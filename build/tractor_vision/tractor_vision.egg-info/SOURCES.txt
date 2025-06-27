@@ -1,0 +1,15 @@
+package.xml
+setup.cfg
+setup.py
+config/realsense_config.yaml
+resource/tractor_vision
+tractor_vision/__init__.py
+tractor_vision/obstacle_detector.py
+tractor_vision/realsense_processor.py
+tractor_vision.egg-info/PKG-INFO
+tractor_vision.egg-info/SOURCES.txt
+tractor_vision.egg-info/dependency_links.txt
+tractor_vision.egg-info/entry_points.txt
+tractor_vision.egg-info/requires.txt
+tractor_vision.egg-info/top_level.txt
+tractor_vision.egg-info/zip-safe

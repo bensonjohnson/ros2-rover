@@ -1,0 +1,24 @@
+running develop
+running egg_info
+creating tractor_coverage.egg-info
+writing tractor_coverage.egg-info/PKG-INFO
+writing dependency_links to tractor_coverage.egg-info/dependency_links.txt
+writing entry points to tractor_coverage.egg-info/entry_points.txt
+writing requirements to tractor_coverage.egg-info/requires.txt
+writing top-level names to tractor_coverage.egg-info/top_level.txt
+writing manifest file 'tractor_coverage.egg-info/SOURCES.txt'
+reading manifest file 'tractor_coverage.egg-info/SOURCES.txt'
+writing manifest file 'tractor_coverage.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages/tractor-coverage.egg-link (link to .)
+Installing coverage_action_server script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+Installing coverage_client script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+Installing coverage_visualizer script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+
+Installed /home/benson/tractor_ws/build/tractor_coverage
+running symlink_data
+creating /home/benson/tractor_ws/install/tractor_coverage/share/ament_index
+creating /home/benson/tractor_ws/install/tractor_coverage/share/ament_index/resource_index
+creating /home/benson/tractor_ws/install/tractor_coverage/share/ament_index/resource_index/packages
+symbolically linking /home/benson/tractor_ws/build/tractor_coverage/resource/tractor_coverage -> /home/benson/tractor_ws/install/tractor_coverage/share/ament_index/resource_index/packages
+symbolically linking /home/benson/tractor_ws/build/tractor_coverage/package.xml -> /home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage

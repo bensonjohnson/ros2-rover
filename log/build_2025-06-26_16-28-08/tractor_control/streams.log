@@ -1,0 +1,46 @@
+[1.841s] Invoking command in '/home/benson/tractor_ws/build/tractor_control': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/benson/tractor_ws/build/tractor_control/build
+[2.339s] running develop
+[2.616s] /usr/lib/python3/dist-packages/setuptools/command/easy_install.py:363: UserWarning: Unbuilt egg for pytest-repeat [unknown version] (/usr/lib/python3/dist-packages)
+[2.617s]   self.local_index = Environment(self.shadow_path + sys.path)
+[2.683s] Removing /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor-control.egg-link (link to .)
+[2.774s] Invoked command in '/home/benson/tractor_ws/build/tractor_control' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/benson/tractor_ws/build/tractor_control/build
+[2.775s] Invoking command in '/home/benson/tractor_ws/src/tractor_control': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_control build --build-base /home/benson/tractor_ws/build/tractor_control/build install --record /home/benson/tractor_ws/build/tractor_control/install.log --single-version-externally-managed install_data --force
+[3.214s] running egg_info
+[3.248s] writing ../../build/tractor_control/tractor_control.egg-info/PKG-INFO
+[3.248s] writing dependency_links to ../../build/tractor_control/tractor_control.egg-info/dependency_links.txt
+[3.249s] writing entry points to ../../build/tractor_control/tractor_control.egg-info/entry_points.txt
+[3.249s] writing requirements to ../../build/tractor_control/tractor_control.egg-info/requires.txt
+[3.250s] writing top-level names to ../../build/tractor_control/tractor_control.egg-info/top_level.txt
+[3.316s] reading manifest file '../../build/tractor_control/tractor_control.egg-info/SOURCES.txt'
+[3.317s] writing manifest file '../../build/tractor_control/tractor_control.egg-info/SOURCES.txt'
+[3.317s] running build
+[3.318s] running build_py
+[3.319s] creating /home/benson/tractor_ws/build/tractor_control/build
+[3.319s] creating /home/benson/tractor_ws/build/tractor_control/build/lib
+[3.319s] creating /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control
+[3.320s] copying tractor_control/tank_steering_controller.py -> /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control
+[3.320s] copying tractor_control/hiwonder_motor_driver.py -> /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control
+[3.320s] copying tractor_control/xbox_controller_teleop.py -> /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control
+[3.321s] copying tractor_control/__init__.py -> /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control
+[3.321s] running install
+[3.329s] running install_lib
+[3.362s] creating /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control
+[3.363s] copying /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control/tank_steering_controller.py -> /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control
+[3.363s] copying /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control/hiwonder_motor_driver.py -> /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control
+[3.364s] copying /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control/xbox_controller_teleop.py -> /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control
+[3.364s] copying /home/benson/tractor_ws/build/tractor_control/build/lib/tractor_control/__init__.py -> /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control
+[3.364s] byte-compiling /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control/tank_steering_controller.py to tank_steering_controller.cpython-312.pyc
+[3.365s] byte-compiling /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control/hiwonder_motor_driver.py to hiwonder_motor_driver.cpython-312.pyc
+[3.368s] byte-compiling /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control/xbox_controller_teleop.py to xbox_controller_teleop.cpython-312.pyc
+[3.370s] byte-compiling /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control/__init__.py to __init__.cpython-312.pyc
+[3.371s] running install_data
+[3.371s] copying resource/tractor_control -> /home/benson/tractor_ws/install/tractor_control/share/ament_index/resource_index/packages
+[3.372s] copying package.xml -> /home/benson/tractor_ws/install/tractor_control/share/tractor_control
+[3.372s] running install_egg_info
+[3.406s] Copying ../../build/tractor_control/tractor_control.egg-info to /home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages/tractor_control-0.0.0-py3.12.egg-info
+[3.407s] running install_scripts
+[3.619s] Installing hiwonder_motor_driver script to /home/benson/tractor_ws/install/tractor_control/lib/tractor_control
+[3.620s] Installing tank_steering_controller script to /home/benson/tractor_ws/install/tractor_control/lib/tractor_control
+[3.620s] Installing xbox_controller_teleop script to /home/benson/tractor_ws/install/tractor_control/lib/tractor_control
+[3.621s] writing list of installed files to '/home/benson/tractor_ws/build/tractor_control/install.log'
+[3.685s] Invoked command in '/home/benson/tractor_ws/src/tractor_control' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_control build --build-base /home/benson/tractor_ws/build/tractor_control/build install --record /home/benson/tractor_ws/build/tractor_control/install.log --single-version-externally-managed install_data --force

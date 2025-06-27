@@ -1,0 +1,25 @@
+running develop
+/usr/lib/python3/dist-packages/setuptools/command/easy_install.py:363: UserWarning: Unbuilt egg for pytest-repeat [unknown version] (/usr/lib/python3/dist-packages)
+  self.local_index = Environment(self.shadow_path + sys.path)
+running egg_info
+creating tractor_sensors.egg-info
+writing tractor_sensors.egg-info/PKG-INFO
+writing dependency_links to tractor_sensors.egg-info/dependency_links.txt
+writing entry points to tractor_sensors.egg-info/entry_points.txt
+writing requirements to tractor_sensors.egg-info/requires.txt
+writing top-level names to tractor_sensors.egg-info/top_level.txt
+writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+reading manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/benson/tractor_ws/install/tractor_sensors/lib/python3.12/site-packages/tractor-sensors.egg-link (link to .)
+Installing encoder_publisher script to /home/benson/tractor_ws/install/tractor_sensors/lib/tractor_sensors
+Installing gps_compass_publisher script to /home/benson/tractor_ws/install/tractor_sensors/lib/tractor_sensors
+
+Installed /home/benson/tractor_ws/build/tractor_sensors
+running symlink_data
+creating /home/benson/tractor_ws/install/tractor_sensors/share/ament_index
+creating /home/benson/tractor_ws/install/tractor_sensors/share/ament_index/resource_index
+creating /home/benson/tractor_ws/install/tractor_sensors/share/ament_index/resource_index/packages
+symbolically linking /home/benson/tractor_ws/build/tractor_sensors/resource/tractor_sensors -> /home/benson/tractor_ws/install/tractor_sensors/share/ament_index/resource_index/packages
+symbolically linking /home/benson/tractor_ws/build/tractor_sensors/package.xml -> /home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors

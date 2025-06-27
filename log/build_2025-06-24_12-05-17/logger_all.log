@@ -1,0 +1,455 @@
+[0.155s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build', '--symlink-install']
+[0.155s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=True, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=8, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0xffff8a5f1100>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0xffff8a5c98b0>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0xffff8a5c98b0>>, mixin_verb=('build',))
+[0.210s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.210s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.210s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.210s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.210s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.211s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.211s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/benson/tractor_ws'
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.211s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.249s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['cmake', 'python']
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'cmake'
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python'
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['python_setup_py']
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python_setup_py'
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extensions ['ignore', 'ignore_ament_install']
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extension 'ignore'
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(build) ignored
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extensions ['ignore', 'ignore_ament_install']
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extension 'ignore'
+[0.250s] Level 1:colcon.colcon_core.package_identification:_identify(install) ignored
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extensions ['ignore', 'ignore_ament_install']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extension 'ignore'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(log) ignored
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['ignore', 'ignore_ament_install']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ignore'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ignore_ament_install'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['colcon_pkg']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'colcon_pkg'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['colcon_meta']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'colcon_meta'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['ros']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ros'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['cmake', 'python']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'cmake'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'python'
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['python_setup_py']
+[0.251s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'python_setup_py'
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['ignore', 'ignore_ament_install']
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ignore'
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ignore_ament_install'
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['colcon_pkg']
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'colcon_pkg'
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['colcon_meta']
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'colcon_meta'
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['ros']
+[0.252s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ros'
+[0.255s] DEBUG:colcon.colcon_core.package_identification:Package 'src/slam_stress_test' with type 'ros.ament_python' and name 'slam_stress_test'
+[0.255s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['ignore', 'ignore_ament_install']
+[0.255s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ignore'
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ignore_ament_install'
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['colcon_pkg']
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'colcon_pkg'
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['colcon_meta']
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'colcon_meta'
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['ros']
+[0.256s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ros'
+[0.257s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_bringup' with type 'ros.ament_python' and name 'tractor_bringup'
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['ignore', 'ignore_ament_install']
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ignore'
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ignore_ament_install'
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['colcon_pkg']
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'colcon_pkg'
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['colcon_meta']
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'colcon_meta'
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['ros']
+[0.258s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ros'
+[0.259s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_control' with type 'ros.ament_python' and name 'tractor_control'
+[0.259s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['ignore', 'ignore_ament_install']
+[0.259s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ignore'
+[0.259s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ignore_ament_install'
+[0.259s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['colcon_pkg']
+[0.260s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'colcon_pkg'
+[0.260s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['colcon_meta']
+[0.260s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'colcon_meta'
+[0.260s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['ros']
+[0.260s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ros'
+[0.261s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_coverage' with type 'ros.ament_python' and name 'tractor_coverage'
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['ignore', 'ignore_ament_install']
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ignore'
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ignore_ament_install'
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['colcon_pkg']
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'colcon_pkg'
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['colcon_meta']
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'colcon_meta'
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['ros']
+[0.261s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ros'
+[0.262s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_implements' with type 'ros.ament_python' and name 'tractor_implements'
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['ignore', 'ignore_ament_install']
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ignore'
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ignore_ament_install'
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['colcon_pkg']
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'colcon_pkg'
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['colcon_meta']
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'colcon_meta'
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['ros']
+[0.263s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ros'
+[0.264s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_sensors' with type 'ros.ament_python' and name 'tractor_sensors'
+[0.264s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['ignore', 'ignore_ament_install']
+[0.264s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ignore'
+[0.264s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ignore_ament_install'
+[0.264s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['colcon_pkg']
+[0.265s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'colcon_pkg'
+[0.265s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['colcon_meta']
+[0.265s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'colcon_meta'
+[0.265s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['ros']
+[0.265s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ros'
+[0.266s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_vision' with type 'ros.ament_python' and name 'tractor_vision'
+[0.266s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.266s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.266s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.266s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.266s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_args' from command line to 'None'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_target' from command line to 'None'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_clean_cache' from command line to 'False'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_clean_first' from command line to 'False'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_force_configure' from command line to 'False'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'ament_cmake_args' from command line to 'None'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'catkin_cmake_args' from command line to 'None'
+[0.294s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.294s] DEBUG:colcon.colcon_core.verb:Building package 'slam_stress_test' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/slam_stress_test', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/slam_stress_test', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/slam_stress_test', 'symlink_install': True, 'test_result_base': None}
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_target' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_clean_cache' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_clean_first' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_force_configure' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'ament_cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'catkin_cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.295s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_bringup' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_bringup', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_bringup', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_bringup', 'symlink_install': True, 'test_result_base': None}
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_target' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_clean_cache' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_clean_first' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_force_configure' from command line to 'False'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'ament_cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'catkin_cmake_args' from command line to 'None'
+[0.295s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.295s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_control' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_control', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_control', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_control', 'symlink_install': True, 'test_result_base': None}
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_target' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_clean_cache' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_clean_first' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_force_configure' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'ament_cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'catkin_cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.296s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_coverage' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_coverage', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_coverage', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_coverage', 'symlink_install': True, 'test_result_base': None}
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_target' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_clean_cache' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_clean_first' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_force_configure' from command line to 'False'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'ament_cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'catkin_cmake_args' from command line to 'None'
+[0.296s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.296s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_implements' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_implements', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_implements', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_implements', 'symlink_install': True, 'test_result_base': None}
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_args' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_target' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_clean_cache' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_clean_first' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_force_configure' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'ament_cmake_args' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'catkin_cmake_args' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.297s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_sensors' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_sensors', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_sensors', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_sensors', 'symlink_install': True, 'test_result_base': None}
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_args' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_target' from command line to 'None'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_clean_cache' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_clean_first' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_force_configure' from command line to 'False'
+[0.297s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'ament_cmake_args' from command line to 'None'
+[0.298s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'catkin_cmake_args' from command line to 'None'
+[0.298s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.298s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_vision' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/benson/tractor_ws/build/tractor_vision', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/benson/tractor_ws/install/tractor_vision', 'merge_install': False, 'path': '/home/benson/tractor_ws/src/tractor_vision', 'symlink_install': True, 'test_result_base': None}
+[0.298s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[0.299s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[0.300s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/slam_stress_test' with build type 'ament_python'
+[0.300s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'ament_prefix_path')
+[0.303s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[0.303s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.ps1'
+[0.304s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.dsv'
+[0.305s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.sh'
+[0.306s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.306s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.312s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_bringup' with build type 'ament_python'
+[0.312s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'ament_prefix_path')
+[0.312s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.ps1'
+[0.313s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.dsv'
+[0.313s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.sh'
+[0.314s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.314s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.319s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_control' with build type 'ament_python'
+[0.319s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'ament_prefix_path')
+[0.319s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/ament_prefix_path.ps1'
+[0.320s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/ament_prefix_path.dsv'
+[0.320s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/ament_prefix_path.sh'
+[0.321s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.321s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.326s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_coverage' with build type 'ament_python'
+[0.326s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'ament_prefix_path')
+[0.326s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.ps1'
+[0.327s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.dsv'
+[0.327s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.sh'
+[0.328s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.328s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.332s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_implements' with build type 'ament_python'
+[0.333s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'ament_prefix_path')
+[0.333s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.ps1'
+[0.334s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.dsv'
+[0.334s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.sh'
+[0.335s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.335s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.339s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_sensors' with build type 'ament_python'
+[0.339s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'ament_prefix_path')
+[0.339s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.ps1'
+[0.340s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.dsv'
+[0.340s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.sh'
+[0.341s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.341s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.346s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/benson/tractor_ws/src/tractor_vision' with build type 'ament_python'
+[0.346s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'ament_prefix_path')
+[0.346s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.ps1'
+[0.347s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.dsv'
+[0.347s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.sh'
+[0.347s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.348s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.736s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/slam_stress_test'
+[0.737s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.737s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.094s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_bringup'
+[1.095s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.095s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.444s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_control'
+[1.444s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.444s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.883s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_coverage'
+[1.884s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.884s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.231s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_implements'
+[2.232s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.232s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.579s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_sensors'
+[2.579s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.579s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.952s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/benson/tractor_ws/src/tractor_vision'
+[2.952s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.952s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[3.944s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_control': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_control/build --no-deps symlink_data
+[3.970s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_vision': PYTHONPATH=/home/benson/tractor_ws/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_vision/build --no-deps symlink_data
+[3.985s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_implements': PYTHONPATH=/home/benson/tractor_ws/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_implements/build --no-deps symlink_data
+[3.993s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_sensors': PYTHONPATH=/home/benson/tractor_ws/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_sensors/build --no-deps symlink_data
+[4.654s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_coverage': PYTHONPATH=/home/benson/tractor_ws/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_coverage/build --no-deps symlink_data
+[4.681s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/benson/tractor_ws/install/slam_stress_test/share/ament_index/resource_index/packages/slam_stress_test
+[4.681s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.xml
+[4.681s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/benson/tractor_ws/install/slam_stress_test/lib/slam_stress_test/synthetic_lidar
+[4.686s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/slam_stress_test': PYTHONPATH=/home/benson/tractor_ws/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/slam_stress_test/build --no-deps symlink_data --force
+[5.076s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'pythonpath_develop')
+[5.078s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_control/share/tractor_control/hook/pythonpath_develop.ps1'
+[5.081s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_control/share/tractor_control/hook/pythonpath_develop.dsv'
+[5.082s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_control/share/tractor_control/hook/pythonpath_develop.sh'
+[5.078s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_control' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_control/build --no-deps symlink_data
+[5.098s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control' for CMake module files
+[5.103s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control' for CMake config files
+[5.105s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control/lib'
+[5.106s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control/bin'
+[5.107s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control/lib/pkgconfig/tractor_control.pc'
+[5.108s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control/lib/python3.12/site-packages'
+[5.109s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'pythonpath')
+[5.109s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/pythonpath.ps1'
+[5.111s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/pythonpath.dsv'
+[5.113s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/hook/pythonpath.sh'
+[5.115s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_control/bin'
+[5.115s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_control)
+[5.117s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/package.ps1'
+[5.121s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/package.dsv'
+[5.123s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/package.sh'
+[5.127s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/package.bash'
+[5.129s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_control/share/tractor_control/package.zsh'
+[5.130s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_control/share/colcon-core/packages/tractor_control)
+[5.132s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'pythonpath_develop')
+[5.133s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.ps1'
+[5.135s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_vision' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_vision/build --no-deps symlink_data
+[5.136s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.dsv'
+[5.137s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.sh'
+[5.140s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision' for CMake module files
+[5.142s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision' for CMake config files
+[5.144s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision/lib'
+[5.144s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision/bin'
+[5.145s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision/lib/pkgconfig/tractor_vision.pc'
+[5.146s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision/lib/python3.12/site-packages'
+[5.146s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'pythonpath')
+[5.147s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/pythonpath.ps1'
+[5.148s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/pythonpath.dsv'
+[5.150s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/hook/pythonpath.sh'
+[5.152s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_vision/bin'
+[5.152s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_vision)
+[5.153s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/package.ps1'
+[5.156s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/package.dsv'
+[5.158s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/package.sh'
+[5.160s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/package.bash'
+[5.161s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_vision/share/tractor_vision/package.zsh'
+[5.162s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_vision/share/colcon-core/packages/tractor_vision)
+[5.465s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/benson/tractor_ws/build/tractor_bringup': PYTHONPATH=/home/benson/tractor_ws/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_bringup/build --no-deps symlink_data
+[5.527s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'pythonpath_develop')
+[5.528s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.ps1'
+[5.530s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_sensors' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_sensors/build --no-deps symlink_data
+[5.531s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.dsv'
+[5.532s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.sh'
+[5.534s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors' for CMake module files
+[5.537s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors' for CMake config files
+[5.538s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors/lib'
+[5.539s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors/bin'
+[5.539s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors/lib/pkgconfig/tractor_sensors.pc'
+[5.540s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors/lib/python3.12/site-packages'
+[5.541s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'pythonpath')
+[5.542s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.ps1'
+[5.543s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.dsv'
+[5.544s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.sh'
+[5.546s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_sensors/bin'
+[5.547s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_sensors)
+[5.548s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/package.ps1'
+[5.550s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/package.dsv'
+[5.552s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/package.sh'
+[5.554s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/package.bash'
+[5.555s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_sensors/share/tractor_sensors/package.zsh'
+[5.556s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_sensors/share/colcon-core/packages/tractor_sensors)
+[5.764s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'pythonpath_develop')
+[5.765s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.ps1'
+[5.766s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/slam_stress_test' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/slam_stress_test/build --no-deps symlink_data --force
+[5.767s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.dsv'
+[5.768s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.sh'
+[5.770s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test' for CMake module files
+[5.772s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test' for CMake config files
+[5.774s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test/lib'
+[5.774s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test/bin'
+[5.774s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test/lib/pkgconfig/slam_stress_test.pc'
+[5.776s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test/lib/python3.12/site-packages'
+[5.776s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'pythonpath')
+[5.777s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.ps1'
+[5.778s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.dsv'
+[5.779s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.sh'
+[5.782s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/slam_stress_test/bin'
+[5.782s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(slam_stress_test)
+[5.783s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.ps1'
+[5.785s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.dsv'
+[5.787s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.sh'
+[5.789s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.bash'
+[5.790s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/slam_stress_test/share/slam_stress_test/package.zsh'
+[5.791s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/slam_stress_test/share/colcon-core/packages/slam_stress_test)
+[6.046s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'pythonpath_develop')
+[6.046s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.ps1'
+[6.047s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_coverage' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_coverage/build --no-deps symlink_data
+[6.048s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.dsv'
+[6.048s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.sh'
+[6.049s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage' for CMake module files
+[6.050s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage' for CMake config files
+[6.050s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage/lib'
+[6.050s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage/bin'
+[6.050s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage/lib/pkgconfig/tractor_coverage.pc'
+[6.051s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages'
+[6.051s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'pythonpath')
+[6.051s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.ps1'
+[6.052s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.dsv'
+[6.052s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.sh'
+[6.053s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_coverage/bin'
+[6.053s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_coverage)
+[6.053s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/package.ps1'
+[6.054s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/package.dsv'
+[6.054s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/package.sh'
+[6.055s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/package.bash'
+[6.055s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_coverage/share/tractor_coverage/package.zsh'
+[6.055s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_coverage/share/colcon-core/packages/tractor_coverage)
+[6.160s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'pythonpath_develop')
+[6.160s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.ps1'
+[6.161s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_implements' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_implements/build --no-deps symlink_data
+[6.161s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.dsv'
+[6.162s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.sh'
+[6.162s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements' for CMake module files
+[6.163s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements' for CMake config files
+[6.164s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements/lib'
+[6.164s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements/bin'
+[6.164s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements/lib/pkgconfig/tractor_implements.pc'
+[6.164s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements/lib/python3.12/site-packages'
+[6.164s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'pythonpath')
+[6.165s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/pythonpath.ps1'
+[6.165s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/pythonpath.dsv'
+[6.165s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/hook/pythonpath.sh'
+[6.166s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_implements/bin'
+[6.166s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_implements)
+[6.166s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/package.ps1'
+[6.167s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/package.dsv'
+[6.168s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/package.sh'
+[6.168s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/package.bash'
+[6.168s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_implements/share/tractor_implements/package.zsh'
+[6.169s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_implements/share/colcon-core/packages/tractor_implements)
+[6.554s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'pythonpath_develop')
+[6.555s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.ps1'
+[6.556s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/benson/tractor_ws/build/tractor_bringup' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/benson/tractor_ws/build/tractor_bringup/build --no-deps symlink_data
+[6.558s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.dsv'
+[6.559s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.sh'
+[6.561s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup' for CMake module files
+[6.563s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup' for CMake config files
+[6.564s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup/lib'
+[6.565s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup/bin'
+[6.565s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup/lib/pkgconfig/tractor_bringup.pc'
+[6.566s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages'
+[6.566s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'pythonpath')
+[6.567s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.ps1'
+[6.568s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.dsv'
+[6.569s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.sh'
+[6.571s] Level 1:colcon.colcon_core.environment:checking '/home/benson/tractor_ws/install/tractor_bringup/bin'
+[6.571s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_bringup)
+[6.572s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/package.ps1'
+[6.574s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/package.dsv'
+[6.576s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/package.sh'
+[6.577s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/package.bash'
+[6.578s] INFO:colcon.colcon_core.shell:Creating package script '/home/benson/tractor_ws/install/tractor_bringup/share/tractor_bringup/package.zsh'
+[6.579s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/benson/tractor_ws/install/tractor_bringup/share/colcon-core/packages/tractor_bringup)
+[6.580s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[6.581s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[6.581s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[6.581s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[6.588s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.notify_send': Could not find 'notify-send'
+[6.588s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.terminal_notifier': Not used on non-Darwin systems
+[6.588s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.win32': Not used on non-Windows systems
+[6.588s] INFO:colcon.colcon_notification.desktop_notification:Sending desktop notification using 'notify2'
+[6.589s] DEBUG:colcon.colcon_notification.desktop_notification.notify2:Failed to initialize notify2: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.Notifications was not provided by any .service files
+[6.589s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[6.590s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/benson/tractor_ws/install/local_setup.ps1'
+[6.593s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/benson/tractor_ws/install/_local_setup_util_ps1.py'
+[6.598s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/benson/tractor_ws/install/setup.ps1'
+[6.601s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/benson/tractor_ws/install/local_setup.sh'
+[6.603s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/benson/tractor_ws/install/_local_setup_util_sh.py'
+[6.605s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/benson/tractor_ws/install/setup.sh'
+[6.608s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/benson/tractor_ws/install/local_setup.bash'
+[6.610s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/benson/tractor_ws/install/setup.bash'
+[6.613s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/benson/tractor_ws/install/local_setup.zsh'
+[6.615s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/benson/tractor_ws/install/setup.zsh'

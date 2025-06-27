@@ -1,0 +1,26 @@
+[1.350s] Invoking command in '/home/benson/tractor_ws/src/tractor_coverage': PYTHONPATH=/home/benson/tractor_ws/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_coverage build --build-base /home/benson/tractor_ws/build/tractor_coverage/build install --record /home/benson/tractor_ws/build/tractor_coverage/install.log --single-version-externally-managed install_data
+[1.800s] running egg_info
+[1.835s] writing ../../build/tractor_coverage/tractor_coverage.egg-info/PKG-INFO
+[1.835s] writing dependency_links to ../../build/tractor_coverage/tractor_coverage.egg-info/dependency_links.txt
+[1.836s] writing entry points to ../../build/tractor_coverage/tractor_coverage.egg-info/entry_points.txt
+[1.836s] writing requirements to ../../build/tractor_coverage/tractor_coverage.egg-info/requires.txt
+[1.837s] writing top-level names to ../../build/tractor_coverage/tractor_coverage.egg-info/top_level.txt
+[1.904s] reading manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+[1.905s] writing manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+[1.905s] running build
+[1.906s] running build_py
+[1.906s] copying tractor_coverage/coverage_client.py -> /home/benson/tractor_ws/build/tractor_coverage/build/lib/tractor_coverage
+[1.906s] running install
+[1.917s] running install_lib
+[1.951s] copying /home/benson/tractor_ws/build/tractor_coverage/build/lib/tractor_coverage/coverage_client.py -> /home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+[1.952s] byte-compiling /home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/coverage_client.py to coverage_client.cpython-312.pyc
+[1.956s] running install_data
+[1.956s] running install_egg_info
+[1.992s] removing '/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage-0.0.0-py3.12.egg-info' (and everything under it)
+[1.992s] Copying ../../build/tractor_coverage/tractor_coverage.egg-info to /home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage-0.0.0-py3.12.egg-info
+[1.993s] running install_scripts
+[2.210s] Installing coverage_action_server script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+[2.211s] Installing coverage_client script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+[2.211s] Installing coverage_visualizer script to /home/benson/tractor_ws/install/tractor_coverage/lib/tractor_coverage
+[2.212s] writing list of installed files to '/home/benson/tractor_ws/build/tractor_coverage/install.log'
+[2.285s] Invoked command in '/home/benson/tractor_ws/src/tractor_coverage' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_coverage build --build-base /home/benson/tractor_ws/build/tractor_coverage/build install --record /home/benson/tractor_ws/build/tractor_coverage/install.log --single-version-externally-managed install_data

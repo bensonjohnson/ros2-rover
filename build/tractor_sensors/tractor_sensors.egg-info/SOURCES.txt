@@ -1,0 +1,14 @@
+package.xml
+setup.cfg
+setup.py
+resource/tractor_sensors
+tractor_sensors/__init__.py
+tractor_sensors/encoder_publisher.py
+tractor_sensors/gps_compass_publisher.py
+tractor_sensors.egg-info/PKG-INFO
+tractor_sensors.egg-info/SOURCES.txt
+tractor_sensors.egg-info/dependency_links.txt
+tractor_sensors.egg-info/entry_points.txt
+tractor_sensors.egg-info/requires.txt
+tractor_sensors.egg-info/top_level.txt
+tractor_sensors.egg-info/zip-safe

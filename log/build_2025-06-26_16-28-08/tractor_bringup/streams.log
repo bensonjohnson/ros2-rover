@@ -1,0 +1,19 @@
+[1.858s] Invoking command in '/home/benson/tractor_ws/src/tractor_bringup': PYTHONPATH=/home/benson/tractor_ws/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/benson/tractor_ws/build/tractor_bringup/build install --record /home/benson/tractor_ws/build/tractor_bringup/install.log --single-version-externally-managed install_data
+[2.287s] running egg_info
+[2.320s] writing ../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
+[2.320s] writing dependency_links to ../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
+[2.321s] writing requirements to ../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
+[2.321s] writing top-level names to ../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
+[2.388s] reading manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[2.389s] writing manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[2.390s] running build
+[2.390s] running build_py
+[2.391s] running install
+[2.400s] running install_lib
+[2.435s] running install_data
+[2.435s] running install_egg_info
+[2.470s] removing '/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info' (and everything under it)
+[2.471s] Copying ../../build/tractor_bringup/tractor_bringup.egg-info to /home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info
+[2.471s] running install_scripts
+[2.690s] writing list of installed files to '/home/benson/tractor_ws/build/tractor_bringup/install.log'
+[2.768s] Invoked command in '/home/benson/tractor_ws/src/tractor_bringup' returned '0': PYTHONPATH=/home/benson/tractor_ws/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/benson/tractor_ws/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/benson/tractor_ws/build/tractor_bringup/build install --record /home/benson/tractor_ws/build/tractor_bringup/install.log --single-version-externally-managed install_data
