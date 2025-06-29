@@ -1,0 +1,21 @@
+[4.288s] Invoking command in '/home/ubuntu/ros2-rover/src/slam_stress_test': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/slam_stress_test build --build-base /home/ubuntu/ros2-rover/build/slam_stress_test/build install --record /home/ubuntu/ros2-rover/build/slam_stress_test/install.log --single-version-externally-managed install_data
+[4.801s] running egg_info
+[4.831s] writing ../../build/slam_stress_test/slam_stress_test.egg-info/PKG-INFO
+[4.832s] writing dependency_links to ../../build/slam_stress_test/slam_stress_test.egg-info/dependency_links.txt
+[4.833s] writing entry points to ../../build/slam_stress_test/slam_stress_test.egg-info/entry_points.txt
+[4.833s] writing requirements to ../../build/slam_stress_test/slam_stress_test.egg-info/requires.txt
+[4.833s] writing top-level names to ../../build/slam_stress_test/slam_stress_test.egg-info/top_level.txt
+[4.900s] reading manifest file '../../build/slam_stress_test/slam_stress_test.egg-info/SOURCES.txt'
+[4.902s] writing manifest file '../../build/slam_stress_test/slam_stress_test.egg-info/SOURCES.txt'
+[4.902s] running build
+[4.902s] running build_py
+[4.903s] running install
+[4.914s] running install_lib
+[4.947s] running install_data
+[4.947s] running install_egg_info
+[4.982s] removing '/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages/slam_stress_test-0.0.0-py3.12.egg-info' (and everything under it)
+[4.982s] Copying ../../build/slam_stress_test/slam_stress_test.egg-info to /home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages/slam_stress_test-0.0.0-py3.12.egg-info
+[4.984s] running install_scripts
+[5.206s] Installing synthetic_lidar script to /home/ubuntu/ros2-rover/install/slam_stress_test/lib/slam_stress_test
+[5.207s] writing list of installed files to '/home/ubuntu/ros2-rover/build/slam_stress_test/install.log'
+[5.322s] Invoked command in '/home/ubuntu/ros2-rover/src/slam_stress_test' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/slam_stress_test build --build-base /home/ubuntu/ros2-rover/build/slam_stress_test/build install --record /home/ubuntu/ros2-rover/build/slam_stress_test/install.log --single-version-externally-managed install_data

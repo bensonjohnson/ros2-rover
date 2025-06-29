@@ -8,9 +8,13 @@ from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+
 def generate_launch_description():
     # Package directories
     pkg_tractor_sensors = get_package_share_directory('tractor_sensors')
+    pkg_tractor_bringup = get_package_share_directory('tractor_bringup')
     
     # Launch arguments
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -40,22 +44,12 @@ def generate_launch_description():
         }]
     )
     
-    # GPS and compass publisher node
-    gps_compass_node = Node(
-        package='tractor_sensors',
-        executable='gps_compass_publisher',
-        name='gps_compass_publisher',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'gps_port': '/dev/ttyS6',
-            'gps_baudrate': 9600,
-            'compass_port': '/dev/ttyUSB1',
-            'compass_baudrate': 9600,
-            'magnetic_declination': 0.0,
-            'gps_frame_id': 'gps_link',
-            'compass_frame_id': 'compass_link'
-        }]
+    # Robot description launch
+    robot_description_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            PathJoinSubstitution([pkg_tractor_bringup, 'launch', 'robot_description.launch.py'])
+        ),
+        launch_arguments={'use_sim_time': use_sim_time}.items()
     )
     
     ld = LaunchDescription()
@@ -65,6 +59,6 @@ def generate_launch_description():
     
     # Add sensor nodes
     ld.add_action(encoder_publisher_node)
-    ld.add_action(gps_compass_node)
+    ld.add_action(robot_description_launch)
     
     return ld
