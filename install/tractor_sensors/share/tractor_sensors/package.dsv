@@ -4,6 +4,3 @@ source;share/tractor_sensors/hook/pythonpath.sh
 source;share/tractor_sensors/hook/ament_prefix_path.ps1
 source;share/tractor_sensors/hook/ament_prefix_path.dsv
 source;share/tractor_sensors/hook/ament_prefix_path.sh
-source;../../build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.ps1
-source;../../build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.dsv
-source;../../build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.sh

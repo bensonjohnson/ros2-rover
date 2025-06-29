@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+import os
+from glob import glob
 
 package_name = 'tractor_sensors'
 
@@ -10,6 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +26,7 @@ setup(
         'console_scripts': [
             'encoder_publisher = tractor_sensors.encoder_publisher:main',
             'gps_compass_publisher = tractor_sensors.gps_compass_publisher:main',
+            'hglrc_m100_5883 = tractor_sensors.hglrc_m100_5883:main',
         ],
     },
 )

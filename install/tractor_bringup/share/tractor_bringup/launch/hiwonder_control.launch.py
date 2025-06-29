@@ -12,7 +12,7 @@ def generate_launch_description():
     # Launch arguments
     i2c_bus_arg = DeclareLaunchArgument(
         'i2c_bus',
-        default_value='9',
+        default_value='5',
         description='I2C bus number'
     )
     

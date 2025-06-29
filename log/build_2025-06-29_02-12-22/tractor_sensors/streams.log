@@ -1,0 +1,25 @@
+[4.242s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data
+[5.020s] running develop
+[5.317s] running egg_info
+[5.318s] creating tractor_sensors.egg-info
+[5.345s] writing tractor_sensors.egg-info/PKG-INFO
+[5.345s] writing dependency_links to tractor_sensors.egg-info/dependency_links.txt
+[5.346s] writing entry points to tractor_sensors.egg-info/entry_points.txt
+[5.347s] writing requirements to tractor_sensors.egg-info/requires.txt
+[5.347s] writing top-level names to tractor_sensors.egg-info/top_level.txt
+[5.348s] writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[5.405s] reading manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[5.408s] writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[5.437s] running build_ext
+[5.437s] Creating /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor-sensors.egg-link (link to .)
+[5.441s] Installing encoder_publisher script to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors
+[5.442s] Installing gps_compass_publisher script to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors
+[5.442s] 
+[5.443s] Installed /home/ubuntu/ros2-rover/build/tractor_sensors
+[5.443s] running symlink_data
+[5.445s] creating /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index
+[5.446s] creating /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index/resource_index
+[5.446s] creating /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index/resource_index/packages
+[5.446s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/resource/tractor_sensors -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index/resource_index/packages
+[5.447s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/package.xml -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors
+[5.559s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data

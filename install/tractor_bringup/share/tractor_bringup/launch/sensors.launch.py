@@ -48,7 +48,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'gps_port': '/dev/ttyUSB0',
+            'gps_port': '/dev/ttyS6',
             'gps_baudrate': 9600,
             'compass_port': '/dev/ttyUSB1',
             'compass_baudrate': 9600,

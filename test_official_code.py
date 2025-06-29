@@ -4,7 +4,7 @@ import time
 import struct
 
 # Set the I2C bus number, usually 1
-I2C_BUS = 9  # Changed to 9 for your system
+I2C_BUS = 5  # Changed to 5 for your system
 
 # Set the I2C address of the 4-ch encoder motor driver
 MOTOR_ADDR = 0x34 

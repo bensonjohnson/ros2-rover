@@ -4,7 +4,7 @@
 # Tests Hiwonder motor controller communication directly
 
 MOTOR_ADDR=0x34
-I2C_BUS=9
+I2C_BUS=5
 
 # Register addresses from ESP32 code
 ADC_BAT_ADDR=0x00

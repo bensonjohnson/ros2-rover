@@ -1,0 +1,132 @@
+{
+  "configById": {
+    "3D!18rla7y": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 50,
+        "phi": 45,
+        "thetaOffset": 0,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1]
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "enableStats": false,
+        "backgroundColor": "#303030"
+      },
+      "transforms": {
+        "frame": "map"
+      },
+      "topics": {
+        "/hglrc_gps/fix": {
+          "visible": true,
+          "colorField": "altitude",
+          "pointSize": 8,
+          "colorMode": "colormap",
+          "colorMap": "rainbow"
+        },
+        "/odometry/filtered": {
+          "visible": true,
+          "historySize": 1000,
+          "lineWidth": 3,
+          "color": "#00ff00"
+        },
+        "/hglrc_gps/heading": {
+          "visible": true,
+          "arrowScale": [2, 2, 2],
+          "color": "#ff0000"
+        },
+        "/tf": {
+          "visible": true
+        }
+      },
+      "layers": {
+        "grid": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid",
+          "instanceId": "grid",
+          "layerId": "foxglove.Grid",
+          "size": 100,
+          "divisions": 20,
+          "lineWidth": 1,
+          "color": "#ffffff",
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0],
+          "order": 1
+        }
+      }
+    },
+    "Plot!2qf8dh": {
+      "paths": [
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/hglrc_gps/fix.latitude",
+          "enabled": true,
+          "label": "GPS Latitude"
+        },
+        {
+          "timestampMethod": "receiveTime", 
+          "value": "/hglrc_gps/fix.longitude",
+          "enabled": true,
+          "label": "GPS Longitude"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": false,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "GPS!3d9sk": {
+      "topicPath": "/hglrc_gps/fix",
+      "color": "#ff6600",
+      "pointSize": 6,
+      "tolerance": 0.1
+    },
+    "Compass!8fj2k": {
+      "topicPath": "/hglrc_gps/imu",
+      "showCompass": true,
+      "compassSize": 100,
+      "showHeading": true
+    },
+    "RawMessages!4x7j9": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/hglrc_gps/fix"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": {
+      "direction": "column", 
+      "first": "3D!18rla7y",
+      "second": {
+        "direction": "row",
+        "first": "GPS!3d9sk",
+        "second": "Compass!8fj2k",
+        "splitPercentage": 50
+      },
+      "splitPercentage": 70
+    },
+    "second": {
+      "direction": "column",
+      "first": "Plot!2qf8dh", 
+      "second": "RawMessages!4x7j9",
+      "splitPercentage": 60
+    },
+    "splitPercentage": 75
+  }
+}

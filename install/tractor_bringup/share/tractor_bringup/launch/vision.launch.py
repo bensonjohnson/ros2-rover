@@ -25,7 +25,34 @@ def generate_launch_description():
     # Config file path
     config_file = os.path.join(pkg_tractor_vision, 'config', 'realsense_config.yaml')
     
-    # RealSense processor node
+    # Official RealSense camera node
+    realsense_camera_node = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        name='realsense2_camera',
+        output='screen',
+        parameters=[
+            {
+                'camera_name': 'realsense',
+                'camera_namespace': 'realsense',
+                'enable_color': True,
+                'enable_depth': True,
+                'enable_infra1': False,
+                'enable_infra2': False,
+                'color_width': 640,
+                'color_height': 480,
+                'color_fps': 30,
+                'depth_width': 640,
+                'depth_height': 480,
+                'depth_fps': 30,
+                'pointcloud.enable': True,
+                'align_depth.enable': True,
+                'use_sim_time': use_sim_time
+            }
+        ]
+    )
+
+    # Custom RealSense processor node (for custom processing)
     realsense_processor_node = Node(
         package='tractor_vision',
         executable='realsense_processor',
@@ -55,6 +82,7 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     
     # Add vision nodes
+    ld.add_action(realsense_camera_node)
     ld.add_action(realsense_processor_node)
     ld.add_action(obstacle_detector_node)
     

@@ -17,7 +17,7 @@ class HiwonderMotorDriver(Node):
         super().__init__('hiwonder_motor_driver')
         
         # Parameters (using corrected addresses from ESP32 testing)
-        self.declare_parameter('i2c_bus', 9)
+        self.declare_parameter('i2c_bus', 5)
         self.declare_parameter('motor_controller_address', 0x34)  # Corrected from ESP32 testing
         self.declare_parameter('wheel_separation', 0.5)  # meters
         self.declare_parameter('wheel_radius', 0.15)  # meters
@@ -295,30 +295,39 @@ class HiwonderMotorDriver(Node):
         self.joint_state_pub.publish(joint_msg)
     
     def battery_callback(self):
-        """Read and publish battery voltage - DISABLED to prevent I2C conflicts"""
+        """Read and publish battery voltage from motor controller"""
         if self.bus is None:
             return
             
-        # TEMPORARILY DISABLED - Battery reading causes I2C lockup
-        # TODO: Re-enable with single-byte reads once motor control is stable
-        
-        # Publish a dummy voltage to keep system happy
-        voltage_msg = Float32()
-        voltage_msg.data = 12.0  # Dummy 12V reading
-        self.battery_voltage_pub.publish(voltage_msg)
-        
-        self.get_logger().debug("Battery reading disabled - publishing dummy 12V")
-        
-        return
-        
-        # Original battery reading code (disabled):
-        # try:
-        #     voltage_data = self.read_data_array(self.ADC_BAT_ADDR, 2)
-        #     if voltage_data and len(voltage_data) == 2:
-        #         voltage_raw = voltage_data[0] + (voltage_data[1] << 8)
-        #         # ... rest of voltage processing
-        # except Exception as e:
-        #     self.get_logger().error(f'Battery voltage reading error: {e}')
+        try:
+            # Read 2 bytes from battery voltage register (like ESP32 code)
+            voltage_data = self.read_data_array(self.ADC_BAT_ADDR, 2)
+            if voltage_data and len(voltage_data) == 2:
+                # Combine bytes: data[0] + (data[1] << 8) like ESP32
+                voltage_raw = voltage_data[0] + (voltage_data[1] << 8)
+                
+                # Convert to volts (assuming millivolts from controller)
+                voltage_volts = voltage_raw / 1000.0
+                
+                # Publish the real voltage
+                voltage_msg = Float32()
+                voltage_msg.data = voltage_volts
+                self.battery_voltage_pub.publish(voltage_msg)
+                
+                self.get_logger().debug(f"Battery voltage: {voltage_raw}mV ({voltage_volts:.1f}V)")
+            else:
+                # Fallback to dummy value if read fails
+                voltage_msg = Float32()
+                voltage_msg.data = 12.0
+                self.battery_voltage_pub.publish(voltage_msg)
+                self.get_logger().debug("Battery read failed - using dummy 12V")
+                
+        except Exception as e:
+            # Fallback to dummy value on error
+            voltage_msg = Float32()
+            voltage_msg.data = 12.0
+            self.battery_voltage_pub.publish(voltage_msg)
+            self.get_logger().debug(f'Battery reading error: {e} - using dummy 12V')
     
     def destroy_node(self):
         """Clean shutdown"""

@@ -8,11 +8,13 @@ setup.py
 ../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
 ../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/nav2_params.yaml
+config/robot_localization.yaml
 launch/control.launch.py
 launch/hiwonder_control.launch.py
 launch/implements.launch.py
 launch/navigation.launch.py
 launch/robot_description.launch.py
+launch/robot_localization.launch.py
 launch/sensors.launch.py
 launch/tractor_bringup.launch.py
 launch/tractor_gazebo.launch.py

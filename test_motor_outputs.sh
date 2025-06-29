@@ -3,7 +3,7 @@
 # Test all motor output combinations to find which ones are connected
 
 MOTOR_ADDR=0x34
-I2C_BUS=9
+I2C_BUS=5
 
 echo "=================================================="
 echo "    MOTOR OUTPUT TESTING TOOL"

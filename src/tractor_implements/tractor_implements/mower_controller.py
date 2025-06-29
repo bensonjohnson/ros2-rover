@@ -57,7 +57,7 @@ class MowerController(Node):
         
         # Initialize I2C for height adjustment
         try:
-            self.i2c_bus = smbus2.SMBus(1)
+            self.i2c_bus = smbus2.SMBus(5)
             self.get_logger().info('I2C initialized for height control')
         except Exception as e:
             self.get_logger().error(f'Failed to initialize I2C: {e}')

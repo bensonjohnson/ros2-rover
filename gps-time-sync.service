@@ -1,0 +1,20 @@
+[Unit]
+Description=GPS Time Synchronization Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/python3 /home/ubuntu/ros2-rover/gps_time_sync.py --continuous --interval 3600 --verbose
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=/home/ubuntu/ros2-rover
+
+[Install]
+WantedBy=multi-user.target

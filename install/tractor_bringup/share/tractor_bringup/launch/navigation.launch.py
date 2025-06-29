@@ -58,6 +58,20 @@ def generate_launch_description():
         description='Whether to respawn if a node crashes'
     )
     
+    # Robot Localization launch (GPS + Compass + Wheel odometry fusion)
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('tractor_bringup'),
+                'launch',
+                'robot_localization.launch.py'
+            ])
+        ]),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
+    )
+    
     # Nav2 navigation launch (without docking)
     nav2_bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -106,6 +120,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     
     # Add navigation launches
+    ld.add_action(robot_localization_launch)
     ld.add_action(nav2_bringup_launch)
     ld.add_action(map_server_launch)
     
