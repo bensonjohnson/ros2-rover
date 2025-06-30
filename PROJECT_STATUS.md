@@ -36,10 +36,10 @@ Autonomous outdoor tractor/rover system built on ROS2 Jazzy with GPS navigation,
   - Location: `src/tractor_sensors/tractor_sensors/hglrc_m100_5883.py`
   - Topics: `/hglrc_gps/fix`, `/hglrc_gps/imu`, `/hglrc_gps/magnetic_field`
   - Hardware: `/dev/ttyS6` (GPS), I2C-5 (compass)
-- **Wheel Encoders:** ✅ Implemented
-  - Location: `src/tractor_sensors/tractor_sensors/encoder_publisher.py`  
-  - Topic: `/wheel_odom`
-  - Hardware: GPIO pins 18,19,20,21 for quadrature encoders
+- **Wheel Encoders:** ✅ Implemented via I2C motor controller
+  - Location: `src/tractor_control/tractor_control/hiwonder_motor_driver.py`  
+  - Topics: `/joint_states` (encoder feedback), `/wheel_odom`
+  - Hardware: I2C motor controller board (M1=right, M2=left tracks)
 - **Motor Control:** ✅ Hiwonder driver integration
   - Location: `src/tractor_control/tractor_control/hiwonder_motor_driver.py`
   - Topics: `/cmd_vel` → motor commands, `/motor_status`
@@ -231,8 +231,7 @@ source install/setup.bash
 ### Hardware Requirements
 - **GPS Module:** HGLRC M100 5883 ✅ Connected
 - **Compass:** Integrated with GPS ✅ Working
-- **Motor Driver:** Hiwonder I2C ✅ Connected
-- **Encoders:** Quadrature on GPIO ✅ Configured
+- **Motor Driver:** Hiwonder I2C ✅ Connected (with integrated encoders)
 - **Camera:** RealSense D435i 🟡 Pending delivery
 - **Battery:** 12V system 🟡 Waiting for proper battery
 

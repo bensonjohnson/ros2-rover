@@ -73,7 +73,9 @@
       "Bash(timedatectl:*)",
       "Bash(sudo systemctl:*)",
       "Bash(ros2 pkg list:*)",
-      "Bash(pip3 list:*)"
+      "Bash(pip3 list:*)",
+      "Bash(modinfo:*)",
+      "Bash(dtc:*)"
     ],
     "deny": []
   }

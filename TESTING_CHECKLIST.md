@@ -13,7 +13,7 @@
 - [ ] Intel RealSense D435i camera
 - [ ] GPS module with UART/USB interface
 - [ ] Digital compass/magnetometer module
-- [ ] Rotary encoders for each wheel (1440 PPR recommended)
+- [ ] Motor controller with integrated encoders (I2C interface)
 - [ ] I2C level shifters if needed (3.3V to 5V)
 
 ### Implement Hardware
@@ -66,7 +66,7 @@
 - [ ] Verify power system voltage levels
 
 ### 2. Individual Sensor Tests
-- [ ] Test encoder publishers: `ros2 topic echo /joint_states`
+- [ ] Test motor encoders: `ros2 topic echo /joint_states`
 - [ ] Test GPS: `ros2 topic echo /gps/fix`
 - [ ] Test compass: `ros2 topic echo /compass/heading`
 - [ ] Test RealSense camera: `ros2 topic echo /realsense_435i/color/image_raw`
@@ -125,7 +125,7 @@
 
 ### Physical Calibration
 - [ ] Measure and set wheel separation accurately
-- [ ] Calibrate encoder counts per revolution
+- [ ] Verify motor encoder counts per revolution (I2C)
 - [ ] Set magnetic declination for local area
 - [ ] Calibrate RealSense camera intrinsics
 - [ ] Calibrate mower height positions

@@ -24,7 +24,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'encoder_publisher = tractor_sensors.encoder_publisher:main',
             'gps_compass_publisher = tractor_sensors.gps_compass_publisher:main',
             'hglrc_m100_5883 = tractor_sensors.hglrc_m100_5883:main',
         ],

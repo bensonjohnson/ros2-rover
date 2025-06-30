@@ -2,9 +2,11 @@
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TransformStamped
 from std_msgs.msg import Float32MultiArray, Float32
 from sensor_msgs.msg import JointState
+from nav_msgs.msg import Odometry
+import tf2_ros
 import smbus
 import time
 import struct
@@ -70,6 +72,7 @@ class HiwonderMotorDriver(Node):
         self.prev_right_encoder = 0
         self.left_velocity = 0.0
         self.right_velocity = 0.0
+        self.read_count = 0
         
         # Motor command rate limiting
         self.last_motor_command_time = 0.0
@@ -107,8 +110,17 @@ class HiwonderMotorDriver(Node):
             10
         )
         
-        # Timer for sensor readings - much less frequent like ESP32
-        self.sensor_timer = self.create_timer(3.0, self.sensor_callback)  # Every 3 seconds like ESP32
+        self.odom_pub = self.create_publisher(
+            Odometry,
+            'odom',
+            10
+        )
+        
+        # TF broadcaster
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        
+        # Timer for sensor readings - 100Hz for excellent odometry feedback (faster I2C after speed fix)
+        self.sensor_timer = self.create_timer(1.0/100.0, self.sensor_callback)  # 100 Hz (10ms intervals)
         self.battery_timer = self.create_timer(5.0, self.battery_callback)  # Every 5 seconds
         
         self.get_logger().info('Hiwonder Motor Driver initialized')
@@ -231,9 +243,9 @@ class HiwonderMotorDriver(Node):
             return
         
         try:
-            # Pack speeds as signed integers (M1=left, M2=right, M3=0, M4=0) 
+            # Pack speeds as signed integers (M1=right, M2=left, M3=0, M4=0) 
             # Official documentation uses signed values directly: [-50,-50,-50,-50]
-            speeds = [left_speed, right_speed, 0, 0]
+            speeds = [right_speed, left_speed, 0, 0]
             # Clamp to reasonable range for JGB37 motors
             speeds_bytes = [max(-127, min(127, int(s))) for s in speeds]
             
@@ -255,30 +267,60 @@ class HiwonderMotorDriver(Node):
             self.get_logger().error(f'Motor command error: {e}')
     
     def sensor_callback(self):
-        """Read encoders and publish sensor data - DISABLED to prevent I2C lockup"""
+        """Read encoders and publish sensor data"""
         if self.bus is None:
             return
             
-        # TEMPORARILY DISABLED - Encoder reading causes I2C lockup
-        # TODO: Re-enable once I2C timing issues are resolved
-        
-        # For now, just publish zero joint states to keep system happy
-        current_time = time.time()
-        self.last_encoder_time = current_time
-        self.publish_joint_states(0, 0)
-        
-        self.get_logger().debug("Encoder reading disabled - publishing zero values")
-        
-        return
-        
-        # Original encoder reading code (disabled):
-        # try:
-        #     encoder_data = self.read_data_array(self.MOTOR_ENCODER_TOTAL_ADDR, 16)
-        #     if encoder_data and len(encoder_data) == 16:
-        #         encoders = struct.unpack('<4i', bytes(encoder_data))
-        #         # ... rest of encoder processing
-        # except Exception as e:
-        #     self.get_logger().error(f'Encoder reading error: {e}')
+        try:
+            # Read encoder data from I2C motor controller (only need first 8 bytes for M1 and M2)
+            encoder_data = self.read_data_array(self.MOTOR_ENCODER_TOTAL_ADDR, 8)
+            if encoder_data and len(encoder_data) == 8:
+                # Unpack 2 signed 32-bit integers (M1=right, M2=left encoder counts)
+                encoders = struct.unpack('<2i', bytes(encoder_data))
+                right_encoder = encoders[0]  # M1 (right motor)
+                left_encoder = encoders[1]   # M2 (left motor)
+                self.read_count += 1
+                
+                # Calculate velocities
+                current_time = time.time()
+                dt = current_time - self.last_encoder_time
+                
+                if dt > 0:
+                    with self.encoder_lock:
+                        left_delta = left_encoder - self.prev_left_encoder
+                        right_delta = right_encoder - self.prev_right_encoder
+                        
+                        # Convert encoder deltas to wheel velocities (rad/s)
+                        self.left_velocity = (left_delta / self.encoder_ppr) * 2 * math.pi / dt
+                        self.right_velocity = (right_delta / self.encoder_ppr) * 2 * math.pi / dt
+                        
+                        self.prev_left_encoder = left_encoder
+                        self.prev_right_encoder = right_encoder
+                
+                self.last_encoder_time = current_time
+                
+                # Publish joint states and odometry with real encoder data
+                self.publish_joint_states(left_encoder, right_encoder)
+                self.publish_odometry()
+                
+                # Log at reduced rate to avoid spam (every 2.5 seconds = 250 reads at 100Hz)
+                if self.read_count % 250 == 0:
+                    self.get_logger().info(f"Encoders @100Hz: L={left_encoder}, R={right_encoder}, "
+                                         f"Velocities: L={self.left_velocity:.2f}, R={self.right_velocity:.2f}")
+                else:
+                    self.get_logger().debug(f"Encoders: L={left_encoder}, R={right_encoder}, "
+                                          f"Velocities: L={self.left_velocity:.2f}, R={self.right_velocity:.2f}")
+            else:
+                self.get_logger().warning("Invalid encoder data received")
+                # Publish zero values if read fails
+                self.publish_joint_states(0, 0)
+                self.publish_odometry()
+                
+        except Exception as e:
+            self.get_logger().error(f'Encoder reading error: {e}')
+            # Publish zero values on error
+            self.publish_joint_states(0, 0)
+            self.publish_odometry()
     
     def publish_joint_states(self, left_encoder, right_encoder):
         """Publish joint states from encoder data"""
@@ -293,6 +335,64 @@ class HiwonderMotorDriver(Node):
         joint_msg.velocity = [self.left_velocity, self.right_velocity]
         
         self.joint_state_pub.publish(joint_msg)
+    
+    def publish_odometry(self):
+        """Calculate and publish wheel odometry"""
+        # Tank steering kinematics
+        linear_vel = (self.left_velocity + self.right_velocity) * self.wheel_radius / 2.0
+        angular_vel = (self.right_velocity - self.left_velocity) * self.wheel_radius / self.wheel_separation
+        
+        # Update pose (integrate velocities)
+        dt = 1.0/100.0  # 100Hz sensor callback frequency (10ms)
+        self.x += linear_vel * math.cos(self.theta) * dt
+        self.y += linear_vel * math.sin(self.theta) * dt
+        self.theta += angular_vel * dt
+        
+        # Normalize theta
+        self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
+        
+        # Create odometry message
+        odom_msg = Odometry()
+        odom_msg.header.stamp = self.get_clock().now().to_msg()
+        odom_msg.header.frame_id = 'odom'
+        odom_msg.child_frame_id = 'base_link'
+        
+        # Position
+        odom_msg.pose.pose.position.x = self.x
+        odom_msg.pose.pose.position.y = self.y
+        odom_msg.pose.pose.position.z = 0.0
+        
+        # Orientation (quaternion from yaw)
+        odom_msg.pose.pose.orientation.x = 0.0
+        odom_msg.pose.pose.orientation.y = 0.0
+        odom_msg.pose.pose.orientation.z = math.sin(self.theta / 2.0)
+        odom_msg.pose.pose.orientation.w = math.cos(self.theta / 2.0)
+        
+        # Velocity
+        odom_msg.twist.twist.linear.x = linear_vel
+        odom_msg.twist.twist.linear.y = 0.0
+        odom_msg.twist.twist.angular.z = angular_vel
+        
+        # Covariance (simplified)
+        odom_msg.pose.covariance[0] = 0.1   # x
+        odom_msg.pose.covariance[7] = 0.1   # y
+        odom_msg.pose.covariance[35] = 0.1  # theta
+        odom_msg.twist.covariance[0] = 0.1  # vx
+        odom_msg.twist.covariance[35] = 0.1 # vtheta
+        
+        self.odom_pub.publish(odom_msg)
+        
+        # Publish TF transform
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = self.get_clock().now().to_msg()
+        tf_msg.header.frame_id = 'odom'
+        tf_msg.child_frame_id = 'base_link'
+        tf_msg.transform.translation.x = self.x
+        tf_msg.transform.translation.y = self.y
+        tf_msg.transform.translation.z = 0.0
+        tf_msg.transform.rotation = odom_msg.pose.pose.orientation
+        
+        self.tf_broadcaster.sendTransform(tf_msg)
     
     def battery_callback(self):
         """Read and publish battery voltage from motor controller"""
