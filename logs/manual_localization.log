@@ -1,0 +1,5 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-51-263987-rover-4552
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [ekf_node-1]: process started with pid [4556]
+[INFO] [ekf_node-2]: process started with pid [4557]
+[INFO] [navsat_transform_node-3]: process started with pid [4558]

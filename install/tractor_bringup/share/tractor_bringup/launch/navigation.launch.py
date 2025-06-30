@@ -72,31 +72,13 @@ def generate_launch_description():
         }.items()
     )
     
-    # Nav2 navigation launch (without docking)
+    # Complete Nav2 bringup (includes map server, planning, and control)
     nav2_bringup_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
                 FindPackageShare('nav2_bringup'),
                 'launch',
-                'navigation_launch.py'
-            ])
-        ]),
-        launch_arguments={
-            'use_sim_time': use_sim_time,
-            'params_file': params_file,
-            'autostart': autostart,
-            'use_composition': use_composition,
-            'use_respawn': use_respawn,
-        }.items()
-    )
-    
-    # Map server launch separately  
-    map_server_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('nav2_bringup'),
-                'launch',
-                'localization_launch.py'
+                'bringup_launch.py'
             ])
         ]),
         launch_arguments={
@@ -122,6 +104,5 @@ def generate_launch_description():
     # Add navigation launches
     ld.add_action(robot_localization_launch)
     ld.add_action(nav2_bringup_launch)
-    ld.add_action(map_server_launch)
     
     return ld

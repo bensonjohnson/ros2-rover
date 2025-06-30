@@ -1,0 +1,5 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-56-281006-rover-4605
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [tank_steering_controller-1]: process started with pid [4609]
+[tank_steering_controller-1] [INFO] [1751296977.051222439] [tank_steering_controller]: I2C bus 1 initialized successfully
+[tank_steering_controller-1] [INFO] [1751296977.059635971] [tank_steering_controller]: Tank Steering Controller initialized

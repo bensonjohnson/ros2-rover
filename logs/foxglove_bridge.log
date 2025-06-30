@@ -1,57 +1,58 @@
-[INFO] [1751177511.928964581] [foxglove_bridge_component_manager]: Load Library: /opt/ros/jazzy/lib/libfoxglove_bridge_component.so
-[INFO] [1751177511.945301076] [foxglove_bridge_component_manager]: Found class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
-[INFO] [1751177511.945454793] [foxglove_bridge_component_manager]: Instantiate class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
-[INFO] [1751177511.957669829] [foxglove_bridge]: Starting foxglove_bridge (jazzy, 0.8.5@) with WebSocket++/0.8.2
-[INFO] [1751177511.959137862] [foxglove_bridge]: [WS] Server running without TLS
-[INFO] [1751177511.959831480] [foxglove_bridge]: [WS] WebSocket server listening at ws://0.0.0.0:8765
-[INFO] [1751177511.959858315] [foxglove_bridge]: [WS] WebSocket server run loop started
-[INFO] [1751177514.875466076] [foxglove_bridge]: [WS] Client 10.0.0.244:57530 connected via /
-[INFO] [1751177514.928072565] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 1 with encoding "cdr"
-[INFO] [1751177514.931207264] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 2 with encoding "cdr"
-[INFO] [1751177514.934298795] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 3 with encoding "cdr"
-[INFO] [1751177515.259360180] [foxglove_bridge]: [WS] Subscribing to connection graph updates.
-[INFO] [1751177515.261420617] [foxglove_bridge]: Client 10.0.0.244:57530 is no longer advertising /move_base_simple/goal (0 subscribers) on channel 1
-[INFO] [1751177515.261550999] [foxglove_bridge]: Client 10.0.0.244:57530 is no longer advertising /clicked_point (0 subscribers) on channel 2
-[INFO] [1751177515.261595334] [foxglove_bridge]: Client 10.0.0.244:57530 is no longer advertising /initialpose (0 subscribers) on channel 3
-[INFO] [1751177515.263297587] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 4 with encoding "cdr"
-[INFO] [1751177515.264420560] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 5 with encoding "cdr"
-[INFO] [1751177515.265596619] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 6 with encoding "cdr"
-[INFO] [1751177515.265755585] [foxglove_bridge]: Subscribing to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2 with reliablity "reliable"
-[INFO] [1751177515.269166799] [foxglove_bridge]: Subscribing to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1 with reliablity "reliable"
-[INFO] [1751177515.270310773] [foxglove_bridge]: Subscribing to topic "/move_base_simple/goal" (geometry_msgs/msg/PoseStamped) on channel 19 with reliablity "reliable"
-[INFO] [1751177515.271435205] [foxglove_bridge]: Subscribing to topic "/robot_description" (std_msgs/msg/String) on channel 6 with reliablity "reliable"
-[INFO] [1751177515.273003284] [foxglove_bridge]: Subscribing to topic "/set_pose" (geometry_msgs/msg/PoseWithCovarianceStamped) on channel 14 with reliablity "best_effort"
-[INFO] [1751177515.680567903] [foxglove_bridge]: Subscribing to topic "/initialpose" (geometry_msgs/msg/PoseWithCovarianceStamped) on channel 20 with reliablity "reliable"
-[INFO] [1751177515.911282902] [foxglove_bridge]: [WS] Client 10.0.0.244:57531 connected via /
-[INFO] [1751177515.951125118] [foxglove_bridge]: Adding subscriber #1 to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2
-[INFO] [1751177515.952946085] [foxglove_bridge]: Adding subscriber #1 to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1
-[INFO] [1751177769.761083518] [foxglove_bridge]: Subscribing to topic "/diagnostics" (diagnostic_msgs/msg/DiagnosticArray) on channel 18 with reliablity "reliable"
-[INFO] [1751177783.069018169] [foxglove_bridge]: Subscribing to topic "/hglrc_gps/fix" (sensor_msgs/msg/NavSatFix) on channel 13 with reliablity "reliable"
-[INFO] [1751178120.807233113] [foxglove_bridge]: Client 10.0.0.244:57531 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 1 with encoding "cdr"
-[INFO] [1751178120.809193185] [foxglove_bridge]: Client 10.0.0.244:57531 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 2 with encoding "cdr"
-[INFO] [1751178120.810750451] [foxglove_bridge]: Client 10.0.0.244:57531 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 3 with encoding "cdr"
-[INFO] [1751178120.850845300] [foxglove_bridge]: Removed one subscription from channel 2 (1 subscription(s) left)
-[INFO] [1751178120.851300608] [foxglove_bridge]: Removed one subscription from channel 1 (1 subscription(s) left)
-[INFO] [1751178121.005388230] [foxglove_bridge]: Adding subscriber #1 to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2
-[INFO] [1751178121.007735066] [foxglove_bridge]: Adding subscriber #1 to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1
-[INFO] [1751178127.541726196] [foxglove_bridge]: Unsubscribing from topic "/diagnostics" (diagnostic_msgs/msg/DiagnosticArray) on channel 18
-[INFO] [1751178944.601761176] [foxglove_bridge]: Subscribing to topic "/hglrc_gps/heading" (geometry_msgs/msg/QuaternionStamped) on channel 12 with reliablity "reliable"
-[INFO] [1751178946.355595899] [foxglove_bridge]: Unsubscribing from topic "/hglrc_gps/heading" (geometry_msgs/msg/QuaternionStamped) on channel 12
-[INFO] [1751178960.916443343] [foxglove_bridge]: Subscribing to topic "/clicked_point" (geometry_msgs/msg/PointStamped) on channel 21 with reliablity "reliable"
-[INFO] [1751178962.892264594] [foxglove_bridge]: Unsubscribing from topic "/clicked_point" (geometry_msgs/msg/PointStamped) on channel 21
-[ERROR] [1751179084.070810493] [foxglove_bridge]: [WS] 10.0.0.244:57530: Failed to create publisher: could not create publisher: create_publisher() called for existing topic name rt/clicked_point with incompatible type geometry_msgs::msg::dds_::Twist_, at ./src/publisher.cpp:145, at ./src/rcl/publisher.c:117 (op: advertise, id: 7)
-[ERROR] [1751179087.025454366] [foxglove_bridge]: [WS] 10.0.0.244:57530: Channel 7 is not advertised
-[ERROR] [1751179087.797230071] [foxglove_bridge]: [WS] 10.0.0.244:57530: Channel 7 is not advertised
-[ERROR] [1751179088.471467740] [foxglove_bridge]: [WS] 10.0.0.244:57530: Channel 7 is not advertised
-[ERROR] [1751179088.774283687] [foxglove_bridge]: [WS] 10.0.0.244:57530: Channel 7 is not advertised
-[ERROR] [1751179089.030284498] [foxglove_bridge]: [WS] 10.0.0.244:57530: Channel 7 is not advertised
-[INFO] [1751179099.902397863] [foxglove_bridge]: Client 10.0.0.244:57530 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 8 with encoding "cdr"
-[INFO] [1751179182.965947024] [rclcpp]: signal_handler(signum=2)
-[INFO] [1751179182.972224279] [foxglove_bridge]: Shutting down foxglove_bridge
-[INFO] [1751179182.972429020] [foxglove_bridge]: [WS] Stopping WebSocket server
-[INFO] [1751179182.972623844] [foxglove_bridge]: [WS] Closing 2 client connection(s)
-[INFO] [1751179182.972750713] [foxglove_bridge]: [WS] asio handle_accept error: asio.system:125 (Operation aborted.)
-[INFO] [1751179182.972798545] [foxglove_bridge]: [WS] Error getting remote endpoint: asio.system:9 (Bad file descriptor)
-[INFO] [1751179182.973003577] [foxglove_bridge]: [WS] asio async_shutdown error: asio.system:9 (Bad file descriptor)
-[ERROR] [1751179182.973054908] [foxglove_bridge]: [WS] handle_accept error: Operation aborted.
-[INFO] [1751179182.973075615] [foxglove_bridge]: [WS] Stopping acceptance of new connections because the underlying transport is no longer listening.
+[INFO] [1751179237.795026993] [foxglove_bridge_component_manager]: Load Library: /opt/ros/jazzy/lib/libfoxglove_bridge_component.so
+[INFO] [1751179237.806924468] [foxglove_bridge_component_manager]: Found class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
+[INFO] [1751179237.806996507] [foxglove_bridge_component_manager]: Instantiate class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
+[INFO] [1751179237.814424080] [foxglove_bridge]: Starting foxglove_bridge (jazzy, 0.8.5@) with WebSocket++/0.8.2
+[INFO] [1751179237.815458288] [foxglove_bridge]: [WS] Server running without TLS
+[INFO] [1751179237.815866605] [foxglove_bridge]: [WS] WebSocket server listening at ws://0.0.0.0:8765
+[INFO] [1751179237.815905104] [foxglove_bridge]: [WS] WebSocket server run loop started
+[INFO] [1751179240.327190878] [foxglove_bridge]: [WS] Client 10.0.0.244:59295 connected via /
+[INFO] [1751179240.417708893] [foxglove_bridge]: [WS] Subscribing to connection graph updates.
+[INFO] [1751179240.419841766] [foxglove_bridge]: Subscribing to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2 with reliablity "reliable"
+[INFO] [1751179240.425184009] [foxglove_bridge]: Subscribing to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1 with reliablity "reliable"
+[INFO] [1751179242.584451855] [foxglove_bridge]: [WS] Client 10.0.0.244:59296 connected via /
+[INFO] [1751179242.630873116] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 1 with encoding "cdr"
+[INFO] [1751179242.632940366] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 2 with encoding "cdr"
+[INFO] [1751179242.634744252] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 3 with encoding "cdr"
+[INFO] [1751179242.883292020] [foxglove_bridge]: Subscribing to topic "/hglrc_gps/fix" (sensor_msgs/msg/NavSatFix) on channel 13 with reliablity "reliable"
+[INFO] [1751179242.887864878] [foxglove_bridge]: Adding subscriber #1 to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2
+[INFO] [1751179242.889573101] [foxglove_bridge]: Adding subscriber #1 to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1
+[INFO] [1751179242.891087665] [foxglove_bridge]: Client 10.0.0.244:59296 is no longer advertising /move_base_simple/goal (0 subscribers) on channel 1
+[INFO] [1751179242.891357738] [foxglove_bridge]: Client 10.0.0.244:59296 is no longer advertising /clicked_point (0 subscribers) on channel 2
+[INFO] [1751179242.891451359] [foxglove_bridge]: Client 10.0.0.244:59296 is no longer advertising /initialpose (0 subscribers) on channel 3
+[INFO] [1751179242.894236956] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 4 with encoding "cdr"
+[INFO] [1751179242.896196585] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 5 with encoding "cdr"
+[INFO] [1751179242.897487742] [foxglove_bridge]: Client 10.0.0.244:59296 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 6 with encoding "cdr"
+[INFO] [1751179242.898422204] [foxglove_bridge]: Removed one subscription from channel 2 (1 subscription(s) left)
+[INFO] [1751179242.898560740] [foxglove_bridge]: Removed one subscription from channel 1 (1 subscription(s) left)
+[INFO] [1751179242.898682360] [foxglove_bridge]: Adding subscriber #1 to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 2
+[INFO] [1751179242.899966226] [foxglove_bridge]: Adding subscriber #1 to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 1
+[INFO] [1751179242.901645866] [foxglove_bridge]: Subscribing to topic "/robot_description" (std_msgs/msg/String) on channel 6 with reliablity "reliable"
+[INFO] [1751179242.903685118] [foxglove_bridge]: Subscribing to topic "/set_pose" (geometry_msgs/msg/PoseWithCovarianceStamped) on channel 14 with reliablity "best_effort"
+[INFO] [1751179242.905168183] [foxglove_bridge]: Subscribing to topic "/move_base_simple/goal" (geometry_msgs/msg/PoseStamped) on channel 19 with reliablity "reliable"
+[INFO] [1751179243.205648925] [foxglove_bridge]: Subscribing to topic "/initialpose" (geometry_msgs/msg/PoseWithCovarianceStamped) on channel 20 with reliablity "reliable"
+[INFO] [1751179265.105677545] [rclcpp]: signal_handler(signum=2)
+[INFO] [1751179265.112533783] [foxglove_bridge]: Shutting down foxglove_bridge
+[INFO] [1751179265.112657445] [foxglove_bridge]: [WS] Stopping WebSocket server
+[INFO] [1751179265.112744942] [foxglove_bridge]: [WS] Closing 2 client connection(s)
+[INFO] [1751179265.112879103] [foxglove_bridge]: [WS] asio handle_accept error: asio.system:125 (Operation aborted.)
+[INFO] [1751179265.113303462] [foxglove_bridge]: [WS] Error getting remote endpoint: asio.system:9 (Bad file descriptor)
+[INFO] [1751179265.113330586] [foxglove_bridge]: [WS] asio async_shutdown error: asio.system:9 (Bad file descriptor)
+[ERROR] [1751179265.113341669] [foxglove_bridge]: [WS] handle_accept error: Operation aborted.
+[INFO] [1751179265.113347210] [foxglove_bridge]: [WS] Stopping acceptance of new connections because the underlying transport is no longer listening.
+[INFO] [1751179265.122252912] [foxglove_bridge]: [WS] Client 10.0.0.244:59296 disconnected
+[INFO] [1751179265.122546901] [foxglove_bridge]: [WS] WebSocket server run loop stopped
+[INFO] [1751179265.122540484] [foxglove_bridge]: [WS] Client 10.0.0.244:59296 unadvertising channel 6 due to disconnect
+[INFO] [1751179265.122690978] [foxglove_bridge]: Client 10.0.0.244:59296 is no longer advertising /initialpose (0 subscribers) on channel 6
+[INFO] [1751179265.123406409] [foxglove_bridge]: [WS] All WebSocket connections closed
+[INFO] [1751179265.123449866] [foxglove_bridge]: [WS] Waiting for WebSocket server run loop to terminate
+[INFO] [1751179265.123699815] [foxglove_bridge]: [WS] WebSocket server run loop terminated
+[INFO] [1751179265.124203796] [foxglove_bridge]: Shutdown complete
+[ERROR] [1751179265.127974610] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751179265.128165353] [foxglove_bridge]: [WS] Client 10.0.0.244:59296 unadvertising channel 5 due to disconnect
+[INFO] [1751179265.128227475] [foxglove_bridge]: Client (unknown) is no longer advertising /clicked_point (0 subscribers) on channel 5
+[ERROR] [1751179265.128384969] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751179265.128444467] [foxglove_bridge]: [WS] Client 10.0.0.244:59296 unadvertising channel 4 due to disconnect
+[INFO] [1751179265.128467508] [foxglove_bridge]: Client (unknown) is no longer advertising /move_base_simple/goal (0 subscribers) on channel 4
+[ERROR] [1751179265.134058544] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751179265.134491944] [foxglove_bridge]: Unsubscribing from topic "/initialpose" (geometry_msgs/msg/PoseWithCovarianceStamped) on channel 20
+[INFO] [1751179265.141323683] [foxglove_bridge]: Unsubscribing from topic "/move_base_simple/goal" (geometry_msgs/msg/PoseStamped) on channel 19

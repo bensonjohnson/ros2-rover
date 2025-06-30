@@ -1,0 +1,13 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-59-278111-rover-4626
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [realsense2_camera_node-1]: process started with pid [4630]
+[INFO] [realsense_processor-2]: process started with pid [4631]
+[INFO] [obstacle_detector-3]: process started with pid [4632]
+[realsense2_camera_node-1] [INFO] [1751296979.928889511] [camera.realsense2_camera]: RealSense ROS v4.55.1
+[realsense2_camera_node-1] [INFO] [1751296979.929007346] [camera.realsense2_camera]: Built with LibRealSense v2.55.1
+[realsense2_camera_node-1] [INFO] [1751296979.929021930] [camera.realsense2_camera]: Running with LibRealSense v2.55.1
+[realsense2_camera_node-1] [WARN] [1751296979.936189446] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense_processor-2] pyrealsense2 not available. Will use official realsense2_camera node instead.
+[realsense_processor-2] RealSense library not available. Cannot start node.
+[INFO] [realsense_processor-2]: process has finished cleanly [pid 4631]
+[obstacle_detector-3] [INFO] [1751296980.857618865] [obstacle_detector]: Obstacle Detector initialized

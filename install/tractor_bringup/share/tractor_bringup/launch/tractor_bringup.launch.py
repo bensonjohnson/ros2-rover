@@ -110,19 +110,19 @@ def generate_launch_description():
         }.items()
     )
     
-    # Navigation (optional - can be launched separately)
-    # nav_launch = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource([
-    #         PathJoinSubstitution([
-    #             FindPackageShare('tractor_bringup'),
-    #             'launch',
-    #             'navigation.launch.py'
-    #         ])
-    #     ]),
-    #     launch_arguments={
-    #         'use_sim_time': use_sim_time,
-    #     }.items()
-    # )
+    # Navigation
+    nav_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('tractor_bringup'),
+                'launch',
+                'navigation.launch.py'
+            ])
+        ]),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+        }.items()
+    )
     
     ld = LaunchDescription()
     
@@ -137,5 +137,6 @@ def generate_launch_description():
     ld.add_action(control_launch)
     ld.add_action(vision_launch)
     ld.add_action(simulator_launch)
+    ld.add_action(nav_launch)
     
     return ld

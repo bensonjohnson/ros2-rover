@@ -72,7 +72,8 @@
       "WebFetch(domain:www.orangepi.org)",
       "Bash(timedatectl:*)",
       "Bash(sudo systemctl:*)",
-      "Bash(ros2 pkg list:*)"
+      "Bash(ros2 pkg list:*)",
+      "Bash(pip3 list:*)"
     ],
     "deny": []
   }

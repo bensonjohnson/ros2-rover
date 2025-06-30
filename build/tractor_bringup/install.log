@@ -13,9 +13,11 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/vision.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/hiwonder_control.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/robot_localization.launch.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/slam_mapping.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf/tractor.urdf.xacro
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/nav2_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/robot_localization.yaml
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/slam_toolbox_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/SOURCES.txt

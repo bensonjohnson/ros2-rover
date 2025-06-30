@@ -1,3 +1,3 @@
-[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-29-06-11-43-109235-ubuntu-2191
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-29-06-40-29-015510-ubuntu-4946
 [INFO] [launch]: Default logging verbosity is set to INFO
 [ERROR] [launch]: Caught exception in launch (see debug for traceback): "package 'joint_state_publisher_gui' not found, searching: ['/home/ubuntu/ros2-rover/install/tractor_vision', '/home/ubuntu/ros2-rover/install/tractor_sensors', '/home/ubuntu/ros2-rover/install/tractor_implements', '/home/ubuntu/ros2-rover/install/tractor_coverage', '/home/ubuntu/ros2-rover/install/tractor_control', '/home/ubuntu/ros2-rover/install/tractor_bringup', '/home/ubuntu/ros2-rover/install/slam_stress_test', '/opt/ros/jazzy']"

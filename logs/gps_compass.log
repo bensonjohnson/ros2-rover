@@ -1,16 +1,7 @@
-[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-29-06-11-35-642171-ubuntu-2129
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-29-06-40-21-535344-ubuntu-4884
 [INFO] [launch]: Default logging verbosity is set to INFO
-[INFO] [hglrc_m100_5883-1]: process started with pid [2133]
-[hglrc_m100_5883-1] [INFO] [1751177496.490167530] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS serial port /dev/ttyS6 opened at 115200 baud
-[hglrc_m100_5883-1] [INFO] [1751177496.593034990] [hglrc_m100_5883_publisher]: QMC5883 chip ID verified
-[hglrc_m100_5883-1] [INFO] [1751177496.593717234] [hglrc_m100_5883_publisher]: QMC5883 compass initialized on I2C bus 5
-[hglrc_m100_5883-1] [INFO] [1751177496.662555040] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS and QMC5883 Compass Publisher initialized
-[hglrc_m100_5883-1] Traceback (most recent call last):
-[hglrc_m100_5883-1]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors/hglrc_m100_5883.py", line 323, in main
-[hglrc_m100_5883-1]     rclpy.spin(hglrc_pub)
-[hglrc_m100_5883-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 244, in spin
-[hglrc_m100_5883-1]     executor.spin_once()
-[hglrc_m100_5883-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 839, in spin_once
-[hglrc_m100_5883-1]     self._spin_once_impl(timeout_sec)
-[hglrc_m100_5883-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 823, in _spin_once_impl
-[hglrc_m100_5883-1]     handler, entity, node = self.wait_for_ready_callbacks(
+[INFO] [hglrc_m100_5883-1]: process started with pid [4888]
+[hglrc_m100_5883-1] [INFO] [1751179222.386813461] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS serial port /dev/ttyS6 opened at 115200 baud
+[hglrc_m100_5883-1] [INFO] [1751179222.489740062] [hglrc_m100_5883_publisher]: QMC5883 chip ID verified
+[hglrc_m100_5883-1] [INFO] [1751179222.490454032] [hglrc_m100_5883_publisher]: QMC5883 compass initialized on I2C bus 5
+[hglrc_m100_5883-1] [INFO] [1751179222.562105070] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS and QMC5883 Compass Publisher initialized

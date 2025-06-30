@@ -1,0 +1,36 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-46-259026-rover-4518
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [encoder_publisher-1]: process started with pid [4523]
+[INFO] [robot_state_publisher-2]: process started with pid [4524]
+[INFO] [joint_state_publisher_gui-3]: process started with pid [4525]
+[robot_state_publisher-2] [INFO] [1751296966.723798845] [robot_state_publisher]: Robot initialized
+[joint_state_publisher_gui-3] qt.qpa.xcb: could not connect to display 
+[joint_state_publisher_gui-3] qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
+[joint_state_publisher_gui-3] This application failed to start because no Qt platform plugin could be initialized. Reinstalling the application may fix this problem.
+[joint_state_publisher_gui-3] 
+[joint_state_publisher_gui-3] Available platform plugins are: eglfs, linuxfb, minimal, minimalegl, offscreen, vnc, wayland-egl, wayland, wayland-xcomposite-egl, wayland-xcomposite-glx, xcb.
+[joint_state_publisher_gui-3] 
+[encoder_publisher-1] Traceback (most recent call last):
+[encoder_publisher-1]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher", line 33, in <module>
+[encoder_publisher-1]     sys.exit(load_entry_point('tractor-sensors==0.0.0', 'console_scripts', 'encoder_publisher')())
+[encoder_publisher-1]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-1]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher", line 25, in importlib_load_entry_point
+[encoder_publisher-1]     return next(matches).load()
+[encoder_publisher-1]            ^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-1]   File "/usr/lib/python3.12/importlib/metadata/__init__.py", line 205, in load
+[encoder_publisher-1]     module = import_module(match.group('module'))
+[encoder_publisher-1]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-1]   File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+[encoder_publisher-1]     return _bootstrap._gcd_import(name[level:], package, level)
+[encoder_publisher-1]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-1]   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+[encoder_publisher-1]   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+[encoder_publisher-1]   File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+[encoder_publisher-1]   File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+[encoder_publisher-1]   File "<frozen importlib._bootstrap_external>", line 995, in exec_module
+[encoder_publisher-1]   File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+[encoder_publisher-1]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors/encoder_publisher.py", line 11, in <module>
+[encoder_publisher-1]     import RPi.GPIO as GPIO
+[encoder_publisher-1] ModuleNotFoundError: No module named 'RPi'
+[ERROR] [encoder_publisher-1]: process has died [pid 4523, exit code 1, cmd '/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher --ros-args -r __node:=encoder_publisher --params-file /tmp/launch_params_blay33d0'].
+[ERROR] [joint_state_publisher_gui-3]: process has died [pid 4525, exit code -6, cmd '/opt/ros/jazzy/lib/joint_state_publisher_gui/joint_state_publisher_gui --ros-args -r __node:=joint_state_publisher_gui --params-file /tmp/launch_params_h01ubxrb'].
