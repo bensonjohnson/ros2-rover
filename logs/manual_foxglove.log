@@ -1,0 +1,48 @@
+[INFO] [1751334298.475493750] [foxglove_bridge_component_manager]: Load Library: /opt/ros/jazzy/lib/libfoxglove_bridge_component.so
+[INFO] [1751334298.488314639] [foxglove_bridge_component_manager]: Found class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
+[INFO] [1751334298.488387846] [foxglove_bridge_component_manager]: Instantiate class: rclcpp_components::NodeFactoryTemplate<foxglove_bridge::FoxgloveBridge>
+[INFO] [1751334298.499476261] [foxglove_bridge]: Starting foxglove_bridge (jazzy, 0.8.5@) with WebSocket++/0.8.2
+[INFO] [1751334298.500589827] [foxglove_bridge]: [WS] Server running without TLS
+[INFO] [1751334298.500986488] [foxglove_bridge]: [WS] WebSocket server listening at ws://0.0.0.0:8765
+[INFO] [1751334298.501027612] [foxglove_bridge]: [WS] WebSocket server run loop started
+[INFO] [1751334304.096448799] [foxglove_bridge]: [WS] Client 10.0.0.206:59082 connected via /
+[INFO] [1751334304.135686727] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 1 with encoding "cdr"
+[INFO] [1751334304.139890458] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 2 with encoding "cdr"
+[INFO] [1751334304.144242936] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 3 with encoding "cdr"
+[INFO] [1751334304.416782798] [foxglove_bridge]: [WS] Subscribing to connection graph updates.
+[INFO] [1751334304.419361969] [foxglove_bridge]: Client 10.0.0.206:59082 is no longer advertising /move_base_simple/goal (0 subscribers) on channel 1
+[INFO] [1751334304.419510425] [foxglove_bridge]: Client 10.0.0.206:59082 is no longer advertising /clicked_point (0 subscribers) on channel 2
+[INFO] [1751334304.419567008] [foxglove_bridge]: Client 10.0.0.206:59082 is no longer advertising /initialpose (0 subscribers) on channel 3
+[INFO] [1751334304.422449508] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/move_base_simple/goal" (geometry_msgs/PoseStamped) on channel 4 with encoding "cdr"
+[INFO] [1751334304.424997470] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/clicked_point" (geometry_msgs/PointStamped) on channel 5 with encoding "cdr"
+[INFO] [1751334304.427384144] [foxglove_bridge]: Client 10.0.0.206:59082 is advertising "/initialpose" (geometry_msgs/PoseWithCovarianceStamped) on channel 6 with encoding "cdr"
+[INFO] [1751334304.427569350] [foxglove_bridge]: Subscribing to topic "/tf" (tf2_msgs/msg/TFMessage) on channel 10 with reliablity "reliable"
+[INFO] [1751334304.430978008] [foxglove_bridge]: Subscribing to topic "/tf_static" (tf2_msgs/msg/TFMessage) on channel 2 with reliablity "reliable"
+[INFO] [1751334304.432201532] [foxglove_bridge]: Subscribing to topic "/obstacle_mask" (sensor_msgs/msg/Image) on channel 11 with reliablity "reliable"
+[INFO] [1751334315.857198379] [rclcpp]: signal_handler(signum=2)
+[INFO] [1751334315.869841958] [foxglove_bridge]: Shutting down foxglove_bridge
+[INFO] [1751334315.869974664] [foxglove_bridge]: [WS] Stopping WebSocket server
+[INFO] [1751334315.870081704] [foxglove_bridge]: [WS] Closing 1 client connection(s)
+[INFO] [1751334315.870117579] [foxglove_bridge]: [WS] asio handle_accept error: asio.system:125 (Operation aborted.)
+[INFO] [1751334315.870208869] [foxglove_bridge]: [WS] Error getting remote endpoint: asio.system:9 (Bad file descriptor)
+[INFO] [1751334315.870280618] [foxglove_bridge]: [WS] asio async_shutdown error: asio.system:9 (Bad file descriptor)
+[ERROR] [1751334315.870317659] [foxglove_bridge]: [WS] handle_accept error: Operation aborted.
+[INFO] [1751334315.870337784] [foxglove_bridge]: [WS] Stopping acceptance of new connections because the underlying transport is no longer listening.
+[INFO] [1751334315.905694304] [foxglove_bridge]: [WS] Client 10.0.0.206:59082 disconnected
+[INFO] [1751334315.905845094] [foxglove_bridge]: [WS] Client 10.0.0.206:59082 unadvertising channel 6 due to disconnect
+[INFO] [1751334315.905860844] [foxglove_bridge]: [WS] WebSocket server run loop stopped
+[INFO] [1751334315.905909260] [foxglove_bridge]: Client 10.0.0.206:59082 is no longer advertising /initialpose (0 subscribers) on channel 6
+[ERROR] [1751334315.908319852] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751334315.908429809] [foxglove_bridge]: [WS] Client 10.0.0.206:59082 unadvertising channel 5 due to disconnect
+[INFO] [1751334315.908485516] [foxglove_bridge]: [WS] Error getting remote endpoint: asio.system:107 (Transport endpoint is not connected)
+[INFO] [1751334315.908503308] [foxglove_bridge]: Client Unknown is no longer advertising /clicked_point (0 subscribers) on channel 5
+[ERROR] [1751334315.910563030] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751334315.910674737] [foxglove_bridge]: [WS] Client 10.0.0.206:59082 unadvertising channel 4 due to disconnect
+[INFO] [1751334315.910732194] [foxglove_bridge]: [WS] Error getting remote endpoint: asio.system:107 (Transport endpoint is not connected)
+[INFO] [1751334315.910748527] [foxglove_bridge]: Client Unknown is no longer advertising /move_base_simple/goal (0 subscribers) on channel 4
+[INFO] [1751334315.910544363] [foxglove_bridge]: [WS] All WebSocket connections closed
+[INFO] [1751334315.911466601] [foxglove_bridge]: [WS] Waiting for WebSocket server run loop to terminate
+[INFO] [1751334315.911555266] [foxglove_bridge]: [WS] WebSocket server run loop terminated
+[INFO] [1751334315.911730847] [foxglove_bridge]: Shutdown complete
+[ERROR] [1751334315.916889194] [foxglove_bridge]: [WS] Exception caught when closing connection: Couldn't initialize rcl timer handle: the given context is not valid, either rcl_init() was not called or rcl_shutdown() was called., at ./src/rcl/guard_condition.c:67
+[INFO] [1751334315.916945193] [foxglove_bridge]: Unsubscribing from topic "/obstacle_mask" (sensor_msgs/msg/Image) on channel 11

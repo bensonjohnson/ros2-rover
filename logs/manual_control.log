@@ -1,5 +1,39 @@
-[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-56-281006-rover-4605
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-01-01-44-52-487418-rover-2757
 [INFO] [launch]: Default logging verbosity is set to INFO
-[INFO] [tank_steering_controller-1]: process started with pid [4609]
-[tank_steering_controller-1] [INFO] [1751296977.051222439] [tank_steering_controller]: I2C bus 1 initialized successfully
-[tank_steering_controller-1] [INFO] [1751296977.059635971] [tank_steering_controller]: Tank Steering Controller initialized
+[INFO] [tank_steering_controller-1]: process started with pid [2761]
+[tank_steering_controller-1] [INFO] [1751334293.281261201] [tank_steering_controller]: I2C bus 1 initialized successfully
+[tank_steering_controller-1] [INFO] [1751334293.290416474] [tank_steering_controller]: Tank Steering Controller initialized
+[tank_steering_controller-1] [ERROR] [1751334315.860023132] [tank_steering_controller]: I2C communication error: [Errno 6] No such device or address
+[tank_steering_controller-1] Failed to publish log message to rosout: publisher's context is invalid, at ./src/rcl/publisher.c:423
+[tank_steering_controller-1] Traceback (most recent call last):
+[tank_steering_controller-1]   File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/tank_steering_controller.py", line 124, in main
+[tank_steering_controller-1]     rclpy.spin(controller)
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 244, in spin
+[tank_steering_controller-1]     executor.spin_once()
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 839, in spin_once
+[tank_steering_controller-1]     self._spin_once_impl(timeout_sec)
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 823, in _spin_once_impl
+[tank_steering_controller-1]     handler, entity, node = self.wait_for_ready_callbacks(
+[tank_steering_controller-1]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 793, in wait_for_ready_callbacks
+[tank_steering_controller-1]     return next(self._cb_iter)
+[tank_steering_controller-1]            ^^^^^^^^^^^^^^^^^^^
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 701, in _wait_for_ready_callbacks
+[tank_steering_controller-1]     raise ExternalShutdownException()
+[tank_steering_controller-1] rclpy.executors.ExternalShutdownException
+[tank_steering_controller-1] 
+[tank_steering_controller-1] During handling of the above exception, another exception occurred:
+[tank_steering_controller-1] 
+[tank_steering_controller-1] Traceback (most recent call last):
+[tank_steering_controller-1]   File "/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/tank_steering_controller", line 33, in <module>
+[tank_steering_controller-1]     sys.exit(load_entry_point('tractor-control==0.0.0', 'console_scripts', 'tank_steering_controller')())
+[tank_steering_controller-1]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[tank_steering_controller-1]   File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/tank_steering_controller.py", line 129, in main
+[tank_steering_controller-1]     rclpy.shutdown()
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[tank_steering_controller-1]     _shutdown(context=context)
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[tank_steering_controller-1]     context.shutdown()
+[tank_steering_controller-1]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[tank_steering_controller-1]     self.__context.shutdown()
+[tank_steering_controller-1] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333

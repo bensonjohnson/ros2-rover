@@ -121,10 +121,11 @@ class HGLRCM1005883Publisher(Node):
             # Bits: OSR[7:6]=11, RNG[5:4]=01, ODR[3:2]=11, MODE[1:0]=01
             self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x09, 0xDD)
             
-            # Verify chip ID
+            # Verify chip ID (QMC5883 chip ID register is at 0x0D)
             chip_id = self.i2c_bus_obj.read_byte_data(self.qmc5883_address, 0x0D)
             if chip_id != 0xFF:
                 self.get_logger().warn(f'QMC5883 chip ID mismatch: expected 0xFF, got 0x{chip_id:02X}')
+                self.get_logger().warn('Continuing anyway - some QMC5883 clones have different chip IDs')
             else:
                 self.get_logger().info('QMC5883 chip ID verified')
                 

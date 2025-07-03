@@ -1,0 +1,339 @@
+[INFO] [1751557915.121055356] [hiwonder_motor_driver]: I2C bus 5 initialized successfully
+[INFO] [1751557915.121595860] [hiwonder_motor_driver]: Initializing motor driver with corrected addresses...
+[INFO] [1751557915.122406179] [hiwonder_motor_driver]: Motor type set to JGB37 (value 3) at address 0x14
+[INFO] [1751557915.623823487] [hiwonder_motor_driver]: Encoder polarity set to 0 at address 0x15
+[INFO] [1751557915.724648678] [hiwonder_motor_driver]: Using Speed control (with encoders) for JGB3865 motors
+[INFO] [1751557915.725243145] [hiwonder_motor_driver]: Motor driver initialized successfully!
+[INFO] [1751557915.742446815] [hiwonder_motor_driver]: Hiwonder Motor Driver initialized
+[INFO] [1751557919.298911804] [hiwonder_motor_driver]: Encoders @100Hz: L=481, R=652, Velocities: L=0.00, R=0.00
+[INFO] [1751557922.961469963] [hiwonder_motor_driver]: Encoders @100Hz: L=481, R=652, Velocities: L=0.00, R=0.00
+[INFO] [1751557925.524749961] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557925.527556897] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557925.677087852] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557925.679919290] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557925.820012897] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557925.822860962] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557925.973677397] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557925.976597800] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.117822246] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.120871284] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.227949007] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.230775777] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.376576250] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.379743130] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.481991047] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.485039793] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.630004574] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.631831721] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.695052947] [hiwonder_motor_driver]: Encoders @100Hz: L=4104, R=4499, Velocities: L=112.53, R=237.23
+[INFO] [1751557926.770104837] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.771402275] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557926.872192032] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557926.875154146] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.023175540] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.024679494] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.123289122] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.124878833] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.282549870] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.285962061] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.425634945] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.428470172] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.573154875] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.575960059] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.726404766] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557927.729479763] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557927.878598447] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557927.881892212] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.029851125] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.033086259] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.167868615] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.170729802] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.276458087] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.279289813] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.416978277] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.419797169] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.525449323] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.528307884] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.679900043] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557928.682749563] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.815907206] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=49
+[INFO] [1751557928.818745350] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557928.925609767] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557928.928469787] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.074530309] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.077328198] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.227146826] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.229944132] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.365423576] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.368252093] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.474219232] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.477047165] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.628519382] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.631570750] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.777902225] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.780732200] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557929.916910242] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557929.919698505] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.022887582] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.025728932] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.173540386] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.176796227] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.328955316] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.332027685] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.470822716] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.473852498] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.523066686] [hiwonder_motor_driver]: Encoders @100Hz: L=18210, R=18504, Velocities: L=218.21, R=119.57
+[INFO] [1751557930.570958062] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.573909379] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.680776924] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.683785996] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.779291058] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.780760883] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557930.918798979] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557930.921626620] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.074659001] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.076150702] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.174994117] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.176640997] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.318268866] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.321222224] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.419881582] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.422864984] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.521996880] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.525052621] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.627261551] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.630349377] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.728630998] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.731972303] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557931.866684211] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557931.869491140] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.078700849] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.081552697] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.218524858] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.221295325] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.321738328] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.324810111] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.423396510] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.426260027] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.572988910] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.576294920] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.726270016] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.729200330] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557932.870599754] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557932.872313138] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.028385120] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557933.031154419] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.177368709] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557933.180322939] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.315873063] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557933.318707117] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.422169944] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557933.424955870] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.522689333] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=49
+[INFO] [1751557933.524013020] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.679133462] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557933.682090902] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.827044509] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557933.830148085] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557933.975493723] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557933.978701432] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.123528693] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.126434793] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.276973615] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557934.279800959] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.355682480] [hiwonder_motor_driver]: Encoders @100Hz: L=24511, R=31268, Velocities: L=223.09, R=213.53
+[INFO] [1751557934.417237096] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.420481557] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.523138699] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.525982670] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.673662353] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.676543368] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.823336315] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.826307463] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557934.972892727] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557934.976118519] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.121598821] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557935.124989125] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.226869170] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557935.230074835] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.375549876] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557935.378874841] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.523622701] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557935.526590931] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.676701205] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=8
+[INFO] [1751557935.679478378] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.816683447] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557935.819714098] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557935.974162958] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557935.976981259] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.129229278] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.132408690] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.277958350] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.280748940] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.415238332] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.418050798] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.521882498] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.525099246] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.664891546] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.666199188] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.770402208] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.771596675] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557936.913350001] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557936.914645685] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.018258612] [hiwonder_motor_driver]: Sending Speed motor command: L=38, R=-11
+[INFO] [1751557937.019533877] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.175978360] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557937.179240318] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.328978871] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=9
+[INFO] [1751557937.331789295] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.474879089] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557937.477979743] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.627531323] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557937.630386084] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.765567313] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557937.768368111] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557937.873779269] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-33
+[INFO] [1751557937.876514437] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.029871091] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-50
+[INFO] [1751557938.032676263] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.078501173] [hiwonder_motor_driver]: Encoders @100Hz: L=37180, R=42236, Velocities: L=-18.99, R=9.49
+[INFO] [1751557938.169805634] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-50
+[INFO] [1751557938.172590680] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.278235442] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-50
+[INFO] [1751557938.281035947] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.416855926] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-50
+[INFO] [1751557938.419915451] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.521486194] [hiwonder_motor_driver]: Sending Speed motor command: L=-50, R=-50
+[INFO] [1751557938.524302159] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.627289927] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557938.630110267] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.776249325] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557938.779459653] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557938.924840028] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557938.927619531] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557939.078319701] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557939.081130998] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557939.726901703] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557939.729692873] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557939.878613714] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557939.881431136] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.028620504] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.031417798] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.165698146] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.168973810] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.271610311] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.274881600] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.377022521] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.380281850] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.526856294] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.529851937] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.678543456] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.681356794] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.818945475] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.821774272] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557940.922963997] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557940.925813795] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.076953724] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557941.079788645] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.217550540] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557941.220593727] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.329460367] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557941.332428882] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.466570922] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557941.469406718] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.575611117] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557941.578388284] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557941.858939327] [hiwonder_motor_driver]: Encoders @100Hz: L=28972, R=45809, Velocities: L=0.00, R=142.55
+[INFO] [1751557942.223248961] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557942.226226225] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557942.374085160] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557942.376842783] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557942.527105522] [hiwonder_motor_driver]: Sending Speed motor command: L=-25, R=25
+[INFO] [1751557942.529826684] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557942.874466253] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557942.877268213] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.025080761] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.027866677] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.177044282] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.179800154] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.328131571] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.330944613] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.479669518] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.482935261] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.617567533] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.619117273] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.769542138] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557943.772907638] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557943.878717015] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557943.881482221] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.013464792] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.014680257] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.116604308] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.117838733] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.274737566] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.278055520] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.425704917] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.428531084] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.574214502] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.577260603] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.722369104] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557944.725355700] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.828412377] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557944.831599946] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557944.976839123] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557944.979894849] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.126621593] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557945.129417424] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.277700316] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557945.280488271] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.420982797] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557945.422319896] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.526619419] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557945.529721523] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.546952418] [hiwonder_motor_driver]: Encoders @100Hz: L=36749, R=55266, Velocities: L=170.90, R=173.18
+[INFO] [1751557945.666216129] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557945.669044337] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.776009015] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557945.779091576] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557945.926762798] [hiwonder_motor_driver]: Sending Speed motor command: L=25, R=-25
+[INFO] [1751557945.929564462] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.027132982] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.029892934] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.174804151] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.176566531] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.317350361] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.320144733] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.424953507] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.427845011] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.572305570] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.575377920] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.726013516] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.729024903] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.866187135] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.869002508] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557946.971413898] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557946.974259899] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557947.123020482] [hiwonder_motor_driver]: Sending Speed motor command: L=50, R=50
+[INFO] [1751557947.125864148] [hiwonder_motor_driver]: ✅ Motor command sent successfully
+[INFO] [1751557949.270483067] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557953.153143047] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557957.175902706] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557960.994576643] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557964.923103792] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557968.858646482] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557972.623686407] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557976.583625009] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557980.465316014] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557984.352948086] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557988.222633803] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557992.043815341] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557995.891447080] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751557999.732977475] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558003.661850133] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558007.534151301] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558011.382126114] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558015.280206967] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558019.283334901] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558023.047753074] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558026.937523860] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00
+[INFO] [1751558030.915443968] [hiwonder_motor_driver]: Encoders @100Hz: L=43765, R=61745, Velocities: L=0.00, R=0.00

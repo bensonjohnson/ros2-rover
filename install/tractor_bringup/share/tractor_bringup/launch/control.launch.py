@@ -17,19 +17,26 @@ def generate_launch_description():
         description='Use simulation (Gazebo) clock if true'
     )
     
-    # Tank steering controller node
-    tank_steering_node = Node(
+    # Hiwonder motor driver node (includes battery publishing)
+    hiwonder_motor_node = Node(
         package='tractor_control',
-        executable='tank_steering_controller',
-        name='tank_steering_controller',
+        executable='hiwonder_motor_driver',
+        name='hiwonder_motor_driver',
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
-            'i2c_bus': 1,
-            'motor_controller_address': 0x60,
+            'i2c_bus': 5,
+            'motor_controller_address': 0x34,
             'wheel_separation': 0.5,
-            'max_motor_speed': 255,
-            'deadband': 0.05
+            'wheel_radius': 0.15,
+            'max_motor_speed': 25,
+            'deadband': 0.05,
+            'encoder_ppr': 1980,
+            'publish_rate': 100.0,
+            'use_pwm_control': True,
+            'motor_type': 3,
+            'min_samples_for_estimation': 10,
+            'max_history_minutes': 60
         }]
     )
     
@@ -39,6 +46,6 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     
     # Add control nodes
-    ld.add_action(tank_steering_node)
+    ld.add_action(hiwonder_motor_node)
     
     return ld

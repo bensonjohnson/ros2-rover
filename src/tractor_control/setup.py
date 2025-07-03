@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'pygame', 'smbus2'],
     zip_safe=True,
     maintainer='benson',
     maintainer_email='benson@todo.todo',
@@ -20,9 +20,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'tank_steering_controller = tractor_control.tank_steering_controller:main',
             'hiwonder_motor_driver = tractor_control.hiwonder_motor_driver:main',
             'xbox_controller_teleop = tractor_control.xbox_controller_teleop:main',
+            'velocity_feedback_controller = tractor_control.velocity_feedback_controller:main',
         ],
     },
 )

@@ -19,12 +19,14 @@ class XboxControllerTeleop(Node):
         self.declare_parameter('deadzone', 0.15)  # Joystick deadzone
         self.declare_parameter('tank_drive_mode', True)  # Tank drive vs arcade drive
         self.declare_parameter('controller_index', 0)  # Which controller to use
+        self.declare_parameter('use_feedback_control', False)  # Use velocity feedback controller
         
         self.max_linear_speed = self.get_parameter('max_linear_speed').value
         self.max_angular_speed = self.get_parameter('max_angular_speed').value
         self.deadzone = self.get_parameter('deadzone').value
         self.tank_drive_mode = self.get_parameter('tank_drive_mode').value
         self.controller_index = self.get_parameter('controller_index').value
+        self.use_feedback_control = self.get_parameter('use_feedback_control').value
         
         # Initialize pygame for joystick support
         try:
@@ -44,7 +46,9 @@ class XboxControllerTeleop(Node):
             self.controller = None
         
         # Publishers
-        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        # Choose output topic based on feedback control mode
+        cmd_vel_topic = 'cmd_vel_raw' if self.use_feedback_control else 'cmd_vel'
+        self.cmd_vel_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
         self.emergency_stop_pub = self.create_publisher(Bool, 'emergency_stop', 10)
         
         # Control state
@@ -54,7 +58,7 @@ class XboxControllerTeleop(Node):
         # Timer for controller polling
         self.timer = self.create_timer(0.05, self.controller_callback)  # 20 Hz
         
-        self.get_logger().info(f'Xbox Controller Teleop initialized (Tank Drive: {self.tank_drive_mode})')
+        self.get_logger().info(f'Xbox Controller Teleop initialized (Tank Drive: {self.tank_drive_mode}, Feedback Control: {self.use_feedback_control})')
         self.print_controls()
     
     def print_controls(self):
@@ -70,6 +74,10 @@ class XboxControllerTeleop(Node):
             self.get_logger().info("- Left stick X: Left/Right turn")
         self.get_logger().info("- Y button: Emergency stop toggle")
         self.get_logger().info("- A button: Resume from emergency stop")
+        if self.use_feedback_control:
+            self.get_logger().info("- Encoder feedback control: ENABLED (auto-correction)")
+        else:
+            self.get_logger().info("- Encoder feedback control: DISABLED (open-loop)")
         self.get_logger().info("================================")
     
     def apply_deadzone(self, value, deadzone):
@@ -158,9 +166,12 @@ class XboxControllerTeleop(Node):
         left_wheel_speed = left_y * self.max_linear_speed
         right_wheel_speed = right_y * self.max_linear_speed
         
-        # Convert to twist (approximation)
+        # Convert to twist using proper tank drive kinematics
         linear_vel = (left_wheel_speed + right_wheel_speed) / 2.0
-        angular_vel = (right_wheel_speed - left_wheel_speed) / 2.0  # Simplified
+        # For tank drive: angular_vel = (right - left) / wheel_separation
+        # Using approximate wheel separation of 0.5m (should match robot's actual value)
+        wheel_separation = 0.5  
+        angular_vel = (right_wheel_speed - left_wheel_speed) / wheel_separation
         
         # Limit angular velocity
         angular_vel = max(-self.max_angular_speed, min(self.max_angular_speed, angular_vel))

@@ -14,5 +14,5 @@ test/test_flake8.py
 test/test_pep257.py
 tractor_control/__init__.py
 tractor_control/hiwonder_motor_driver.py
-tractor_control/tank_steering_controller.py
+tractor_control/velocity_feedback_controller.py
 tractor_control/xbox_controller_teleop.py

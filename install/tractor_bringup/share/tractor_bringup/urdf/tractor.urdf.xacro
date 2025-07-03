@@ -258,22 +258,18 @@
     <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
   </joint>
   
-  <!-- Left Track Joint -->
-  <joint name="left_wheel_joint" type="continuous">
+  <!-- Left Track Joint - Fixed for real robot (tank tracks don't rotate) -->
+  <joint name="left_wheel_joint" type="fixed">
     <parent link="base_link"/>
     <child link="left_wheel"/>
     <origin xyz="0 ${(base_width + track_width)/2} -0.016" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-    <dynamics damping="1.0" friction="0.1"/>
   </joint>
 
-  <!-- Right Track Joint -->
-  <joint name="right_wheel_joint" type="continuous">
+  <!-- Right Track Joint - Fixed for real robot (tank tracks don't rotate) -->
+  <joint name="right_wheel_joint" type="fixed">
     <parent link="base_link"/>
     <child link="right_wheel"/>
     <origin xyz="0 ${-(base_width + track_width)/2} -0.016" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-    <dynamics damping="1.0" friction="0.1"/>
   </joint>
 
   <!-- Camera Joint -->
@@ -314,6 +310,46 @@
   </joint>
 
   <!-- Sprayer tank joint removed -->
+
+  <!-- Virtual Visualization Wheels (small, for motion display only) -->
+  <!-- These rotate to show movement while tank tracks stay fixed -->
+  
+  <!-- Left Virtual Wheel -->
+  <link name="left_viz_wheel">
+    <visual>
+      <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+      <geometry>
+        <cylinder radius="0.02" length="0.01"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+  
+  <!-- Right Virtual Wheel -->
+  <link name="right_viz_wheel">
+    <visual>
+      <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
+      <geometry>
+        <cylinder radius="0.02" length="0.01"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+  </link>
+  
+  <!-- Virtual Wheel Joints (continuous for rotation) -->
+  <joint name="left_viz_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_viz_wheel"/>
+    <origin xyz="0 ${(base_width + track_width)/2 + 0.03} -0.045" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+  
+  <joint name="right_viz_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_viz_wheel"/>
+    <origin xyz="0 ${-(base_width + track_width)/2 - 0.03} -0.045" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
 
   <!-- Gazebo-specific elements -->
   <gazebo reference="base_link">
@@ -394,7 +430,9 @@
 
   <!-- Sprayer tank Gazebo reference removed -->
 
-  <!-- Differential Drive Plugin -->
+  <!-- Differential Drive Plugin - Disabled for fixed track joints -->
+  <!-- Tank tracks are fixed to chassis - use hiwonder_motor_driver for real robot control -->
+  <!--
   <gazebo>
     <plugin name="differential_drive_controller" filename="libgazebo_ros_diff_drive.so">
       <ros>
@@ -416,6 +454,7 @@
       <robot_base_frame>base_footprint</robot_base_frame>
     </plugin>
   </gazebo>
+  -->
 
   <!-- RealSense Camera Plugin -->
   <gazebo reference="camera_link">

@@ -1,0 +1,36 @@
+[INFO] [1751557316.327099323] [velocity_feedback_controller]: Velocity Feedback Controller initialized at 50.0 Hz
+[INFO] [1751557316.328115718] [velocity_feedback_controller]: PID gains - Linear: Kp=0.8, Ki=0.1
+[INFO] [1751557316.328827135] [velocity_feedback_controller]: PID gains - Angular: Kp=0.6, Ki=0.05
+Traceback (most recent call last):
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/velocity_feedback_controller.py", line 207, in main
+    rclpy.spin(controller)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 244, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 839, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 823, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 793, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 701, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/velocity_feedback_controller", line 33, in <module>
+    sys.exit(load_entry_point('tractor-control==0.0.0', 'console_scripts', 'velocity_feedback_controller')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/velocity_feedback_controller.py", line 211, in main
+    controller.destroy_node()
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/velocity_feedback_controller.py", line 196, in destroy_node
+    self.publish_velocity_command(0.0, 0.0)
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/velocity_feedback_controller.py", line 191, in publish_velocity_command
+    self.cmd_vel_pub.publish(cmd_msg)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/publisher.py", line 70, in publish
+    self.__publisher.publish(msg)
+rclpy._rclpy_pybind11.RCLError: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:423
+[ERROR] [1751557345.234076683] [rclpy.signals]: rcl_trigger_guard_condition() failed: guard condition implementation is invalid, at ./src/rcl/guard_condition.c:172

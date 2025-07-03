@@ -1,0 +1,23 @@
+[4.695s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_coverage': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_coverage build --build-base /home/ubuntu/ros2-rover/build/tractor_coverage/build install --record /home/ubuntu/ros2-rover/build/tractor_coverage/install.log --single-version-externally-managed install_data
+[5.248s] running egg_info
+[5.279s] writing ../../build/tractor_coverage/tractor_coverage.egg-info/PKG-INFO
+[5.280s] writing dependency_links to ../../build/tractor_coverage/tractor_coverage.egg-info/dependency_links.txt
+[5.281s] writing entry points to ../../build/tractor_coverage/tractor_coverage.egg-info/entry_points.txt
+[5.282s] writing requirements to ../../build/tractor_coverage/tractor_coverage.egg-info/requires.txt
+[5.282s] writing top-level names to ../../build/tractor_coverage/tractor_coverage.egg-info/top_level.txt
+[5.374s] reading manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+[5.374s] writing manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+[5.375s] running build
+[5.375s] running build_py
+[5.376s] running install
+[5.376s] running install_lib
+[5.408s] running install_data
+[5.409s] running install_egg_info
+[5.421s] removing '/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage-0.0.0-py3.12.egg-info' (and everything under it)
+[5.422s] Copying ../../build/tractor_coverage/tractor_coverage.egg-info to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage-0.0.0-py3.12.egg-info
+[5.423s] running install_scripts
+[5.632s] Installing coverage_action_server script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[5.633s] Installing coverage_client script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[5.634s] Installing coverage_visualizer script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[5.634s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_coverage/install.log'
+[5.708s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_coverage' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_coverage build --build-base /home/ubuntu/ros2-rover/build/tractor_coverage/build install --record /home/ubuntu/ros2-rover/build/tractor_coverage/install.log --single-version-externally-managed install_data

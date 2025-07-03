@@ -1,13 +1,49 @@
-[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-06-30-15-22-59-278111-rover-4626
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-01-01-44-55-501608-rover-2778
 [INFO] [launch]: Default logging verbosity is set to INFO
-[INFO] [realsense2_camera_node-1]: process started with pid [4630]
-[INFO] [realsense_processor-2]: process started with pid [4631]
-[INFO] [obstacle_detector-3]: process started with pid [4632]
-[realsense2_camera_node-1] [INFO] [1751296979.928889511] [camera.realsense2_camera]: RealSense ROS v4.55.1
-[realsense2_camera_node-1] [INFO] [1751296979.929007346] [camera.realsense2_camera]: Built with LibRealSense v2.55.1
-[realsense2_camera_node-1] [INFO] [1751296979.929021930] [camera.realsense2_camera]: Running with LibRealSense v2.55.1
-[realsense2_camera_node-1] [WARN] [1751296979.936189446] [camera.realsense2_camera]: No RealSense devices were found!
+[INFO] [realsense2_camera_node-1]: process started with pid [2782]
+[INFO] [realsense_processor-2]: process started with pid [2783]
+[INFO] [obstacle_detector-3]: process started with pid [2784]
+[realsense2_camera_node-1] [INFO] [1751334296.542644527] [camera.realsense2_camera]: RealSense ROS v4.55.1
+[realsense2_camera_node-1] [INFO] [1751334296.542753317] [camera.realsense2_camera]: Built with LibRealSense v2.55.1
+[realsense2_camera_node-1] [INFO] [1751334296.542767025] [camera.realsense2_camera]: Running with LibRealSense v2.55.1
+[realsense2_camera_node-1] [WARN] [1751334296.549577629] [camera.realsense2_camera]: No RealSense devices were found!
 [realsense_processor-2] pyrealsense2 not available. Will use official realsense2_camera node instead.
 [realsense_processor-2] RealSense library not available. Cannot start node.
-[INFO] [realsense_processor-2]: process has finished cleanly [pid 4631]
-[obstacle_detector-3] [INFO] [1751296980.857618865] [obstacle_detector]: Obstacle Detector initialized
+[obstacle_detector-3] [INFO] [1751334296.790337752] [obstacle_detector]: Obstacle Detector initialized
+[INFO] [realsense_processor-2]: process has finished cleanly [pid 2783]
+[realsense2_camera_node-1] [WARN] [1751334302.556772420] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-1] [WARN] [1751334308.564225788] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-1] [WARN] [1751334314.571554452] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-1] [INFO] [1751334315.857189046] [rclcpp]: signal_handler(signum=2)
+[obstacle_detector-3] Traceback (most recent call last):
+[obstacle_detector-3]   File "/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor_vision/obstacle_detector.py", line 300, in main
+[obstacle_detector-3]     rclpy.spin(detector)
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 244, in spin
+[obstacle_detector-3]     executor.spin_once()
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 839, in spin_once
+[obstacle_detector-3]     self._spin_once_impl(timeout_sec)
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 823, in _spin_once_impl
+[obstacle_detector-3]     handler, entity, node = self.wait_for_ready_callbacks(
+[obstacle_detector-3]                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 793, in wait_for_ready_callbacks
+[obstacle_detector-3]     return next(self._cb_iter)
+[obstacle_detector-3]            ^^^^^^^^^^^^^^^^^^^
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 701, in _wait_for_ready_callbacks
+[obstacle_detector-3]     raise ExternalShutdownException()
+[obstacle_detector-3] rclpy.executors.ExternalShutdownException
+[obstacle_detector-3] 
+[obstacle_detector-3] During handling of the above exception, another exception occurred:
+[obstacle_detector-3] 
+[obstacle_detector-3] Traceback (most recent call last):
+[obstacle_detector-3]   File "/home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision/obstacle_detector", line 33, in <module>
+[obstacle_detector-3]     sys.exit(load_entry_point('tractor-vision==0.0.0', 'console_scripts', 'obstacle_detector')())
+[obstacle_detector-3]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[obstacle_detector-3]   File "/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor_vision/obstacle_detector.py", line 305, in main
+[obstacle_detector-3]     rclpy.shutdown()
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+[obstacle_detector-3]     _shutdown(context=context)
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+[obstacle_detector-3]     context.shutdown()
+[obstacle_detector-3]   File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+[obstacle_detector-3]     self.__context.shutdown()
+[obstacle_detector-3] rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333

@@ -1,0 +1,4 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-03-15-51-47-025275-rover-5360
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [robot_state_publisher-1]: process started with pid [5365]
+[robot_state_publisher-1] [INFO] [1751557907.424921206] [robot_state_publisher]: Robot initialized

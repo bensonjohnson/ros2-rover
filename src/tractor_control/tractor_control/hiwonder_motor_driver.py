@@ -29,6 +29,8 @@ class HiwonderMotorDriver(Node):
         self.declare_parameter('publish_rate', 5.0)  # Hz - Reduced to prevent I2C overload
         self.declare_parameter('use_pwm_control', True)  # Use PWM for JGB3865 (open-loop)
         self.declare_parameter('motor_type', 0)  # 0=no encoder (PWM mode for JGB3865)
+        self.declare_parameter('min_samples_for_estimation', 10)  # Minimum samples before estimating runtime
+        self.declare_parameter('max_history_minutes', 60)  # How far back to look for drain rate (minutes)
         
         self.i2c_bus = self.get_parameter('i2c_bus').value
         self.motor_address = self.get_parameter('motor_controller_address').value
@@ -40,6 +42,12 @@ class HiwonderMotorDriver(Node):
         self.publish_rate = self.get_parameter('publish_rate').value
         self.use_pwm_control = self.get_parameter('use_pwm_control').value
         self.motor_type = self.get_parameter('motor_type').value
+        self.min_samples_for_estimation = self.get_parameter('min_samples_for_estimation').value
+        self.max_history_minutes = self.get_parameter('max_history_minutes').value
+        
+        # Battery monitoring history
+        self.voltage_history = []  # List of (timestamp, voltage, percentage) tuples
+        self.start_time = time.time()
         
         # I2C Register addresses (corrected from ESP32 testing)
         self.ADC_BAT_ADDR = 0x00
@@ -54,7 +62,8 @@ class HiwonderMotorDriver(Node):
         self.MOTOR_TYPE_TT = 1
         self.MOTOR_TYPE_N20 = 2  
         self.MOTOR_TYPE_JGB37_520_12V = 3     # 90:1 gear ratio (44 pulses per rev)
-        # Note: JGB3865-520R45-12 has 45:1 gear ratio - different encoder count
+        # Note: JGB3865-520R45-12 has 45:1 gear ratio (44 pulses × 45:1 = 1980 PPR)
+        # Use motor_type=3 with encoder_ppr=1980 for JGB3865-520R45-12
         
         # Initialize I2C
         try:
@@ -101,6 +110,18 @@ class HiwonderMotorDriver(Node):
         self.battery_voltage_pub = self.create_publisher(
             Float32,
             'battery_voltage',
+            10
+        )
+        
+        self.battery_percentage_pub = self.create_publisher(
+            Float32,
+            'battery_percentage',
+            10
+        )
+        
+        self.battery_runtime_pub = self.create_publisher(
+            Float32,
+            'battery_runtime',
             10
         )
         
@@ -291,8 +312,12 @@ class HiwonderMotorDriver(Node):
                         right_delta = right_encoder - self.prev_right_encoder
                         
                         # Convert encoder deltas to wheel velocities (rad/s)
-                        self.left_velocity = (left_delta / self.encoder_ppr) * 2 * math.pi / dt
-                        self.right_velocity = (right_delta / self.encoder_ppr) * 2 * math.pi / dt
+                        if dt > 0.001:  # Avoid division by very small dt
+                            self.left_velocity = (left_delta / self.encoder_ppr) * 2 * math.pi / dt
+                            self.right_velocity = (right_delta / self.encoder_ppr) * 2 * math.pi / dt
+                        else:
+                            # Keep previous velocities if dt too small
+                            pass
                         
                         self.prev_left_encoder = left_encoder
                         self.prev_right_encoder = right_encoder
@@ -324,23 +349,26 @@ class HiwonderMotorDriver(Node):
     
     def publish_joint_states(self, left_encoder, right_encoder):
         """Publish joint states from encoder data"""
-        # Convert encoder counts to wheel positions
-        left_pos = (left_encoder / self.encoder_ppr) * 2 * math.pi
-        right_pos = (right_encoder / self.encoder_ppr) * 2 * math.pi
+        # Tank tracks are fixed joints - don't publish rotating positions!
+        # The encoder data is used for odometry calculation, not joint visualization
+        
+        # Convert encoder counts to wheel radians for visualization wheels
+        left_wheel_pos = (left_encoder / self.encoder_ppr) * 2 * math.pi
+        right_wheel_pos = (right_encoder / self.encoder_ppr) * 2 * math.pi
         
         joint_msg = JointState()
         joint_msg.header.stamp = self.get_clock().now().to_msg()
-        joint_msg.name = ['left_wheel_joint', 'right_wheel_joint']
-        joint_msg.position = [left_pos, right_pos]
-        joint_msg.velocity = [self.left_velocity, self.right_velocity]
+        joint_msg.name = ['left_wheel_joint', 'right_wheel_joint', 'left_viz_wheel_joint', 'right_viz_wheel_joint']
+        joint_msg.position = [0.0, 0.0, left_wheel_pos, right_wheel_pos]  # Fixed tracks + rotating viz wheels
+        joint_msg.velocity = [0.0, 0.0, self.left_velocity, self.right_velocity]  # Fixed tracks + wheel velocities
         
         self.joint_state_pub.publish(joint_msg)
     
     def publish_odometry(self):
         """Calculate and publish wheel odometry"""
-        # Tank steering kinematics
+        # Tank steering kinematics (fixed coordinate frame orientation)
         linear_vel = (self.left_velocity + self.right_velocity) * self.wheel_radius / 2.0
-        angular_vel = (self.right_velocity - self.left_velocity) * self.wheel_radius / self.wheel_separation
+        angular_vel = -(self.left_velocity - self.right_velocity) * self.wheel_radius / self.wheel_separation
         
         # Update pose (integrate velocities)
         dt = 1.0/100.0  # 100Hz sensor callback frequency (10ms)
@@ -355,7 +383,7 @@ class HiwonderMotorDriver(Node):
         odom_msg = Odometry()
         odom_msg.header.stamp = self.get_clock().now().to_msg()
         odom_msg.header.frame_id = 'odom'
-        odom_msg.child_frame_id = 'base_link'
+        odom_msg.child_frame_id = 'base_footprint'
         
         # Position
         odom_msg.pose.pose.position.x = self.x
@@ -382,11 +410,11 @@ class HiwonderMotorDriver(Node):
         
         self.odom_pub.publish(odom_msg)
         
-        # Publish TF transform
+        # Publish TF transform (odom -> base_footprint, base_footprint -> base_link is in URDF)
         tf_msg = TransformStamped()
         tf_msg.header.stamp = self.get_clock().now().to_msg()
         tf_msg.header.frame_id = 'odom'
-        tf_msg.child_frame_id = 'base_link'
+        tf_msg.child_frame_id = 'base_footprint'
         tf_msg.transform.translation.x = self.x
         tf_msg.transform.translation.y = self.y
         tf_msg.transform.translation.z = 0.0
@@ -414,12 +442,45 @@ class HiwonderMotorDriver(Node):
                 voltage_msg.data = voltage_volts
                 self.battery_voltage_pub.publish(voltage_msg)
                 
-                self.get_logger().debug(f"Battery voltage: {voltage_raw}mV ({voltage_volts:.1f}V)")
+                # Calculate and publish battery percentage (3S LiPo: 9.9V=0%, 12.6V=100%)
+                battery_percentage = self.calculate_battery_percentage(voltage_volts)
+                percentage_msg = Float32()
+                percentage_msg.data = battery_percentage
+                self.battery_percentage_pub.publish(percentage_msg)
+                
+                # Update voltage history for drain rate calculation
+                current_time = time.time()
+                self.update_voltage_history(current_time, voltage_volts, battery_percentage)
+                
+                # Calculate and publish estimated runtime remaining based on actual drain rate
+                runtime_hours = self.calculate_dynamic_runtime()
+                runtime_msg = Float32()
+                runtime_msg.data = runtime_hours
+                self.battery_runtime_pub.publish(runtime_msg)
+                
+                # Enhanced logging with runtime status
+                if runtime_hours < 0:
+                    runtime_status = "calculating..."
+                else:
+                    runtime_status = f"{runtime_hours:.1f}h remaining"
+                
+                self.get_logger().debug(f"Battery: {voltage_raw}mV ({voltage_volts:.1f}V, {battery_percentage:.1f}%, {runtime_status}) [samples: {len(self.voltage_history)}]")
             else:
                 # Fallback to dummy value if read fails
                 voltage_msg = Float32()
                 voltage_msg.data = 12.0
                 self.battery_voltage_pub.publish(voltage_msg)
+                
+                # Publish dummy percentage and runtime too
+                dummy_percentage = self.calculate_battery_percentage(12.0)
+                percentage_msg = Float32()
+                percentage_msg.data = dummy_percentage
+                self.battery_percentage_pub.publish(percentage_msg)
+                
+                runtime_msg = Float32()
+                runtime_msg.data = -1.0  # Indicate unknown runtime
+                self.battery_runtime_pub.publish(runtime_msg)
+                
                 self.get_logger().debug("Battery read failed - using dummy 12V")
                 
         except Exception as e:
@@ -427,7 +488,74 @@ class HiwonderMotorDriver(Node):
             voltage_msg = Float32()
             voltage_msg.data = 12.0
             self.battery_voltage_pub.publish(voltage_msg)
+            
+            # Publish dummy percentage and runtime too
+            dummy_percentage = self.calculate_battery_percentage(12.0)
+            percentage_msg = Float32()
+            percentage_msg.data = dummy_percentage
+            self.battery_percentage_pub.publish(percentage_msg)
+            
+            runtime_msg = Float32()
+            runtime_msg.data = -1.0  # Indicate unknown runtime
+            self.battery_runtime_pub.publish(runtime_msg)
+            
             self.get_logger().debug(f'Battery reading error: {e} - using dummy 12V')
+    
+    def calculate_battery_percentage(self, voltage):
+        """Calculate battery percentage for 3S LiPo (9.9V = 0%, 12.6V = 100%)"""
+        min_voltage = 9.9   # 0% charge (3.3V per cell)
+        max_voltage = 12.6  # 100% charge (4.2V per cell)
+        
+        # Clamp voltage to valid range
+        voltage = max(min_voltage, min(max_voltage, voltage))
+        
+        # Calculate percentage
+        percentage = ((voltage - min_voltage) / (max_voltage - min_voltage)) * 100.0
+        
+        return max(0.0, min(100.0, percentage))
+    
+    def update_voltage_history(self, timestamp, voltage, percentage):
+        """Update voltage history and clean old entries"""
+        # Add new reading
+        self.voltage_history.append((timestamp, voltage, percentage))
+        
+        # Remove entries older than max_history_minutes
+        cutoff_time = timestamp - (self.max_history_minutes * 60)
+        self.voltage_history = [entry for entry in self.voltage_history if entry[0] > cutoff_time]
+    
+    def calculate_dynamic_runtime(self):
+        """Calculate runtime based on actual battery drain rate"""
+        if len(self.voltage_history) < self.min_samples_for_estimation:
+            return -1.0  # Not enough data yet
+        
+        # Get current and oldest readings
+        current_time, current_voltage, current_percentage = self.voltage_history[-1]
+        oldest_time, oldest_voltage, oldest_percentage = self.voltage_history[0]
+        
+        # Calculate time elapsed and voltage/percentage change
+        time_elapsed_hours = (current_time - oldest_time) / 3600.0
+        voltage_drop = oldest_voltage - current_voltage
+        percentage_drop = oldest_percentage - current_percentage
+        
+        # If no significant change or time, can't estimate
+        if time_elapsed_hours < 0.01 or percentage_drop <= 0:
+            return -1.0  # No meaningful drain detected
+        
+        # Calculate drain rate (percentage per hour)
+        drain_rate_percent_per_hour = percentage_drop / time_elapsed_hours
+        
+        # Estimate remaining time based on current percentage and drain rate
+        if drain_rate_percent_per_hour <= 0:
+            return -1.0  # Invalid drain rate
+        
+        # Calculate hours remaining: current_percentage / drain_rate
+        runtime_hours = current_percentage / drain_rate_percent_per_hour
+        
+        # Cap unrealistic estimates
+        max_reasonable_hours = 24.0
+        runtime_hours = min(runtime_hours, max_reasonable_hours)
+        
+        return max(0.0, runtime_hours)
     
     def destroy_node(self):
         """Clean shutdown"""

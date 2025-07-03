@@ -1,0 +1,26 @@
+running egg_info
+writing ../../build/tractor_control/tractor_control.egg-info/PKG-INFO
+writing dependency_links to ../../build/tractor_control/tractor_control.egg-info/dependency_links.txt
+writing entry points to ../../build/tractor_control/tractor_control.egg-info/entry_points.txt
+writing requirements to ../../build/tractor_control/tractor_control.egg-info/requires.txt
+writing top-level names to ../../build/tractor_control/tractor_control.egg-info/top_level.txt
+reading manifest file '../../build/tractor_control/tractor_control.egg-info/SOURCES.txt'
+writing manifest file '../../build/tractor_control/tractor_control.egg-info/SOURCES.txt'
+running build
+running build_py
+copying tractor_control/hiwonder_motor_driver.py -> /home/ubuntu/ros2-rover/build/tractor_control/build/lib/tractor_control
+copying tractor_control/xbox_controller_teleop.py -> /home/ubuntu/ros2-rover/build/tractor_control/build/lib/tractor_control
+running install
+running install_lib
+copying /home/ubuntu/ros2-rover/build/tractor_control/build/lib/tractor_control/hiwonder_motor_driver.py -> /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control
+copying /home/ubuntu/ros2-rover/build/tractor_control/build/lib/tractor_control/xbox_controller_teleop.py -> /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/hiwonder_motor_driver.py to hiwonder_motor_driver.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control/xbox_controller_teleop.py to xbox_controller_teleop.cpython-312.pyc
+running install_data
+running install_egg_info
+removing '/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control-0.0.0-py3.12.egg-info' (and everything under it)
+Copying ../../build/tractor_control/tractor_control.egg-info to /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor_control-0.0.0-py3.12.egg-info
+running install_scripts
+Installing hiwonder_motor_driver script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+Installing xbox_controller_teleop script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_control/install.log'

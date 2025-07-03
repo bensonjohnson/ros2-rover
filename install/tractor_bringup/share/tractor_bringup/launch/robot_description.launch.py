@@ -42,16 +42,16 @@ def generate_launch_description():
         }]
     )
     
-    # Joint state publisher (for manual joint control in simulation)
-    joint_state_publisher_node = Node(
-        package='joint_state_publisher_gui',
-        executable='joint_state_publisher_gui',
-        name='joint_state_publisher_gui',
-        output='screen',
-        parameters=[{
-            'use_sim_time': use_sim_time
-        }]
-    )
+    # Joint state publisher GUI disabled for real robot (tracks are fixed)
+    # joint_state_publisher_node = Node(
+    #     package='joint_state_publisher_gui',
+    #     executable='joint_state_publisher_gui',
+    #     name='joint_state_publisher_gui',
+    #     output='screen',
+    #     parameters=[{
+    #         'use_sim_time': use_sim_time
+    #     }]
+    # )
     
     ld = LaunchDescription()
     
@@ -60,6 +60,6 @@ def generate_launch_description():
     
     # Add nodes
     ld.add_action(robot_state_publisher_node)
-    ld.add_action(joint_state_publisher_node)
+    # ld.add_action(joint_state_publisher_node)  # Disabled for real robot
     
     return ld

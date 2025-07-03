@@ -1,0 +1,221 @@
+{
+  "configById": {
+    "3d": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 5.0,
+        "phi": 0.5,
+        "thetaOffset": 0,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1]
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "enableStats": false,
+        "backgroundColor": "#212529",
+        "transforms": {
+          "showLabel": false,
+          "editable": true
+        }
+      },
+      "transforms": {
+        "frame:base_link": {
+          "visible": true
+        },
+        "frame:left_wheel": {
+          "visible": true
+        },
+        "frame:right_wheel": {
+          "visible": true
+        },
+        "frame:camera_link": {
+          "visible": true
+        },
+        "frame:gps_link": {
+          "visible": true
+        }
+      },
+      "topics": {
+        "/robot_description": {
+          "visible": true
+        },
+        "/tf": {
+          "visible": true
+        },
+        "/tf_static": {
+          "visible": true
+        },
+        "/odom": {
+          "visible": true,
+          "color": "rgba(0, 255, 0, 0.8)",
+          "type": "arrow"
+        }
+      },
+      "layers": {
+        "grid": {
+          "visible": true,
+          "frameId": "map",
+          "size": 20,
+          "divisions": 10,
+          "color": "rgba(255, 255, 255, 0.1)"
+        }
+      }
+    },
+    "map": {
+      "topicToRender": "/map",
+      "transforms": {},
+      "followTf": "base_link",
+      "zAxisUp": false,
+      "panelTitle": "Map View"
+    },
+    "teleop": {
+      "topic": "/cmd_vel",
+      "publishRate": 10,
+      "upButton": {
+        "field": "linear.x",
+        "value": 0.3
+      },
+      "downButton": {
+        "field": "linear.x", 
+        "value": -0.3
+      },
+      "leftButton": {
+        "field": "angular.z",
+        "value": 0.5
+      },
+      "rightButton": {
+        "field": "angular.z",
+        "value": -0.5
+      }
+    },
+    "battery_voltage": {
+      "path": "/battery_voltage.data",
+      "minValue": 9.9,
+      "maxValue": 12.6,
+      "colorMap": "turbo",
+      "gradient": ["#ff0000", "#ffff00", "#00ff00"],
+      "reverse": false,
+      "showTooltip": true,
+      "panelTitle": "Battery Voltage"
+    },
+    "battery_percentage": {
+      "path": "/battery_percentage.data", 
+      "minValue": 0,
+      "maxValue": 100,
+      "colorMap": "turbo",
+      "gradient": ["#ff0000", "#ffff00", "#00ff00"],
+      "reverse": false,
+      "showTooltip": true,
+      "panelTitle": "Battery %"
+    },
+    "battery_runtime": {
+      "path": "/battery_runtime.data",
+      "minValue": 0,
+      "maxValue": 8,
+      "colorMap": "turbo", 
+      "gradient": ["#ff0000", "#ffff00", "#00ff00"],
+      "reverse": false,
+      "showTooltip": true,
+      "panelTitle": "Runtime (hrs)"
+    },
+    "speed_gauge": {
+      "path": "/odom.twist.twist.linear.x",
+      "minValue": -1.0,
+      "maxValue": 1.0,
+      "colorMap": "turbo",
+      "gradient": ["#0000ff", "#00ff00", "#ff0000"],
+      "reverse": false,
+      "showTooltip": true,
+      "panelTitle": "Speed (m/s)"
+    },
+    "gps_status": {
+      "paths": [
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/hglrc_gps/fix.latitude",
+          "enabled": true,
+          "label": "Latitude"
+        },
+        {
+          "timestampMethod": "receiveTime", 
+          "value": "/hglrc_gps/fix.longitude",
+          "enabled": true,
+          "label": "Longitude"
+        },
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/hglrc_gps/fix.status.status",
+          "enabled": true,
+          "label": "GPS Status"
+        }
+      ],
+      "panelTitle": "GPS Status"
+    },
+    "motor_status": {
+      "paths": [
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/motor_speeds.data[0]",
+          "enabled": true,
+          "label": "Left Motor"
+        },
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/motor_speeds.data[1]", 
+          "enabled": true,
+          "label": "Right Motor"
+        }
+      ],
+      "panelTitle": "Motor Commands"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "direction": "row",
+    "first": {
+      "direction": "column",
+      "first": {
+        "direction": "row", 
+        "first": "3d",
+        "second": "map",
+        "splitPercentage": 60
+      },
+      "second": {
+        "direction": "row",
+        "first": "gps_status",
+        "second": "motor_status", 
+        "splitPercentage": 50
+      },
+      "splitPercentage": 75
+    },
+    "second": {
+      "direction": "column",
+      "first": "teleop",
+      "second": {
+        "direction": "column",
+        "first": {
+          "direction": "row",
+          "first": "battery_voltage",
+          "second": "battery_percentage",
+          "splitPercentage": 50
+        },
+        "second": {
+          "direction": "row", 
+          "first": "battery_runtime",
+          "second": "speed_gauge",
+          "splitPercentage": 50
+        },
+        "splitPercentage": 50
+      },
+      "splitPercentage": 40
+    },
+    "splitPercentage": 75
+  }
+}

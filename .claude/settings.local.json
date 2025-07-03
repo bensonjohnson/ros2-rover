@@ -75,7 +75,24 @@
       "Bash(ros2 pkg list:*)",
       "Bash(pip3 list:*)",
       "Bash(modinfo:*)",
-      "Bash(dtc:*)"
+      "Bash(dtc:*)",
+      "Bash(rg:*)",
+      "Bash(xacro:*)",
+      "Bash(systemctl status:*)",
+      "Bash(bluetoothctl:*)",
+      "Bash(hciconfig:*)",
+      "Bash(rfkill list:*)",
+      "Bash(rfkill:*)",
+      "Bash(sudo rfkill:*)",
+      "Bash(sudo python3:*)",
+      "Bash(sudo udevadm control:*)",
+      "Bash(newgrp:*)",
+      "Bash(export:*)",
+      "Bash(jstest:*)",
+      "Bash(mv:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }

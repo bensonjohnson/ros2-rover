@@ -1,0 +1,339 @@
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-01-16-18-08-551423-rover-5372
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [robot_state_publisher-1]: process started with pid [5394]
+[INFO] [joint_state_publisher_gui-2]: process started with pid [5395]
+[INFO] [encoder_publisher-3]: process started with pid [5396]
+[INFO] [robot_state_publisher-4]: process started with pid [5397]
+[INFO] [joint_state_publisher_gui-5]: process started with pid [5398]
+[INFO] [tank_steering_controller-6]: process started with pid [5399]
+[INFO] [realsense2_camera_node-7]: process started with pid [5400]
+[INFO] [realsense_processor-8]: process started with pid [5401]
+[INFO] [obstacle_detector-9]: process started with pid [5402]
+[INFO] [ekf_node-10]: process started with pid [5405]
+[INFO] [ekf_node-11]: process started with pid [5412]
+[INFO] [navsat_transform_node-12]: process started with pid [5420]
+[INFO] [component_container_isolated-13]: process started with pid [5422]
+[robot_state_publisher-4] [37;1m2025-07-01 16:18:10.333 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[encoder_publisher-3] Traceback (most recent call last):
+[encoder_publisher-3]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher", line 33, in <module>
+[encoder_publisher-3]     sys.exit(load_entry_point('tractor-sensors==0.0.0', 'console_scripts', 'encoder_publisher')())
+[encoder_publisher-3]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-3]   File "/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher", line 25, in importlib_load_entry_point
+[encoder_publisher-3]     return next(matches).load()
+[encoder_publisher-3]            ^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-3]   File "/usr/lib/python3.12/importlib/metadata/__init__.py", line 205, in load
+[encoder_publisher-3]     module = import_module(match.group('module'))
+[encoder_publisher-3]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-3]   File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+[encoder_publisher-3]     return _bootstrap._gcd_import(name[level:], package, level)
+[encoder_publisher-3]            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[encoder_publisher-3]   File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+[encoder_publisher-3]   File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+[encoder_publisher-3]   File "<frozen importlib._bootstrap>", line 1324, in _find_and_load_unlocked
+[encoder_publisher-3] ModuleNotFoundError: No module named 'tractor_sensors.encoder_publisher'
+[ekf_node-10] [37;1m2025-07-01 16:18:10.404 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[ERROR] [encoder_publisher-3]: process has died [pid 5396, exit code 1, cmd '/home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors/encoder_publisher --ros-args -r __node:=encoder_publisher --params-file /tmp/launch_params_2ironhtf'].
+[component_container_isolated-13] [37;1m2025-07-01 16:18:10.453 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[navsat_transform_node-12] [37;1m2025-07-01 16:18:10.462 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[ekf_node-11] [37;1m2025-07-01 16:18:10.466 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[robot_state_publisher-1] [37;1m2025-07-01 16:18:10.478 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[tank_steering_controller-6] Traceback (most recent call last):
+[tank_steering_controller-6]   File "/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/tank_steering_controller", line 33, in <module>
+[tank_steering_controller-6]     sys.exit(load_entry_point('tractor-control==0.0.0', 'console_scripts', 'tank_steering_controller')())
+[tank_steering_controller-6]              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[tank_steering_controller-6]   File "/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/tank_steering_controller", line 25, in importlib_load_entry_point
+[tank_steering_controller-6]     return next(matches).load()
+[tank_steering_controller-6]            ^^^^^^^^^^^^^
+[tank_steering_controller-6] StopIteration
+[realsense2_camera_node-7] [37;1m2025-07-01 16:18:10.521 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[ERROR] [tank_steering_controller-6]: process has died [pid 5399, exit code 1, cmd '/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/tank_steering_controller --ros-args -r __node:=tank_steering_controller --params-file /tmp/launch_params_k_5h5byk'].
+[joint_state_publisher_gui-5] qt.qpa.xcb: could not connect to display 
+[joint_state_publisher_gui-5] qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
+[joint_state_publisher_gui-5] This application failed to start because no Qt platform plugin could be initialized. Reinstalling the application may fix this problem.
+[joint_state_publisher_gui-5] 
+[joint_state_publisher_gui-5] Available platform plugins are: eglfs, linuxfb, minimal, minimalegl, offscreen, vnc, wayland-egl, wayland, wayland-xcomposite-egl, wayland-xcomposite-glx, xcb.
+[joint_state_publisher_gui-5] 
+[component_container_isolated-13] [INFO] [1751386691.127328087] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libmap_server_core.so
+[robot_state_publisher-4] [INFO] [1751386691.196121496] [robot_state_publisher]: Robot initialized
+[realsense2_camera_node-7] [INFO] [1751386691.206878661] [camera.realsense2_camera]: RealSense ROS v4.55.1
+[realsense2_camera_node-7] [INFO] [1751386691.207142909] [camera.realsense2_camera]: Built with LibRealSense v2.55.1
+[realsense2_camera_node-7] [INFO] [1751386691.207289907] [camera.realsense2_camera]: Running with LibRealSense v2.55.1
+[component_container_isolated-13] [INFO] [1751386691.219909349] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_map_server::CostmapFilterInfoServer>
+[component_container_isolated-13] [INFO] [1751386691.221644168] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_map_server::MapSaver>
+[component_container_isolated-13] [INFO] [1751386691.222435162] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_map_server::MapServer>
+[joint_state_publisher_gui-2] qt.qpa.xcb: could not connect to display 
+[joint_state_publisher_gui-2] qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
+[joint_state_publisher_gui-2] This application failed to start because no Qt platform plugin could be initialized. Reinstalling the application may fix this problem.
+[joint_state_publisher_gui-2] 
+[joint_state_publisher_gui-2] Available platform plugins are: eglfs, linuxfb, minimal, minimalegl, offscreen, vnc, wayland-egl, wayland, wayland-xcomposite-egl, wayland-xcomposite-glx, xcb.
+[joint_state_publisher_gui-2] 
+[component_container_isolated-13] [INFO] [1751386691.224482354] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_map_server::MapServer>
+[realsense2_camera_node-7] [WARN] [1751386691.242815208] [camera.realsense2_camera]: No RealSense devices were found!
+[robot_state_publisher-1] [INFO] [1751386691.272494679] [robot_state_publisher]: Robot initialized
+[component_container_isolated-13] [INFO] [1751386691.325500882] [map_server]: 
+[component_container_isolated-13] 	map_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.325626589] [map_server]: Creating
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/map_server' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.327723364] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libamcl_core.so
+[component_container_isolated-13] [INFO] [1751386691.333479943] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_amcl::AmclNode>
+[component_container_isolated-13] [INFO] [1751386691.333555193] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_amcl::AmclNode>
+[component_container_isolated-13] [INFO] [1751386691.415841870] [amcl]: 
+[component_container_isolated-13] 	amcl lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.417538481] [amcl]: Creating
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/amcl' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.443327151] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libcontroller_server_core.so
+[component_container_isolated-13] [INFO] [1751386691.459445981] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_controller::ControllerServer>
+[component_container_isolated-13] [INFO] [1751386691.459507230] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_controller::ControllerServer>
+[component_container_isolated-13] [INFO] [1751386691.476440678] [controller_server]: 
+[component_container_isolated-13] 	controller_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.482744128] [controller_server]: Creating controller server
+[component_container_isolated-13] [INFO] [1751386691.508214300] [local_costmap.local_costmap]: 
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/controller_server' in container '/nav2_container'
+[component_container_isolated-13] 	local_costmap lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.509023960] [local_costmap.local_costmap]: Creating Costmap
+[component_container_isolated-13] [INFO] [1751386691.510763447] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libnav2_lifecycle_manager_core.so
+[component_container_isolated-13] [INFO] [1751386691.512573224] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_lifecycle_manager::LifecycleManager>
+[component_container_isolated-13] [INFO] [1751386691.512635640] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_lifecycle_manager::LifecycleManager>
+[component_container_isolated-13] [INFO] [1751386691.532745313] [lifecycle_manager_localization]: Creating
+[component_container_isolated-13] [INFO] [1751386691.542201363] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libsmoother_server_core.so
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/lifecycle_manager_localization' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.542210988] [lifecycle_manager_localization]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.544859300] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_smoother::SmootherServer>
+[component_container_isolated-13] [INFO] [1751386691.544910049] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_smoother::SmootherServer>
+[component_container_isolated-13] [INFO] [1751386691.560914547] [lifecycle_manager_localization]: [34m[1mStarting managed nodes bringup...[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.560986005] [lifecycle_manager_localization]: [34m[1mConfiguring map_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.561455876] [map_server]: Configuring
+[component_container_isolated-13] [INFO] [1751386691.561647208] [map_io]: Loading yaml file: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
+[component_container_isolated-13] [INFO] [1751386691.562489243] [map_io]: resolution: 0.05
+[component_container_isolated-13] [INFO] [1751386691.562541159] [map_io]: origin[0]: -10
+[component_container_isolated-13] [INFO] [1751386691.562561867] [map_io]: origin[1]: -10
+[component_container_isolated-13] [INFO] [1751386691.562579367] [map_io]: origin[2]: 0
+[component_container_isolated-13] [INFO] [1751386691.562693699] [map_io]: free_thresh: 0.196
+[component_container_isolated-13] [INFO] [1751386691.562717032] [map_io]: occupied_thresh: 0.65
+[component_container_isolated-13] [INFO] [1751386691.562747365] [map_io]: mode: trinary
+[component_container_isolated-13] [INFO] [1751386691.562767199] [map_io]: negate: 0
+[component_container_isolated-13] [INFO] [1751386691.563361319] [map_io]: Loading image_file: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm
+[component_container_isolated-13] [INFO] [1751386691.571487671] [map_io]: Read map /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm: 400 X 400 map @ 0.05 m/cell
+[obstacle_detector-9] [37;1m2025-07-01 16:18:11.587 [31;1m[[37;1mRTPS_TRANSPORT_SHM[31;1m Error] [37mFailed init_port fastrtps_port7002: open_and_lock_file failed[34;1m -> Function [36mopen_port_internal[m
+[component_container_isolated-13] [INFO] [1751386691.596072350] [lifecycle_manager_localization]: [34m[1mConfiguring amcl[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.596333098] [amcl]: Configuring
+[component_container_isolated-13] [INFO] [1751386691.596461138] [amcl]: initTransforms
+[component_container_isolated-13] [INFO] [1751386691.616611936] [smoother_server]: 
+[component_container_isolated-13] 	smoother_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.618814877] [smoother_server]: Creating smoother server
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/smoother_server' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.627473516] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libplanner_server_core.so
+[component_container_isolated-13] [INFO] [1751386691.628987546] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_planner::PlannerServer>
+[component_container_isolated-13] [INFO] [1751386691.629063378] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_planner::PlannerServer>
+[realsense_processor-8] pyrealsense2 not available. Will use official realsense2_camera node instead.
+[realsense_processor-8] RealSense library not available. Cannot start node.
+[component_container_isolated-13] [INFO] [1751386691.667824403] [amcl]: initPubSub
+[component_container_isolated-13] [INFO] [1751386691.696618965] [amcl]: Subscribed to map topic.
+[component_container_isolated-13] [INFO] [1751386691.714682904] [lifecycle_manager_localization]: [34m[1mActivating map_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.715066735] [map_server]: Activating
+[component_container_isolated-13] [INFO] [1751386691.716003560] [map_server]: Creating bond (map_server) to lifecycle manager.
+[component_container_isolated-13] [INFO] [1751386691.716161059] [amcl]: Received a 400 X 400 map @ 0.050 m/pix
+[component_container_isolated-13] [INFO] [1751386691.733355547] [planner_server]: 
+[component_container_isolated-13] 	planner_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.735600779] [planner_server]: Creating
+[obstacle_detector-9] [INFO] [1751386691.762694063] [obstacle_detector]: Obstacle Detector initialized
+[component_container_isolated-13] [INFO] [1751386691.764839254] [global_costmap.global_costmap]: 
+[component_container_isolated-13] 	global_costmap lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.765688873] [global_costmap.global_costmap]: Creating Costmap
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/planner_server' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.774183597] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libbehavior_server_core.so
+[component_container_isolated-13] [INFO] [1751386691.775431045] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<behavior_server::BehaviorServer>
+[component_container_isolated-13] [INFO] [1751386691.775476836] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<behavior_server::BehaviorServer>
+[INFO] [realsense_processor-8]: process has finished cleanly [pid 5401]
+[component_container_isolated-13] [INFO] [1751386691.797047748] [behavior_server]: 
+[component_container_isolated-13] 	behavior_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/behavior_server' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.805326057] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libbt_navigator_core.so
+[component_container_isolated-13] [INFO] [1751386691.806711754] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_bt_navigator::BtNavigator>
+[component_container_isolated-13] [INFO] [1751386691.806744129] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_bt_navigator::BtNavigator>
+[component_container_isolated-13] [INFO] [1751386691.830320232] [bt_navigator]: 
+[component_container_isolated-13] 	bt_navigator lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.832465132] [bt_navigator]: Creating
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/bt_navigator' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.836551933] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libwaypoint_follower_core.so
+[component_container_isolated-13] [INFO] [1751386691.837717132] [lifecycle_manager_localization]: Server map_server connected with bond.
+[component_container_isolated-13] [INFO] [1751386691.837758840] [lifecycle_manager_localization]: [34m[1mActivating amcl[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.838138295] [amcl]: Activating
+[component_container_isolated-13] [INFO] [1751386691.838283252] [amcl]: Creating bond (amcl) to lifecycle manager.
+[component_container_isolated-13] [INFO] [1751386691.838420335] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_waypoint_follower::WaypointFollower>
+[component_container_isolated-13] [INFO] [1751386691.838442793] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_waypoint_follower::WaypointFollower>
+[component_container_isolated-13] [INFO] [1751386691.866649651] [waypoint_follower]: 
+[component_container_isolated-13] 	waypoint_follower lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.867291604] [waypoint_follower]: Creating
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/waypoint_follower' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.871311031] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libvelocity_smoother_core.so
+[component_container_isolated-13] [INFO] [1751386691.872661728] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_velocity_smoother::VelocitySmoother>
+[component_container_isolated-13] [INFO] [1751386691.872702561] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_velocity_smoother::VelocitySmoother>
+[component_container_isolated-13] [INFO] [1751386691.897646571] [velocity_smoother]: 
+[component_container_isolated-13] 	velocity_smoother lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/velocity_smoother' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.901921495] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libcollision_monitor_core.so
+[component_container_isolated-13] [INFO] [1751386691.905982629] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_collision_monitor::CollisionMonitor>
+[component_container_isolated-13] [INFO] [1751386691.906026379] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_collision_monitor::CollisionMonitor>
+[component_container_isolated-13] [INFO] [1751386691.931164054] [collision_monitor]: 
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/collision_monitor' in container '/nav2_container'
+[component_container_isolated-13] 	collision_monitor lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.934974648] [nav2_container]: Load Library: /opt/ros/jazzy/lib/libopennav_docking_core.so
+[component_container_isolated-13] [INFO] [1751386691.937178756] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<opennav_docking::DockingServer>
+[component_container_isolated-13] [INFO] [1751386691.937227464] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<opennav_docking::DockingServer>
+[component_container_isolated-13] [INFO] [1751386691.947542756] [lifecycle_manager_localization]: Server amcl connected with bond.
+[component_container_isolated-13] [INFO] [1751386691.947601964] [lifecycle_manager_localization]: [34m[1mManaged nodes are active[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.947625589] [lifecycle_manager_localization]: [34m[1mCreating bond timer...[0m[0m
+[component_container_isolated-13] [INFO] [1751386691.963360589] [docking_server]: 
+[component_container_isolated-13] 	docking_server lifecycle node launched. 
+[component_container_isolated-13] 	Waiting on external lifecycle transitions to activate
+[component_container_isolated-13] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[component_container_isolated-13] [INFO] [1751386691.963455963] [docking_server]: Creating docking_server
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/docking_server' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.969513248] [nav2_container]: Found class: rclcpp_components::NodeFactoryTemplate<nav2_lifecycle_manager::LifecycleManager>
+[component_container_isolated-13] [INFO] [1751386691.969555831] [nav2_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<nav2_lifecycle_manager::LifecycleManager>
+[component_container_isolated-13] [INFO] [1751386691.989015676] [lifecycle_manager_navigation]: Creating
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/lifecycle_manager_navigation' in container '/nav2_container'
+[component_container_isolated-13] [INFO] [1751386691.993864595] [lifecycle_manager_navigation]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.060471691] [lifecycle_manager_navigation]: [34m[1mStarting managed nodes bringup...[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.060577273] [lifecycle_manager_navigation]: [34m[1mConfiguring controller_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.061067853] [controller_server]: Configuring controller interface
+[component_container_isolated-13] [INFO] [1751386692.061132019] [controller_server]: getting progress checker plugins..
+[component_container_isolated-13] [INFO] [1751386692.062145261] [controller_server]: getting goal checker plugins..
+[component_container_isolated-13] [INFO] [1751386692.062880255] [controller_server]: Controller frequency set to 20.0000Hz
+[component_container_isolated-13] [INFO] [1751386692.063087920] [local_costmap.local_costmap]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.089027672] [local_costmap.local_costmap]: Using plugin "voxel_layer"
+[component_container_isolated-13] [INFO] [1751386692.103317767] [local_costmap.local_costmap]: Subscribed to Topics: pointcloud
+[component_container_isolated-13] [INFO] [1751386692.132023664] [local_costmap.local_costmap]: Initialized plugin "voxel_layer"
+[component_container_isolated-13] [INFO] [1751386692.132114955] [local_costmap.local_costmap]: Using plugin "inflation_layer"
+[component_container_isolated-13] [INFO] [1751386692.135687552] [local_costmap.local_costmap]: Initialized plugin "inflation_layer"
+[component_container_isolated-13] [INFO] [1751386692.165601814] [controller_server]: Created progress_checker : progress_checker of type nav2_controller::SimpleProgressChecker
+[component_container_isolated-13] [INFO] [1751386692.166708389] [controller_server]: Controller Server has progress_checker  progress checkers available.
+[component_container_isolated-13] [INFO] [1751386692.167924921] [controller_server]: Created goal checker : general_goal_checker of type nav2_controller::SimpleGoalChecker
+[component_container_isolated-13] [INFO] [1751386692.168982787] [controller_server]: Controller Server has general_goal_checker  goal checkers available.
+[component_container_isolated-13] [INFO] [1751386692.170521317] [controller_server]: Created controller : FollowPath of type nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
+[component_container_isolated-13] [INFO] [1751386692.184923411] [controller_server]: Controller Server has FollowPath  controllers available.
+[component_container_isolated-13] [INFO] [1751386692.201173490] [lifecycle_manager_navigation]: [34m[1mConfiguring smoother_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.201465154] [smoother_server]: Configuring smoother server
+[component_container_isolated-13] [INFO] [1751386692.216211704] [smoother_server]: Created smoother : simple_smoother of type nav2_smoother::SimpleSmoother
+[component_container_isolated-13] [INFO] [1751386692.218701934] [smoother_server]: Smoother Server has simple_smoother  smoothers available.
+[component_container_isolated-13] [INFO] [1751386692.228988644] [lifecycle_manager_navigation]: [34m[1mConfiguring planner_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.229279142] [planner_server]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.229345058] [global_costmap.global_costmap]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.254570232] [global_costmap.global_costmap]: Using plugin "static_layer"
+[component_container_isolated-13] [INFO] [1751386692.258650616] [global_costmap.global_costmap]: Subscribing to the map topic (/map) with transient local durability
+[component_container_isolated-13] [INFO] [1751386692.262207755] [global_costmap.global_costmap]: Initialized plugin "static_layer"
+[component_container_isolated-13] [INFO] [1751386692.262297588] [global_costmap.global_costmap]: Using plugin "obstacle_layer"
+[component_container_isolated-13] [INFO] [1751386692.266025058] [global_costmap.global_costmap]: Subscribed to Topics: pointcloud
+[component_container_isolated-13] [INFO] [1751386692.283110464] [global_costmap.global_costmap]: Initialized plugin "obstacle_layer"
+[component_container_isolated-13] [INFO] [1751386692.283209046] [global_costmap.global_costmap]: Using plugin "inflation_layer"
+[component_container_isolated-13] [INFO] [1751386692.286648936] [global_costmap.global_costmap]: Initialized plugin "inflation_layer"
+[component_container_isolated-13] [INFO] [1751386692.325743625] [planner_server]: Created global planner plugin GridBased of type nav2_navfn_planner::NavfnPlanner
+[component_container_isolated-13] [INFO] [1751386692.325803416] [planner_server]: Configuring plugin GridBased of type NavfnPlanner
+[component_container_isolated-13] [INFO] [1751386692.328819517] [planner_server]: Planner Server has GridBased  planners available.
+[component_container_isolated-13] [INFO] [1751386692.331524704] [global_costmap.global_costmap]: StaticLayer: Resizing costmap to 400 X 400 at 0.050000 m/pix
+[component_container_isolated-13] [INFO] [1751386692.348365695] [lifecycle_manager_navigation]: [34m[1mConfiguring behavior_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.348578027] [behavior_server]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.358105243] [behavior_server]: Creating behavior plugin spin of type nav2_behaviors::Spin
+[component_container_isolated-13] [INFO] [1751386692.359463816] [behavior_server]: Creating behavior plugin backup of type nav2_behaviors::BackUp
+[component_container_isolated-13] [INFO] [1751386692.360691139] [behavior_server]: Creating behavior plugin drive_on_heading of type nav2_behaviors::DriveOnHeading
+[component_container_isolated-13] [INFO] [1751386692.361857797] [behavior_server]: Creating behavior plugin wait of type nav2_behaviors::Wait
+[component_container_isolated-13] [INFO] [1751386692.367018797] [behavior_server]: Configuring spin
+[component_container_isolated-13] [INFO] [1751386692.379388574] [behavior_server]: Configuring backup
+[component_container_isolated-13] [INFO] [1751386692.388958956] [behavior_server]: Configuring drive_on_heading
+[component_container_isolated-13] [INFO] [1751386692.398316424] [behavior_server]: Configuring wait
+[component_container_isolated-13] [INFO] [1751386692.408981131] [lifecycle_manager_navigation]: [34m[1mConfiguring velocity_smoother[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.409413085] [velocity_smoother]: Configuring velocity smoother
+[component_container_isolated-13] [INFO] [1751386692.415772827] [lifecycle_manager_navigation]: [34m[1mConfiguring collision_monitor[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.416064199] [collision_monitor]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.453654192] [collision_monitor]: [pointcloud]: Creating PointCloud
+[component_container_isolated-13] [INFO] [1751386692.464343982] [collision_monitor]: [safety_polygon]: Creating Polygon
+[component_container_isolated-13] [INFO] [1751386692.464461523] [collision_monitor]: [safety_polygon]: Creating Circle
+[ERROR] [joint_state_publisher_gui-5]: process has died [pid 5398, exit code -6, cmd '/opt/ros/jazzy/lib/joint_state_publisher_gui/joint_state_publisher_gui --ros-args -r __node:=joint_state_publisher_gui --params-file /tmp/launch_params__3dql2mk'].
+[component_container_isolated-13] [INFO] [1751386692.494260870] [lifecycle_manager_navigation]: [34m[1mConfiguring bt_navigator[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.494665116] [bt_navigator]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.514761957] [bt_navigator]: Creating navigator id navigate_to_pose of type nav2_bt_navigator::NavigateToPoseNavigator
+[component_container_isolated-13] [WARN] [1751386692.525234749] [bt_navigator]: Error_code parameters were not set. Using default values of: follow_path_error_code compute_path_error_code
+[component_container_isolated-13] Make sure these match your BT and there are not other sources of error codes youreported to your application
+[component_container_isolated-13] [INFO] [1751386692.640171794] [bt_navigator]: Creating navigator id navigate_through_poses of type nav2_bt_navigator::NavigateThroughPosesNavigator
+[component_container_isolated-13] [INFO] [1751386692.689634859] [lifecycle_manager_navigation]: [34m[1mConfiguring waypoint_follower[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.689978148] [waypoint_follower]: Configuring
+[component_container_isolated-13] [INFO] [1751386692.723062510] [waypoint_follower]: Created waypoint_task_executor : wait_at_waypoint of type nav2_waypoint_follower::WaitAtWaypoint
+[component_container_isolated-13] [INFO] [1751386692.724977870] [lifecycle_manager_navigation]: [34m[1mConfiguring docking_server[0m[0m
+[component_container_isolated-13] [INFO] [1751386692.725315617] [docking_server]: Configuring docking_server
+[component_container_isolated-13] [INFO] [1751386692.725409825] [docking_server]: Controller frequency set to 50.0000Hz
+[component_container_isolated-13] [ERROR] [1751386692.760846752] [docking_server]: Charging dock plugins not given!
+[component_container_isolated-13] [ERROR] [1751386692.760957293] [docking_server]: An error occurred while getting the dock plugins!
+[component_container_isolated-13] [INFO] [1751386692.760985876] [docking_server]: Cleaning up docking_server
+[component_container_isolated-13] [ERROR] [1751386692.807609005] [lifecycle_manager_navigation]: Failed to change state for node: docking_server
+[component_container_isolated-13] [ERROR] [1751386692.807756296] [lifecycle_manager_navigation]: Failed to bring up all requested nodes. Aborting bringup.
+[ERROR] [joint_state_publisher_gui-2]: process has died [pid 5395, exit code -6, cmd '/opt/ros/jazzy/lib/joint_state_publisher_gui/joint_state_publisher_gui --ros-args -r __node:=joint_state_publisher_gui --params-file /tmp/launch_params_czt686fc'].
+[realsense2_camera_node-7] [WARN] [1751386697.263548163] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386703.284273934] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386709.291768440] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386715.299060028] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386721.306341184] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386727.312339073] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386733.319733207] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386739.327092377] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386745.334931652] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386751.342417736] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386757.349784242] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386763.357057701] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386769.364686974] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386775.372314763] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386781.379586393] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386787.386983977] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386793.394433712] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386799.401892716] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386805.409340562] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386811.416672242] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386817.423951328] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386823.431343770] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386829.438582393] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386835.445977228] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386841.452816312] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386847.460388505] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386853.467918843] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386859.475502692] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386865.482851588] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386871.489435565] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386877.496780318] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386883.504329631] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386889.512023415] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386895.519521871] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386901.525969535] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386907.532488146] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386913.539992944] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386919.547132633] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386925.554712203] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386931.562059358] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386937.569629088] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386943.577071972] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386949.597063221] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386955.618432315] [camera.realsense2_camera]: No RealSense devices were found!
+[realsense2_camera_node-7] [WARN] [1751386961.639310545] [camera.realsense2_camera]: No RealSense devices were found!
