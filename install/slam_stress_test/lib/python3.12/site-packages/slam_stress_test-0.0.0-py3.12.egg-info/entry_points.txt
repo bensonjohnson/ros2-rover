@@ -1,2 +1,1 @@
 [console_scripts]
-synthetic_lidar = slam_stress_test.synthetic_lidar:main

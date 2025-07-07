@@ -10,7 +10,6 @@ setup.py
 ../../build/slam_stress_test/slam_stress_test.egg-info/zip-safe
 resource/slam_stress_test
 slam_stress_test/__init__.py
-slam_stress_test/synthetic_lidar.py
 test/test_copyright.py
 test/test_flake8.py
 test/test_pep257.py

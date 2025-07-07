@@ -19,7 +19,6 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "synthetic_lidar = slam_stress_test.synthetic_lidar:main",
         ],
     },
 )
