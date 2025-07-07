@@ -12,7 +12,7 @@
   <xacro:property name="track_width" value="0.042"/>   <!-- 42mm tread width -->
   <xacro:property name="track_length" value="0.2667"/> <!-- Same as body length -->
   <xacro:property name="track_height" value="0.090"/>  <!-- Same as body height -->
-  <xacro:property name="wheel_radius" value="0.045"/>  <!-- Half of track height -->
+  <xacro:property name="wheel_radius" value="0.0485"/>  <!-- Half of track height - Updated to 48.5mm -->
   <xacro:property name="wheel_separation" value="0.144"/> <!-- 102mm + 42mm = center to center -->
 
   <!-- Platform properties -->
