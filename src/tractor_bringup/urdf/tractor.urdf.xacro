@@ -151,44 +151,44 @@
     </inertial>
   </link>
 
-  <!-- HGLRC M100-5883 GPS Module (M10 chip, 21x21x8.02mm, 7.73g) -->
+  <!-- HGLRC M100-5883 GPS Module (M10 chip, 21x21x8.02mm, 7.73g) REMOVED -->
+  <!--
   <link name="gps_link">
-    <!-- Main PCB board -->
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.021 0.021 0.008"/>  <!-- 21x21x8mm actual size -->
+        <box size="0.021 0.021 0.008"/>
       </geometry>
       <material name="blue"/>
     </visual>
-    <!-- Ceramic antenna (integrated on PCB) -->
     <visual>
       <origin xyz="0 0 0.004" rpy="0 0 0"/>
       <geometry>
-        <box size="0.015 0.015 0.002"/>  <!-- 15x15x2mm ceramic patch -->
+        <box size="0.015 0.015 0.002"/>
       </geometry>
       <material name="white"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.021 0.021 0.008"/>  <!-- Actual dimensions -->
+        <box size="0.021 0.021 0.008"/>
       </geometry>
     </collision>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.00773"/>  <!-- 7.73g actual weight -->
+      <mass value="0.00773"/>
       <inertia ixx="0.000003" ixy="0.0" ixz="0.0" iyy="0.000003" iyz="0.0" izz="0.000005"/>
     </inertial>
   </link>
+  -->
 
-  <!-- QMC5883 Compass/Magnetometer (integrated in GPS module) -->
+  <!-- QMC5883 Compass/Magnetometer (integrated in GPS module) REMOVED -->
+  <!--
   <link name="compass_link">
-    <!-- Small magnetometer chip representation -->
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.003 0.003 0.001"/>  <!-- 3x3x1mm chip size -->
+        <box size="0.003 0.003 0.001"/>
       </geometry>
       <material name="black"/>
     </visual>
@@ -200,10 +200,11 @@
     </collision>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.001"/>  <!-- Negligible mass -->
+      <mass value="0.001"/>
       <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
     </inertial>
   </link>
+  -->
 
   <!-- Mower Deck Link -->
   <!--
