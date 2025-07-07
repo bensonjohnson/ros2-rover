@@ -2,9 +2,9 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -17,6 +17,14 @@ def generate_launch_description():
         description="Use simulation (Gazebo) clock if true",
     )
 
+    # Package Share for tractor_bringup
+    pkg_tractor_bringup_share = FindPackageShare("tractor_bringup")
+
+    # Parameters file for Hiwonder motor
+    motor_params_file = PathJoinSubstitution(
+        [pkg_tractor_bringup_share, "config", "hiwonder_motor_params.yaml"]
+    )
+
     # Hiwonder motor driver node (includes battery publishing and odometry)
     hiwonder_motor_node = Node(
         package="tractor_control",
@@ -24,21 +32,10 @@ def generate_launch_description():
         name="hiwonder_motor_driver",
         output="screen",
         parameters=[
-            {
-                "use_sim_time": use_sim_time,
-                "i2c_bus": 5,
-                "motor_controller_address": 0x34,
-                "wheel_separation": 0.5,
-                "wheel_radius": 0.15,
-                "max_motor_speed": 25,
-                "deadband": 0.05,
-                "encoder_ppr": 1980,  # JGB3865-520R45-12: 44 pulses × 45:1 ratio
-                "publish_rate": 100.0,  # High rate for good control
-                "use_pwm_control": True,  # PWM mode for JGB3865
-                "motor_type": 3,
-                "min_samples_for_estimation": 10,
-                "max_history_minutes": 60,
-            }
+            motor_params_file,
+            {"use_sim_time": use_sim_time}
+            # Add any overrides specific to this launch file if needed, e.g.:
+            # {"max_motor_speed": 25} # Example override
         ],
     )
 
@@ -60,6 +57,8 @@ def generate_launch_description():
                 "max_integral": 0.5,  # Maximum integral windup
                 "control_frequency": 50.0,  # Control loop frequency
                 "deadband": 0.01,  # Minimum velocity command
+                # Gain for encoder drift correction in velocity_feedback_controller
+                "drift_correction_gain": 0.0001,
             }
         ],
         remappings=[
