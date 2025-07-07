@@ -1,0 +1,19 @@
+hiwonder_motor_driver:
+  ros__parameters:
+    i2c_bus: 5
+    motor_controller_address: 0x34 # Hexadecimal 52
+    wheel_separation: 0.5
+    wheel_radius: 0.15
+    max_motor_speed: 100
+    deadband: 0.05
+    encoder_ppr: 1980
+    publish_rate: 100.0 # Note: Driver comments suggest sensor data published at 100Hz timer, not via this param.
+    use_pwm_control: True
+    motor_type: 3
+    min_samples_for_estimation: 10
+    max_history_minutes: 60
+    i2c_write_delay_secs: 0.005       # Delay after I2C write operations (seconds)
+    i2c_read_inter_byte_delay_secs: 0.001 # Delay between reading consecutive bytes (seconds)
+    motor_command_rate_limit_secs: 0.1 # Minimum interval between motor commands (seconds)
+    init_motor_type_delay_secs: 0.5   # Delay after setting motor type in initialization (seconds)
+    init_encoder_polarity_delay_secs: 0.1 # Delay after setting encoder polarity in initialization (seconds)
