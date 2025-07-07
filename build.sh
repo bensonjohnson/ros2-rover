@@ -7,7 +7,7 @@ set -e
 
 # Source ROS 2 environment - MODIFY IF YOUR SETUP IS DIFFERENT
 # For example, if using Humble:
-ROS2_SETUP_SCRIPT="/opt/ros/humble/setup.bash"
+ROS2_SETUP_SCRIPT="/opt/ros/jazzy/setup.bash"
 # Or, if you have an overlay workspace, source that instead:
 # ROS2_SETUP_SCRIPT="$HOME/my_ros2_ws/install/setup.bash"
 
