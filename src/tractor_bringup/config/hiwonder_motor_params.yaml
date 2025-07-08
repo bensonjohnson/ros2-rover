@@ -8,7 +8,7 @@ hiwonder_motor_driver:
     deadband: 0.05
     encoder_ppr: 1980
     publish_rate: 100.0 # Note: Driver comments suggest sensor data published at 100Hz timer, not via this param.
-    use_pwm_control: True
+    use_pwm_control: False # Changed to False for closed-loop speed control by Hiwonder board
     motor_type: 3
     min_samples_for_estimation: 10
     max_history_minutes: 60
