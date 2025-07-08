@@ -92,7 +92,15 @@
       "Bash(mv:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(ros2 param get:*)",
+      "Bash(echo $ROS_DOMAIN_ID)",
+      "Bash(ROS_DOMAIN_ID=42 ros2 topic list)",
+      "Bash(ROS_DOMAIN_ID=42 ros2 topic echo /hglrc_gps/heading --once)",
+      "Bash(ROS_DOMAIN_ID=42 ros2 topic hz /hglrc_gps/heading --window 5)",
+      "Bash(ROS_DOMAIN_ID=42 ros2 topic hz /hglrc_gps/magnetic_field --window 5)",
+      "Bash(ROS_DOMAIN_ID=42 ros2 topic echo /hglrc_gps/magnetic_field --once)",
+      "Bash(journalctl:*)"
     ],
     "deny": []
   }

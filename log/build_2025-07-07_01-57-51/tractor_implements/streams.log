@@ -1,0 +1,18 @@
+[4.149s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_implements': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build --no-deps symlink_data
+[4.660s] running develop
+[4.990s] running egg_info
+[5.023s] writing tractor_implements.egg-info/PKG-INFO
+[5.024s] writing dependency_links to tractor_implements.egg-info/dependency_links.txt
+[5.024s] writing entry points to tractor_implements.egg-info/entry_points.txt
+[5.025s] writing requirements to tractor_implements.egg-info/requires.txt
+[5.025s] writing top-level names to tractor_implements.egg-info/top_level.txt
+[5.087s] reading manifest file 'tractor_implements.egg-info/SOURCES.txt'
+[5.088s] writing manifest file 'tractor_implements.egg-info/SOURCES.txt'
+[5.121s] running build_ext
+[5.122s] Creating /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor-implements.egg-link (link to .)
+[5.123s] Installing mower_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+[5.123s] Installing sprayer_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+[5.124s] 
+[5.125s] Installed /home/ubuntu/ros2-rover/build/tractor_implements
+[5.125s] running symlink_data
+[5.218s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_implements' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build --no-deps symlink_data

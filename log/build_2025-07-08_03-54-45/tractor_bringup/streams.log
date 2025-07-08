@@ -1,0 +1,19 @@
+[5.821s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/ubuntu/ros2-rover/build/tractor_bringup/build install --record /home/ubuntu/ros2-rover/build/tractor_bringup/install.log --single-version-externally-managed install_data
+[6.280s] running egg_info
+[6.312s] writing ../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
+[6.312s] writing dependency_links to ../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
+[6.312s] writing requirements to ../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
+[6.312s] writing top-level names to ../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
+[6.377s] reading manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[6.378s] writing manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[6.378s] running build
+[6.379s] running build_py
+[6.379s] running install
+[6.389s] running install_lib
+[6.425s] running install_data
+[6.426s] running install_egg_info
+[6.463s] removing '/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info' (and everything under it)
+[6.464s] Copying ../../build/tractor_bringup/tractor_bringup.egg-info to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info
+[6.465s] running install_scripts
+[6.710s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_bringup/install.log'
+[6.829s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/ubuntu/ros2-rover/build/tractor_bringup/build install --record /home/ubuntu/ros2-rover/build/tractor_bringup/install.log --single-version-externally-managed install_data

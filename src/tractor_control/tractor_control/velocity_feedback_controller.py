@@ -1,9 +1,10 @@
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, QuaternionStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 import time
+import math
 from threading import Lock
 
 
@@ -24,7 +25,7 @@ class VelocityFeedbackController(Node):
         self.declare_parameter("ki_angular", 0.05)
         self.declare_parameter("max_integral", 0.5)  # Maximum integral windup
         self.declare_parameter("control_frequency", 50.0)  # Hz
-        self.declare_parameter("deadband", 0.01)  # Minimum velocity command
+        self.declare_parameter("deadband", 0.001)  # Minimum velocity command
         self.declare_parameter(
             "drift_correction_gain", 0.0001
         )  # Gain for encoder drift correction
@@ -45,7 +46,13 @@ class VelocityFeedbackController(Node):
         self.desired_angular = 0.0
         self.current_linear = 0.0
         self.current_angular = 0.0
+        self.current_yaw = 0.0  # Current heading from filtered odometry
         self.emergency_stop = False
+        
+        # Compass-based heading tracking
+        self.current_heading = 0.0  # Current compass heading in radians
+        self.target_heading = None  # Target heading when going straight
+        self.heading_set = False
 
         # Encoder drift correction
         self.left_encoder_total = 0
@@ -57,6 +64,10 @@ class VelocityFeedbackController(Node):
         self.linear_integral = 0.0
         self.angular_integral = 0.0
         self.last_time = time.time()
+
+        # Velocity tracking (initialize to zero)
+        self.left_velocity = 0.0
+        self.right_velocity = 0.0
 
         # Thread safety
         self.control_lock = Lock()
@@ -71,7 +82,7 @@ class VelocityFeedbackController(Node):
 
         self.odom_sub = self.create_subscription(
             Odometry,
-            "odom",  # Feedback: actual velocity from encoders
+            "odometry/filtered",  # Use robot_localization's filtered odometry
             self.odom_callback,
             10,
         )
@@ -85,6 +96,11 @@ class VelocityFeedbackController(Node):
 
         self.emergency_stop_sub = self.create_subscription(
             Bool, "emergency_stop", self.emergency_stop_callback, 10
+        )
+
+        # Subscribe to compass heading for drift correction
+        self.compass_sub = self.create_subscription(
+            QuaternionStamped, "/hglrc_gps/heading", self.compass_callback, 10
         )
 
         # Publishers
@@ -117,12 +133,27 @@ class VelocityFeedbackController(Node):
         with self.control_lock:
             self.desired_linear = msg.linear.x
             self.desired_angular = msg.angular.z
+            
+        # Log received commands for debugging
+        if abs(msg.linear.x) > 0.001 or abs(msg.angular.z) > 0.001:
+            self.get_logger().info(f"Received cmd_vel: linear={msg.linear.x:.3f}, angular={msg.angular.z:.3f}")
 
     def odom_callback(self, msg):
-        """Receive actual velocity feedback from encoders"""
+        """Receive filtered odometry from robot_localization EKF"""
         with self.control_lock:
             self.current_linear = msg.twist.twist.linear.x
             self.current_angular = msg.twist.twist.angular.z
+            
+            # Extract yaw from quaternion in pose
+            q = msg.pose.pose.orientation
+            self.current_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 
+                                        1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+            
+            # Calculate individual wheel speeds from odometry
+            # This is the reverse of the kinematics in the motor driver
+            wheel_separation = self.wheel_separation
+            self.left_velocity = (self.current_linear - self.current_angular * wheel_separation / 2.0) / self.wheel_radius
+            self.right_velocity = (self.current_linear + self.current_angular * wheel_separation / 2.0) / self.wheel_radius
 
     def joint_state_callback(self, msg):
         """Receive encoder totals from joint states for drift correction"""
@@ -186,164 +217,107 @@ class VelocityFeedbackController(Node):
                 "Emergency stop activated - clearing velocity commands"
             )
 
+    def compass_callback(self, msg):
+        """Receive compass heading data"""
+        # Convert quaternion to yaw angle (radians)
+        q = msg.quaternion
+        # Extract yaw from quaternion (assuming pitch and roll are minimal)
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 
+                        1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        
+        with self.control_lock:
+            self.current_heading = yaw
+            if not self.heading_set:
+                self.heading_set = True
+                self.get_logger().info(f"Compass initialized: heading={math.degrees(yaw):.1f}°")
+
     def control_loop(self):
-        """Main PID control loop with smart tank turn detection"""
+        """Simple drift correction - slow down faster track"""
         if self.emergency_stop:
             # Send stop command during emergency stop
             self.publish_velocity_command(0.0, 0.0)
             return
 
-        current_time = time.time()
-        dt = current_time - self.last_time
-        self.last_time = current_time
-
-        if dt <= 0.001:  # Avoid division by very small dt
-            return
-
         with self.control_lock:
-            # Detect if this is an intentional tank turn (high angular
-            # velocity)
-            is_tank_turning = abs(self.desired_angular) > 1.0
+            # Apply deadband to desired velocities
+            desired_linear = self.desired_linear
+            desired_angular = self.desired_angular
+            
+            if abs(desired_linear) < self.deadband:
+                desired_linear = 0.0
+            if abs(desired_angular) < self.deadband:
+                desired_angular = 0.0
 
-            # For very low speeds or tank turns, don't apply PI corrections
-            if abs(self.desired_linear) < 0.1 or is_tank_turning:
-                # Pass through commands without correction
-                self.publish_velocity_command(self.desired_linear, self.desired_angular)
-                # Reset integrals
-                self.linear_integral = 0.0
-                self.angular_integral = 0.0
-                if is_tank_turning:
-                    self.get_logger().debug(
-                        "Tank turn detected, PI corrections bypassed."
-                    )
+            # For very low speeds or intentional turns, pass through without correction
+            if abs(desired_linear) < 0.05 or abs(desired_angular) > 0.3:
+                self.publish_velocity_command(desired_linear, desired_angular)
+                if abs(desired_angular) > 0.3:
+                    self.get_logger().info("Intentional turn detected, no drift correction")
+                    # Reset target heading when turning
+                    self.target_heading = None
                 return
 
-            # Calculate errors
-            linear_error = self.desired_linear - self.current_linear
-            angular_error = self.desired_angular - self.current_angular
-
-            # Apply deadband to desired velocities
-            if abs(self.desired_linear) < self.deadband:
-                self.desired_linear = 0.0
-                linear_error = -self.current_linear  # Drive actual to zero
-
-            if abs(self.desired_angular) < self.deadband:
-                self.desired_angular = 0.0
-                angular_error = -self.current_angular  # Drive actual to zero
-
-            # PI corrections primarily for straight-line driving (small desired
-            # angular velocity)
-            if abs(self.desired_angular) < 0.3:
-                # Update integral terms (with windup protection)
-                if (
-                    abs(self.desired_linear) > 0.2
-                ):  # Only integrate when moving at reasonable speed
-                    self.linear_integral += linear_error * dt
-                    self.linear_integral = max(
-                        -self.max_integral, min(self.max_integral, self.linear_integral)
-                    )
-                else:
-                    self.linear_integral = 0.0  # Reset integral when slow or stopped
-
-                # Gentle angular correction: only for small angular errors
-                if abs(angular_error) < 0.5:
-                    self.angular_integral += angular_error * dt
-                    self.angular_integral = max(
-                        -self.max_integral,
-                        min(self.max_integral, self.angular_integral),
-                    )
-                else:
-                    # Reset for large angular errors (likely intentional turn)
-                    self.angular_integral = 0.0
-
-                # PI control output
-                linear_output = (
-                    self.kp_linear * linear_error
-                    + self.ki_linear * self.linear_integral
-                )
-
-                # Reduce angular correction effect during primarily straight
-                # driving
-                angular_output = (
-                    self.kp_angular * angular_error
-                    + self.ki_angular * self.angular_integral
-                ) * 0.3
-
-                corrected_linear = self.desired_linear + linear_output
-                corrected_angular = self.desired_angular + angular_output
-
-                self.publish_velocity_command(corrected_linear, corrected_angular)
-
-                if abs(linear_error) > 0.05 or abs(angular_error) > 0.05:
-                    self.get_logger().debug(
-                        f"Straight PID: Des[{
-                            self.desired_linear:.2f}, {
-                            self.desired_angular:.2f}] "
-                        f"Act[{
-                            self.current_linear:.2f}, {
-                            self.current_angular:.2f}] "
-                        f"Err[{
-                            linear_error:.2f}, {
-                            angular_error:.2f}] "
-                        f"Out[{
-                                corrected_linear:.2f}, {
-                                    corrected_angular:.2f}]"
-                    )
-            else:  # Handling intentional turns (larger desired_angular)
-                # Pass through commands without PI correction for turns
-                self.get_logger().debug(
-                    f"Intentional turn (des_ang: {
-                        self.desired_angular:.2f}), PI corrections bypassed."
-                )
-                self.publish_velocity_command(self.desired_linear, self.desired_angular)
-                # Reset integrals during turns
-                self.linear_integral = 0.0
-                self.angular_integral = 0.0
+            # EKF-based drift correction with stability monitoring (ready for D435i integration)
+            corrected_angular = desired_angular
+            
+            if (abs(desired_linear) > 0.02 and abs(desired_angular) < 0.1):
+                
+                # Set target heading when starting to go straight (use EKF filtered heading)
+                if self.target_heading is None:
+                    self.target_heading = self.current_yaw  # Use EKF heading
+                    self.get_logger().info(f"Target heading set from EKF: {math.degrees(self.current_yaw):.1f}°")
+                
+                # Calculate heading error using EKF filtered odometry
+                if self.target_heading is not None:
+                    heading_error = self.current_yaw - self.target_heading
+                    
+                    # Normalize heading error to [-pi, pi]
+                    while heading_error > math.pi:
+                        heading_error -= 2 * math.pi
+                    while heading_error < -math.pi:
+                        heading_error += 2 * math.pi
+                    
+                    # EKF stability check - if huge errors, gradually adapt target instead of fighting
+                    if abs(heading_error) > 1.57:  # 90 degrees - EKF likely unstable
+                        # Gradually move target toward current heading (adaptive target)
+                        target_adjustment = heading_error * 0.1  # Move target 10% toward current
+                        self.target_heading += target_adjustment
+                        heading_error *= 0.9  # Reduce error for this cycle
+                        self.get_logger().warn(f"EKF instability detected, adapting target by {math.degrees(target_adjustment):.1f}°")
+                    
+                    # Apply correction - stronger for stable EKF, gentler for unstable
+                    if abs(heading_error) > 0.02:  # ~1 degree threshold
+                        if abs(heading_error) < 0.52:  # Less than 30° - stable correction
+                            heading_correction = -heading_error * 0.6  # Strong gain for small errors
+                            heading_correction = max(-0.5, min(0.5, heading_correction))
+                            correction_type = "stable"
+                        else:  # Large error - gentler correction
+                            heading_correction = -heading_error * 0.3  # Gentler for large errors
+                            heading_correction = max(-0.4, min(0.4, heading_correction))
+                            correction_type = "adaptive"
+                        
+                        corrected_angular += heading_correction
+                        
+                        self.get_logger().info(
+                            f"EKF correction ({correction_type}): heading_error={math.degrees(heading_error):.1f}°, "
+                            f"correction={heading_correction:.3f}"
+                        )
+            
+            self.publish_velocity_command(desired_linear, corrected_angular)
 
     def publish_velocity_command(self, linear, angular):
-        """Publish corrected velocity command with drift compensation"""
-        corrected_angular = angular  # Start with the angular from PI or passthrough
-
-        # Apply encoder-based drift correction for straight driving only
-        if (
-            self.encoder_diff_baseline_set
-            and abs(linear) > 0.2  # Only when moving meaningfully straight
-            and abs(self.desired_angular) < 0.2
-        ):  # Only when intending to go straight
-
-            current_encoder_diff = self.right_encoder_total - self.left_encoder_total
-            accumulated_drift = current_encoder_diff - self.initial_encoder_diff
-
-            # Apply proportional correction for drift
-            # Positive drift (right_encoder_total > left_encoder_total than baseline) means robot drifts right.
-            # Need a negative angular velocity (turn left) to correct.
-            drift_adjustment = -accumulated_drift * self.drift_correction_gain
-
-            # Limit the magnitude of drift correction
-            max_drift_correction_angular_vel = 0.2
-            drift_adjustment = max(
-                -max_drift_correction_angular_vel,
-                min(max_drift_correction_angular_vel, drift_adjustment),
-            )
-
-            # Add to the PI output or passthrough angular
-            corrected_angular += drift_adjustment
-
-            if abs(drift_adjustment) > 0.001:  # Log only if correction is significant
-                self.get_logger().debug(
-                    f"Drift correction: base_diff={
-                        self.initial_encoder_diff}, curr_diff={current_encoder_diff}, acc_drift={accumulated_drift}, adjust={
-                        drift_adjustment:.4f}, final_ang={
-                        corrected_angular:.4f}"
-                )
-
+        """Publish velocity command"""
         cmd_msg = Twist()
         cmd_msg.linear.x = linear
         cmd_msg.linear.y = 0.0
         cmd_msg.linear.z = 0.0
         cmd_msg.angular.x = 0.0
         cmd_msg.angular.y = 0.0
-        cmd_msg.angular.z = corrected_angular  # Use potentially drift-corrected angular
+        cmd_msg.angular.z = angular
+
+        # Log published commands for debugging
+        if abs(linear) > 0.001 or abs(angular) > 0.001:
+            self.get_logger().info(f"Publishing cmd_vel: linear={linear:.3f}, angular={angular:.3f}")
 
         self.cmd_vel_pub.publish(cmd_msg)
 

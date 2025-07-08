@@ -133,29 +133,29 @@ class HGLRCM1005883Publisher(Node):
     def init_qmc5883(self):
         """Initialize QMC5883 magnetometer"""
         try:
-            # Soft reset
-            self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x0A, 0x01)
+            # Soft reset - write 0x80 to control register 2 (0x0A)
+            self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x0A, 0x80)
             time.sleep(0.1)
 
-            # Set/Reset period
+            # Set/Reset period register (0x0B) - recommended value 0x01
             self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x0B, 0x01)
 
-            # Control register 1: Continuous mode, 200Hz, ±8G, OSR=512
-            # Bits: OSR[7:6]=11, RNG[5:4]=01, ODR[3:2]=11, MODE[1:0]=01
-            self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x09, 0xDD)
+            # Control register 1 (0x09): 
+            # MODE[1:0] = 01 (continuous measurement mode)
+            # ODR[3:2] = 00 (10Hz) - start with slower rate for stability
+            # RNG[5:4] = 00 (±2G range)
+            # OSR[7:6] = 00 (512 oversampling)
+            # Combined: 0x01 for continuous mode, 10Hz, ±2G, OSR=512
+            self.i2c_bus_obj.write_byte_data(self.qmc5883_address, 0x09, 0x01)
+            time.sleep(0.1)
 
-            # Verify chip ID (QMC5883 chip ID register is at 0x0D)
-            chip_id = self.i2c_bus_obj.read_byte_data(self.qmc5883_address, 0x0D)
-            if chip_id != 0xFF:
-                self.get_logger().warn(
-                    f"QMC5883 chip ID mismatch: expected 0xFF, got 0x{
-                        chip_id:02X}"
-                )
-                self.get_logger().warn(
-                    "Continuing anyway - some QMC5883 clones have different chip IDs"
-                )
-            else:
-                self.get_logger().info("QMC5883 chip ID verified")
+            # Read status register to verify communication
+            status = self.i2c_bus_obj.read_byte_data(self.qmc5883_address, 0x06)
+            self.get_logger().info(f"QMC5883 status after init: 0x{status:02X}")
+
+            # Note: QMC5883L doesn't have a reliable chip ID register like HMC5883L
+            # Instead, verify by checking if we can read status register
+            self.get_logger().info("QMC5883 initialization completed")
 
         except Exception as e:
             self.get_logger().error(f"QMC5883 initialization error: {e}")
@@ -164,17 +164,20 @@ class HGLRCM1005883Publisher(Node):
     def read_qmc5883_raw(self):
         """Read raw magnetometer data from QMC5883"""
         try:
-            # Check data ready bit
+            # Check data ready bit (DRDY) in status register 0x06
             status = self.i2c_bus_obj.read_byte_data(self.qmc5883_address, 0x06)
             if not (status & 0x01):  # DRDY bit
                 return None, None, None
 
-            # Read 6 bytes of data (X, Y, Z each 2 bytes)
+            # QMC5883L data registers: 0x00-0x05
+            # 0x00: X LSB, 0x01: X MSB
+            # 0x02: Y LSB, 0x03: Y MSB  
+            # 0x04: Z LSB, 0x05: Z MSB
             data = []
             for reg in range(0x00, 0x06):
                 data.append(self.i2c_bus_obj.read_byte_data(self.qmc5883_address, reg))
 
-            # Convert to signed 16-bit values
+            # Convert to signed 16-bit values (little-endian: LSB first, then MSB)
             x = struct.unpack("<h", bytes([data[0], data[1]]))[0]
             y = struct.unpack("<h", bytes([data[2], data[3]]))[0]
             z = struct.unpack("<h", bytes([data[4], data[5]]))[0]
@@ -232,9 +235,11 @@ class HGLRCM1005883Publisher(Node):
                 x_raw, y_raw, z_raw = self.read_qmc5883_raw()
 
                 if x_raw is not None:
-                    # Convert to microTesla (approximate conversion for QMC5883)
-                    # QMC5883 has ±8 gauss range with 16-bit resolution
-                    scale_factor = 8.0 / 32768.0 * 100.0  # Convert to microTesla
+                    # Convert to microTesla (QMC5883L specifications)
+                    # QMC5883L ±2G range with 16-bit resolution (we set RNG=00 for ±2G)
+                    # 1 Gauss = 100 microTesla
+                    # ±2G range = ±200 microTesla over 16-bit signed range (-32768 to +32767)
+                    scale_factor = 200.0 / 32768.0  # microTesla per LSB
 
                     with self.compass_lock:
                         self.magnetic_x = x_raw * scale_factor

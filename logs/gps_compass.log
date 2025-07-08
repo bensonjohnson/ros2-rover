@@ -1,7 +1,8 @@
-[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-03-15-51-50-599788-rover-5415
+[INFO] [launch]: All log files can be found below /home/ubuntu/.ros/log/2025-07-08-05-08-48-917184-rover-12610
 [INFO] [launch]: Default logging verbosity is set to INFO
-[INFO] [hglrc_m100_5883-1]: process started with pid [5419]
-[hglrc_m100_5883-1] [INFO] [1751557911.450528525] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS serial port /dev/ttyS6 opened at 115200 baud
-[hglrc_m100_5883-1] [INFO] [1751557911.553465727] [hglrc_m100_5883_publisher]: QMC5883 chip ID verified
-[hglrc_m100_5883-1] [INFO] [1751557911.554159662] [hglrc_m100_5883_publisher]: QMC5883 compass initialized on I2C bus 5
-[hglrc_m100_5883-1] [INFO] [1751557911.625068800] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS and QMC5883 Compass Publisher initialized
+[INFO] [hglrc_m100_5883-1]: process started with pid [12614]
+[hglrc_m100_5883-1] [INFO] [1751951329.878633385] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS serial port /dev/ttyS6 opened at 115200 baud
+[hglrc_m100_5883-1] [INFO] [1751951330.082639821] [hglrc_m100_5883_publisher]: QMC5883 status after init: 0x05
+[hglrc_m100_5883-1] [INFO] [1751951330.083242681] [hglrc_m100_5883_publisher]: QMC5883 initialization completed
+[hglrc_m100_5883-1] [INFO] [1751951330.083886081] [hglrc_m100_5883_publisher]: QMC5883 compass initialized on I2C bus 5
+[hglrc_m100_5883-1] [INFO] [1751951330.162358218] [hglrc_m100_5883_publisher]: HGLRC M100-5883 GPS and QMC5883 Compass Publisher initialized

@@ -6,13 +6,13 @@ ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
 ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
 ALSA lib conf.c:5727:(snd_config_expand) Evaluate error: No such file or directory
 ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
-[INFO] [1751557919.492532491] [xbox_controller_teleop]: Controller initialized: Xbox Wireless Controller
-[INFO] [1751557919.499170211] [xbox_controller_teleop]: Xbox Controller Teleop initialized (Tank Drive: True, Feedback Control: False)
-[INFO] [1751557919.499637500] [xbox_controller_teleop]: === Xbox Controller Controls ===
-[INFO] [1751557919.500080287] [xbox_controller_teleop]: Tank Drive Mode:
-[INFO] [1751557919.500506448] [xbox_controller_teleop]: - Left stick Y: Left motor
-[INFO] [1751557919.500921816] [xbox_controller_teleop]: - Right stick Y: Right motor
-[INFO] [1751557919.501385021] [xbox_controller_teleop]: - Y button: Emergency stop toggle
-[INFO] [1751557919.501840351] [xbox_controller_teleop]: - A button: Resume from emergency stop
-[INFO] [1751557919.502316099] [xbox_controller_teleop]: - Encoder feedback control: DISABLED (open-loop)
-[INFO] [1751557919.502799431] [xbox_controller_teleop]: ================================
+[ERROR] [1751951337.779589666] [xbox_controller_teleop]: No joystick/controller detected
+[INFO] [1751951337.790896430] [xbox_controller_teleop]: Xbox Controller Teleop initialized (Tank Drive: True, Feedback Control: False)
+[INFO] [1751951337.791516498] [xbox_controller_teleop]: === Xbox Controller Controls ===
+[INFO] [1751951337.792056652] [xbox_controller_teleop]: Tank Drive Mode:
+[INFO] [1751951337.792591847] [xbox_controller_teleop]: - Left stick Y: Left motor
+[INFO] [1751951337.793110709] [xbox_controller_teleop]: - Right stick Y: Right motor
+[INFO] [1751951337.793613822] [xbox_controller_teleop]: - Y button: Emergency stop toggle
+[INFO] [1751951337.794109060] [xbox_controller_teleop]: - A button: Resume from emergency stop
+[INFO] [1751951337.794620630] [xbox_controller_teleop]: - Encoder feedback control: DISABLED (open-loop)
+[INFO] [1751951337.795140951] [xbox_controller_teleop]: ================================

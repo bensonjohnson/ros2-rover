@@ -1,0 +1,30 @@
+running develop
+Removing /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor-implements.egg-link (link to .)
+running egg_info
+writing ../../build/tractor_implements/tractor_implements.egg-info/PKG-INFO
+writing dependency_links to ../../build/tractor_implements/tractor_implements.egg-info/dependency_links.txt
+writing entry points to ../../build/tractor_implements/tractor_implements.egg-info/entry_points.txt
+writing requirements to ../../build/tractor_implements/tractor_implements.egg-info/requires.txt
+writing top-level names to ../../build/tractor_implements/tractor_implements.egg-info/top_level.txt
+reading manifest file '../../build/tractor_implements/tractor_implements.egg-info/SOURCES.txt'
+writing manifest file '../../build/tractor_implements/tractor_implements.egg-info/SOURCES.txt'
+running build
+running build_py
+running install
+running install_lib
+creating /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/mower_controller.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/sprayer_controller.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/__init__.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/mower_controller.py to mower_controller.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/sprayer_controller.py to sprayer_controller.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/__init__.py to __init__.cpython-312.pyc
+running install_data
+copying resource/tractor_implements -> /home/ubuntu/ros2-rover/install/tractor_implements/share/ament_index/resource_index/packages
+copying package.xml -> /home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements
+running install_egg_info
+Copying ../../build/tractor_implements/tractor_implements.egg-info to /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements-0.0.0-py3.12.egg-info
+running install_scripts
+Installing mower_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+Installing sprayer_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_implements/install.log'

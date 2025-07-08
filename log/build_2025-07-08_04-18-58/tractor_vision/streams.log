@@ -1,0 +1,21 @@
+[4.667s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_vision': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data --force
+[5.919s] running develop
+[6.254s] running egg_info
+[6.286s] writing tractor_vision.egg-info/PKG-INFO
+[6.288s] writing dependency_links to tractor_vision.egg-info/dependency_links.txt
+[6.289s] writing entry points to tractor_vision.egg-info/entry_points.txt
+[6.290s] writing requirements to tractor_vision.egg-info/requires.txt
+[6.290s] writing top-level names to tractor_vision.egg-info/top_level.txt
+[6.353s] reading manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[6.354s] writing manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[6.388s] running build_ext
+[6.389s] Creating /home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor-vision.egg-link (link to .)
+[6.392s] Installing obstacle_detector script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[6.393s] Installing realsense_processor script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[6.395s] 
+[6.396s] Installed /home/ubuntu/ros2-rover/build/tractor_vision
+[6.396s] running symlink_data
+[6.397s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_vision/resource/tractor_vision -> /home/ubuntu/ros2-rover/install/tractor_vision/share/ament_index/resource_index/packages
+[6.399s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_vision/package.xml -> /home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision
+[6.399s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_vision/config/realsense_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/config
+[6.499s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_vision' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data --force

@@ -1,0 +1,18 @@
+[4.482s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_vision': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data
+[5.253s] running develop
+[5.585s] running egg_info
+[5.616s] writing tractor_vision.egg-info/PKG-INFO
+[5.617s] writing dependency_links to tractor_vision.egg-info/dependency_links.txt
+[5.618s] writing entry points to tractor_vision.egg-info/entry_points.txt
+[5.618s] writing requirements to tractor_vision.egg-info/requires.txt
+[5.619s] writing top-level names to tractor_vision.egg-info/top_level.txt
+[5.682s] reading manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[5.683s] writing manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[5.717s] running build_ext
+[5.719s] Creating /home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor-vision.egg-link (link to .)
+[5.720s] Installing obstacle_detector script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[5.723s] Installing realsense_processor script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[5.723s] 
+[5.726s] Installed /home/ubuntu/ros2-rover/build/tractor_vision
+[5.727s] running symlink_data
+[5.803s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_vision' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data

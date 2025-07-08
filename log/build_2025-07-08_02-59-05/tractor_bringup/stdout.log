@@ -1,0 +1,15 @@
+running develop
+running egg_info
+writing tractor_bringup.egg-info/PKG-INFO
+writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+writing requirements to tractor_bringup.egg-info/requires.txt
+writing top-level names to tractor_bringup.egg-info/top_level.txt
+reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+
+Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+running symlink_data
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch

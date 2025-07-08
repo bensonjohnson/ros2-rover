@@ -1,0 +1,34 @@
+[4.169s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_implements': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build
+[4.694s] running develop
+[5.033s] Removing /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor-implements.egg-link (link to .)
+[5.128s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_implements' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build
+[5.129s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_implements': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_implements build --build-base /home/ubuntu/ros2-rover/build/tractor_implements/build install --record /home/ubuntu/ros2-rover/build/tractor_implements/install.log --single-version-externally-managed install_data --force
+[5.577s] running egg_info
+[5.608s] writing ../../build/tractor_implements/tractor_implements.egg-info/PKG-INFO
+[5.609s] writing dependency_links to ../../build/tractor_implements/tractor_implements.egg-info/dependency_links.txt
+[5.609s] writing entry points to ../../build/tractor_implements/tractor_implements.egg-info/entry_points.txt
+[5.610s] writing requirements to ../../build/tractor_implements/tractor_implements.egg-info/requires.txt
+[5.610s] writing top-level names to ../../build/tractor_implements/tractor_implements.egg-info/top_level.txt
+[5.675s] reading manifest file '../../build/tractor_implements/tractor_implements.egg-info/SOURCES.txt'
+[5.677s] writing manifest file '../../build/tractor_implements/tractor_implements.egg-info/SOURCES.txt'
+[5.678s] running build
+[5.678s] running build_py
+[5.679s] running install
+[5.688s] running install_lib
+[5.721s] creating /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+[5.721s] copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/mower_controller.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+[5.722s] copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/sprayer_controller.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+[5.722s] copying /home/ubuntu/ros2-rover/build/tractor_implements/build/lib/tractor_implements/__init__.py -> /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements
+[5.724s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/mower_controller.py to mower_controller.cpython-312.pyc
+[5.730s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/sprayer_controller.py to sprayer_controller.cpython-312.pyc
+[5.743s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements/__init__.py to __init__.cpython-312.pyc
+[5.744s] running install_data
+[5.744s] copying resource/tractor_implements -> /home/ubuntu/ros2-rover/install/tractor_implements/share/ament_index/resource_index/packages
+[5.745s] copying package.xml -> /home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements
+[5.746s] running install_egg_info
+[5.881s] Copying ../../build/tractor_implements/tractor_implements.egg-info to /home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages/tractor_implements-0.0.0-py3.12.egg-info
+[5.885s] running install_scripts
+[6.460s] Installing mower_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+[6.461s] Installing sprayer_controller script to /home/ubuntu/ros2-rover/install/tractor_implements/lib/tractor_implements
+[6.462s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_implements/install.log'
+[6.542s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_implements' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_implements build --build-base /home/ubuntu/ros2-rover/build/tractor_implements/build install --record /home/ubuntu/ros2-rover/build/tractor_implements/install.log --single-version-externally-managed install_data --force

@@ -1,0 +1,15 @@
+[4.242s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data
+[5.266s] running develop
+[5.598s] running egg_info
+[5.631s] writing tractor_bringup.egg-info/PKG-INFO
+[5.633s] writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+[5.634s] writing requirements to tractor_bringup.egg-info/requires.txt
+[5.634s] writing top-level names to tractor_bringup.egg-info/top_level.txt
+[5.698s] reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[5.699s] writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[5.734s] running build_ext
+[5.735s] Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+[5.736s] 
+[5.736s] Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+[5.737s] running symlink_data
+[5.885s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data

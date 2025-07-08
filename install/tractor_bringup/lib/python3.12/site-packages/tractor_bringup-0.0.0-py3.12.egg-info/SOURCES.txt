@@ -7,10 +7,12 @@ setup.py
 ../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
 ../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
 ../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
+config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
 config/robot_localization.yaml
 config/slam_toolbox_params.yaml
 launch/control.launch.py
+launch/control_with_feedback.launch.py
 launch/hiwonder_control.launch.py
 launch/implements.launch.py
 launch/navigation.launch.py
@@ -22,6 +24,7 @@ launch/tractor_bringup.launch.py
 launch/tractor_gazebo.launch.py
 launch/tractor_sim.launch.py
 launch/vision.launch.py
+launch/xbox_teleop_with_feedback.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
 resource/tractor_bringup

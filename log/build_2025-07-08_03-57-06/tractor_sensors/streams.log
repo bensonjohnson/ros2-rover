@@ -1,0 +1,32 @@
+[4.780s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build
+[5.295s] running develop
+[5.639s] Removing /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor-sensors.egg-link (link to .)
+[5.731s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build
+[5.735s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_sensors build --build-base /home/ubuntu/ros2-rover/build/tractor_sensors/build install --record /home/ubuntu/ros2-rover/build/tractor_sensors/install.log --single-version-externally-managed install_data --force
+[6.683s] running egg_info
+[6.716s] writing ../../build/tractor_sensors/tractor_sensors.egg-info/PKG-INFO
+[6.716s] writing dependency_links to ../../build/tractor_sensors/tractor_sensors.egg-info/dependency_links.txt
+[6.717s] writing entry points to ../../build/tractor_sensors/tractor_sensors.egg-info/entry_points.txt
+[6.718s] writing requirements to ../../build/tractor_sensors/tractor_sensors.egg-info/requires.txt
+[6.718s] writing top-level names to ../../build/tractor_sensors/tractor_sensors.egg-info/top_level.txt
+[6.788s] reading manifest file '../../build/tractor_sensors/tractor_sensors.egg-info/SOURCES.txt'
+[6.789s] writing manifest file '../../build/tractor_sensors/tractor_sensors.egg-info/SOURCES.txt'
+[6.789s] running build
+[6.789s] running build_py
+[6.790s] running install
+[6.800s] running install_lib
+[6.834s] copying /home/ubuntu/ros2-rover/build/tractor_sensors/build/lib/tractor_sensors/hglrc_m100_5883.py -> /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors
+[6.834s] copying /home/ubuntu/ros2-rover/build/tractor_sensors/build/lib/tractor_sensors/__init__.py -> /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors
+[6.836s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors/hglrc_m100_5883.py to hglrc_m100_5883.cpython-312.pyc
+[6.841s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors/__init__.py to __init__.cpython-312.pyc
+[6.842s] running install_data
+[6.842s] copying resource/tractor_sensors -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index/resource_index/packages
+[6.842s] copying package.xml -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors
+[6.842s] copying launch/hglrc_m100_5883.launch.py -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/launch
+[6.843s] copying config/hglrc_m100_5883_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/config
+[6.843s] running install_egg_info
+[6.878s] Copying ../../build/tractor_sensors/tractor_sensors.egg-info to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor_sensors-0.0.0-py3.12.egg-info
+[6.879s] running install_scripts
+[7.103s] Installing hglrc_m100_5883 script to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors
+[7.104s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_sensors/install.log'
+[7.184s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_sensors build --build-base /home/ubuntu/ros2-rover/build/tractor_sensors/build install --record /home/ubuntu/ros2-rover/build/tractor_sensors/install.log --single-version-externally-managed install_data --force

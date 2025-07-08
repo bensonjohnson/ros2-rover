@@ -1,0 +1,54 @@
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5204:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5727:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+[INFO] [1751946225.584549541] [xbox_controller_teleop]: Controller initialized: Xbox Wireless Controller
+[INFO] [1751946225.591335987] [xbox_controller_teleop]: Xbox Controller Teleop initialized (Tank Drive: True, Feedback Control: False)
+[INFO] [1751946225.591831504] [xbox_controller_teleop]: === Xbox Controller Controls ===
+[INFO] [1751946225.592264024] [xbox_controller_teleop]: Tank Drive Mode:
+[INFO] [1751946225.592684877] [xbox_controller_teleop]: - Left stick Y: Left motor
+[INFO] [1751946225.593133729] [xbox_controller_teleop]: - Right stick Y: Right motor
+[INFO] [1751946225.593602122] [xbox_controller_teleop]: - Y button: Emergency stop toggle
+[INFO] [1751946225.594088597] [xbox_controller_teleop]: - A button: Resume from emergency stop
+[INFO] [1751946225.594600155] [xbox_controller_teleop]: - Encoder feedback control: DISABLED (open-loop)
+[INFO] [1751946225.595107337] [xbox_controller_teleop]: ================================
+[ERROR] [1751946408.107467015] [xbox_controller_teleop]: Error during cleanup: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:423
+Failed to publish log message to rosout: publisher's context is invalid, at ./src/rcl/publisher.c:423
+pygame 2.5.2 (SDL 2.30.0, Python 3.12.3)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+Traceback (most recent call last):
+  File "/home/ubuntu/ros2-rover/build/tractor_control/tractor_control/xbox_controller_teleop.py", line 280, in main
+    rclpy.spin(xbox_teleop)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 244, in spin
+    executor.spin_once()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 839, in spin_once
+    self._spin_once_impl(timeout_sec)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 823, in _spin_once_impl
+    handler, entity, node = self.wait_for_ready_callbacks(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 793, in wait_for_ready_callbacks
+    return next(self._cb_iter)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/executors.py", line 701, in _wait_for_ready_callbacks
+    raise ExternalShutdownException()
+rclpy.executors.ExternalShutdownException
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control/xbox_controller_teleop", line 33, in <module>
+    sys.exit(load_entry_point('tractor-control==0.0.0', 'console_scripts', 'xbox_controller_teleop')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/ros2-rover/build/tractor_control/tractor_control/xbox_controller_teleop.py", line 285, in main
+    rclpy.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/__init__.py", line 134, in shutdown
+    _shutdown(context=context)
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/utilities.py", line 82, in shutdown
+    context.shutdown()
+  File "/opt/ros/jazzy/lib/python3.12/site-packages/rclpy/context.py", line 129, in shutdown
+    self.__context.shutdown()
+rclpy._rclpy_pybind11.RCLError: failed to shutdown: rcl_shutdown already called on the given context, at ./src/rcl/init.c:333

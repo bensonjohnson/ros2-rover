@@ -13,7 +13,7 @@ slam_toolbox:
     odom_frame: odom
     map_frame: map
     base_frame: base_link
-    scan_topic: /realsense_435i/scan
+    scan_topic: /realsense_435i/scan # Assumes depthimage_to_laserscan provides this
     mode: mapping  # localization
 
     # If you want to use the lifecycle interface for slam toolbox, 
@@ -24,17 +24,16 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_time_interval: 0.5
-    transform_publish_period: 0.02
-    map_update_interval: 5.0
-    resolution: 0.05
-    max_laser_range: 20.0
-    minimum_travel_distance: 0.5
-    minimum_travel_heading: 0.5
-    laserMaxRange: 20.0
-    laser_min_range: 0.0
-    tf_buffer_duration: 30.0
-    stack_size_to_use: 40000000
+    minimum_time_interval: 0.2 # Process scans at up to 5Hz. Default was 0.5 (2Hz). Tune based on performance.
+    transform_publish_period: 0.02 # Default 0.02 (50Hz)
+    map_update_interval: 5.0 # Default 5.0
+    resolution: 0.05 # Must match map resolution
+    max_laser_range: 8.0 # Max effective range of the /realsense_435i/scan. Was 20.0.
+    minimum_travel_distance: 0.5 # Default 0.5
+    minimum_travel_heading: 0.5 # Default 0.5
+    laser_min_range: 0.15 # Min effective range of the /realsense_435i/scan. Was 0.0.
+    tf_buffer_duration: 30.0 # Default 30.0
+    stack_size_to_use: 40000000 # Default 40000000
     enable_interactive_mode: true
 
     # General Parameters for mapping
@@ -77,7 +76,7 @@ slam_toolbox:
 
     # GPS integration parameters for outdoor mapping
     # These help with global positioning and large loop closures
-    enable_gps_global_localization: true
+    enable_gps_global_localization: true # Set to false if GPS is not available or unreliable
     gps_global_localization_threshold: 100.0  # Use GPS for very large areas
     map_with_known_poses: false
     use_pose_extrapolator: true

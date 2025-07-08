@@ -9,9 +9,13 @@ setup.py
 ../../build/tractor_implements/tractor_implements.egg-info/top_level.txt
 ../../build/tractor_implements/tractor_implements.egg-info/zip-safe
 resource/tractor_implements
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
 tractor_implements/__init__.py
 tractor_implements/mower_controller.py
 tractor_implements/sprayer_controller.py
+tractor_implements.egg-info/PKG-INFO
+tractor_implements.egg-info/SOURCES.txt
+tractor_implements.egg-info/dependency_links.txt
+tractor_implements.egg-info/entry_points.txt
+tractor_implements.egg-info/requires.txt
+tractor_implements.egg-info/top_level.txt
+tractor_implements.egg-info/zip-safe

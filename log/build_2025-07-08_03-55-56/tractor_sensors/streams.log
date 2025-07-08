@@ -1,0 +1,21 @@
+[4.854s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data --force
+[5.692s] running develop
+[6.041s] running egg_info
+[6.075s] writing tractor_sensors.egg-info/PKG-INFO
+[6.076s] writing dependency_links to tractor_sensors.egg-info/dependency_links.txt
+[6.077s] writing entry points to tractor_sensors.egg-info/entry_points.txt
+[6.077s] writing requirements to tractor_sensors.egg-info/requires.txt
+[6.078s] writing top-level names to tractor_sensors.egg-info/top_level.txt
+[6.147s] reading manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[6.148s] writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[6.184s] running build_ext
+[6.185s] Creating /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor-sensors.egg-link (link to .)
+[6.186s] Installing hglrc_m100_5883 script to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors
+[6.186s] 
+[6.187s] Installed /home/ubuntu/ros2-rover/build/tractor_sensors
+[6.188s] running symlink_data
+[6.188s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/resource/tractor_sensors -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/ament_index/resource_index/packages
+[6.189s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/package.xml -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors
+[6.189s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/launch/hglrc_m100_5883.launch.py -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/launch
+[6.190s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_sensors/config/hglrc_m100_5883_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/config
+[6.317s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data --force

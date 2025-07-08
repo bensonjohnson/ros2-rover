@@ -1,0 +1,22 @@
+[4.784s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_vision': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_vision build --build-base /home/ubuntu/ros2-rover/build/tractor_vision/build install --record /home/ubuntu/ros2-rover/build/tractor_vision/install.log --single-version-externally-managed install_data
+[5.255s] running egg_info
+[5.288s] writing ../../build/tractor_vision/tractor_vision.egg-info/PKG-INFO
+[5.289s] writing dependency_links to ../../build/tractor_vision/tractor_vision.egg-info/dependency_links.txt
+[5.289s] writing entry points to ../../build/tractor_vision/tractor_vision.egg-info/entry_points.txt
+[5.290s] writing requirements to ../../build/tractor_vision/tractor_vision.egg-info/requires.txt
+[5.290s] writing top-level names to ../../build/tractor_vision/tractor_vision.egg-info/top_level.txt
+[5.353s] reading manifest file '../../build/tractor_vision/tractor_vision.egg-info/SOURCES.txt'
+[5.355s] writing manifest file '../../build/tractor_vision/tractor_vision.egg-info/SOURCES.txt'
+[5.355s] running build
+[5.356s] running build_py
+[5.356s] running install
+[5.366s] running install_lib
+[5.402s] running install_data
+[5.403s] running install_egg_info
+[5.435s] removing '/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor_vision-0.0.0-py3.12.egg-info' (and everything under it)
+[5.435s] Copying ../../build/tractor_vision/tractor_vision.egg-info to /home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor_vision-0.0.0-py3.12.egg-info
+[5.436s] running install_scripts
+[5.661s] Installing obstacle_detector script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[5.662s] Installing realsense_processor script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[5.663s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_vision/install.log'
+[5.753s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_vision' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_vision build --build-base /home/ubuntu/ros2-rover/build/tractor_vision/build install --record /home/ubuntu/ros2-rover/build/tractor_vision/install.log --single-version-externally-managed install_data

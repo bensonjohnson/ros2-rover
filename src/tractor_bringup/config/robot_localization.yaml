@@ -21,8 +21,10 @@ ekf_filter_node:
     # Input sources
     # odom0: Wheel odometry from /odom topic
     # imu0: Compass heading from GPS module
+    # imu1: D435i IMU (to be added when camera arrives)
     odom0: /odom
     imu0: /hglrc_gps/imu
+    # imu1: /camera/imu  # Uncomment when D435i is connected
     
     # Wheel odometry configuration
     # x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az

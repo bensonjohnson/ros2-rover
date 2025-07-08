@@ -75,9 +75,8 @@ cleanup() {
     print_warning "Shutting down feedback-controlled tractor system..."
 
     # Kill background processes
-    # This will kill the launch command and any nodes it started, plus xbox_controller
+    # This will kill the launch command and any nodes it started (including xbox_controller)
     pkill -f "ros2 launch tractor_bringup control_with_feedback.launch.py" || true
-    pkill -f "ros2 run tractor_control xbox_controller_teleop" || true
     pkill -f "foxglove_bridge" || true # If Foxglove is started by this script
 
     print_success "System shutdown complete"
@@ -153,30 +152,18 @@ main() {
     fi
     print_success "Core control system (control_with_feedback.launch.py) started."
 
-    # Start Xbox controller teleop, remapping its output to /cmd_vel_desired
-    # which is then remapped to /cmd_vel_raw by control_with_feedback.launch.py
-    print_status "Launching Xbox controller teleop..."
+    # Xbox controller is now included in control_with_feedback.launch.py
+    print_status "Xbox controller teleop included in launch file..."
     export SDL_JOYSTICK_DEVICE=${SDL_JOYSTICK_DEVICE:-/dev/input/js0}
     if [ ! -e "$SDL_JOYSTICK_DEVICE" ]; then
         print_warning "Xbox controller device $SDL_JOYSTICK_DEVICE not found. Teleop will likely fail."
     fi
 
-    ros2 run tractor_control xbox_controller_teleop --ros-args \
-        -p max_linear_speed:=1.0 \
-        -p max_angular_speed:=1.0 \
-        -p deadzone:=0.15 \
-        -p tank_drive_mode:=true \
-        -p controller_index:=0 \
-        -p use_feedback_control:=false \
-        --remap cmd_vel:=cmd_vel_desired \
-        > "$LOG_DIR/xbox_controller_feedback_mode.log" 2>&1 &
-    XBOX_PID=$!
     sleep 2
-
     if check_process "xbox_controller_teleop"; then
-        print_success "Xbox controller teleop started, publishing to /cmd_vel_desired."
+        print_success "Xbox controller teleop started within launch file."
     else
-        print_warning "Xbox controller teleop failed to start (controller may not be connected or SDL_JOYSTICK_DEVICE is wrong)."
+        print_warning "Xbox controller teleop failed to start (controller may not be connected)."
     fi
 
     # Optionally, start Foxglove bridge if not handled elsewhere
@@ -227,13 +214,9 @@ main() {
             break
         fi
 
-        # Xbox controller is optional, just warn if it stops
-        if [ ! -z ${XBOX_PID+x} ] && ! kill -0 $XBOX_PID 2>/dev/null && check_process "xbox_controller_teleop"; then
-            # Process might have exited cleanly if controller disconnected
-            if ! check_process "xbox_controller_teleop"; then
-                 print_warning "Xbox controller teleop stopped (controller may have been disconnected or exited)."
-                 unset XBOX_PID # Avoid further checks if it's meant to be off
-            fi
+        # Xbox controller is managed by the launch file, check if it's still running
+        if ! check_process "xbox_controller_teleop"; then
+            print_warning "Xbox controller teleop stopped (controller may have been disconnected)."
         fi
 
         sleep 5
