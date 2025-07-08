@@ -134,14 +134,14 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.09 0.025 0.025"/> <!-- Updated dimensions -->
+        <box size="0.025 0.09 0.025"/> <!-- Updated dimensions -->
       </geometry>
       <material name="black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <box size="0.09 0.025 0.025"/> <!-- Updated dimensions -->
+        <box size="0.025 0.09 0.025"/> <!-- Updated dimensions -->
       </geometry>
     </collision>
     <inertial>
