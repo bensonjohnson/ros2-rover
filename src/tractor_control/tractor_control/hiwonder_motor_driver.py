@@ -475,8 +475,14 @@ class HiwonderMotorDriver(Node):
             "left_viz_wheel_joint",
             "right_viz_wheel_joint",
         ]
-        # Fixed tracks + rotating viz wheels
-        joint_msg.position = [0.0, 0.0, left_wheel_pos, right_wheel_pos]
+        # Publish raw encoder counts for left_wheel_joint and right_wheel_joint
+        # and scaled radians for visualization wheels.
+        joint_msg.position = [
+            float(left_encoder),
+            float(right_encoder),
+            left_wheel_pos,
+            right_wheel_pos,
+        ]
         # Fixed tracks + wheel velocities
         joint_msg.velocity = [0.0, 0.0, self.left_velocity, self.right_velocity]
 
