@@ -171,7 +171,7 @@ main() {
         -p motor_controller_address:=0x34 \
         -p use_pwm_control:=false \
         -p motor_type:=3 \
-        -p encoder_ppr:=135 \
+        -p encoder_ppr:=1980 \
         -p publish_rate:=5.0 \
         -p max_motor_speed:=50 \
         -p wheel_separation:=0.5 \
