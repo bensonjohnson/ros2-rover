@@ -21,6 +21,8 @@ setup(
         ("share/" + package_name + "/launch", ["launch/hiwonder_control.launch.py"]),
         ("share/" + package_name + "/launch", ["launch/robot_localization.launch.py"]),
         ("share/" + package_name + "/launch", ["launch/slam_mapping.launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/control_with_feedback.launch.py"]), # Added this line
+        ("share/" + package_name + "/launch", ["launch/xbox_teleop_with_feedback.launch.py"]), # Added this line
         ("share/" + package_name + "/urdf", ["urdf/tractor.urdf.xacro"]),
         ("share/" + package_name + "/config", ["config/nav2_params.yaml"]),
         ("share/" + package_name + "/config", ["config/robot_localization.yaml"]),
