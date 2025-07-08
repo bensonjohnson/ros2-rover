@@ -311,41 +311,41 @@
   <!-- These rotate to show movement while tank tracks stay fixed -->
   
   <!-- Left Virtual Wheel -->
-  <link name="left_viz_wheel">
-    <visual>
-      <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry>
-        <cylinder radius="0.02" length="0.01"/>
-      </geometry>
-      <material name="white"/>
-    </visual>
-  </link>
+  <!-- <link name="left_viz_wheel"> -->
+    <!-- <visual> -->
+      <!-- <origin xyz="0 0 0" rpy="${PI/2} 0 0"/> -->
+      <!-- <geometry> -->
+        <!-- <cylinder radius="0.02" length="0.01"/> -->
+      <!-- </geometry> -->
+      <!-- <material name="white"/> -->
+    <!-- </visual> -->
+  <!-- </link> -->
   
   <!-- Right Virtual Wheel -->
-  <link name="right_viz_wheel">
-    <visual>
-      <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry>
-        <cylinder radius="0.02" length="0.01"/>
-      </geometry>
-      <material name="white"/>
-    </visual>
-  </link>
+  <!-- <link name="right_viz_wheel"> -->
+    <!-- <visual> -->
+      <!-- <origin xyz="0 0 0" rpy="${PI/2} 0 0"/> -->
+      <!-- <geometry> -->
+        <!-- <cylinder radius="0.02" length="0.01"/> -->
+      <!-- </geometry> -->
+      <!-- <material name="white"/> -->
+    <!-- </visual> -->
+  <!-- </link> -->
   
   <!-- Virtual Wheel Joints (continuous for rotation) -->
-  <joint name="left_viz_wheel_joint" type="continuous">
-    <parent link="base_link"/>
-    <child link="left_viz_wheel"/>
-    <origin xyz="0 ${(base_width + track_width)/2 + 0.03} -0.045" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-  </joint>
+  <!-- <joint name="left_viz_wheel_joint" type="continuous"> -->
+    <!-- <parent link="base_link"/> -->
+    <!-- <child link="left_viz_wheel"/> -->
+    <!-- <origin xyz="0 ${(base_width + track_width)/2 + 0.03} -0.045" rpy="0 0 0"/> -->
+    <!-- <axis xyz="0 1 0"/> -->
+  <!-- </joint> -->
   
-  <joint name="right_viz_wheel_joint" type="continuous">
-    <parent link="base_link"/>
-    <child link="right_viz_wheel"/>
-    <origin xyz="0 ${-(base_width + track_width)/2 - 0.03} -0.045" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>
-  </joint>
+  <!-- <joint name="right_viz_wheel_joint" type="continuous"> -->
+    <!-- <parent link="base_link"/> -->
+    <!-- <child link="right_viz_wheel"/> -->
+    <!-- <origin xyz="0 ${-(base_width + track_width)/2 - 0.03} -0.045" rpy="0 0 0"/> -->
+    <!-- <axis xyz="0 1 0"/> -->
+  <!-- </joint> -->
 
   <!-- Gazebo-specific elements -->
   <gazebo reference="base_link">
