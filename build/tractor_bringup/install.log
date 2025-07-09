@@ -1,4 +1,8 @@
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/autonomous_mapping.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/safety_monitor.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/__init__.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/__pycache__/autonomous_mapping.cpython-312.pyc
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/__pycache__/safety_monitor.cpython-312.pyc
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/__pycache__/__init__.cpython-312.pyc
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages/tractor_bringup
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.xml
@@ -16,6 +20,8 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/slam_mapping.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/control_with_feedback.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/realsense_opencv.launch.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/realsense_nav2.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf/tractor.urdf.xacro
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/nav2_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/robot_localization.yaml
@@ -24,8 +30,11 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/SOURCES.txt
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/entry_points.txt
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/requires.txt
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/dependency_links.txt
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/zip-safe
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/PKG-INFO
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/top_level.txt
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup/autonomous_mapping.py
+/home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup/safety_monitor.py

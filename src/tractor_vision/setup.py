@@ -22,6 +22,8 @@ setup(
         "console_scripts": [
             "realsense_processor = tractor_vision.realsense_processor:main",
             "obstacle_detector = tractor_vision.obstacle_detector:main",
+            "opencv_camera_node = tractor_vision.opencv_camera_node:main",
+            "realsense_nav2_node = tractor_vision.realsense_nav2_node:main",
         ],
     },
 )

@@ -129,7 +129,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: pointcloud
         pointcloud:
-          topic: /realsense_435i/depth/points
+          topic: /realsense/depth/points
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -159,7 +159,7 @@ global_costmap:
         enabled: True
         observation_sources: pointcloud
         pointcloud:
-          topic: /realsense_435i/depth/points
+          topic: /realsense/depth/points
           max_obstacle_height: 2.0
           clearing: True
           marking: True

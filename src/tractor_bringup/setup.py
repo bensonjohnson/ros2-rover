@@ -23,6 +23,8 @@ setup(
         ("share/" + package_name + "/launch", ["launch/slam_mapping.launch.py"]),
         ("share/" + package_name + "/launch", ["launch/control_with_feedback.launch.py"]), # Added this line
         ("share/" + package_name + "/launch", ["launch/xbox_teleop_with_feedback.launch.py"]), # Added this line
+        ("share/" + package_name + "/launch", ["launch/realsense_opencv.launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/realsense_nav2.launch.py"]),
         ("share/" + package_name + "/urdf", ["urdf/tractor.urdf.xacro"]),
         ("share/" + package_name + "/config", ["config/nav2_params.yaml"]),
         ("share/" + package_name + "/config", ["config/robot_localization.yaml"]),
@@ -39,6 +41,9 @@ setup(
     license="TODO: License declaration",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "autonomous_mapping.py = tractor_bringup.autonomous_mapping:main",
+            "safety_monitor.py = tractor_bringup.safety_monitor:main",
+        ],
     },
 )

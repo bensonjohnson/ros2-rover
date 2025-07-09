@@ -1,0 +1,38 @@
+[4.657s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force
+[5.964s] running develop
+[6.305s] running egg_info
+[6.340s] writing tractor_bringup.egg-info/PKG-INFO
+[6.340s] writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+[6.341s] writing requirements to tractor_bringup.egg-info/requires.txt
+[6.342s] writing top-level names to tractor_bringup.egg-info/top_level.txt
+[6.418s] reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[6.420s] writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[6.460s] running build_ext
+[6.461s] Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+[6.461s] 
+[6.462s] Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+[6.463s] running symlink_data
+[6.465s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/resource/tractor_bringup -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages
+[6.466s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/package.xml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup
+[6.468s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.468s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/implements.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.469s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/navigation.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.469s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_description.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.470s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/sensors.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.470s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_bringup.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.471s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_gazebo.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.473s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_sim.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.473s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/vision.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.474s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/hiwonder_control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.474s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_localization.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.475s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/slam_mapping.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.475s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.475s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[6.476s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/urdf/tractor.urdf.xacro -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf
+[6.477s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/nav2_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[6.477s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/robot_localization.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[6.478s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/slam_toolbox_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[6.478s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/hiwonder_motor_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[6.479s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[6.479s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.pgm -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[6.579s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force
