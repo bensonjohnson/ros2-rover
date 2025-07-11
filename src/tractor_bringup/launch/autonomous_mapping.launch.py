@@ -108,8 +108,9 @@ def generate_launch_description():
             "unite_imu_method": "linear_interpolation",
             "enable_infra1": "false",
             "enable_infra2": "false",
-            "depth_module.depth_profile": "640x480x30",
-            "rgb_camera.color_profile": "640x480x30",
+            "depth_module.depth_profile": "424x240x15",
+            "rgb_camera.color_profile": "424x240x15",
+            "depth_module.emitter_enabled": "0", # Disabled for outdoor use
             "clip_distance": "8.0",
             "linear_accel_cov": "0.01",
             "angular_velocity_cov": "0.01",
@@ -132,7 +133,7 @@ def generate_launch_description():
                 "angle_min": -1.57,  # -90 degrees
                 "angle_max": 1.57,   # +90 degrees
                 "angle_increment": 0.0087,  # 0.5 degrees for higher resolution
-                "scan_time": 0.033,  # 30 Hz
+                "scan_time": 0.06666666666,  # 15 Hz (1.0/15.0)
                 "range_min": 0.3,
                 "range_max": 8.0,
                 "use_inf": True,
