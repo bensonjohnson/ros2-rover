@@ -14,6 +14,7 @@ echo "  - SLAM mapping"
 echo "  - Nav2 navigation"
 echo "  - Autonomous exploration"
 echo "  - Safety monitoring"
+echo "  - Foxglove Bridge (port 8765)"
 echo ""
 
 # Check if we're in the right directory
@@ -27,9 +28,25 @@ fi
 echo "Sourcing ROS2 workspace..."
 source install/setup.bash
 
-# Make Python scripts executable
-chmod +x autonomous_mapping.py
-chmod +x safety_monitor.py
+echo "Ensuring RealSense device is ready..."
+# Wait for RealSense device to be fully initialized
+sleep 2
+
+# Ensure proper USB power management
+if [ -d "/sys/bus/usb/devices/8-1" ]; then
+    echo "on" | sudo tee /sys/bus/usb/devices/8-1/power/control > /dev/null 2>&1
+fi
+
+# Test RealSense connectivity
+echo "Testing RealSense connection..."
+timeout 5s rs-enumerate-devices > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "✓ RealSense device detected and ready"
+else
+    echo "⚠ RealSense device not ready - continuing anyway"
+fi
+
+# Python scripts are now installed as executables via setup.py
 
 # Set mapping parameters
 MAPPING_DURATION=${1:-600}  # Default 10 minutes (600 seconds)
@@ -58,6 +75,12 @@ mkdir -p maps/autonomous
 # Launch the autonomous mapping system
 echo "Launching autonomous mapping system..."
 echo "Press Ctrl+C to stop safely"
+echo ""
+echo "🦊 Foxglove Bridge will be available at: ws://$(hostname -I | awk '{print $1}'):8765"
+echo "    - Point Cloud: /realsense/depth/points"
+echo "    - Camera: /realsense/color/image_raw"
+echo "    - Map: /map"
+echo "    - Robot Path: /navigate_to_pose/_action/feedback"
 echo ""
 
 ros2 launch tractor_bringup autonomous_mapping.launch.py \

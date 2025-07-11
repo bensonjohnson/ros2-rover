@@ -9,7 +9,6 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
-        ("share/" + package_name + "/config", ["config/realsense_config.yaml"]),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -20,10 +19,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "realsense_processor = tractor_vision.realsense_processor:main",
             "obstacle_detector = tractor_vision.obstacle_detector:main",
-            "opencv_camera_node = tractor_vision.opencv_camera_node:main",
-            "realsense_nav2_node = tractor_vision.realsense_nav2_node:main",
         ],
     },
 )

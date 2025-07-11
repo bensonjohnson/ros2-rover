@@ -10,15 +10,15 @@ setup.py
 ../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
+config/realsense_config.yaml
 config/robot_localization.yaml
 config/slam_toolbox_params.yaml
+launch/autonomous_mapping.launch.py
 launch/control.launch.py
 launch/control_with_feedback.launch.py
 launch/hiwonder_control.launch.py
 launch/implements.launch.py
 launch/navigation.launch.py
-launch/realsense_nav2.launch.py
-launch/realsense_opencv.launch.py
 launch/robot_description.launch.py
 launch/robot_localization.launch.py
 launch/sensors.launch.py

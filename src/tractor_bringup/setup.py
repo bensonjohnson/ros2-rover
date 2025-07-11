@@ -23,13 +23,13 @@ setup(
         ("share/" + package_name + "/launch", ["launch/slam_mapping.launch.py"]),
         ("share/" + package_name + "/launch", ["launch/control_with_feedback.launch.py"]), # Added this line
         ("share/" + package_name + "/launch", ["launch/xbox_teleop_with_feedback.launch.py"]), # Added this line
-        ("share/" + package_name + "/launch", ["launch/realsense_opencv.launch.py"]),
-        ("share/" + package_name + "/launch", ["launch/realsense_nav2.launch.py"]),
+        ("share/" + package_name + "/launch", ["launch/autonomous_mapping.launch.py"]),
         ("share/" + package_name + "/urdf", ["urdf/tractor.urdf.xacro"]),
         ("share/" + package_name + "/config", ["config/nav2_params.yaml"]),
         ("share/" + package_name + "/config", ["config/robot_localization.yaml"]),
         ("share/" + package_name + "/config", ["config/slam_toolbox_params.yaml"]),
         ("share/" + package_name + "/config", ["config/hiwonder_motor_params.yaml"]),
+        ("share/" + package_name + "/config", ["config/realsense_config.yaml"]),
         ("share/" + package_name + "/maps", ["maps/yard_map.yaml"]),
         ("share/" + package_name + "/maps", ["maps/yard_map.pgm"]),
     ],

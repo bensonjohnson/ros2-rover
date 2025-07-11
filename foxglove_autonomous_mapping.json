@@ -1,0 +1,202 @@
+{
+  "configById": {
+    "3D!4co6gj": {
+      "cameraState": {
+        "perspective": true,
+        "distance": 10,
+        "phi": 0.7854,
+        "thetaOffset": 0.785398,
+        "targetOffset": [0, 0, 0],
+        "target": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "fovy": 0.7854
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "enableStats": false,
+        "backgroundColor": "#303133",
+        "labelScaleFactor": 1
+      },
+      "transforms": {
+        "showLabel": false,
+        "editable": false,
+        "enablePreloading": true,
+        "frame": "map"
+      },
+      "topics": {
+        "/map": {
+          "visible": true,
+          "colorMode": "map",
+          "alpha": 0.8,
+          "minColor": "#000000",
+          "maxColor": "#ffffff",
+          "unknownColor": "#a0a0a0"
+        },
+        "/realsense/depth/points": {
+          "visible": true,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "colorMode": "colormap",
+          "colorField": "z",
+          "colorMap": "rainbow",
+          "minValue": 0,
+          "maxValue": 5,
+          "decayTime": 0
+        },
+        "/scan": {
+          "visible": true,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "colorMode": "flat",
+          "flatColor": "#ff6b6b",
+          "gradient": ["#ff6b6b", "#4ecdc4"]
+        },
+        "/tf": {
+          "visible": true
+        },
+        "/robot_description": {
+          "visible": true
+        }
+      },
+      "layers": {
+        "grid": {
+          "visible": true,
+          "frameLocked": true,
+          "label": "Grid",
+          "instanceId": "grid",
+          "layerId": "foxglove.Grid",
+          "size": 20,
+          "divisions": 10,
+          "lineWidth": 1,
+          "color": "#ffffff",
+          "position": [0, 0, 0],
+          "rotation": [0, 0, 0, 1]
+        }
+      }
+    },
+    "ImageView!2k5ghi": {
+      "cameraState": {
+        "synchronize": true,
+        "mode": "fit"
+      },
+      "topics": {
+        "/realsense/color/image_raw": {
+          "visible": true,
+          "frameLocked": true,
+          "cameraInfoTopic": "/realsense/color/camera_info"
+        }
+      }
+    },
+    "ImageView!3k7mno": {
+      "cameraState": {
+        "synchronize": true,
+        "mode": "fit"
+      },
+      "topics": {
+        "/realsense/depth/image_raw": {
+          "visible": true,
+          "frameLocked": true,
+          "cameraInfoTopic": "/realsense/depth/camera_info",
+          "colorMode": "rainbow",
+          "minValue": 0,
+          "maxValue": 5000
+        }
+      }
+    },
+    "Plot!1p8qrs": {
+      "paths": [
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/mapping_status.data",
+          "enabled": true,
+          "label": "Mapping Status"
+        },
+        {
+          "timestampMethod": "receiveTime", 
+          "value": "/safety_status.data",
+          "enabled": true,
+          "label": "Safety Status"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "RawMessages!9z1abc": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/emergency_stop"
+    },
+    "Gauge!5f2def": {
+      "path": "/cmd_vel.linear.x",
+      "minValue": -1,
+      "maxValue": 1,
+      "colorMap": "red-yellow-green",
+      "colorMode": "colormap",
+      "gradient": ["#ff0000", "#ffff00", "#00ff00"],
+      "reverse": false,
+      "unit": "m/s"
+    },
+    "StateTransitions!6g3ghi": {
+      "paths": [
+        {
+          "value": "/mapping_status.data",
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/safety_status.data", 
+          "timestampMethod": "receiveTime"
+        },
+        {
+          "value": "/emergency_stop.data",
+          "timestampMethod": "receiveTime"
+        }
+      ],
+      "isSynced": true,
+      "showTransitionLines": true
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "linkedGlobalVariables": [],
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": {
+        "first": "3D!4co6gj",
+        "second": {
+          "first": "ImageView!2k5ghi",
+          "second": "ImageView!3k7mno",
+          "direction": "column"
+        },
+        "direction": "row"
+      },
+      "second": {
+        "first": {
+          "first": "Plot!1p8qrs",
+          "second": "Gauge!5f2def",
+          "direction": "row"
+        },
+        "second": {
+          "first": "RawMessages!9z1abc",
+          "second": "StateTransitions!6g3ghi", 
+          "direction": "row"
+        },
+        "direction": "column"
+      },
+      "direction": "column"
+    },
+    "second": null,
+    "direction": "row"
+  }
+}

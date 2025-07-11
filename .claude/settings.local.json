@@ -108,7 +108,24 @@
       "Bash(RS_LOG_LEVEL=DEBUG rs-enumerate-devices)",
       "Bash(sudo rs-enumerate-devices:*)",
       "Bash(sudo:*)",
-      "Bash(v4l2-ctl:*)"
+      "Bash(v4l2-ctl:*)",
+      "Bash(ros2 service call:*)",
+      "Bash(ros2 service:*)",
+      "Bash(ros2 lifecycle set:*)",
+      "Bash(apt-cache:*)",
+      "WebFetch(domain:dev.intelrealsense.com)",
+      "Bash(git clone:*)",
+      "Bash(./scripts/setup_udev_rules.sh:*)",
+      "Bash(cmake:*)",
+      "Bash(pgrep:*)",
+      "Bash(udevadm:*)",
+      "Bash(./start_autonomous_mapping.sh:*)",
+      "Bash(ldd:*)",
+      "Bash(echo:*)",
+      "Bash(rs-sensor-control:*)",
+      "Bash(ros2 topic hz:*)",
+      "Bash(ros2 log:*)",
+      "Bash(ros2 param set:*)"
     ],
     "deny": []
   }

@@ -233,6 +233,11 @@ class AutonomousMapper(Node):
             self.emergency_stop = False
             return
         
+        # Wait for map frame to be available (SLAM initialization)
+        if not self.map_data:
+            self.get_logger().info("Waiting for map data from SLAM...")
+            return
+        
         # Check if we need a new goal
         if self.current_goal is None:
             waypoint = self.get_next_waypoint()

@@ -24,9 +24,17 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_time_interval: 0.2 # Process scans at up to 5Hz. Default was 0.5 (2Hz). Tune based on performance.
-    transform_publish_period: 0.02 # Default 0.02 (50Hz)
-    map_update_interval: 5.0 # Default 5.0
+    minimum_time_interval: 0.2 # Process scans at up to 5Hz
+    transform_publish_period: 0.02 # 50Hz transform publishing
+    map_update_interval: 2.0 # Faster map updates for better performance
+    
+    # Multi-threading optimization for Orange Pi 5 Plus
+    number_of_threads: 4  # Use 4 cores available
+    
+    # Performance tuning
+    max_laser_range: 8.0  # Match RealSense range
+    minimum_travel_distance: 0.2  # More frequent keyframes
+    minimum_travel_heading: 0.2   # More sensitive to rotation
     resolution: 0.05 # Must match map resolution
     max_laser_range: 8.0 # Max effective range of the /realsense_435i/scan. Was 20.0.
     minimum_travel_distance: 0.5 # Default 0.5
