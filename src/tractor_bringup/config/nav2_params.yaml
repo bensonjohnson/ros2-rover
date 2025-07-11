@@ -37,7 +37,7 @@ amcl:
     z_max: 0.05
     z_rand: 0.5
     z_short: 0.05
-    scan_topic: /realsense_435i/scan
+    scan_topic: /scan # Corrected topic
 
 bt_navigator:
   ros__parameters:
@@ -129,7 +129,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: pointcloud
         pointcloud:
-          topic: /realsense/depth/points
+          topic: /camera/camera/depth/color/points # Corrected topic
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -159,7 +159,7 @@ global_costmap:
         enabled: True
         observation_sources: pointcloud
         pointcloud:
-          topic: /realsense/depth/points
+          topic: /camera/camera/depth/color/points # Corrected topic
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -278,7 +278,7 @@ collision_monitor:
     observation_sources: ["pointcloud"]
     pointcloud:
       type: "pointcloud"
-      topic: "/realsense_435i/depth/points"
+      topic: "/camera/camera/depth/color/points" # Corrected topic
       min_height: 0.05
       max_height: 2.0
       enabled: True

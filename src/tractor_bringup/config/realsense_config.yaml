@@ -14,16 +14,16 @@ align_depth.enable: true
 
 # Depth camera settings - optimized for outdoor use
 depth_module.enable: true
-depth_module.depth_profile: "640x480x30"
+depth_module.depth_profile: "424x240x15" # Lowered resolution and FPS
 depth_module.enable_auto_exposure: true
 depth_module.auto_exposure_limit: 100000
-depth_module.emitter_enabled: 1
-depth_module.laser_power: 150
+depth_module.emitter_enabled: 0 # Disabled for outdoor use
+depth_module.laser_power: 150 # Note: Emitter is disabled, so this might not have an effect.
 depth_module.accuracy: 2
 
 # RGB camera settings
 rgb_camera.enable: true
-rgb_camera.color_profile: "640x480x30"
+rgb_camera.color_profile: "424x240x15" # Lowered resolution and FPS
 rgb_camera.enable_auto_exposure: true
 rgb_camera.auto_exposure_limit: 100000
 rgb_camera.brightness: 0
