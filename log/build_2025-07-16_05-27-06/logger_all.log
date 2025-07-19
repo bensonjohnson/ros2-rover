@@ -1,0 +1,522 @@
+[0.265s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build', '--symlink-install', '--event-handlers', 'console_direct+']
+[0.265s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=True, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=8, event_handlers=['console_direct+'], ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=None, packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0xffff89e3d8e0>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0xffff89fb5400>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0xffff89fb5400>>, mixin_verb=('build',))
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.347s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.347s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/ubuntu/ros2-rover'
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.348s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['cmake', 'python']
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'cmake'
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python'
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['python_setup_py']
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python_setup_py'
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extensions ['ignore', 'ignore_ament_install']
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extension 'ignore'
+[0.397s] Level 1:colcon.colcon_core.package_identification:_identify(build) ignored
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extensions ['ignore', 'ignore_ament_install']
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extension 'ignore'
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(install) ignored
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extensions ['ignore', 'ignore_ament_install']
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extension 'ignore'
+[0.398s] Level 1:colcon.colcon_core.package_identification:_identify(log) ignored
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['ignore', 'ignore_ament_install']
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'ignore'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'ignore_ament_install'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['colcon_pkg']
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'colcon_pkg'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['colcon_meta']
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'colcon_meta'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['ros']
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'ros'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['cmake', 'python']
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'cmake'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'python'
+[0.399s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extensions ['python_setup_py']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps) by extension 'python_setup_py'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['ignore', 'ignore_ament_install']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'ignore'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'ignore_ament_install'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['colcon_pkg']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'colcon_pkg'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['colcon_meta']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'colcon_meta'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['ros']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'ros'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['cmake', 'python']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'cmake'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'python'
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extensions ['python_setup_py']
+[0.400s] Level 1:colcon.colcon_core.package_identification:_identify(maps/autonomous) by extension 'python_setup_py'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['ignore', 'ignore_ament_install']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ignore'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ignore_ament_install'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['colcon_pkg']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'colcon_pkg'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['colcon_meta']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'colcon_meta'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['ros']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'ros'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['cmake', 'python']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'cmake'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'python'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extensions ['python_setup_py']
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src) by extension 'python_setup_py'
+[0.401s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['ignore', 'ignore_ament_install']
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ignore'
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ignore_ament_install'
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['colcon_pkg']
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'colcon_pkg'
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['colcon_meta']
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'colcon_meta'
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extensions ['ros']
+[0.402s] Level 1:colcon.colcon_core.package_identification:_identify(src/slam_stress_test) by extension 'ros'
+[0.406s] DEBUG:colcon.colcon_core.package_identification:Package 'src/slam_stress_test' with type 'ros.ament_python' and name 'slam_stress_test'
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['ignore', 'ignore_ament_install']
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ignore'
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ignore_ament_install'
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['colcon_pkg']
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'colcon_pkg'
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['colcon_meta']
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'colcon_meta'
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extensions ['ros']
+[0.407s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_bringup) by extension 'ros'
+[0.409s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_bringup' with type 'ros.ament_python' and name 'tractor_bringup'
+[0.409s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['ignore', 'ignore_ament_install']
+[0.409s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ignore'
+[0.409s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ignore_ament_install'
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['colcon_pkg']
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'colcon_pkg'
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['colcon_meta']
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'colcon_meta'
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extensions ['ros']
+[0.410s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_control) by extension 'ros'
+[0.411s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_control' with type 'ros.ament_python' and name 'tractor_control'
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['ignore', 'ignore_ament_install']
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ignore'
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ignore_ament_install'
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['colcon_pkg']
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'colcon_pkg'
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['colcon_meta']
+[0.411s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'colcon_meta'
+[0.412s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extensions ['ros']
+[0.412s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_coverage) by extension 'ros'
+[0.413s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_coverage' with type 'ros.ament_python' and name 'tractor_coverage'
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['ignore', 'ignore_ament_install']
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ignore'
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ignore_ament_install'
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['colcon_pkg']
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'colcon_pkg'
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['colcon_meta']
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'colcon_meta'
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extensions ['ros']
+[0.413s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_implements) by extension 'ros'
+[0.414s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_implements' with type 'ros.ament_python' and name 'tractor_implements'
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['ignore', 'ignore_ament_install']
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ignore'
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ignore_ament_install'
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['colcon_pkg']
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'colcon_pkg'
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['colcon_meta']
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'colcon_meta'
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extensions ['ros']
+[0.415s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_sensors) by extension 'ros'
+[0.416s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_sensors' with type 'ros.ament_python' and name 'tractor_sensors'
+[0.416s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['ignore', 'ignore_ament_install']
+[0.416s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ignore'
+[0.416s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ignore_ament_install'
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['colcon_pkg']
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'colcon_pkg'
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['colcon_meta']
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'colcon_meta'
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extensions ['ros']
+[0.417s] Level 1:colcon.colcon_core.package_identification:_identify(src/tractor_vision) by extension 'ros'
+[0.418s] DEBUG:colcon.colcon_core.package_identification:Package 'src/tractor_vision' with type 'ros.ament_python' and name 'tractor_vision'
+[0.418s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.418s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.418s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.418s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.418s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[0.453s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) check parameters
+[0.453s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) discover
+[0.457s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 7 installed packages in /home/ubuntu/ros2-rover/install
+[0.460s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 390 installed packages in /opt/ros/jazzy
+[0.463s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) using defaults
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_args' from command line to 'None'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_target' from command line to 'None'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_clean_cache' from command line to 'False'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_clean_first' from command line to 'False'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'cmake_force_configure' from command line to 'False'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'ament_cmake_args' from command line to 'None'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'catkin_cmake_args' from command line to 'None'
+[0.551s] Level 5:colcon.colcon_core.verb:set package 'slam_stress_test' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.551s] DEBUG:colcon.colcon_core.verb:Building package 'slam_stress_test' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/slam_stress_test', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/slam_stress_test', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/slam_stress_test', 'symlink_install': True, 'test_result_base': None}
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_args' from command line to 'None'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_target' from command line to 'None'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_clean_cache' from command line to 'False'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_clean_first' from command line to 'False'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'cmake_force_configure' from command line to 'False'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'ament_cmake_args' from command line to 'None'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'catkin_cmake_args' from command line to 'None'
+[0.552s] Level 5:colcon.colcon_core.verb:set package 'tractor_bringup' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.552s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_bringup' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_bringup', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_bringup', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_bringup', 'symlink_install': True, 'test_result_base': None}
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_args' from command line to 'None'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_target' from command line to 'None'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_clean_cache' from command line to 'False'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_clean_first' from command line to 'False'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'cmake_force_configure' from command line to 'False'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'ament_cmake_args' from command line to 'None'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'catkin_cmake_args' from command line to 'None'
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_control' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.553s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_control' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_control', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_control', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_control', 'symlink_install': True, 'test_result_base': None}
+[0.553s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_target' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_clean_cache' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_clean_first' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'cmake_force_configure' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'ament_cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'catkin_cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_coverage' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.554s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_coverage' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_coverage', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_coverage', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_coverage', 'symlink_install': True, 'test_result_base': None}
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_target' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_clean_cache' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_clean_first' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'cmake_force_configure' from command line to 'False'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'ament_cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'catkin_cmake_args' from command line to 'None'
+[0.554s] Level 5:colcon.colcon_core.verb:set package 'tractor_implements' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.554s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_implements' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_implements', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_implements', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_implements', 'symlink_install': True, 'test_result_base': None}
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_args' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_target' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_clean_cache' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_clean_first' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'cmake_force_configure' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'ament_cmake_args' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'catkin_cmake_args' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_sensors' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.555s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_sensors' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_sensors', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_sensors', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_sensors', 'symlink_install': True, 'test_result_base': None}
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_args' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_target' from command line to 'None'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_clean_cache' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_clean_first' from command line to 'False'
+[0.555s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'cmake_force_configure' from command line to 'False'
+[0.556s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'ament_cmake_args' from command line to 'None'
+[0.556s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'catkin_cmake_args' from command line to 'None'
+[0.556s] Level 5:colcon.colcon_core.verb:set package 'tractor_vision' build argument 'catkin_skip_building_tests' from command line to 'False'
+[0.556s] DEBUG:colcon.colcon_core.verb:Building package 'tractor_vision' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/ubuntu/ros2-rover/build/tractor_vision', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/ubuntu/ros2-rover/install/tractor_vision', 'merge_install': False, 'path': '/home/ubuntu/ros2-rover/src/tractor_vision', 'symlink_install': True, 'test_result_base': None}
+[0.556s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[0.558s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[0.558s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/slam_stress_test' with build type 'ament_python'
+[0.558s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'ament_prefix_path')
+[0.564s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[0.564s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.ps1'
+[0.565s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.dsv'
+[0.566s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/ament_prefix_path.sh'
+[0.567s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.567s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.574s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_bringup' with build type 'ament_python'
+[0.574s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'ament_prefix_path')
+[0.574s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.ps1'
+[0.575s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.dsv'
+[0.576s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/ament_prefix_path.sh'
+[0.576s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.576s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.583s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_control' with build type 'ament_python'
+[0.583s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'ament_prefix_path')
+[0.583s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/ament_prefix_path.ps1'
+[0.584s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/ament_prefix_path.dsv'
+[0.584s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/ament_prefix_path.sh'
+[0.585s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.585s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.591s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_coverage' with build type 'ament_python'
+[0.591s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'ament_prefix_path')
+[0.591s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.ps1'
+[0.592s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.dsv'
+[0.593s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/ament_prefix_path.sh'
+[0.593s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.594s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.599s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_implements' with build type 'ament_python'
+[0.600s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'ament_prefix_path')
+[0.600s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.ps1'
+[0.601s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.dsv'
+[0.601s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/ament_prefix_path.sh'
+[0.602s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.602s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.608s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_sensors' with build type 'ament_python'
+[0.608s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'ament_prefix_path')
+[0.608s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.ps1'
+[0.609s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.dsv'
+[0.609s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/ament_prefix_path.sh'
+[0.610s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.610s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[0.616s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/ubuntu/ros2-rover/src/tractor_vision' with build type 'ament_python'
+[0.616s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'ament_prefix_path')
+[0.617s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.ps1'
+[0.618s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.dsv'
+[0.618s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/ament_prefix_path.sh'
+[0.619s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[0.619s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.042s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/slam_stress_test'
+[1.042s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.042s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.456s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_bringup'
+[1.456s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.456s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.893s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_control'
+[1.894s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.894s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.327s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_coverage'
+[2.327s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.327s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.756s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_implements'
+[2.757s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.757s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[3.179s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_sensors'
+[3.180s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[3.180s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[3.608s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/ubuntu/ros2-rover/src/tractor_vision'
+[3.609s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[3.609s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[5.007s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data
+[5.017s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_control': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_control/build --no-deps symlink_data
+[5.118s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages/tractor_bringup
+[5.118s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.xml
+[5.119s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/control.launch.py
+[5.119s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/tractor_gazebo.launch.py
+[5.119s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/slam_mapping.launch.py
+[5.119s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/autonomous_mapping_simplified.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/control_no_gps.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/nav2_simple_test.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/nav_no_gps_test.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/control_with_feedback.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/robot_localization.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/nav2_pointcloud_test.launch.py
+[5.120s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/implements.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/basic_nav_test.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/tractor_bringup.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/robot_description.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/autonomous_mapping_minimal.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/nav_working_test.launch.py
+[5.121s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/tractor_sim.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/autonomous_mapping.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/hiwonder_control.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/autonomous_mapping_no_gps.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/navigation.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/sensors.launch.py
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf/tractor.urdf.xacro
+[5.122s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/minimal_costmap_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/realsense_config.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/nav2_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/slam_toolbox_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/minimal_ekf_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/direct_costmap_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/robot_localization.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/hiwonder_motor_params.yaml
+[5.123s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
+[5.124s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm
+[5.125s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup/autonomous_mapping.py
+[5.125s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup/safety_monitor.py
+[5.145s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force
+[5.154s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_coverage': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_coverage/build --no-deps symlink_data
+[5.163s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/slam_stress_test': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/slam_stress_test/build --no-deps symlink_data
+[5.184s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_vision': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data
+[5.217s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/ubuntu/ros2-rover/build/tractor_implements': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build --no-deps symlink_data
+[6.509s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'pythonpath_develop')
+[6.510s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.ps1'
+[6.514s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_coverage' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_coverage/build --no-deps symlink_data
+[6.514s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.dsv'
+[6.517s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_coverage/share/tractor_coverage/hook/pythonpath_develop.sh'
+[6.535s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage' for CMake module files
+[6.541s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage' for CMake config files
+[6.544s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage/lib'
+[6.545s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage/bin'
+[6.546s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage/lib/pkgconfig/tractor_coverage.pc'
+[6.547s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages'
+[6.548s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_coverage', 'pythonpath')
+[6.549s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.ps1'
+[6.551s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.dsv'
+[6.552s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/hook/pythonpath.sh'
+[6.555s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_coverage/bin'
+[6.555s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_coverage)
+[6.557s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/package.ps1'
+[6.561s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/package.dsv'
+[6.564s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/package.sh'
+[6.568s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/package.bash'
+[6.571s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/package.zsh'
+[6.574s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_coverage/share/colcon-core/packages/tractor_coverage)
+[6.575s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'pythonpath_develop')
+[6.576s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.ps1'
+[6.579s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.dsv'
+[6.581s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force
+[6.581s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_bringup/share/tractor_bringup/hook/pythonpath_develop.sh'
+[6.584s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup' for CMake module files
+[6.587s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup' for CMake config files
+[6.591s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup/lib'
+[6.591s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup/bin'
+[6.592s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup/lib/pkgconfig/tractor_bringup.pc'
+[6.593s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages'
+[6.593s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_bringup', 'pythonpath')
+[6.594s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.ps1'
+[6.596s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.dsv'
+[6.596s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/hook/pythonpath.sh'
+[6.597s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_bringup/bin'
+[6.597s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_bringup)
+[6.598s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.ps1'
+[6.598s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.dsv'
+[6.600s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.sh'
+[6.601s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.bash'
+[6.601s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/package.zsh'
+[6.602s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_bringup/share/colcon-core/packages/tractor_bringup)
+[6.605s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'pythonpath_develop')
+[6.606s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.ps1'
+[6.607s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data
+[6.607s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.dsv'
+[6.608s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_sensors/share/tractor_sensors/hook/pythonpath_develop.sh'
+[6.609s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors' for CMake module files
+[6.610s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors' for CMake config files
+[6.614s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors/lib'
+[6.614s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors/bin'
+[6.614s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors/lib/pkgconfig/tractor_sensors.pc'
+[6.614s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages'
+[6.614s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_sensors', 'pythonpath')
+[6.615s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.ps1'
+[6.615s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.dsv'
+[6.616s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/hook/pythonpath.sh'
+[6.617s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_sensors/bin'
+[6.617s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_sensors)
+[6.617s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/package.ps1'
+[6.618s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/package.dsv'
+[6.619s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/package.sh'
+[6.619s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/package.bash'
+[6.620s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_sensors/share/tractor_sensors/package.zsh'
+[6.620s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_sensors/share/colcon-core/packages/tractor_sensors)
+[6.621s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'pythonpath_develop')
+[6.621s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_control/share/tractor_control/hook/pythonpath_develop.ps1'
+[6.622s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_control/share/tractor_control/hook/pythonpath_develop.dsv'
+[6.623s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_control/share/tractor_control/hook/pythonpath_develop.sh'
+[6.625s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_control' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_control/build --no-deps symlink_data
+[6.625s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control' for CMake module files
+[6.626s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control' for CMake config files
+[6.627s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control/lib'
+[6.627s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control/bin'
+[6.627s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control/lib/pkgconfig/tractor_control.pc'
+[6.627s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages'
+[6.628s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_control', 'pythonpath')
+[6.628s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/pythonpath.ps1'
+[6.628s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/pythonpath.dsv'
+[6.629s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/hook/pythonpath.sh'
+[6.630s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_control/bin'
+[6.630s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_control)
+[6.630s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/package.ps1'
+[6.631s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/package.dsv'
+[6.632s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/package.sh'
+[6.632s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/package.bash'
+[6.633s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_control/share/tractor_control/package.zsh'
+[6.633s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_control/share/colcon-core/packages/tractor_control)
+[6.696s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'pythonpath_develop')
+[6.697s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.ps1'
+[6.698s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/slam_stress_test' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/slam_stress_test/build --no-deps symlink_data
+[6.698s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.dsv'
+[6.699s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/slam_stress_test/share/slam_stress_test/hook/pythonpath_develop.sh'
+[6.700s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test' for CMake module files
+[6.700s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test' for CMake config files
+[6.701s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test/lib'
+[6.701s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test/bin'
+[6.701s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test/lib/pkgconfig/slam_stress_test.pc'
+[6.702s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages'
+[6.702s] Level 1:colcon.colcon_core.shell:create_environment_hook('slam_stress_test', 'pythonpath')
+[6.702s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.ps1'
+[6.703s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.dsv'
+[6.703s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/hook/pythonpath.sh'
+[6.704s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/slam_stress_test/bin'
+[6.704s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(slam_stress_test)
+[6.704s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/package.ps1'
+[6.705s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/package.dsv'
+[6.706s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/package.sh'
+[6.707s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/package.bash'
+[6.707s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/slam_stress_test/share/slam_stress_test/package.zsh'
+[6.707s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/slam_stress_test/share/colcon-core/packages/slam_stress_test)
+[6.725s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'pythonpath_develop')
+[6.726s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.ps1'
+[6.727s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_implements' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_implements/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_implements/build --no-deps symlink_data
+[6.727s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.dsv'
+[6.728s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_implements/share/tractor_implements/hook/pythonpath_develop.sh'
+[6.729s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements' for CMake module files
+[6.729s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements' for CMake config files
+[6.730s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements/lib'
+[6.730s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements/bin'
+[6.730s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements/lib/pkgconfig/tractor_implements.pc'
+[6.730s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements/lib/python3.12/site-packages'
+[6.730s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_implements', 'pythonpath')
+[6.731s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/pythonpath.ps1'
+[6.731s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/pythonpath.dsv'
+[6.732s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/hook/pythonpath.sh'
+[6.732s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_implements/bin'
+[6.732s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_implements)
+[6.733s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/package.ps1'
+[6.733s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/package.dsv'
+[6.734s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/package.sh'
+[6.734s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/package.bash'
+[6.735s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_implements/share/tractor_implements/package.zsh'
+[6.735s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_implements/share/colcon-core/packages/tractor_implements)
+[7.234s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'pythonpath_develop')
+[7.235s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.ps1'
+[7.237s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/ubuntu/ros2-rover/build/tractor_vision' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data
+[7.237s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.dsv'
+[7.238s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/build/tractor_vision/share/tractor_vision/hook/pythonpath_develop.sh'
+[7.239s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision' for CMake module files
+[7.239s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision' for CMake config files
+[7.240s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision/lib'
+[7.240s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision/bin'
+[7.241s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision/lib/pkgconfig/tractor_vision.pc'
+[7.241s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages'
+[7.241s] Level 1:colcon.colcon_core.shell:create_environment_hook('tractor_vision', 'pythonpath')
+[7.241s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/pythonpath.ps1'
+[7.242s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/pythonpath.dsv'
+[7.242s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/hook/pythonpath.sh'
+[7.243s] Level 1:colcon.colcon_core.environment:checking '/home/ubuntu/ros2-rover/install/tractor_vision/bin'
+[7.243s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(tractor_vision)
+[7.243s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/package.ps1'
+[7.244s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/package.dsv'
+[7.245s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/package.sh'
+[7.245s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/package.bash'
+[7.246s] INFO:colcon.colcon_core.shell:Creating package script '/home/ubuntu/ros2-rover/install/tractor_vision/share/tractor_vision/package.zsh'
+[7.246s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/ubuntu/ros2-rover/install/tractor_vision/share/colcon-core/packages/tractor_vision)
+[7.247s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[7.247s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[7.247s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[7.247s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[7.337s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.terminal_notifier': Not used on non-Darwin systems
+[7.338s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.win32': Not used on non-Windows systems
+[7.338s] INFO:colcon.colcon_notification.desktop_notification:Sending desktop notification using 'notify2'
+[7.366s] DEBUG:colcon.colcon_notification.desktop_notification.notify2:Failed to initialize notify2: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.Notifications was not provided by any .service files
+[7.366s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[7.367s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/ubuntu/ros2-rover/install/local_setup.ps1'
+[7.368s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/ubuntu/ros2-rover/install/_local_setup_util_ps1.py'
+[7.370s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/ubuntu/ros2-rover/install/setup.ps1'
+[7.372s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/ubuntu/ros2-rover/install/local_setup.sh'
+[7.373s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/ubuntu/ros2-rover/install/_local_setup_util_sh.py'
+[7.373s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/ubuntu/ros2-rover/install/setup.sh'
+[7.375s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/ubuntu/ros2-rover/install/local_setup.bash'
+[7.376s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/ubuntu/ros2-rover/install/setup.bash'
+[7.378s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/ubuntu/ros2-rover/install/local_setup.zsh'
+[7.378s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/ubuntu/ros2-rover/install/setup.zsh'

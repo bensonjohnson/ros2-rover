@@ -1,0 +1,4 @@
+[console_scripts]
+coverage_action_server = tractor_coverage.coverage_action_server:main
+coverage_client = tractor_coverage.coverage_client:main
+coverage_visualizer = tractor_coverage.coverage_visualizer:main

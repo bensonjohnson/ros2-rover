@@ -1,0 +1,17 @@
+[5.005s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_sensors': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data
+[5.574s] running develop
+[5.903s] running egg_info
+[5.937s] writing tractor_sensors.egg-info/PKG-INFO
+[5.938s] writing dependency_links to tractor_sensors.egg-info/dependency_links.txt
+[5.940s] writing entry points to tractor_sensors.egg-info/entry_points.txt
+[5.940s] writing requirements to tractor_sensors.egg-info/requires.txt
+[5.941s] writing top-level names to tractor_sensors.egg-info/top_level.txt
+[6.005s] reading manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[6.006s] writing manifest file 'tractor_sensors.egg-info/SOURCES.txt'
+[6.046s] running build_ext
+[6.048s] Creating /home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages/tractor-sensors.egg-link (link to .)
+[6.050s] Installing hglrc_m100_5883 script to /home/ubuntu/ros2-rover/install/tractor_sensors/lib/tractor_sensors
+[6.051s] 
+[6.052s] Installed /home/ubuntu/ros2-rover/build/tractor_sensors
+[6.052s] running symlink_data
+[6.162s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_sensors' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_sensors/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_sensors/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_sensors/build --no-deps symlink_data

@@ -1,0 +1,31 @@
+# Goal - Define the area to cover and operation parameters
+geometry_msgs/Polygon boundary          # Boundary of area to cover
+geometry_msgs/Polygon[] obstacles       # Obstacles to avoid (optional)
+string operation_type                   # "mowing", "spraying", etc.
+float32 tool_width                      # Width of implement in meters
+float32 overlap_percentage              # Overlap between passes (0.0-1.0)
+float32 work_speed                      # Operating speed in m/s
+bool include_perimeter                  # Whether to do perimeter pass first
+bool optimize_path                      # Whether to optimize the generated path
+
+---
+
+# Result - Summary of completed operation
+bool success                           # Whether operation completed successfully
+string message                         # Status message
+float32 area_covered                   # Total area covered in m²
+float32 total_distance                 # Total distance traveled in meters
+builtin_interfaces/Duration total_time # Total time taken
+uint32 total_waypoints                 # Number of waypoints in path
+
+---
+
+# Feedback - Progress updates during operation
+uint32 current_waypoint                # Current waypoint number
+uint32 total_waypoints                 # Total waypoints in path
+float32 percent_complete               # Percentage complete (0.0-100.0)
+float32 distance_remaining             # Estimated distance remaining in meters
+builtin_interfaces/Duration time_remaining  # Estimated time remaining
+geometry_msgs/Point current_position   # Current robot position
+string current_status                  # Current operation status
+bool implement_active                  # Whether implement is currently active

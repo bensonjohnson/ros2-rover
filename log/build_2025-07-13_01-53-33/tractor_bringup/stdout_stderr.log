@@ -1,0 +1,44 @@
+running develop
+running egg_info
+writing tractor_bringup.egg-info/PKG-INFO
+writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+writing entry points to tractor_bringup.egg-info/entry_points.txt
+writing requirements to tractor_bringup.egg-info/requires.txt
+writing top-level names to tractor_bringup.egg-info/top_level.txt
+reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+Installing autonomous_mapping.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+Installing safety_monitor.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+
+Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+running symlink_data
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/resource/tractor_bringup -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/package.xml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/implements.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/navigation.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_description.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/sensors.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_bringup.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_gazebo.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_sim.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/hiwonder_control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_localization.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/slam_mapping.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav2_pointcloud_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav2_simple_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/basic_nav_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav_working_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/urdf/tractor.urdf.xacro -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/nav2_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/robot_localization.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/slam_toolbox_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/hiwonder_motor_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/realsense_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.pgm -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps

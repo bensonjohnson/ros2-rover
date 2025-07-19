@@ -1,0 +1,36 @@
+running develop
+Removing /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor-coverage.egg-link (link to .)
+running egg_info
+writing ../../build/tractor_coverage/tractor_coverage.egg-info/PKG-INFO
+writing dependency_links to ../../build/tractor_coverage/tractor_coverage.egg-info/dependency_links.txt
+writing entry points to ../../build/tractor_coverage/tractor_coverage.egg-info/entry_points.txt
+writing requirements to ../../build/tractor_coverage/tractor_coverage.egg-info/requires.txt
+writing top-level names to ../../build/tractor_coverage/tractor_coverage.egg-info/top_level.txt
+reading manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+writing manifest file '../../build/tractor_coverage/tractor_coverage.egg-info/SOURCES.txt'
+running build
+running build_py
+running install
+running install_lib
+creating /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+copying /home/ubuntu/ros2-rover/build/tractor_coverage/build/lib/tractor_coverage/coverage_visualizer.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+copying /home/ubuntu/ros2-rover/build/tractor_coverage/build/lib/tractor_coverage/coverage_client.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+copying /home/ubuntu/ros2-rover/build/tractor_coverage/build/lib/tractor_coverage/coverage_action_server.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+copying /home/ubuntu/ros2-rover/build/tractor_coverage/build/lib/tractor_coverage/__init__.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+copying /home/ubuntu/ros2-rover/build/tractor_coverage/build/lib/tractor_coverage/coverage_planner.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/coverage_visualizer.py to coverage_visualizer.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/coverage_client.py to coverage_client.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/coverage_action_server.py to coverage_action_server.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/__init__.py to __init__.cpython-312.pyc
+byte-compiling /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage/coverage_planner.py to coverage_planner.cpython-312.pyc
+running install_data
+copying resource/tractor_coverage -> /home/ubuntu/ros2-rover/install/tractor_coverage/share/ament_index/resource_index/packages
+copying package.xml -> /home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage
+copying launch/coverage_system.launch.py -> /home/ubuntu/ros2-rover/install/tractor_coverage/share/tractor_coverage/launch
+running install_egg_info
+Copying ../../build/tractor_coverage/tractor_coverage.egg-info to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor_coverage-0.0.0-py3.12.egg-info
+running install_scripts
+Installing coverage_action_server script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+Installing coverage_client script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+Installing coverage_visualizer script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_coverage/install.log'

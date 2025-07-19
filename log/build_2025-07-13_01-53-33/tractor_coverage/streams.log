@@ -1,0 +1,19 @@
+[5.797s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_coverage': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_coverage/build --no-deps symlink_data
+[6.337s] running develop
+[6.686s] running egg_info
+[6.717s] writing tractor_coverage.egg-info/PKG-INFO
+[6.718s] writing dependency_links to tractor_coverage.egg-info/dependency_links.txt
+[6.719s] writing entry points to tractor_coverage.egg-info/entry_points.txt
+[6.720s] writing requirements to tractor_coverage.egg-info/requires.txt
+[6.720s] writing top-level names to tractor_coverage.egg-info/top_level.txt
+[6.786s] reading manifest file 'tractor_coverage.egg-info/SOURCES.txt'
+[6.787s] writing manifest file 'tractor_coverage.egg-info/SOURCES.txt'
+[6.820s] running build_ext
+[6.821s] Creating /home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages/tractor-coverage.egg-link (link to .)
+[6.822s] Installing coverage_action_server script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[6.823s] Installing coverage_client script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[6.823s] Installing coverage_visualizer script to /home/ubuntu/ros2-rover/install/tractor_coverage/lib/tractor_coverage
+[6.824s] 
+[6.824s] Installed /home/ubuntu/ros2-rover/build/tractor_coverage
+[6.825s] running symlink_data
+[6.950s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_coverage' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_coverage/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_coverage/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_coverage/build --no-deps symlink_data

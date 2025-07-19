@@ -1,0 +1,17 @@
+running develop
+running egg_info
+writing tractor_control.egg-info/PKG-INFO
+writing dependency_links to tractor_control.egg-info/dependency_links.txt
+writing entry points to tractor_control.egg-info/entry_points.txt
+writing requirements to tractor_control.egg-info/requires.txt
+writing top-level names to tractor_control.egg-info/top_level.txt
+reading manifest file 'tractor_control.egg-info/SOURCES.txt'
+writing manifest file 'tractor_control.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor-control.egg-link (link to .)
+Installing hiwonder_motor_driver script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+Installing velocity_feedback_controller script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+Installing xbox_controller_teleop script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+
+Installed /home/ubuntu/ros2-rover/build/tractor_control
+running symlink_data

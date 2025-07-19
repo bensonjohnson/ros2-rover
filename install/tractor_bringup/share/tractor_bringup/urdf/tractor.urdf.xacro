@@ -1,0 +1,621 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="tractor">
+
+  <!-- Properties -->
+  <xacro:property name="PI" value="3.14159"/>
+  <!-- Robot dimensions based on actual measurements -->
+  <!-- Main body: 102mm wide × 266.7mm long × 90mm height -->
+  <!-- Treads: 42mm wide each, same length and height as body -->
+  <xacro:property name="base_length" value="0.2667"/>  <!-- 266.7mm -->
+  <xacro:property name="base_width" value="0.102"/>   <!-- 102mm main body width -->
+  <xacro:property name="base_height" value="0.058"/>  <!-- 58mm -->
+  <xacro:property name="track_width" value="0.042"/>   <!-- 42mm tread width -->
+  <xacro:property name="track_length" value="0.2667"/> <!-- Same as body length -->
+  <xacro:property name="track_height" value="0.090"/>  <!-- Same as body height -->
+  <xacro:property name="wheel_radius" value="0.0485"/>  <!-- Half of track height - Updated to 48.5mm -->
+  <xacro:property name="wheel_separation" value="0.144"/> <!-- 102mm + 42mm = center to center -->
+
+  <!-- Platform properties -->
+  <xacro:property name="platform_height" value="0.0025"/> <!-- 2.5mm -->
+  <xacro:property name="platform_offset_z" value="0.05"/>  <!-- 50mm -->
+
+  <!-- Materials -->
+  <material name="red">
+    <color rgba="0.8 0.0 0.0 1.0"/>
+  </material>
+  
+  <material name="green">
+    <color rgba="0.0 0.8 0.0 1.0"/>
+  </material>
+  
+  <material name="blue">
+    <color rgba="0.0 0.0 0.8 1.0"/>
+  </material>
+  
+  <material name="black">
+    <color rgba="0.0 0.0 0.0 1.0"/>
+  </material>
+  
+  <material name="white">
+    <color rgba="1.0 1.0 1.0 1.0"/>
+  </material>
+
+  <!-- Root Link (dummy link to fix KDL warning) -->
+  <link name="base_footprint">
+    <!-- No inertia, visual, or collision for dummy link -->
+  </link>
+
+  <!-- Base Link (main chassis) -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+      <material name="green"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="5.0"/>
+      <inertia ixx="0.08" ixy="0.0" ixz="0.0" iyy="0.15" iyz="0.0" izz="0.18"/>
+    </inertial>
+  </link>
+
+  <!-- Left Track -->
+  <link name="left_wheel">
+    <!-- Main track body (rectangular track shape) -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length} ${track_width} ${track_height}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <!-- Track tread pattern -->
+    <visual>
+      <origin xyz="0 0 ${-track_height/2 + 0.005}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length * 0.9} ${track_width * 0.8} 0.01"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length} ${track_width} ${track_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.03"/>
+    </inertial>
+  </link>
+
+  <!-- Right Track -->
+  <link name="right_wheel">
+    <!-- Main track body (rectangular track shape) -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length} ${track_width} ${track_height}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <!-- Track tread pattern -->
+    <visual>
+      <origin xyz="0 0 ${-track_height/2 + 0.005}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length * 0.9} ${track_width * 0.8} 0.01"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${track_length} ${track_width} ${track_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="0.02" ixy="0.0" ixz="0.0" iyy="0.02" iyz="0.0" izz="0.03"/>
+    </inertial>
+  </link>
+
+  <!-- Camera Link (Intel RealSense) -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.09 0.025"/> <!-- Updated dimensions -->
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.09 0.025"/> <!-- Updated dimensions -->
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/> <!-- Mass can be re-evaluated if needed -->
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <!-- HGLRC M100-5883 GPS Module (M10 chip, 21x21x8.02mm, 7.73g) REMOVED -->
+  <!--
+  <link name="gps_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.021 0.021 0.008"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0.004" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.015 0.015 0.002"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.021 0.021 0.008"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.00773"/>
+      <inertia ixx="0.000003" ixy="0.0" ixz="0.0" iyy="0.000003" iyz="0.0" izz="0.000005"/>
+    </inertial>
+  </link>
+  -->
+
+  <!-- QMC5883 Compass/Magnetometer (integrated in GPS module) REMOVED -->
+  <!--
+  <link name="compass_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.003 0.003 0.001"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.003 0.003 0.001"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+    </inertial>
+  </link>
+  -->
+
+  <!-- Mower Deck Link -->
+  <!--
+  <link name="mower_deck">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.6 0.8 0.1"/>
+      </geometry>
+      <material name="red"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.6 0.8 0.1"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="10.0"/>
+      <inertia ixx="0.55" ixy="0.0" ixz="0.0" iyy="0.38" iyz="0.0" izz="0.85"/>
+    </inertial>
+  </link>
+  -->
+
+  <!-- Laser Scanner Link REMOVED -->
+  <!-- Sprayer tank removed -->
+
+  <!-- Platform Link -->
+  <link name="platform_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${platform_height}"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="${base_length} ${base_width} ${platform_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.5"/> <!-- Estimated mass -->
+      <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/> <!-- Estimated inertia -->
+    </inertial>
+  </link>
+
+  <!-- Joints -->
+  
+  <!-- Base Footprint to Base Link Joint -->
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${track_height/2 - 0.016}" rpy="0 0 0"/>
+  </joint>
+  
+  <!-- Left Track Joint - Fixed for real robot (tank tracks don't rotate) -->
+  <joint name="left_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_wheel"/>
+    <origin xyz="0 ${(base_width + track_width)/2} -0.016" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Right Track Joint - Fixed for real robot (tank tracks don't rotate) -->
+  <joint name="right_wheel_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_wheel"/>
+    <origin xyz="0 ${-(base_width + track_width)/2} -0.016" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Camera Joint -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="platform_link"/> <!-- Changed parent to platform_link -->
+    <child link="camera_link"/>
+    <origin xyz="${base_length/2 - 0.09/2} 0 ${platform_height/2 + 0.025/2}" rpy="0 0 0"/> <!-- Adjusted origin -->
+  </joint>
+
+  <!-- GPS Joint REMOVED -->
+  <!-- Compass Joint REMOVED -->
+
+  <!-- Mower Deck Joint -->
+  <!--
+  <joint name="mower_deck_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="mower_deck"/>
+    <origin xyz="${base_length/2 + 0.3} 0 ${-base_height/2 - 0.05}" rpy="0 0 0"/>
+  </joint>
+  -->
+
+  <!-- Laser Joint REMOVED -->
+  <!-- Sprayer tank joint removed -->
+
+  <!-- Platform Joint -->
+  <joint name="platform_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="platform_link"/>
+    <origin xyz="0 0 ${base_height/2 + platform_offset_z + platform_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Virtual Visualization Wheels (small, for motion display only) -->
+  <!-- These rotate to show movement while tank tracks stay fixed -->
+  
+  <!-- Left Virtual Wheel -->
+  <!-- <link name="left_viz_wheel"> -->
+    <!-- <visual> -->
+      <!-- <origin xyz="0 0 0" rpy="${PI/2} 0 0"/> -->
+      <!-- <geometry> -->
+        <!-- <cylinder radius="0.02" length="0.01"/> -->
+      <!-- </geometry> -->
+      <!-- <material name="white"/> -->
+    <!-- </visual> -->
+  <!-- </link> -->
+  
+  <!-- Right Virtual Wheel -->
+  <!-- <link name="right_viz_wheel"> -->
+    <!-- <visual> -->
+      <!-- <origin xyz="0 0 0" rpy="${PI/2} 0 0"/> -->
+      <!-- <geometry> -->
+        <!-- <cylinder radius="0.02" length="0.01"/> -->
+      <!-- </geometry> -->
+      <!-- <material name="white"/> -->
+    <!-- </visual> -->
+  <!-- </link> -->
+  
+  <!-- Virtual Wheel Joints (continuous for rotation) -->
+  <!-- <joint name="left_viz_wheel_joint" type="continuous"> -->
+    <!-- <parent link="base_link"/> -->
+    <!-- <child link="left_viz_wheel"/> -->
+    <!-- <origin xyz="0 ${(base_width + track_width)/2 + 0.03} -0.045" rpy="0 0 0"/> -->
+    <!-- <axis xyz="0 1 0"/> -->
+  <!-- </joint> -->
+  
+  <!-- <joint name="right_viz_wheel_joint" type="continuous"> -->
+    <!-- <parent link="base_link"/> -->
+    <!-- <child link="right_viz_wheel"/> -->
+    <!-- <origin xyz="0 ${-(base_width + track_width)/2 - 0.03} -0.045" rpy="0 0 0"/> -->
+    <!-- <axis xyz="0 1 0"/> -->
+  <!-- </joint> -->
+
+  <!-- Gazebo-specific elements -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Green</material>
+  </gazebo>
+  
+  <gazebo reference="left_wheel">
+    <material>Gazebo/Black</material>
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+  </gazebo>
+  
+  <gazebo reference="right_wheel">
+    <material>Gazebo/Black</material>
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+    <kp>1000000.0</kp>
+    <kd>100.0</kd>
+    <minDepth>0.001</minDepth>
+    <maxVel>1.0</maxVel>
+  </gazebo>
+  
+  <gazebo reference="platform_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+
+  <gazebo reference="camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+  
+  <!-- <gazebo reference="gps_link"> -->
+    <!-- <material>Gazebo/White</material> -->
+  <!-- </gazebo> -->
+  
+  <!-- <gazebo reference="compass_link"> -->
+    <!-- <material>Gazebo/Black</material> -->
+  <!-- </gazebo> -->
+  
+  <!--
+  <gazebo reference="mower_deck">
+    <material>Gazebo/Red</material>
+  </gazebo>
+  -->
+  
+  <!-- <gazebo reference="laser"> -->
+    <!-- <material>Gazebo/Black</material> -->
+    <!-- <sensor type="ray" name="laser_scanner"> -->
+      <!-- <update_rate>40</update_rate> -->
+      <!-- <ray> -->
+        <!-- <scan> -->
+          <!-- <horizontal> -->
+            <!-- <samples>720</samples> -->
+            <!-- <resolution>1</resolution> -->
+            <!-- <min_angle>0.0</min_angle> -->
+            <!-- <max_angle>6.28318530718</max_angle> -->
+          <!-- </horizontal> -->
+        <!-- </scan> -->
+        <!-- <range> -->
+          <!-- <min>0.1</min> -->
+          <!-- <max>10.0</max> -->
+          <!-- <resolution>0.01</resolution> -->
+        <!-- </range> -->
+        <!-- <noise> -->
+          <!-- <type>gaussian</type> -->
+          <!-- <mean>0.0</mean> -->
+          <!-- <stddev>0.01</stddev> -->
+        <!-- </noise> -->
+      <!-- </ray> -->
+      <!-- <plugin name="gazebo_ros_laser" filename="libgazebo_ros_ray_sensor.so"> -->
+        <!-- <ros> -->
+          <!-- <remapping>~/out:=scan</remapping> -->
+        <!-- </ros> -->
+        <!-- <output_type>sensor_msgs/LaserScan</output_type> -->
+        <!-- <frame_name>laser</frame_name> -->
+      <!-- </plugin> -->
+    <!-- </sensor> -->
+  <!-- </gazebo> -->
+
+  <!-- Sprayer tank Gazebo reference removed -->
+
+  <!-- Differential Drive Plugin - Disabled for fixed track joints -->
+  <!-- Tank tracks are fixed to chassis - use hiwonder_motor_driver for real robot control -->
+  <!--
+  <gazebo>
+    <plugin name="differential_drive_controller" filename="libgazebo_ros_diff_drive.so">
+      <ros>
+        <namespace></namespace>
+        <remapping>cmd_vel:=cmd_vel</remapping>
+        <remapping>odom:=odom</remapping>
+      </ros>
+      <update_rate>30</update_rate>
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${wheel_separation}</wheel_separation>
+      <wheel_diameter>${2*wheel_radius}</wheel_diameter>
+      <max_wheel_torque>50</max_wheel_torque>
+      <max_wheel_acceleration>1.0</max_wheel_acceleration>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>true</publish_wheel_tf>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_footprint</robot_base_frame>
+    </plugin>
+  </gazebo>
+  -->
+
+  <!-- RealSense Camera Plugin -->
+  <gazebo reference="camera_link">
+    <sensor type="camera" name="realsense_color">
+      <update_rate>30.0</update_rate>
+      <camera name="realsense">
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.02</near>
+          <far>300</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+      <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+        <ros>
+          <namespace>realsense_435i</namespace>
+          <remapping>image_raw:=color/image_raw</remapping>
+          <remapping>camera_info:=color/camera_info</remapping>
+        </ros>
+        <camera_name>realsense</camera_name>
+        <frame_name>camera_link</frame_name>
+        <hack_baseline>0.07</hack_baseline>
+      </plugin>
+    </sensor>
+    
+    <sensor type="depth" name="realsense_depth">
+      <update_rate>30.0</update_rate>
+      <camera name="realsense_depth">
+        <horizontal_fov>1.3962634</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+        </image>
+        <clip>
+          <near>0.02</near>
+          <far>300</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+      <plugin name="depth_camera_controller" filename="libgazebo_ros_camera.so">
+        <ros>
+          <namespace>realsense_435i</namespace>
+          <remapping>image_raw:=depth/image_rect_raw</remapping>
+          <remapping>camera_info:=depth/camera_info</remapping>
+        </ros>
+        <camera_name>realsense_depth</camera_name>
+        <frame_name>camera_link</frame_name>
+        <hack_baseline>0.07</hack_baseline>
+      </plugin>
+    </sensor>
+  </gazebo>
+
+  <!-- HGLRC M100-5883 GPS Plugin (M10 chip, multi-constellation) REMOVED -->
+  <!-- <gazebo reference="gps_link"> -->
+    <!-- <sensor type="gps" name="hglrc_m100_gps"> -->
+      <!-- <update_rate>10.0</update_rate>  -->
+      <!-- <plugin name="gps_controller" filename="libgazebo_ros_gps_sensor.so"> -->
+        <!-- <ros> -->
+          <!-- <namespace>hglrc_gps</namespace> -->
+          <!-- <remapping>fix:=fix</remapping> -->
+          <!-- <remapping>vel:=vel</remapping> -->
+        <!-- </ros> -->
+        <!-- <frame_name>gps_link</frame_name> -->
+        <!-- <position_sensing> -->
+          <!-- <horizontal> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>2.5</stddev>   -->
+            <!-- </noise> -->
+          <!-- </horizontal> -->
+          <!-- <vertical> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>4.0</stddev>   -->
+            <!-- </noise> -->
+          <!-- </vertical> -->
+        <!-- </position_sensing> -->
+        <!-- <velocity_sensing> -->
+          <!-- <horizontal> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.1</stddev> -->
+            <!-- </noise> -->
+          <!-- </horizontal> -->
+          <!-- <vertical> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.1</stddev> -->
+            <!-- </noise> -->
+          <!-- </vertical> -->
+        <!-- </velocity_sensing> -->
+      <!-- </plugin> -->
+    <!-- </sensor> -->
+  <!-- </gazebo> -->
+
+  <!-- QMC5883 Magnetometer Plugin REMOVED -->
+  <!-- <gazebo reference="compass_link"> -->
+    <!-- <sensor type="magnetometer" name="qmc5883_compass"> -->
+      <!-- <update_rate>100.0</update_rate>   -->
+      <!-- <plugin name="magnetometer_controller" filename="libgazebo_ros_imu_sensor.so"> -->
+        <!-- <ros> -->
+          <!-- <namespace>hglrc_gps</namespace> -->
+          <!-- <remapping>imu:=compass</remapping> -->
+        <!-- </ros> -->
+        <!-- <frame_name>compass_link</frame_name> -->
+        <!-- <initial_orientation_as_reference>false</initial_orientation_as_reference> -->
+        <!-- <angular_velocity> -->
+          <!-- <x> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </x> -->
+          <!-- <y> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </y> -->
+          <!-- <z> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </z> -->
+        <!-- </angular_velocity> -->
+        <!-- <linear_acceleration> -->
+          <!-- <x> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </x> -->
+          <!-- <y> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </y> -->
+          <!-- <z> -->
+            <!-- <noise type="gaussian"> -->
+              <!-- <mean>0.0</mean> -->
+              <!-- <stddev>0.0</stddev> -->
+            <!-- </noise> -->
+          <!-- </z> -->
+        <!-- </linear_acceleration> -->
+      <!-- </plugin> -->
+    <!-- </sensor> -->
+  <!-- </gazebo> -->
+
+</robot>

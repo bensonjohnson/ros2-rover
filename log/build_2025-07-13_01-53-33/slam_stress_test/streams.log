@@ -1,0 +1,15 @@
+[4.113s] Invoking command in '/home/ubuntu/ros2-rover/build/slam_stress_test': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/slam_stress_test/build --no-deps symlink_data
+[5.582s] running develop
+[5.918s] running egg_info
+[5.952s] writing slam_stress_test.egg-info/PKG-INFO
+[5.952s] writing dependency_links to slam_stress_test.egg-info/dependency_links.txt
+[5.953s] writing requirements to slam_stress_test.egg-info/requires.txt
+[5.953s] writing top-level names to slam_stress_test.egg-info/top_level.txt
+[6.016s] reading manifest file 'slam_stress_test.egg-info/SOURCES.txt'
+[6.018s] writing manifest file 'slam_stress_test.egg-info/SOURCES.txt'
+[6.053s] running build_ext
+[6.054s] Creating /home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages/slam-stress-test.egg-link (link to .)
+[6.055s] 
+[6.055s] Installed /home/ubuntu/ros2-rover/build/slam_stress_test
+[6.056s] running symlink_data
+[6.151s] Invoked command in '/home/ubuntu/ros2-rover/build/slam_stress_test' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/slam_stress_test/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/slam_stress_test/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/slam_stress_test/build --no-deps symlink_data

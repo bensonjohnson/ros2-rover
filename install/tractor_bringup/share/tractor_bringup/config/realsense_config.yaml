@@ -1,0 +1,63 @@
+# Intel RealSense D435i Optimized Configuration
+# This configuration is optimized for outdoor agricultural use
+# with stable power supply and autonomous navigation
+
+# Camera naming and namespacing
+camera_name: "camera"
+camera_namespace: "camera"
+
+# Core features
+enable_sync: true
+enable_pointcloud: true
+pointcloud.enable: true
+align_depth.enable: true
+
+# Depth camera settings - optimized for outdoor use
+depth_module.enable: true
+depth_module.depth_profile: "424x240x15" # Reduced to 15fps for better sync with costmaps
+depth_module.enable_auto_exposure: true
+depth_module.auto_exposure_limit: 100000
+depth_module.emitter_enabled: true # Enabled for better indoor/shadow depth
+depth_module.laser_power: 150.0 # Note: Emitter enabled for better depth
+depth_module.accuracy: 2
+
+# RGB camera settings
+rgb_camera.enable: true
+rgb_camera.color_profile: "424x240x15" # Match depth resolution and framerate
+rgb_camera.enable_auto_exposure: true
+rgb_camera.auto_exposure_limit: 100000
+rgb_camera.brightness: 0
+rgb_camera.contrast: 50
+rgb_camera.gamma: 300
+rgb_camera.saturation: 64
+
+# IMU settings - high frequency for better localization
+enable_gyro: true
+enable_accel: true
+gyro_fps: 200
+accel_fps: 250
+unite_imu_method: "linear_interpolation"
+hold_back_imu_for_frames: true
+
+# Disable infrared cameras to reduce USB bandwidth and avoid issues
+enable_infra1: false
+enable_infra2: false
+
+# Clip distance for outdoor use
+clip_distance: 8.0
+
+# IMU covariance settings
+linear_accel_cov: 0.01
+angular_velocity_cov: 0.01
+
+# Quality settings - enable decimation to reduce point count
+decimation_filter.enable: true
+decimation_filter.magnitude: 1  # No decimation needed with lower resolution
+temporal_filter.enable: true
+spatial_filter.enable: true
+hole_filling_filter.enable: true
+disparity_filter.enable: false
+
+# Performance settings
+publish_tf: true
+tf_publish_rate: 15.0

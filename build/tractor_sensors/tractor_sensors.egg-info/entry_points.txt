@@ -1,0 +1,2 @@
+[console_scripts]
+hglrc_m100_5883 = tractor_sensors.hglrc_m100_5883:main

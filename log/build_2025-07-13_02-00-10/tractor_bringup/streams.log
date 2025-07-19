@@ -1,0 +1,20 @@
+[6.116s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data
+[7.476s] running develop
+[8.681s] running egg_info
+[8.756s] writing tractor_bringup.egg-info/PKG-INFO
+[8.756s] writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+[8.757s] writing entry points to tractor_bringup.egg-info/entry_points.txt
+[8.757s] writing requirements to tractor_bringup.egg-info/requires.txt
+[8.757s] writing top-level names to tractor_bringup.egg-info/top_level.txt
+[8.870s] reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[8.874s] writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[8.906s] running build_ext
+[8.907s] Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+[8.908s] Installing autonomous_mapping.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[8.909s] Installing safety_monitor.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[8.910s] 
+[8.910s] Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+[8.911s] running symlink_data
+[8.911s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_no_gps.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[8.913s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping_no_gps.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[9.021s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data

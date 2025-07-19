@@ -1,0 +1,54 @@
+[4.157s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force
+[5.160s] running develop
+[5.488s] running egg_info
+[5.521s] writing tractor_bringup.egg-info/PKG-INFO
+[5.522s] writing dependency_links to tractor_bringup.egg-info/dependency_links.txt
+[5.523s] writing entry points to tractor_bringup.egg-info/entry_points.txt
+[5.524s] writing requirements to tractor_bringup.egg-info/requires.txt
+[5.524s] writing top-level names to tractor_bringup.egg-info/top_level.txt
+[5.587s] reading manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[5.589s] writing manifest file 'tractor_bringup.egg-info/SOURCES.txt'
+[5.624s] running build_ext
+[5.624s] Creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+[5.625s] Installing autonomous_mapping.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[5.627s] Installing safety_monitor.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[5.628s] 
+[5.629s] Installed /home/ubuntu/ros2-rover/build/tractor_bringup
+[5.630s] running symlink_data
+[5.632s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/resource/tractor_bringup -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages
+[5.632s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/package.xml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup
+[5.633s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.633s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_gazebo.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.634s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/slam_mapping.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.634s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping_simplified.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.635s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_no_gps.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.635s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav2_simple_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.636s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav_no_gps_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.636s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/control_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.637s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_localization.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.637s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav2_pointcloud_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.638s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/implements.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.639s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/basic_nav_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.639s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_bringup.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.640s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/robot_description.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.641s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping_minimal.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.641s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/xbox_teleop_with_feedback.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.643s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/nav_working_test.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.644s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/tractor_sim.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.645s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.646s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/hiwonder_control.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.646s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/autonomous_mapping_no_gps.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.649s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/navigation.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.650s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/launch/sensors.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[5.651s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/urdf/tractor.urdf.xacro -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf
+[5.652s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/minimal_costmap_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.653s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/realsense_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.653s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/nav2_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.654s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/slam_toolbox_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.656s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/minimal_ekf_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.656s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/direct_costmap_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.657s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/robot_localization.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.659s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/config/hiwonder_motor_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[5.660s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[5.661s] symbolically linking /home/ubuntu/ros2-rover/build/tractor_bringup/maps/yard_map.pgm -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[5.778s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build --no-deps symlink_data --force

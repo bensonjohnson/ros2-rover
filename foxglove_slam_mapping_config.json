@@ -1,0 +1,189 @@
+{
+  "configById": {
+    "3D!4f35pjf": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 45,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000,
+        "logDepth": false
+      },
+      "followMode": "follow-pose",
+      "followTf": "base_link",
+      "scene": {
+        "enableStats": false,
+        "backgroundColor": "#303030",
+        "labelScaleFactor": 1
+      },
+      "transforms": {
+        "showLabel": false,
+        "editable": true,
+        "enablePreloading": true,
+        "frame": "map"
+      },
+      "topics": {
+        "/map": {
+          "visible": true,
+          "colorMode": "map",
+          "alpha": 0.7,
+          "minColor": "#000000",
+          "maxColor": "#ffffff",
+          "unknownColor": "#808080"
+        },
+        "/realsense_435i/scan": {
+          "visible": true,
+          "pointSize": 3,
+          "pointShape": "circle",
+          "colorField": "intensity",
+          "colorMode": "colormap",
+          "colorMap": "rainbow",
+          "minValue": 0,
+          "maxValue": 10
+        },
+        "/realsense_435i/depth/points": {
+          "visible": false,
+          "pointSize": 2,
+          "pointShape": "circle",
+          "colorField": "z",
+          "colorMode": "colormap",
+          "colorMap": "rainbow"
+        },
+        "/robot_description": {
+          "visible": true
+        },
+        "/tf": {
+          "visible": true
+        },
+        "/tf_static": {
+          "visible": true
+        }
+      },
+      "layers": {},
+      "publish": {
+        "type": "pose",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      }
+    },
+    "RawMessages!3wiob4a": {
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false,
+      "topicPath": "/slam_toolbox/graph_visualization"
+    },
+    "Plot!2l6q9mf": {
+      "paths": [
+        {
+          "timestampMethod": "receiveTime",
+          "value": "/odometry/filtered.twist.twist.linear.x",
+          "enabled": true,
+          "label": "Linear Velocity X"
+        },
+        {
+          "timestampMethod": "receiveTime", 
+          "value": "/odometry/filtered.twist.twist.angular.z",
+          "enabled": true,
+          "label": "Angular Velocity Z"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": false,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 240
+    },
+    "Image!1abc234": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 45,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000,
+        "logDepth": false
+      },
+      "followMode": "no-follow",
+      "followTf": "",
+      "scene": {},
+      "transforms": {},
+      "topics": {
+        "/realsense_435i/color/image_raw": {
+          "visible": true
+        }
+      },
+      "layers": {},
+      "publish": {}
+    },
+    "StateTransitions!5def678": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 45,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 45,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000,
+        "logDepth": false
+      },
+      "followMode": "no-follow",
+      "followTf": "",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {},
+      "topicToRender": "/slam_toolbox/transition_visualization",
+      "diffEnabled": false,
+      "diffMethod": "custom",
+      "diffTopicPath": "",
+      "showFullMessageForDiff": false
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": {
+        "first": "3D!4f35pjf",
+        "second": "Image!1abc234",
+        "direction": "column",
+        "splitPercentage": 60
+      },
+      "second": {
+        "first": "Plot!2l6q9mf",
+        "second": "RawMessages!3wiob4a",
+        "direction": "column",
+        "splitPercentage": 50
+      },
+      "direction": "row",
+      "splitPercentage": 75
+    },
+    "second": "StateTransitions!5def678",
+    "direction": "row",
+    "splitPercentage": 85
+  }
+}
