@@ -95,6 +95,7 @@ ros2 launch tractor_bringup autonomous_mapping_minimal.launch.py \
     mapping_duration:=${MAPPING_DURATION} \
     max_speed:=${MAX_SPEED} \
     safety_distance:=${SAFETY_DISTANCE} \
+    exploration_distance:=${EXPLORATION_DISTANCE:-2.5} \
     use_sim_time:=false &
 
 # Store the launch process ID
