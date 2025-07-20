@@ -34,7 +34,7 @@ class SimpleAutonomousMapper(Node):
         self.declare_parameter('max_speed', 0.3)
         self.declare_parameter('exploration_distance', 2.5)  # Reduced for better obstacle avoidance
         self.declare_parameter('mapping_duration', 600)  # 10 minutes
-        self.declare_parameter('obstacle_avoidance_distance', 0.8)  # New parameter for safety margin
+        self.declare_parameter('obstacle_avoidance_distance', 0.6)  # New parameter for safety margin
 
         self.max_speed = self.get_parameter('max_speed').get_parameter_value().double_value
         self.exploration_distance = self.get_parameter('exploration_distance').get_parameter_value().double_value
@@ -49,13 +49,13 @@ class SimpleAutonomousMapper(Node):
         self.current_goal = None
         self.nav_goal_active = False
         self.goal_start_time = None
-        self.goal_timeout = 20.0  # Reduced timeout for better responsiveness
+        self.goal_timeout = 25.0  # Force new goal after 25 seconds
         self.last_goal_fail_time = None
-        self.goal_retry_delay = 5.0  # Reduced delay for faster recovery
+        self.goal_retry_delay = 8.0  # Wait 8 seconds after goal failure
         self.obstacle_detected = False
         self.obstacle_avoidance_active = False
         self.avoidance_start_time = None
-        self.avoidance_duration = 10.0  # Time to spend avoiding obstacles
+        self.avoidance_duration = 8.0  # Time to spend avoiding obstacles
 
         # Use callback group for parallel processing
         callback_group = ReentrantCallbackGroup()
@@ -188,9 +188,6 @@ class SimpleAutonomousMapper(Node):
         self.current_goal = (goal_x, goal_y)
         self.nav_goal_active = True
         self.goal_start_time = time.time()
-        self.obstacle_detected = False
-        self.obstacle_avoidance_active = False
-        self.avoidance_start_time = None
 
     def nav_response_callback(self, future):
         """Handle Nav2 goal response"""

@@ -24,9 +24,9 @@ slam_toolbox:
     # General Parameters
     use_scan_matching: true
     use_scan_barycenter: true
-    minimum_time_interval: 0.1 # Process scans at up to 10Hz for better responsiveness
+    minimum_time_interval: 0.15 # Process scans at up to 6.67Hz for better responsiveness
     transform_publish_period: 0.02 # 50Hz transform publishing
-    map_update_interval: 1.0 # Faster map updates for better performance
+    map_update_interval: 1.5 # Faster map updates for better performance
 
     # Multi-threading optimization for Orange Pi 5 Plus
     number_of_threads: 4  # Use 4 cores available
@@ -36,7 +36,7 @@ slam_toolbox:
     minimum_travel_distance: 0.15  # More frequent keyframes for detailed mapping
     minimum_travel_heading: 0.15   # More sensitive to rotation
     resolution: 0.05 # Must match costmap resolution
-    laser_min_range: 0.15 # Match pointcloud_to_laserscan min range
+    laser_min_range: 0.25 # Match pointcloud_to_laserscan min range
     tf_buffer_duration: 30.0 # Default 30.0
     stack_size_to_use: 40000000 # Default 40000000
     enable_interactive_mode: true
@@ -47,8 +47,8 @@ slam_toolbox:
 
     # Outdoor mapping optimized parameters
     # Larger search window for outdoor environments
-    scan_buffer_size: 5  # Reduced for better responsiveness
-    scan_buffer_maximum_scan_distance: 5.0  # Reduced for better near-field mapping
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
     loop_search_maximum_distance: 3.0

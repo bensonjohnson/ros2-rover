@@ -242,7 +242,7 @@ def generate_launch_description():
                 "max_speed": max_speed,
                 "mapping_duration": mapping_duration,
                 "exploration_distance": 2.5,  # Reduced for better obstacle avoidance
-                "obstacle_avoidance_distance": 0.8,  # Safety margin for obstacle detection
+                "obstacle_avoidance_distance": 0.6,  # Safety margin for obstacle detection
             }
         ],
     )
