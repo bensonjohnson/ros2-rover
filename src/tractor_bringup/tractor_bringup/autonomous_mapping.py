@@ -35,11 +35,15 @@ class SimpleAutonomousMapper(Node):
         self.declare_parameter('exploration_distance', 2.5)  # Reduced for better obstacle avoidance
         self.declare_parameter('mapping_duration', 600)  # 10 minutes
         self.declare_parameter('obstacle_avoidance_distance', 0.6)  # New parameter for safety margin
+        self.declare_parameter('camera_fov_angle', 65.0)  # Camera horizontal FOV in degrees
+        self.declare_parameter('camera_max_range', 4.0)  # Maximum range of camera in meters
 
         self.max_speed = self.get_parameter('max_speed').get_parameter_value().double_value
         self.exploration_distance = self.get_parameter('exploration_distance').get_parameter_value().double_value
         self.mapping_duration = self.get_parameter('mapping_duration').get_parameter_value().integer_value
         self.obstacle_avoidance_distance = self.get_parameter('obstacle_avoidance_distance').get_parameter_value().double_value
+        self.camera_fov_angle = self.get_parameter('camera_fov_angle').get_parameter_value().double_value
+        self.camera_max_range = self.get_parameter('camera_max_range').get_parameter_value().double_value
 
         # State variables
         self.current_pose = None
@@ -158,7 +162,7 @@ class SimpleAutonomousMapper(Node):
             return
 
     def send_forward_goal(self):
-        """Send a goal to drive forward in current direction"""
+        """Send a goal to drive forward in current direction, limited to camera FOV"""
         if not self.current_pose:
             return
 
@@ -167,8 +171,12 @@ class SimpleAutonomousMapper(Node):
         current_y = self.current_pose.position.y
 
         # Calculate goal position based on current heading
-        goal_x = current_x + self.exploration_distance * math.cos(self.current_heading)
-        goal_y = current_y + self.exploration_distance * math.sin(self.current_heading)
+        # Limit distance to camera's maximum range
+        safe_distance = min(self.exploration_distance, self.camera_max_range)
+
+        # Calculate goal position
+        goal_x = current_x + safe_distance * math.cos(self.current_heading)
+        goal_y = current_y + safe_distance * math.sin(self.current_heading)
 
         # Create navigation goal
         goal_msg = NavigateToPose.Goal()
@@ -183,6 +191,7 @@ class SimpleAutonomousMapper(Node):
 
         # Send goal
         self.get_logger().info(f"Sending forward goal: ({goal_x:.2f}, {goal_y:.2f})")
+        self.get_logger().info(f"Goal limited to camera FOV ({self.camera_fov_angle}°) and max range ({self.camera_max_range}m)")
         send_goal_future = self.nav_client.send_goal_async(
             goal_msg, feedback_callback=self.nav_feedback_callback
         )
