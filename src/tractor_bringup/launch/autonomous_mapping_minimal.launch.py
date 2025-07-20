@@ -99,6 +99,8 @@ def generate_launch_description():
             "camera_name": "camera",
             "camera_namespace": "camera",
             "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_config.yaml"),
+            "enable_pointcloud": "true",  # Ensure point cloud is enabled
+            "align_depth": "true",  # Align depth for better accuracy
         }.items(),
     )
 
@@ -239,7 +241,8 @@ def generate_launch_description():
                 "use_sim_time": use_sim_time,
                 "max_speed": max_speed,
                 "mapping_duration": mapping_duration,
-                "exploration_distance": 3.0,
+                "exploration_distance": 2.5,  # Reduced for better obstacle avoidance
+                "obstacle_avoidance_distance": 0.8,  # Safety margin for obstacle detection
             }
         ],
     )

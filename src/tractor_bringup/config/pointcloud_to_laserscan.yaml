@@ -1,12 +1,12 @@
 pointcloud_to_laserscan:
   target_frame: "base_footprint"
   transform_tolerance: 0.1
-  min_height: 0.13
-  max_height: 0.25
+  min_height: 0.05  # Lower minimum height to detect closer obstacles
+  max_height: 0.50  # Increased to capture more of the robot's height
   angle_min: -1.57
   angle_max: 1.57
   angle_increment: 0.017
   scan_time: 0.1
-  range_min: 0.3
-  range_max: 5.0
+  range_min: 0.15  # Reduced minimum range for better close obstacle detection
+  range_max: 4.0   # Reduced maximum range for better near-field accuracy
   use_inf: true

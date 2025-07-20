@@ -32,12 +32,14 @@ class SimpleAutonomousMapper(Node):
 
         # Parameters
         self.declare_parameter('max_speed', 0.3)
-        self.declare_parameter('exploration_distance', 3.0)  # How far to drive forward
+        self.declare_parameter('exploration_distance', 2.5)  # Reduced for better obstacle avoidance
         self.declare_parameter('mapping_duration', 600)  # 10 minutes
+        self.declare_parameter('obstacle_avoidance_distance', 0.8)  # New parameter for safety margin
 
         self.max_speed = self.get_parameter('max_speed').get_parameter_value().double_value
         self.exploration_distance = self.get_parameter('exploration_distance').get_parameter_value().double_value
         self.mapping_duration = self.get_parameter('mapping_duration').get_parameter_value().integer_value
+        self.obstacle_avoidance_distance = self.get_parameter('obstacle_avoidance_distance').get_parameter_value().double_value
 
         # State variables
         self.current_pose = None
@@ -47,9 +49,13 @@ class SimpleAutonomousMapper(Node):
         self.current_goal = None
         self.nav_goal_active = False
         self.goal_start_time = None
-        self.goal_timeout = 30.0  # Force new goal after 30 seconds
+        self.goal_timeout = 20.0  # Reduced timeout for better responsiveness
         self.last_goal_fail_time = None
-        self.goal_retry_delay = 10.0  # Wait 10 seconds after goal failure
+        self.goal_retry_delay = 5.0  # Reduced delay for faster recovery
+        self.obstacle_detected = False
+        self.obstacle_avoidance_active = False
+        self.avoidance_start_time = None
+        self.avoidance_duration = 10.0  # Time to spend avoiding obstacles
 
         # Use callback group for parallel processing
         callback_group = ReentrantCallbackGroup()
@@ -99,7 +105,7 @@ class SimpleAutonomousMapper(Node):
         self.current_heading = math.atan2(siny_cosp, cosy_cosp)
 
     def control_loop(self):
-        """Main control loop - simple forward exploration"""
+        """Main control loop - simple forward exploration with obstacle avoidance"""
         # Check if mapping time is up
         elapsed_time = time.time() - self.start_time
         if elapsed_time > self.mapping_duration:
@@ -126,6 +132,17 @@ class SimpleAutonomousMapper(Node):
                 self.get_logger().warn(f"Goal timeout after {goal_elapsed:.1f}s - forcing new goal")
                 self.nav_goal_active = False
                 self.goal_start_time = None
+
+        # Check if obstacle avoidance is active
+        if self.obstacle_avoidance_active:
+            if self.avoidance_start_time:
+                avoidance_elapsed = time.time() - self.avoidance_start_time
+                if avoidance_elapsed > self.avoidance_duration:
+                    self.get_logger().info(f"Obstacle avoidance completed after {avoidance_elapsed:.1f}s")
+                    self.obstacle_avoidance_active = False
+                    self.avoidance_start_time = None
+                    self.obstacle_detected = False
+            return
 
         # Check if enough time has passed since last goal failure
         if self.last_goal_fail_time:
@@ -171,6 +188,9 @@ class SimpleAutonomousMapper(Node):
         self.current_goal = (goal_x, goal_y)
         self.nav_goal_active = True
         self.goal_start_time = time.time()
+        self.obstacle_detected = False
+        self.obstacle_avoidance_active = False
+        self.avoidance_start_time = None
 
     def nav_response_callback(self, future):
         """Handle Nav2 goal response"""
@@ -197,9 +217,16 @@ class SimpleAutonomousMapper(Node):
         if status == 4:  # SUCCEEDED
             self.get_logger().info("Navigation goal completed successfully")
             self.last_goal_fail_time = None  # Clear failure time on success
+        elif status == 3:  # CANCELED
+            self.get_logger().info("Navigation goal was canceled")
+            self.last_goal_fail_time = None
         else:
             self.get_logger().warn(f"Navigation goal failed with status: {status}")
             self.last_goal_fail_time = time.time()  # Record failure time
+            self.obstacle_detected = True
+            self.obstacle_avoidance_active = True
+            self.avoidance_start_time = time.time()
+            self.get_logger().info("Activating obstacle avoidance mode")
 
         self.nav_goal_active = False
         self.goal_start_time = None
