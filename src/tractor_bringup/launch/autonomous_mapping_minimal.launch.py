@@ -319,6 +319,21 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=10.5, actions=[nav2_bt_navigator_node]))
     ld.add_action(TimerAction(period=11.0, actions=[velocity_smoother_node]))
 
+    # Add Nav2 activation commands
+    ld.add_action(TimerAction(period=12.0, actions=[
+        Node(
+            package="nav2_lifecycle_manager",
+            executable="lifecycle_manager",
+            name="nav2_activation",
+            output="screen",
+            parameters=[
+                {"use_sim_time": use_sim_time},
+                {"node_names": ["controller_server", "planner_server", "behavior_server", "bt_navigator", "velocity_smoother"]}
+            ],
+            arguments=["activate"]
+        )
+    ]))
+
     # Safety and exploration (after Nav2 is ready)
     ld.add_action(TimerAction(period=13.0, actions=[safety_monitor_node]))
     ld.add_action(TimerAction(period=12.0, actions=[autonomous_mapper_node]))
