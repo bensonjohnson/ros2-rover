@@ -153,6 +153,9 @@ class SimpleAutonomousMapper(Node):
         # If no active goal, send a new forward exploration goal
         if not self.nav_goal_active:
             self.send_forward_goal()
+            # Wait for the goal to be reached before sending a new one
+            time.sleep(1.0)
+            return
 
     def send_forward_goal(self):
         """Send a goal to drive forward in current direction"""
@@ -188,6 +191,7 @@ class SimpleAutonomousMapper(Node):
         self.current_goal = (goal_x, goal_y)
         self.nav_goal_active = True
         self.goal_start_time = time.time()
+        self.get_logger().info(f"Waiting for goal to be reached before setting new goal")
 
     def nav_response_callback(self, future):
         """Handle Nav2 goal response"""
@@ -214,6 +218,8 @@ class SimpleAutonomousMapper(Node):
         if status == 4:  # SUCCEEDED
             self.get_logger().info("Navigation goal completed successfully")
             self.last_goal_fail_time = None  # Clear failure time on success
+            # Wait at the goal for a moment to ensure proper stopping
+            time.sleep(2.0)
         elif status == 3:  # CANCELED
             self.get_logger().info("Navigation goal was canceled")
             self.last_goal_fail_time = None

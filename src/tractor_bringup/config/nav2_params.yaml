@@ -152,6 +152,9 @@ local_costmap:
           observation_persistence: 0.0
           clearing_use_maximum_range: true
           inf_is_valid: false
+          filter_ground: true  # Enable ground filtering
+          ground_filter_min_height: 0.0  # Ground starts at 0
+          ground_filter_max_height: 0.1  # Anything below 10cm is ground
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0  # Increased penalty near obstacles
@@ -196,6 +199,9 @@ global_costmap:
           observation_persistence: 0.0
           clearing_use_maximum_range: true
           inf_is_valid: false
+          filter_ground: true  # Enable ground filtering
+          ground_filter_min_height: 0.0  # Ground starts at 0
+          ground_filter_max_height: 0.1  # Anything below 10cm is ground
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
