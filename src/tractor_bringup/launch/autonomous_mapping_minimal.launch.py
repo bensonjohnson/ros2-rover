@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal Autonomous Mapping Launch File
+Minimal Autonomous Mapping Launch File with SLAM support
 Clean architecture: Essential nodes only, no duplicates, optimized for performance
 """
 
@@ -11,7 +11,6 @@ from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
-
 
 def generate_launch_description():
     # Package directories
@@ -28,13 +27,13 @@ def generate_launch_description():
         default_value="false",
         description="Use simulation (Gazebo) clock if true",
     )
-    
+
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
         default_value="0.3",
         description="Maximum speed during exploration (m/s)",
     )
-    
+
     declare_safety_distance_cmd = DeclareLaunchArgument(
         "safety_distance",
         default_value="0.5",
@@ -103,48 +102,36 @@ def generate_launch_description():
         }.items(),
     )
 
-    # REMOVED - pointcloud-to-laserscan not needed since we use point cloud directly
-    # pointcloud_to_laserscan_node = Node(
-    #     package="pointcloud_to_laserscan",
-    #     executable="pointcloud_to_laserscan_node",
-    #     name="pointcloud_to_laserscan",
-    #     output="screen",
-    #     parameters=[
-    #         {
-    #             "target_frame": "base_footprint",
-    #             "transform_tolerance": 0.1,  # Reduced for better accuracy
-    #             "min_height": 0.15,  # Slightly above ground, camera at 0.153m
-    #             "max_height": 0.25,  # Narrow slice for consistent SLAM
-    #             "angle_min": -1.57,  # ~90 degrees
-    #             "angle_max": 1.57,
-    #             "angle_increment": 0.017,  # ~1 degree
-    #             "scan_time": 0.1,
-    #             "range_min": 0.3,
-    #             "range_max": 5.0,
-    #             "use_inf": True,
-    #             "use_sim_time": use_sim_time,
-    #         }
-    #     ],
-    #     remappings=[
-    #         ("cloud_in", "/camera/camera/depth/color/points"),
-    #         ("scan", "/scan"),  # For SLAM only
-    #     ],
-    # )
+    # 6. PointCloud to LaserScan for SLAM
+    pointcloud_to_laserscan_node = Node(
+        package="pointcloud_to_laserscan",
+        executable="pointcloud_to_laserscan_node",
+        name="pointcloud_to_laserscan",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "pointcloud_to_laserscan.yaml"),
+            {"use_sim_time": use_sim_time}
+        ],
+        remappings=[
+            ("cloud_in", "/camera/camera/depth/color/points"),
+            ("scan", "/scan"),  # For SLAM only
+        ],
+    )
 
-    # 7. SLAM Toolbox DISABLED - requires laser scan data
-    # slam_toolbox_node = Node(
-    #     package="slam_toolbox",
-    #     executable="async_slam_toolbox_node",
-    #     name="slam_toolbox",
-    #     output="screen",
-    #     parameters=[
-    #         os.path.join(pkg_tractor_bringup, "config", "slam_toolbox_params.yaml"),
-    #         {"use_sim_time": use_sim_time}
-    #     ],
-    #     remappings=[
-    #         ("scan", "/scan"),
-    #     ],
-    # )
+    # 7. SLAM Toolbox for mapping and localization
+    slam_toolbox_node = Node(
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "slam_toolbox_params.yaml"),
+            {"use_sim_time": use_sim_time}
+        ],
+        remappings=[
+            ("scan", "/scan"),
+        ],
+    )
 
     # 8. Nav2 Lifecycle Manager (essential for activating nodes)
     nav2_lifecycle_manager = Node(
@@ -241,7 +228,7 @@ def generate_launch_description():
     # Costmaps are now handled by Nav2 navigation stack internally
     # No separate standalone costmap nodes needed
 
-    # 9. Simple Autonomous Mapper (forward exploration with Nav2)
+    # 11. Simple Autonomous Mapper (forward exploration with Nav2)
     autonomous_mapper_node = Node(
         package="tractor_bringup",
         executable="autonomous_mapping.py",
@@ -257,7 +244,7 @@ def generate_launch_description():
         ],
     )
 
-    # 10. Safety Monitor (essential)
+    # 12. Safety Monitor (essential)
     safety_monitor_node = Node(
         package="tractor_bringup",
         executable="safety_monitor.py",
@@ -273,7 +260,7 @@ def generate_launch_description():
         ],
     )
 
-    # 11. Map Saver (save maps periodically)
+    # 13. Map Saver (save maps periodically)
     map_saver_node = Node(
         package="nav2_map_server",
         executable="map_saver_server",
@@ -284,7 +271,7 @@ def generate_launch_description():
         ],
     )
 
-    # 12. Foxglove Bridge (visualization)
+    # 14. Foxglove Bridge (visualization)
     foxglove_bridge_node = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -313,25 +300,28 @@ def generate_launch_description():
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
     # ld.add_action(gps_compass_node)  # DISABLED
-    
+
     # Camera system (delayed for stability)
     ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))
-    # ld.add_action(TimerAction(period=6.0, actions=[pointcloud_to_laserscan_node]))  # DISABLED
-    
-    # Navigation only (no SLAM) - Start lifecycle manager first, then nodes
-    ld.add_action(TimerAction(period=6.0, actions=[nav2_lifecycle_manager]))
-    ld.add_action(TimerAction(period=6.5, actions=[nav2_controller_node]))
-    ld.add_action(TimerAction(period=7.0, actions=[nav2_planner_node]))
-    ld.add_action(TimerAction(period=7.2, actions=[nav2_behavior_server_node]))
-    ld.add_action(TimerAction(period=7.5, actions=[nav2_bt_navigator_node]))
-    ld.add_action(TimerAction(period=8.0, actions=[velocity_smoother_node]))
-    
+
+    # SLAM system (after camera is ready)
+    ld.add_action(TimerAction(period=6.0, actions=[pointcloud_to_laserscan_node]))
+    ld.add_action(TimerAction(period=7.0, actions=[slam_toolbox_node]))
+
+    # Navigation only - Start lifecycle manager first, then nodes
+    ld.add_action(TimerAction(period=9.0, actions=[nav2_lifecycle_manager]))
+    ld.add_action(TimerAction(period=9.5, actions=[nav2_controller_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[nav2_planner_node]))
+    ld.add_action(TimerAction(period=10.2, actions=[nav2_behavior_server_node]))
+    ld.add_action(TimerAction(period=10.5, actions=[nav2_bt_navigator_node]))
+    ld.add_action(TimerAction(period=11.0, actions=[velocity_smoother_node]))
+
     # Safety and exploration (after Nav2 is ready)
-    ld.add_action(TimerAction(period=10.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=9.0, actions=[autonomous_mapper_node]))
-    
+    ld.add_action(TimerAction(period=13.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=12.0, actions=[autonomous_mapper_node]))
+
     # Utilities
-    ld.add_action(TimerAction(period=5.0, actions=[map_saver_node]))
+    ld.add_action(TimerAction(period=8.0, actions=[map_saver_node]))
     ld.add_action(TimerAction(period=2.0, actions=[foxglove_bridge_node]))
 
     return ld
