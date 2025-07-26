@@ -12,6 +12,7 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/realsense_config.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/nav2_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/slam_toolbox_params.yaml
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/pointcloud_to_laserscan.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/hiwonder_motor_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm

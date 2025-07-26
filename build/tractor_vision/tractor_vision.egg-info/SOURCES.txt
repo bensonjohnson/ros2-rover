@@ -9,8 +9,12 @@ setup.py
 ../../build/tractor_vision/tractor_vision.egg-info/top_level.txt
 ../../build/tractor_vision/tractor_vision.egg-info/zip-safe
 resource/tractor_vision
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
 tractor_vision/__init__.py
 tractor_vision/obstacle_detector.py
+tractor_vision.egg-info/PKG-INFO
+tractor_vision.egg-info/SOURCES.txt
+tractor_vision.egg-info/dependency_links.txt
+tractor_vision.egg-info/entry_points.txt
+tractor_vision.egg-info/requires.txt
+tractor_vision.egg-info/top_level.txt
+tractor_vision.egg-info/zip-safe

@@ -11,8 +11,12 @@ setup.py
 config/hglrc_m100_5883_config.yaml
 launch/hglrc_m100_5883.launch.py
 resource/tractor_sensors
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
 tractor_sensors/__init__.py
 tractor_sensors/hglrc_m100_5883.py
+tractor_sensors.egg-info/PKG-INFO
+tractor_sensors.egg-info/SOURCES.txt
+tractor_sensors.egg-info/dependency_links.txt
+tractor_sensors.egg-info/entry_points.txt
+tractor_sensors.egg-info/requires.txt
+tractor_sensors.egg-info/top_level.txt
+tractor_sensors.egg-info/zip-safe

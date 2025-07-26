@@ -9,6 +9,9 @@ setup.py
 ../../build/slam_stress_test/slam_stress_test.egg-info/zip-safe
 resource/slam_stress_test
 slam_stress_test/__init__.py
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
+slam_stress_test.egg-info/PKG-INFO
+slam_stress_test.egg-info/SOURCES.txt
+slam_stress_test.egg-info/dependency_links.txt
+slam_stress_test.egg-info/requires.txt
+slam_stress_test.egg-info/top_level.txt
+slam_stress_test.egg-info/zip-safe

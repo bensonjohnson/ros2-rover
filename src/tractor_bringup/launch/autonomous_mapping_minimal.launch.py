@@ -159,7 +159,7 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time}
         ],
         remappings=[
-            ("cmd_vel", "cmd_vel")
+            ("cmd_vel", "cmd_vel_nav")
         ]
     )
 
@@ -208,7 +208,7 @@ def generate_launch_description():
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_nav"),
-            ("cmd_vel_smoothed", "cmd_vel")
+            ("cmd_vel_smoothed", "cmd_vel_smoothed")
         ]
     )
 
@@ -223,12 +223,11 @@ def generate_launch_description():
         ],
         remappings=[
             ("cmd_vel_in", "cmd_vel_smoothed"),
-            ("cmd_vel_out", "cmd_vel")
+            ("cmd_vel_out", "cmd_vel_safe")
         ]
     )
 
-    # Costmaps are now handled by Nav2 navigation stack internally
-    # No separate standalone costmap nodes needed
+    # Costmaps are handled internally by Nav2 navigation stack
 
     # 11. Simple Autonomous Mapper (forward exploration with Nav2)
     autonomous_mapper_node = Node(
@@ -318,6 +317,7 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=10.2, actions=[nav2_behavior_server_node]))
     ld.add_action(TimerAction(period=10.5, actions=[nav2_bt_navigator_node]))
     ld.add_action(TimerAction(period=11.0, actions=[velocity_smoother_node]))
+    ld.add_action(TimerAction(period=11.2, actions=[collision_monitor_node]))
 
     # Add Nav2 activation commands
     ld.add_action(TimerAction(period=12.0, actions=[

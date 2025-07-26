@@ -14,7 +14,7 @@ align_depth.enable: true
 
 # Depth camera settings - optimized for outdoor use
 depth_module.enable: true
-depth_module.depth_profile: "424x240x15" # Reduced to 15fps for better sync with costmaps
+depth_module.depth_profile: "640x480x15" # Standard resolution for reliable data
 depth_module.enable_auto_exposure: true
 depth_module.auto_exposure_limit: 100000
 depth_module.emitter_enabled: true # Enabled for better indoor/shadow depth
@@ -23,7 +23,7 @@ depth_module.accuracy: 2
 
 # RGB camera settings
 rgb_camera.enable: true
-rgb_camera.color_profile: "424x240x15" # Match depth resolution and framerate
+rgb_camera.color_profile: "640x480x15" # Match depth resolution and framerate
 rgb_camera.enable_auto_exposure: true
 rgb_camera.auto_exposure_limit: 100000
 rgb_camera.brightness: 0
@@ -52,7 +52,7 @@ angular_velocity_cov: 0.01
 
 # Quality settings - enable decimation to reduce point count
 decimation_filter.enable: true
-decimation_filter.magnitude: 1  # No decimation needed with lower resolution
+decimation_filter.magnitude: 2  # Reduce point cloud density for performance
 temporal_filter.enable: true
 spatial_filter.enable: true
 hole_filling_filter.enable: true

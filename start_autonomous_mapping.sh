@@ -115,6 +115,27 @@ sleep 8
 echo "Costmaps will be auto-activated by Nav2 lifecycle manager..."
 echo "✓ Voxel layer costmaps configured for direct point cloud processing"
 
+# Collision monitor needs manual activation after other nodes are ready
+echo "Waiting for all nodes to initialize..."
+sleep 10  # Wait for all nodes to be fully ready
+
+echo "Activating collision monitor..."
+# Wait for collision monitor node to be available, then activate
+for i in {1..30}; do
+    if ros2 lifecycle get /collision_monitor > /dev/null 2>&1; then
+        ros2 lifecycle set /collision_monitor configure > /dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            ros2 lifecycle set /collision_monitor activate > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                echo "✓ Collision monitor activated for obstacle avoidance"
+                break
+            fi
+        fi
+    fi
+    echo "  Waiting for collision monitor... ($i/30)"
+    sleep 1
+done
+
 # Nav2 nodes are now activated automatically by the lifecycle manager in the launch file.
 # echo "Activating Nav2 navigation servers..."
 # sleep 3  # Wait for nodes to start

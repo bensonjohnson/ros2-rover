@@ -1,3 +1,0 @@
-[console_scripts]
-mower_controller = tractor_implements.mower_controller:main
-sprayer_controller = tractor_implements.sprayer_controller:main

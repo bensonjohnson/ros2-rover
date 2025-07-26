@@ -1,0 +1,1 @@
+/home/ubuntu/ros2-rover/src/tractor_bringup/launch/autonomous_mapping_minimal.launch.py

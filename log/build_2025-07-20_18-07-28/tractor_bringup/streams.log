@@ -1,0 +1,44 @@
+[1.576s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build
+[2.124s] running develop
+[2.477s] Removing /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor-bringup.egg-link (link to .)
+[2.610s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_bringup/build
+[2.612s] Invoking command in '/home/ubuntu/ros2-rover/src/tractor_bringup': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/ubuntu/ros2-rover/build/tractor_bringup/build install --record /home/ubuntu/ros2-rover/build/tractor_bringup/install.log --single-version-externally-managed install_data --force
+[3.087s] running egg_info
+[3.120s] writing ../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
+[3.120s] writing dependency_links to ../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
+[3.120s] writing entry points to ../../build/tractor_bringup/tractor_bringup.egg-info/entry_points.txt
+[3.121s] writing requirements to ../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
+[3.121s] writing top-level names to ../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
+[3.188s] reading manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[3.190s] writing manifest file '../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt'
+[3.190s] running build
+[3.190s] running build_py
+[3.191s] running install
+[3.202s] running install_lib
+[3.236s] creating /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup
+[3.236s] copying /home/ubuntu/ros2-rover/build/tractor_bringup/build/lib/tractor_bringup/autonomous_mapping.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup
+[3.236s] copying /home/ubuntu/ros2-rover/build/tractor_bringup/build/lib/tractor_bringup/safety_monitor.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup
+[3.237s] copying /home/ubuntu/ros2-rover/build/tractor_bringup/build/lib/tractor_bringup/__init__.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup
+[3.237s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/autonomous_mapping.py to autonomous_mapping.cpython-312.pyc
+[3.241s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/safety_monitor.py to safety_monitor.cpython-312.pyc
+[3.244s] byte-compiling /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup/__init__.py to __init__.cpython-312.pyc
+[3.244s] running install_data
+[3.244s] copying resource/tractor_bringup -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/ament_index/resource_index/packages
+[3.245s] copying package.xml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup
+[3.245s] copying launch/robot_description.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[3.245s] copying launch/autonomous_mapping_minimal.launch.py -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch
+[3.245s] copying urdf/tractor.urdf.xacro -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf
+[3.245s] copying config/realsense_config.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[3.246s] copying config/nav2_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[3.246s] copying config/slam_toolbox_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[3.247s] copying config/pointcloud_to_laserscan.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[3.247s] copying config/hiwonder_motor_params.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config
+[3.248s] copying maps/yard_map.yaml -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[3.248s] copying maps/yard_map.pgm -> /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps
+[3.249s] running install_egg_info
+[3.285s] Copying ../../build/tractor_bringup/tractor_bringup.egg-info to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info
+[3.286s] running install_scripts
+[3.523s] Installing autonomous_mapping.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[3.524s] Installing safety_monitor.py script to /home/ubuntu/ros2-rover/install/tractor_bringup/lib/tractor_bringup
+[3.525s] writing list of installed files to '/home/ubuntu/ros2-rover/build/tractor_bringup/install.log'
+[3.639s] Invoked command in '/home/ubuntu/ros2-rover/src/tractor_bringup' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/tractor_bringup build --build-base /home/ubuntu/ros2-rover/build/tractor_bringup/build install --record /home/ubuntu/ros2-rover/build/tractor_bringup/install.log --single-version-externally-managed install_data --force

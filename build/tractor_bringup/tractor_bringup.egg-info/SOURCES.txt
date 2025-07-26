@@ -10,6 +10,7 @@ setup.py
 ../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
+config/pointcloud_to_laserscan.yaml
 config/realsense_config.yaml
 config/slam_toolbox_params.yaml
 launch/autonomous_mapping_minimal.launch.py
