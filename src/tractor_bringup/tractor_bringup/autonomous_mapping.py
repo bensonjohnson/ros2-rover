@@ -237,9 +237,9 @@ class SimpleAutonomousMapper(Node):
         # Calculate goal position to follow wall
         goal_x, goal_y = self.calculate_wall_following_goal(wall_direction)
         
-        # Create navigation goal
+        # Create navigation goal - using odom frame for consistency with costmaps
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'odom'
+        goal_msg.pose.header.frame_id = 'odom'  # Consistent with SLAM and Nav2 costmap configuration
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = goal_x
         goal_msg.pose.pose.position.y = goal_y
@@ -320,7 +320,7 @@ class SimpleAutonomousMapper(Node):
 
         # Create goal at same position but with opposite orientation
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'odom'
+        goal_msg.pose.header.frame_id = 'odom'  # Consistent with SLAM and Nav2 costmap configuration
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = self.current_pose.position.x
         goal_msg.pose.pose.position.y = self.current_pose.position.y

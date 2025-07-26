@@ -10,8 +10,9 @@ slam_toolbox:
     ceres_loss_function: None
 
     # ROS Parameters
+    # Consistent frame configuration across SLAM and Nav2
     odom_frame: odom
-    map_frame: map
+    map_frame: odom  # Changed to match Nav2 for better alignment
     base_frame: base_footprint
     scan_topic: /scan # From pointcloud_to_laserscan conversion
     mode: mapping  # localization

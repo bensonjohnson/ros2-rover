@@ -110,12 +110,12 @@ controller_server:
       max_robot_pose_search_dist: 10.0
       use_interpolation: false
 
-local_costmap:
   local_costmap:
-    ros__parameters:
-      update_frequency: 15.0  # Match camera frame rate for better sync
-      publish_frequency: 15.0  # Match camera frame rate for better sync
-      global_frame: odom  # Use odom frame for SLAM - critical for proper anchoring
+    local_costmap:
+      ros__parameters:
+        update_frequency: 15.0  # Match camera frame rate for better sync
+        publish_frequency: 15.0  # Match camera frame rate for better sync
+        global_frame: odom  # Use odom frame for consistency with SLAM (changed from "map")
       robot_base_frame: base_footprint  # Consistent with SLAM
       use_sim_time: False
       rolling_window: true
@@ -161,12 +161,12 @@ local_costmap:
         inflation_radius: 0.8  # Larger safety buffer
       always_send_full_costmap: True
 
-global_costmap:
   global_costmap:
-    ros__parameters:
-      update_frequency: 1.0  # Adequate for global planning
-      publish_frequency: 1.0  # Adequate for global planning
-      global_frame: odom  # Use odom frame for odometry-based navigation (no SLAM)
+    global_costmap:
+      ros__parameters:
+        update_frequency: 1.0  # Adequate for global planning
+        publish_frequency: 1.0  # Adequate for global planning
+        global_frame: odom  # Use odom frame for consistency with SLAM (changed from "map")
       robot_base_frame: base_footprint  # Consistent with SLAM
       use_sim_time: False
       robot_radius: 0.093
