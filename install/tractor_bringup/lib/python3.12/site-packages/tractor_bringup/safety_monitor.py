@@ -56,7 +56,7 @@ class SafetyMonitor(Node):
             LaserScan, '/realsense/scan', self.realsense_scan_callback, 10
         )
         self.odom_sub = self.create_subscription(
-            Odometry, '/odometry/filtered', self.odom_callback, 10
+            Odometry, '/odom', self.odom_callback, 10
         )
         self.heartbeat_sub = self.create_subscription(
             String, '/mapping_status', self.heartbeat_callback, 10
@@ -122,10 +122,17 @@ class SafetyMonitor(Node):
     
     def check_heartbeat(self):
         """Check if mapping node is still alive"""
-        if time.time() - self.last_heartbeat > self.heartbeat_timeout:
+        elapsed = time.time() - self.last_heartbeat
+        if elapsed > self.heartbeat_timeout:
             with self.lock:
-                self.emergency_stop_active = True
-            self.get_logger().error("Mapping node heartbeat lost - activating emergency stop")
+                if not self.emergency_stop_active:
+                    self.emergency_stop_active = True
+                    self.get_logger().error(f"Mapping node heartbeat lost ({elapsed:.1f}s) - activating emergency stop")
+        elif self.emergency_stop_active and elapsed < (self.heartbeat_timeout * 0.8):
+            # Clear emergency if heartbeat is restored
+            with self.lock:
+                self.emergency_stop_active = False
+                self.get_logger().info("Mapping node heartbeat restored - clearing emergency stop")
     
     def apply_safety_limits(self, cmd_vel):
         """Apply safety limits to command velocity"""

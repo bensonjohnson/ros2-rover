@@ -1,0 +1,15 @@
+[0.000000] (-) TimerEvent: {}
+[0.000350] (-) JobUnselected: {'identifier': 'slam_stress_test'}
+[0.000398] (-) JobUnselected: {'identifier': 'tractor_control'}
+[0.000420] (-) JobUnselected: {'identifier': 'tractor_coverage'}
+[0.000439] (-) JobUnselected: {'identifier': 'tractor_implements'}
+[0.000459] (-) JobUnselected: {'identifier': 'tractor_sensors'}
+[0.000476] (-) JobUnselected: {'identifier': 'tractor_vision'}
+[0.000500] (tractor_bringup) JobQueued: {'identifier': 'tractor_bringup', 'dependencies': OrderedDict()}
+[0.000526] (tractor_bringup) JobStarted: {'identifier': 'tractor_bringup'}
+[0.098667] (-) TimerEvent: {}
+[0.199095] (-) TimerEvent: {}
+[0.299460] (-) TimerEvent: {}
+[0.399962] (-) TimerEvent: {}
+[0.438285] (tractor_bringup) JobEnded: {'identifier': 'tractor_bringup', 'rc': 0}
+[0.439748] (-) EventReactorShutdown: {}

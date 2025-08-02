@@ -1,0 +1,19 @@
+[4.821s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_control': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_control/build --no-deps symlink_data
+[5.990s] running develop
+[6.329s] running egg_info
+[6.365s] writing tractor_control.egg-info/PKG-INFO
+[6.366s] writing dependency_links to tractor_control.egg-info/dependency_links.txt
+[6.366s] writing entry points to tractor_control.egg-info/entry_points.txt
+[6.367s] writing requirements to tractor_control.egg-info/requires.txt
+[6.367s] writing top-level names to tractor_control.egg-info/top_level.txt
+[6.434s] reading manifest file 'tractor_control.egg-info/SOURCES.txt'
+[6.435s] writing manifest file 'tractor_control.egg-info/SOURCES.txt'
+[6.475s] running build_ext
+[6.476s] Creating /home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages/tractor-control.egg-link (link to .)
+[6.476s] Installing hiwonder_motor_driver script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+[6.478s] Installing velocity_feedback_controller script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+[6.478s] Installing xbox_controller_teleop script to /home/ubuntu/ros2-rover/install/tractor_control/lib/tractor_control
+[6.479s] 
+[6.479s] Installed /home/ubuntu/ros2-rover/build/tractor_control
+[6.480s] running symlink_data
+[6.644s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_control' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_control/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_control/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_control/build --no-deps symlink_data

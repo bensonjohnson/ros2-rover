@@ -105,47 +105,13 @@ LAUNCH_PID=$!
 echo "Waiting for nodes to initialize..."
 sleep 8
 
-# SLAM toolbox is not used in the minimal launch, so activation is disabled.
-# echo "Activating SLAM toolbox..."
-# ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState "{transition: {id: 1}}" > /dev/null 2>&1
-# ros2 service call /slam_toolbox/change_state lifecycle_msgs/srv/ChangeState "{transition: {id: 3}}" > /dev/null 2>&1
-# echo "✓ SLAM toolbox activated and ready"
-
 # Costmaps are now integrated with Nav2 lifecycle manager
 echo "Costmaps will be auto-activated by Nav2 lifecycle manager..."
 echo "✓ Voxel layer costmaps configured for direct point cloud processing"
 
-# Collision monitor needs manual activation after other nodes are ready
-echo "Waiting for all nodes to initialize..."
-sleep 10  # Wait for all nodes to be fully ready
-
-echo "Activating collision monitor..."
-# Wait for collision monitor node to be available, then activate
-for i in {1..30}; do
-    if ros2 lifecycle get /collision_monitor > /dev/null 2>&1; then
-        ros2 lifecycle set /collision_monitor configure > /dev/null 2>&1
-        if [ $? -eq 0 ]; then
-            ros2 lifecycle set /collision_monitor activate > /dev/null 2>&1
-            if [ $? -eq 0 ]; then
-                echo "✓ Collision monitor activated for obstacle avoidance"
-                break
-            fi
-        fi
-    fi
-    echo "  Waiting for collision monitor... ($i/30)"
-    sleep 1
-done
-
-# Nav2 nodes are now activated automatically by the lifecycle manager in the launch file.
-# echo "Activating Nav2 navigation servers..."
-# sleep 3  # Wait for nodes to start
-# ros2 lifecycle set /controller_server configure > /dev/null 2>&1
-# ros2 lifecycle set /controller_server activate > /dev/null 2>&1
-# ros2 lifecycle set /planner_server configure > /dev/null 2>&1  
-# ros2 lifecycle set /planner_server activate > /dev/null 2>&1
-# ros2 lifecycle set /bt_navigator configure > /dev/null 2>&1
-# ros2 lifecycle set /bt_navigator activate > /dev/null 2>&1
-# echo "✓ Nav2 navigation servers activated and ready"
+# Nav2 lifecycle manager will automatically activate all nodes including collision monitor
+echo "Waiting for Nav2 lifecycle manager to activate all nodes..."
+sleep 15  # Wait for all nodes to be fully ready and activated
 
 # Robot will now start with initial sweep to populate costmap
 echo "Robot will start with initial 180-degree sweep to populate costmap..."

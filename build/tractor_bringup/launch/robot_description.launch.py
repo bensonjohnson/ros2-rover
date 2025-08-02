@@ -1,1 +1,0 @@
-/home/ubuntu/ros2-rover/src/tractor_bringup/launch/robot_description.launch.py

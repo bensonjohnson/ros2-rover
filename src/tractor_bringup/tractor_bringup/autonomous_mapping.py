@@ -6,6 +6,7 @@ Works in odom frame without SLAM - uses point cloud directly for costmaps
 """
 
 import rclpy
+import rclpy.time
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped, Twist
@@ -17,6 +18,7 @@ from sensor_msgs.msg import PointCloud2
 import sensor_msgs_py.point_cloud2 as pc2
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from tf2_ros import Buffer, TransformListener
 import math
 import time
 import numpy as np
@@ -77,6 +79,12 @@ class SimpleAutonomousMapper(Node):
         # Use callback group for parallel processing
         callback_group = ReentrantCallbackGroup()
 
+        # TF2 setup for frame checking
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.map_frame_available = False
+        self.preferred_frame = 'odom'  # Start with odom frame
+
         # Publishers
         self.status_pub = self.create_publisher(String, '/mapping_status', 10)
 
@@ -87,7 +95,7 @@ class SimpleAutonomousMapper(Node):
         )
 
         self.imu_sub = self.create_subscription(
-            Imu, '/camera/camera/imu', self.imu_callback, 10,
+            Imu, '/camera/imu', self.imu_callback, 10,
             callback_group=callback_group
         )
 
@@ -109,6 +117,9 @@ class SimpleAutonomousMapper(Node):
         self.status_timer = self.create_timer(
             5.0, self.publish_status, callback_group=callback_group
         )
+        self.frame_check_timer = self.create_timer(
+            2.0, self.check_available_frames, callback_group=callback_group
+        )
 
         self.get_logger().info("Simple Autonomous Mapper started")
         self.get_logger().info(f"Will map for {self.mapping_duration} seconds")
@@ -125,6 +136,23 @@ class SimpleAutonomousMapper(Node):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         self.current_heading = math.atan2(siny_cosp, cosy_cosp)
+
+    def check_available_frames(self):
+        """Check which coordinate frames are available"""
+        try:
+            # Check if map frame is available by looking for transform
+            if self.tf_buffer.can_transform('map', 'base_footprint', rclpy.time.Time()):
+                if not self.map_frame_available:
+                    self.get_logger().info("Map frame detected - SLAM is active!")
+                    self.map_frame_available = True
+                    self.preferred_frame = 'map'
+            elif self.tf_buffer.can_transform('odom', 'base_footprint', rclpy.time.Time()):
+                if self.preferred_frame != 'odom':
+                    self.get_logger().info("Using odom frame - waiting for SLAM to create map frame")
+                    self.preferred_frame = 'odom'
+                    self.map_frame_available = False
+        except Exception as e:
+            self.get_logger().debug(f"Frame check error: {e}")
 
     def control_loop(self):
         """Main control loop - simple forward exploration with obstacle avoidance"""
@@ -144,7 +172,7 @@ class SimpleAutonomousMapper(Node):
 
         # Skip if Nav2 is not ready
         if not self.nav_client.wait_for_server(timeout_sec=1.0):
-            self.get_logger().warn("Nav2 action server not available")
+            self.get_logger().warn("Nav2 action server not available - waiting for lifecycle manager to activate nodes")
             return
 
         # Check if current goal has been active too long
@@ -237,9 +265,9 @@ class SimpleAutonomousMapper(Node):
         # Calculate goal position to follow wall
         goal_x, goal_y = self.calculate_wall_following_goal(wall_direction)
         
-        # Create navigation goal - using odom frame for consistency with costmaps
+        # Create navigation goal - use preferred frame (odom or map)
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'odom'  # Consistent with SLAM and Nav2 costmap configuration
+        goal_msg.pose.header.frame_id = self.preferred_frame
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = goal_x
         goal_msg.pose.pose.position.y = goal_y
@@ -320,7 +348,7 @@ class SimpleAutonomousMapper(Node):
 
         # Create goal at same position but with opposite orientation
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'odom'  # Consistent with SLAM and Nav2 costmap configuration
+        goal_msg.pose.header.frame_id = self.preferred_frame
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = self.current_pose.position.x
         goal_msg.pose.pose.position.y = self.current_pose.position.y
@@ -399,7 +427,7 @@ class SimpleAutonomousMapper(Node):
 
         # Create navigation goal
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'odom'
+        goal_msg.pose.header.frame_id = self.preferred_frame
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.pose.position.x = goal_x
         goal_msg.pose.pose.position.y = goal_y
@@ -480,6 +508,8 @@ class SimpleAutonomousMapper(Node):
             f"Simple Autonomous Mapping - "
             f"Elapsed: {elapsed_time:.0f}s, "
             f"Remaining: {remaining_time:.0f}s, "
+            f"Frame: {self.preferred_frame}, "
+            f"SLAM: {'Active' if self.map_frame_available else 'Waiting'}, "
             f"Goal Active: {'Yes' if self.nav_goal_active else 'No'}"
         )
 

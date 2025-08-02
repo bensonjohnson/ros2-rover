@@ -136,6 +136,7 @@ def generate_launch_description():
     )
 
     # 8. Nav2 Lifecycle Manager (essential for activating nodes)
+    # Add a longer timeout and ensure map frame is available
     nav2_lifecycle_manager = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
@@ -144,7 +145,11 @@ def generate_launch_description():
         parameters=[
             {"use_sim_time": use_sim_time},
             {"autostart": True},
-            {"node_names": ["controller_server", "planner_server", "behavior_server", "bt_navigator", "velocity_smoother"]}
+            {"node_names": ["slam_toolbox", "controller_server", "planner_server", "behavior_server", "bt_navigator", "velocity_smoother", "collision_monitor"]},
+            {"bond_timeout": 60.0},  # Much longer timeout for SLAM initialization
+            {"attempt_respawn_reconnection": True},
+            {"bond_respawn_max_duration": 30.0},  # Allow 30s for respawn attempts
+            {"respawn_max_attempts": 5}  # More attempts for outdoor environment
         ],
     )
 
@@ -307,39 +312,26 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))
 
     # SLAM system (after camera is ready)
-    ld.add_action(TimerAction(period=6.0, actions=[pointcloud_to_laserscan_node]))
-    ld.add_action(TimerAction(period=7.0, actions=[slam_toolbox_node]))
+    ld.add_action(TimerAction(period=8.0, actions=[pointcloud_to_laserscan_node]))
+    ld.add_action(TimerAction(period=9.0, actions=[slam_toolbox_node]))
 
-    # Navigation only - Start lifecycle manager first, then nodes
-    ld.add_action(TimerAction(period=9.0, actions=[nav2_lifecycle_manager]))
-    ld.add_action(TimerAction(period=9.5, actions=[nav2_controller_node]))
+    # Navigation nodes - Start all nav2 nodes first, then lifecycle manager will activate them
+    ld.add_action(TimerAction(period=10.0, actions=[nav2_controller_node]))
     ld.add_action(TimerAction(period=10.0, actions=[nav2_planner_node]))
-    ld.add_action(TimerAction(period=10.2, actions=[nav2_behavior_server_node]))
-    ld.add_action(TimerAction(period=10.5, actions=[nav2_bt_navigator_node]))
-    ld.add_action(TimerAction(period=11.0, actions=[velocity_smoother_node]))
-    ld.add_action(TimerAction(period=11.2, actions=[collision_monitor_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[nav2_behavior_server_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[nav2_bt_navigator_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[velocity_smoother_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[collision_monitor_node]))
+    
+    # Start lifecycle manager after all nodes are launched
+    ld.add_action(TimerAction(period=12.0, actions=[nav2_lifecycle_manager]))
 
-    # Add Nav2 activation commands
-    ld.add_action(TimerAction(period=12.0, actions=[
-        Node(
-            package="nav2_lifecycle_manager",
-            executable="lifecycle_manager",
-            name="nav2_activation",
-            output="screen",
-            parameters=[
-                {"use_sim_time": use_sim_time},
-                {"node_names": ["controller_server", "planner_server", "behavior_server", "bt_navigator", "velocity_smoother"]}
-            ],
-            arguments=["activate"]
-        )
-    ]))
-
-    # Safety and exploration (after Nav2 is ready)
-    ld.add_action(TimerAction(period=13.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=12.0, actions=[autonomous_mapper_node]))
+    # Safety and exploration (after Nav2 lifecycle is ready)
+    ld.add_action(TimerAction(period=15.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=18.0, actions=[autonomous_mapper_node]))
 
     # Utilities
-    ld.add_action(TimerAction(period=8.0, actions=[map_saver_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[map_saver_node]))
     ld.add_action(TimerAction(period=2.0, actions=[foxglove_bridge_node]))
 
     return ld

@@ -1,0 +1,17 @@
+[4.993s] Invoking command in '/home/ubuntu/ros2-rover/build/tractor_vision': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data
+[5.771s] running develop
+[6.107s] running egg_info
+[6.143s] writing tractor_vision.egg-info/PKG-INFO
+[6.144s] writing dependency_links to tractor_vision.egg-info/dependency_links.txt
+[6.144s] writing entry points to tractor_vision.egg-info/entry_points.txt
+[6.145s] writing requirements to tractor_vision.egg-info/requires.txt
+[6.145s] writing top-level names to tractor_vision.egg-info/top_level.txt
+[6.213s] reading manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[6.214s] writing manifest file 'tractor_vision.egg-info/SOURCES.txt'
+[6.252s] running build_ext
+[6.252s] Creating /home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages/tractor-vision.egg-link (link to .)
+[6.253s] Installing obstacle_detector script to /home/ubuntu/ros2-rover/install/tractor_vision/lib/tractor_vision
+[6.254s] 
+[6.254s] Installed /home/ubuntu/ros2-rover/build/tractor_vision
+[6.254s] running symlink_data
+[6.397s] Invoked command in '/home/ubuntu/ros2-rover/build/tractor_vision' returned '0': PYTHONPATH=/home/ubuntu/ros2-rover/build/tractor_vision/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ubuntu/ros2-rover/install/tractor_vision/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/ubuntu/ros2-rover/build/tractor_vision/build --no-deps symlink_data
