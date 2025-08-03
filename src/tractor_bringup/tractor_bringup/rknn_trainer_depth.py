@@ -184,7 +184,7 @@ class RKNNTrainerDepth:
         batch = [self.experience_buffer[i] for i in indices]
         
         # Prepare batch data
-        depth_batch = torch.FloatTensor([exp['depth_image'] for exp in batch]).to(self.device)
+        depth_batch = torch.FloatTensor([exp['depth_image'] for exp in batch]).unsqueeze(1).to(self.device)
         sensor_batch = torch.FloatTensor([
             np.concatenate([exp['imu'], exp['proprioceptive']]) 
             for exp in batch
@@ -242,7 +242,7 @@ class RKNNTrainerDepth:
         self.model.eval()
         with torch.no_grad():
             # Prepare inputs
-            depth_tensor = torch.FloatTensor(depth_image).unsqueeze(0).to(self.device)
+            depth_tensor = torch.FloatTensor(depth_image).unsqueeze(0).unsqueeze(0).to(self.device)
             sensor_tensor = torch.FloatTensor(
                 np.concatenate([imu_data, proprioceptive])
             ).unsqueeze(0).to(self.device)

@@ -318,10 +318,8 @@ class NPUExplorationDepthNode(Node):
             return np.array([0.0, 0.0]), 0.0
             
         try:
-            # Prepare depth image input (1 x H x W)
+            # Prepare depth image input (H x W)
             depth_input = self.latest_depth_image.astype(np.float32)
-            if len(depth_input.shape) == 2:
-                depth_input = np.expand_dims(depth_input, axis=0)  # Add channel dimension
             
             # Prepare proprioceptive input
             proprioceptive = np.array([
