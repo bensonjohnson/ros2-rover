@@ -407,8 +407,8 @@ class RKNNTrainerDepth:
             # Convert ONNX to RKNN
             rknn = RKNN(verbose=False)
             rknn.config(
-                mean_values=[[0], [0]],  # No normalization for depth images
-                std_values=[[1], [1]],
+                mean_values=[[0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],  # Depth image (1 channel), Sensor data (10 channels)
+                std_values=[[1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],   # Corresponding std values
                 target_platform='rk3588'
             )
             

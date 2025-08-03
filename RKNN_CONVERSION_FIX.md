@@ -107,6 +107,32 @@ After this fix, the system should:
 
 - `src/tractor_bringup/tractor_bringup/rknn_trainer_depth.py`: Updated `DepthImageExplorationNet` architecture
 
+## Additional Fix Applied
+
+After testing, a second RKNN configuration issue was discovered:
+
+```
+E load_onnx: The len of mean_values ([0]) for input 1 is wrong, expect 10!
+```
+
+This was fixed by updating the RKNN configuration to properly specify normalization values for both inputs:
+
+```python
+# Before (incorrect)
+rknn.config(
+    mean_values=[[0], [0]],  # Wrong: only 1 value for 10-channel sensor input
+    std_values=[[1], [1]],
+    target_platform='rk3588'
+)
+
+# After (correct)
+rknn.config(
+    mean_values=[[0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],  # Depth (1 channel), Sensor (10 channels)
+    std_values=[[1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],   # Corresponding std values
+    target_platform='rk3588'
+)
+```
+
 ## Next Steps
 
 1. **Test on Target Hardware**: Run the NPU exploration system on the actual robot
