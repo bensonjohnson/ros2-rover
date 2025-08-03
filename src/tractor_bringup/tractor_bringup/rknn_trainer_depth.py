@@ -159,7 +159,8 @@ class RKNNTrainerDepth:
                         progress: float,
                         exploration_bonus: float,
                         position: Optional[np.ndarray] = None,
-                        depth_data: Optional[np.ndarray] = None) -> float:
+                        depth_data: Optional[np.ndarray] = None,
+                        wheel_velocities: Optional[Tuple[float, float]] = None) -> float:
         """Calculate reward for reinforcement learning"""
         
         # Use improved reward system if available
@@ -181,7 +182,8 @@ class RKNNTrainerDepth:
                 collision=collision,
                 near_collision=near_collision,
                 progress=progress,
-                depth_data=depth_data
+                depth_data=depth_data,
+                wheel_velocities=wheel_velocities
             )
             
             # Log reward breakdown occasionally for debugging

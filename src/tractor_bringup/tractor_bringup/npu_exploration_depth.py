@@ -7,7 +7,7 @@ Integrates with existing Hiwonder motor controller for odometry
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import Image, Imu, JointState
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Float32
@@ -54,6 +54,7 @@ class NPUExplorationDepthNode(Node):
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
         self.position = np.array([0.0, 0.0])  # [x, y] from odometry
         self.orientation = 0.0  # yaw from odometry
+        self.wheel_velocities = (0.0, 0.0)  # [left, right] wheel velocities from encoders
         self.start_time = time.time()
         self.step_count = 0
         self.last_inference_time = 0.0
@@ -104,6 +105,12 @@ class NPUExplorationDepthNode(Node):
         self.battery_sub = self.create_subscription(
             Float32, '/battery_percentage',
             self.battery_callback, 10
+        )
+        
+        # Joint state subscription for wheel velocities
+        self.joint_sub = self.create_subscription(
+            JointState, 'joint_states',
+            self.joint_state_callback, 10
         )
         
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -190,6 +197,25 @@ class NPUExplorationDepthNode(Node):
         if self.current_battery_percentage <= self.min_battery_percentage and not self.low_battery_shutdown:
             self.get_logger().warn(f"Low battery detected: {self.current_battery_percentage:.1f}% <= {self.min_battery_percentage}% - Initiating safe shutdown")
             self.low_battery_shutdown = True
+    
+    def joint_state_callback(self, msg):
+        """Extract wheel velocities from joint states"""
+        try:
+            # Find left and right wheel velocity indices
+            if 'left_viz_wheel_joint' in msg.name and 'right_viz_wheel_joint' in msg.name:
+                left_idx = msg.name.index('left_viz_wheel_joint')
+                right_idx = msg.name.index('right_viz_wheel_joint')
+                
+                if len(msg.velocity) > max(left_idx, right_idx):
+                    left_vel = msg.velocity[left_idx]
+                    right_vel = msg.velocity[right_idx]
+                    self.wheel_velocities = (left_vel, right_vel)
+                    
+                    # Log wheel velocities for debugging differential drive issues
+                    if abs(left_vel) > 0.01 or abs(right_vel) > 0.01:
+                        self.get_logger().debug(f"Wheel velocities: L={left_vel:.2f}, R={right_vel:.2f}")
+        except Exception as e:
+            self.get_logger().warn(f"Joint state processing failed: {e}")
         
     def preprocess_depth_image(self, depth_msg):
         """Convert ROS Image to numpy array for processing"""
@@ -389,7 +415,8 @@ class NPUExplorationDepthNode(Node):
                 progress=progress,
                 exploration_bonus=exploration_bonus,
                 position=self.position,
-                depth_data=self.latest_depth_image
+                depth_data=self.latest_depth_image,
+                wheel_velocities=self.wheel_velocities
             )
             
             # Add experience to buffer
