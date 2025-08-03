@@ -33,7 +33,7 @@ class DepthImageExplorationNet(nn.Module):
         
         # Depth image branch (CNN)
         self.depth_conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 320x240 -> 160x120
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 424x240 -> 212x120
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 160x120 -> 80x60
             nn.ReLU(),
@@ -326,7 +326,7 @@ class RKNNTrainerDepth:
             os.makedirs(self.model_dir, exist_ok=True)
             
             # Export to ONNX first
-            dummy_depth = torch.randn(1, 1, 240, 320).to(self.device)  # 240x320 depth image
+            dummy_depth = torch.randn(1, 1, 240, 424).to(self.device)  # 240x424 depth image
             dummy_sensor = torch.randn(1, 10).to(self.device)
             
             onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")

@@ -199,7 +199,7 @@ class NPUExplorationDepthNode(Node):
             
             if cv_depth is None or cv_depth.size == 0:
                 # Return safe fallback if no valid depth data
-                return np.zeros((240, 320), dtype=np.float32)
+                return np.zeros((240, 424), dtype=np.float32)
                 
             # Convert to meters if needed (assuming depth is in millimeters)
             if cv_depth.dtype == np.uint16:
@@ -208,7 +208,7 @@ class NPUExplorationDepthNode(Node):
                 depth_meters = cv_depth.astype(np.float32)
                 
             # Resize to standard size for NPU processing
-            depth_resized = cv2.resize(depth_meters, (320, 240))  # Width x Height
+            depth_resized = cv2.resize(depth_meters, (424, 240))  # Width x Height
             
             # Filter out invalid depth values
             depth_resized = np.clip(depth_resized, 0.0, 10.0)  # Clip to 0-10 meters
@@ -218,7 +218,7 @@ class NPUExplorationDepthNode(Node):
         except Exception as e:
             self.get_logger().warn(f"Depth image processing failed: {e}")
             # Return safe fallback
-            return np.zeros((240, 320), dtype=np.float32)
+            return np.zeros((240, 424), dtype=np.float32)
             
     def control_loop(self):
         """Main control loop - runs at 10Hz"""
