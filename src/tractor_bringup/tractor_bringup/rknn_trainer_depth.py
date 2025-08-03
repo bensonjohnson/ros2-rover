@@ -21,6 +21,13 @@ try:
 except ImportError:
     RKNN_AVAILABLE = False
 
+try:
+    from .improved_reward_system import ImprovedRewardCalculator
+    IMPROVED_REWARDS = True
+except ImportError:
+    IMPROVED_REWARDS = False
+    print("Improved reward system not available - using basic rewards")
+
 class DepthImageExplorationNet(nn.Module):
     """
     Neural network for depth image-based rover exploration
@@ -112,6 +119,14 @@ class RKNNTrainerDepth:
         self.reward_history = deque(maxlen=1000)
         self.action_history = deque(maxlen=100)
         
+        # Initialize improved reward calculator if available
+        if IMPROVED_REWARDS:
+            self.reward_calculator = ImprovedRewardCalculator()
+            print("Using improved reward system")
+        else:
+            self.reward_calculator = None
+            print("Using basic reward system")
+        
         # Load existing model if available
         self.load_latest_model()
         
@@ -142,9 +157,40 @@ class RKNNTrainerDepth:
                         action: np.ndarray,
                         collision: bool,
                         progress: float,
-                        exploration_bonus: float) -> float:
+                        exploration_bonus: float,
+                        position: Optional[np.ndarray] = None,
+                        depth_data: Optional[np.ndarray] = None) -> float:
         """Calculate reward for reinforcement learning"""
         
+        # Use improved reward system if available
+        if self.reward_calculator is not None and position is not None:
+            # Use comprehensive reward calculation
+            near_collision = False  # You can enhance this based on depth data
+            if depth_data is not None:
+                try:
+                    valid_depths = depth_data[(depth_data > 0.1) & (depth_data < 5.0)]
+                    if len(valid_depths) > 0:
+                        min_distance = np.min(valid_depths)
+                        near_collision = 0.3 < min_distance < 0.5  # Close but not colliding
+                except:
+                    pass
+            
+            total_reward, reward_breakdown = self.reward_calculator.calculate_comprehensive_reward(
+                action=action,
+                position=position,
+                collision=collision,
+                near_collision=near_collision,
+                progress=progress,
+                depth_data=depth_data
+            )
+            
+            # Log reward breakdown occasionally for debugging
+            if self.training_step % 100 == 0:
+                print(f"Reward breakdown: {reward_breakdown}")
+                
+            return total_reward
+        
+        # Fallback to basic reward system
         reward = 0.0
         
         # Progress reward (forward movement is good)

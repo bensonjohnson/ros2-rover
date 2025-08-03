@@ -387,7 +387,9 @@ class NPUExplorationDepthNode(Node):
                 action=self.last_action,
                 collision=self.collision_detected,
                 progress=progress,
-                exploration_bonus=exploration_bonus
+                exploration_bonus=exploration_bonus,
+                position=self.position,
+                depth_data=self.latest_depth_image
             )
             
             # Add experience to buffer
