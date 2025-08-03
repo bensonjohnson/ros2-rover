@@ -29,6 +29,10 @@ class ImprovedRewardCalculator:
         self.step_count = 0
         self.last_movement_time = time.time()
         
+        # Differential drive tracking
+        self.wheel_velocity_history = deque(maxlen=20)  # Track L/R wheel velocities
+        self.track_efficiency_history = deque(maxlen=50)  # Track turning efficiency
+        
         # Reward scaling factors
         self.reward_config = {
             # Movement rewards
@@ -65,7 +69,12 @@ class ImprovedRewardCalculator:
             
             # Time-based rewards
             'continuous_movement_bonus': 1.5,
-            'stagnation_penalty': -3.0
+            'stagnation_penalty': -3.0,
+            
+            # Differential drive tracking
+            'track_efficiency_bonus': 4.0,      # Reward for efficient differential drive
+            'wheel_slip_penalty': -2.0,         # Penalty for wheel slippage
+            'coordinated_turning_bonus': 3.0,   # Reward for proper tank steering
         }
     
     def calculate_comprehensive_reward(self, 
@@ -74,7 +83,8 @@ class ImprovedRewardCalculator:
                                      collision: bool,
                                      near_collision: bool,
                                      progress: float,
-                                     depth_data: Optional[np.ndarray] = None) -> Tuple[float, Dict[str, float]]:
+                                     depth_data: Optional[np.ndarray] = None,
+                                     wheel_velocities: Optional[Tuple[float, float]] = None) -> Tuple[float, Dict[str, float]]:
         """
         Calculate a comprehensive reward that encourages exploration and movement
         
