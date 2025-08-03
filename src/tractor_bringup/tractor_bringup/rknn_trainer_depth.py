@@ -42,18 +42,20 @@ class DepthImageExplorationNet(nn.Module):
         self.depth_conv = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 424x240 -> 212x120
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 160x120 -> 80x60
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 212x120 -> 106x60
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # 80x60 -> 40x30
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # 106x60 -> 53x30
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # 40x30 -> 20x15
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # 53x30 -> 27x15
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((7, 7)),  # 20x15 -> 7x7
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),  # 27x15 -> 27x15
+            nn.ReLU(),
+            nn.AvgPool2d(kernel_size=(3, 3), stride=(3, 3)),  # 27x15 -> 9x5
             nn.Flatten()
         )
         
         # Calculate the size after conv layers
-        self.depth_fc = nn.Linear(256 * 7 * 7, 512)
+        self.depth_fc = nn.Linear(256 * 9 * 5, 512)
         
         # IMU + Proprioceptive branch
         self.sensor_fc = nn.Sequential(
