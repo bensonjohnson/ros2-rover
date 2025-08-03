@@ -247,12 +247,22 @@ class RKNNTrainerDepth:
                 np.concatenate([imu_data, proprioceptive])
             ).unsqueeze(0).to(self.device)
             
+            # Log input shapes for debugging
+            print(f"Depth tensor shape: {depth_tensor.shape}")
+            print(f"Sensor tensor shape: {sensor_tensor.shape}")
+            
             # Forward pass
             output = self.model(depth_tensor, sensor_tensor)
+            
+            # Log output for debugging
+            print(f"Model output: {output}")
             
             # Extract action and confidence
             action = output[0, :2].cpu().numpy()
             confidence = torch.sigmoid(output[0, 2]).cpu().numpy()
+            
+            # Log action and confidence for debugging
+            print(f"Action: {action}, Confidence: {confidence}")
             
         self.model.train()
         return action, float(confidence)
@@ -313,6 +323,7 @@ class RKNNTrainerDepth:
                 print("No saved model found, starting with fresh model")
         except Exception as e:
             print(f"Failed to load model: {e}")
+            print("Starting with fresh model")
                 
     def convert_to_rknn(self):
         """Convert PyTorch model to RKNN format for NPU inference"""

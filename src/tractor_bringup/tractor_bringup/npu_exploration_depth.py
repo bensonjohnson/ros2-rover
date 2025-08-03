@@ -198,20 +198,31 @@ class NPUExplorationDepthNode(Node):
             cv_depth = self.bridge.imgmsg_to_cv2(depth_msg, "passthrough")
             
             if cv_depth is None or cv_depth.size == 0:
+                self.get_logger().warn("Empty or None depth image received")
                 # Return safe fallback if no valid depth data
                 return np.zeros((240, 424), dtype=np.float32)
                 
+            # Log some information about the depth image
+            self.get_logger().debug(f"Raw depth image shape: {cv_depth.shape}, dtype: {cv_depth.dtype}")
+            
             # Convert to meters if needed (assuming depth is in millimeters)
             if cv_depth.dtype == np.uint16:
                 depth_meters = cv_depth.astype(np.float32) / 1000.0
             else:
                 depth_meters = cv_depth.astype(np.float32)
                 
+            # Log some statistics about the depth values
+            valid_depths = depth_meters[(depth_meters > 0.01) & (depth_meters < 10.0)]
+            if len(valid_depths) > 0:
+                self.get_logger().debug(f"Depth range: {np.min(valid_depths):.2f}m - {np.max(valid_depths):.2f}m")
+                
             # Resize to standard size for NPU processing
             depth_resized = cv2.resize(depth_meters, (424, 240))  # Width x Height
             
             # Filter out invalid depth values
             depth_resized = np.clip(depth_resized, 0.0, 10.0)  # Clip to 0-10 meters
+            
+            self.get_logger().debug(f"Processed depth image shape: {depth_resized.shape}")
             
             return depth_resized
             
@@ -297,7 +308,9 @@ class NPUExplorationDepthNode(Node):
             
             if len(valid_depths) > 0:
                 min_distance = np.min(valid_depths)
-                return min_distance < 0.1  # 10cm emergency zone
+                # Log the minimum distance for debugging
+                self.get_logger().debug(f"Min distance to obstacle: {min_distance:.2f}m")
+                return min_distance < 0.3  # 30cm emergency zone (increased from 10cm)
                 
         except Exception as e:
             self.get_logger().warn(f"Emergency collision check failed: {e}")
@@ -333,6 +346,9 @@ class NPUExplorationDepthNode(Node):
             action, confidence = self.trainer.inference(
                 depth_input, self.latest_imu_data, proprioceptive
             )
+            
+            # Log the action and confidence for debugging
+            self.get_logger().debug(f"NPU Action: linear={action[0]:.2f}, angular={action[1]:.2f}, confidence={confidence:.2f}")
             
             return action, confidence
             
