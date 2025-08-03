@@ -106,24 +106,48 @@ def calculate_exploration_bonus(self):
 - Unified reward calculation (removed duplicate logic)
 - Better integration with improved reward system
 
+## Latest Improvements (Anti-Spinning Update)
+
+### **New Straight-Line Movement Rewards**
+- **Straight-Line Bonus:** +8.0 points for forward movement with minimal turning
+- **Forward Progress Multiplier:** +25.0 × speed for sustained straight-line movement
+- **Angular Penalty Threshold:** 0.3 rad/s (penalize excessive turning)
+- **Pure Spinning Penalty:** -8.0 points for spinning without forward movement
+
+### **Wall-Following and Frontier Exploration**
+- **Wall Following Bonus:** +5.0 for maintaining optimal distance (0.8m) from walls
+- **Frontier Approach Bonus:** +10.0 for moving toward open spaces
+- **Exploration Efficiency Bonus:** +6.0 for sustained forward movement patterns
+- **Smart Depth Analysis:** Left/right/center ROI analysis for intelligent navigation
+
+### **Enhanced Movement Pattern Detection**
+- **Straight-Line Detection:** Analyzes recent positions to detect linear movement
+- **Movement Vector Alignment:** Rewards consistent directional movement
+- **Anti-Circling Logic:** Penalties for repetitive turning patterns
+
 ## Expected Improvements
 
-### 1. **Consistent Movement**
-- Robot will receive positive feedback for any forward movement
-- Balanced rewards encourage exploration without excessive risk-taking
-- No more "freezing" due to fear of penalties
+### 1. **Elimination of Spinning Behavior**
+- Strong penalties for pure spinning (high angular, low linear velocity)
+- Rewards heavily favor straight-line movement over turning
+- Movement pattern analysis prevents repetitive circular motions
 
-### 2. **Better Exploration**
-- Robot tracks visited areas and seeks new regions
-- Curiosity-driven behavior approaches interesting objects safely
-- Exploration streaks encourage sustained movement
+### 2. **Clean Exploration Patterns**
+- Robot will move in straight lines when exploring open areas
+- Wall-following behavior for systematic area coverage
+- Frontier-seeking behavior drives toward unexplored regions
 
-### 3. **Smoother Control**
-- Rewards for smooth transitions between actions
-- Penalties for jerky movements promote stable control
-- Time-based rewards encourage consistent activity
+### 3. **Efficient Navigation**
+- Optimal wall distance maintenance (0.8m ± 0.3m tolerance)
+- Smart turning only when encountering obstacles
+- Sustained forward movement in open spaces
 
-### 4. **Debugging Capability**
+### 4. **Better Area Coverage**
+- Grid-based exploration tracking prevents revisiting areas
+- Frontier detection encourages boundary exploration
+- Efficiency bonuses for systematic coverage patterns
+
+### 5. **Debugging Capability**
 - Detailed reward breakdowns every 100 training steps
 - Statistics on exploration progress and reward trends
 - Clear separation of reward components for analysis

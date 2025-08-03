@@ -37,9 +37,22 @@ class ImprovedRewardCalculator:
             'optimal_speed_range': (0.08, 0.25),  # Sweet spot for speed
             'speed_bonus_multiplier': 3.0,
             
+            # Straight-line movement rewards
+            'straight_line_bonus': 8.0,  # Strong reward for going straight
+            'forward_progress_multiplier': 25.0,  # Heavy emphasis on forward movement
+            'angular_penalty_threshold': 0.3,  # rad/s threshold for penalizing turning
+            'excessive_turning_penalty': -4.0,  # Penalty for too much turning
+            
+            # Wall following and frontier exploration
+            'wall_following_bonus': 5.0,  # Reward for maintaining distance from walls
+            'frontier_approach_bonus': 10.0,  # Reward for heading toward unexplored areas
+            'optimal_wall_distance': 0.8,  # Ideal distance from walls (meters)
+            'wall_distance_tolerance': 0.3,  # Tolerance around optimal distance
+            
             # Exploration rewards
-            'new_area_bonus': 8.0,  # Reward for visiting new areas
-            'exploration_streak_bonus': 2.0,  # Bonus for continuous exploration
+            'new_area_bonus': 12.0,  # Increased reward for visiting new areas
+            'exploration_streak_bonus': 3.0,  # Bonus for continuous exploration
+            'exploration_efficiency_bonus': 6.0,  # Reward for efficient exploration patterns
             
             # Safety penalties
             'collision_penalty': -25.0,  # Reduced from -50.0
@@ -47,8 +60,8 @@ class ImprovedRewardCalculator:
             'stationary_penalty': -2.0,  # Penalty for not moving
             
             # Control smoothness
-            'smooth_control_bonus': 1.0,
-            'jerky_control_penalty': -1.0,
+            'smooth_control_bonus': 2.0,  # Increased to encourage smooth movement
+            'jerky_control_penalty': -3.0,  # Increased penalty for jerky movement
             
             # Time-based rewards
             'continuous_movement_bonus': 1.5,
@@ -97,7 +110,18 @@ class ImprovedRewardCalculator:
         reward_breakdown['time_based'] = time_reward
         total_reward += time_reward
         
-        # 6. Curiosity/Obstacle Interaction (if depth data available)
+        # 6. Straight-line and directional movement rewards
+        straight_line_reward = self._calculate_straight_line_reward(action, position)
+        reward_breakdown['straight_line'] = straight_line_reward
+        total_reward += straight_line_reward
+        
+        # 7. Wall following and frontier exploration (if depth data available)
+        if depth_data is not None:
+            wall_frontier_reward = self._calculate_wall_frontier_reward(depth_data, action, position)
+            reward_breakdown['wall_frontier'] = wall_frontier_reward
+            total_reward += wall_frontier_reward
+        
+        # 8. Curiosity/Obstacle Interaction (if depth data available)
         if depth_data is not None:
             curiosity_reward = self._calculate_curiosity_reward(depth_data, action)
             reward_breakdown['curiosity'] = curiosity_reward
@@ -227,6 +251,128 @@ class ImprovedRewardCalculator:
             pass  # Don't let depth processing errors affect rewards
         
         return reward
+    
+    def _calculate_straight_line_reward(self, action: np.ndarray, position: np.ndarray) -> float:
+        """Reward straight-line movement and penalize excessive turning"""
+        reward = 0.0
+        
+        linear_speed = abs(action[0])
+        angular_speed = abs(action[1])
+        
+        # Strong reward for forward movement with minimal turning
+        if linear_speed > 0.05:  # Moving forward
+            if angular_speed < self.reward_config['angular_penalty_threshold']:
+                # Reward straight-line movement
+                straight_bonus = self.reward_config['straight_line_bonus'] * linear_speed
+                reward += straight_bonus
+                
+                # Extra bonus for sustained forward movement
+                if len(self.position_history) >= 3:
+                    recent_positions = list(self.position_history)[-3:]
+                    if self._is_moving_in_straight_line(recent_positions, position):
+                        reward += self.reward_config['forward_progress_multiplier'] * linear_speed
+            else:
+                # Penalty for excessive turning while moving forward
+                if angular_speed > 0.5:  # Spinning while moving
+                    reward += self.reward_config['excessive_turning_penalty']
+        
+        # Penalize pure spinning (high angular, low linear)
+        if angular_speed > 0.4 and linear_speed < 0.03:
+            reward += self.reward_config['excessive_turning_penalty'] * 2.0  # Double penalty for pure spinning
+        
+        return reward
+    
+    def _calculate_wall_frontier_reward(self, depth_data: np.ndarray, action: np.ndarray, position: np.ndarray) -> float:
+        """Reward wall-following behavior and frontier exploration"""
+        reward = 0.0
+        
+        try:
+            if depth_data.size == 0:
+                return 0.0
+                
+            height, width = depth_data.shape
+            linear_speed = abs(action[0])
+            
+            # Analyze depth data for wall following
+            # Left side depths (for right wall following)
+            left_roi = depth_data[:, :width//3]
+            # Right side depths (for left wall following)  
+            right_roi = depth_data[:, 2*width//3:]
+            # Front center (for obstacle detection)
+            center_roi = depth_data[height//3:2*height//3, width//3:2*width//3]
+            
+            # Calculate distances to walls
+            left_valid = left_roi[(left_roi > 0.1) & (left_roi < 3.0)]
+            right_valid = right_roi[(right_roi > 0.1) & (right_roi < 3.0)]
+            center_valid = center_roi[(center_roi > 0.1) & (center_roi < 3.0)]
+            
+            # Wall following rewards
+            if len(left_valid) > 0 or len(right_valid) > 0:
+                # Find closest wall
+                left_dist = np.min(left_valid) if len(left_valid) > 0 else float('inf')
+                right_dist = np.min(right_valid) if len(right_valid) > 0 else float('inf')
+                wall_dist = min(left_dist, right_dist)
+                
+                # Reward maintaining optimal distance from walls while moving forward
+                if linear_speed > 0.05:  # Moving forward
+                    optimal_dist = self.reward_config['optimal_wall_distance']
+                    tolerance = self.reward_config['wall_distance_tolerance']
+                    
+                    if abs(wall_dist - optimal_dist) < tolerance:
+                        # Perfect wall following distance
+                        reward += self.reward_config['wall_following_bonus'] * linear_speed
+                    elif wall_dist > optimal_dist + tolerance:
+                        # Too far from wall, small bonus for moving toward unexplored areas
+                        reward += self.reward_config['frontier_approach_bonus'] * 0.5 * linear_speed
+            
+            # Frontier exploration reward
+            if len(center_valid) > 0:
+                front_distance = np.min(center_valid)
+                
+                # Reward approaching frontiers (open spaces) while maintaining forward movement
+                if front_distance > 2.0 and linear_speed > 0.08:  # Open space ahead
+                    reward += self.reward_config['frontier_approach_bonus'] * linear_speed
+                    
+                    # Extra bonus for sustained forward movement into open areas
+                    if len(self.action_history) >= 3:
+                        recent_actions = list(self.action_history)[-3:]
+                        if all(abs(a[0]) > 0.05 and abs(a[1]) < 0.2 for a in recent_actions):
+                            reward += self.reward_config['exploration_efficiency_bonus']
+            
+        except Exception as e:
+            # Don't let depth processing errors crash the reward calculation
+            pass
+        
+        return reward
+    
+    def _is_moving_in_straight_line(self, recent_positions: List[np.ndarray], current_position: np.ndarray) -> bool:
+        """Check if robot is moving in a relatively straight line"""
+        if len(recent_positions) < 2:
+            return False
+            
+        try:
+            # Calculate movement vectors
+            positions = recent_positions + [current_position]
+            vectors = []
+            for i in range(1, len(positions)):
+                vec = positions[i] - positions[i-1]
+                if np.linalg.norm(vec) > 0.02:  # Ignore very small movements
+                    vectors.append(vec / np.linalg.norm(vec))  # Normalize
+            
+            if len(vectors) < 2:
+                return False
+            
+            # Check if vectors are roughly aligned (dot product close to 1)
+            alignments = []
+            for i in range(1, len(vectors)):
+                dot_product = np.dot(vectors[i-1], vectors[i])
+                alignments.append(dot_product)
+            
+            # Consider it straight line if most movements are aligned
+            return np.mean(alignments) > 0.7  # Cosine of ~45 degrees
+            
+        except Exception:
+            return False
     
     def _update_tracking(self, action: np.ndarray, position: np.ndarray):
         """Update internal tracking state"""
