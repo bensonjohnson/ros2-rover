@@ -28,6 +28,8 @@ setup(
             "autonomous_mapping.py = tractor_bringup.autonomous_mapping:main",
             "safety_monitor.py = tractor_bringup.safety_monitor:main",
             "frontier_explorer.py = tractor_bringup.frontier_explorer:main",
+            "npu_exploration.py = tractor_bringup.npu_exploration:main",
+            "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
         ],
     },
 )

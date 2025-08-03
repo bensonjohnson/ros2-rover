@@ -47,9 +47,20 @@ else
 fi
 
 # Ensure proper USB power management for RealSense
+echo "Configuring USB power management for RealSense..."
 if [ -d "/sys/bus/usb/devices/8-1" ]; then
     echo "on" | sudo tee /sys/bus/usb/devices/8-1/power/control > /dev/null 2>&1
+    echo "✓ USB power management configured"
+else
+    echo "⚠ USB device path not found, skipping power management"
 fi
+
+# Additional USB bandwidth optimizations
+echo "Applying USB bandwidth optimizations..."
+# Reduce USB autosuspend timeout
+echo 2 | sudo tee /sys/module/usbcore/parameters/autosuspend > /dev/null 2>&1
+# Disable USB3 if causing issues (uncomment if needed)
+# echo 0 | sudo tee /sys/module/xhci_hcd/parameters/quirks > /dev/null 2>&1
 
 # Configuration parameters
 MAX_SPEED=${1:-0.2}          # Maximum exploration speed (m/s)

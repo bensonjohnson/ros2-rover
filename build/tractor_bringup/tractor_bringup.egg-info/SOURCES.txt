@@ -11,10 +11,13 @@ setup.py
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
 config/pointcloud_to_laserscan.yaml
+config/realsense_color_only.yaml
 config/realsense_config.yaml
+config/realsense_low_bandwidth.yaml
 config/slam_toolbox_params.yaml
 launch/autonomous_mapping_minimal.launch.py
 launch/autonomous_slam_mapping.launch.py
+launch/npu_exploration.launch.py
 launch/robot_description.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
@@ -25,5 +28,7 @@ test/test_pep257.py
 tractor_bringup/__init__.py
 tractor_bringup/autonomous_mapping.py
 tractor_bringup/frontier_explorer.py
+tractor_bringup/npu_exploration.py
 tractor_bringup/safety_monitor.py
+tractor_bringup/simple_safety_monitor.py
 urdf/tractor.urdf.xacro

@@ -69,7 +69,7 @@ def generate_launch_description():
         ]
     )
 
-    # 3. RealSense D435i Camera (RGB-D + IMU)
+    # 3. RealSense D435i Camera (RGB-D) - Using working config approach
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
@@ -78,14 +78,9 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "camera_name": "camera",
             "camera_namespace": "camera",
+            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_config.yaml"),
             "enable_pointcloud": "true",
-            "enable_sync": "true",
             "align_depth": "true",
-            "enable_gyro": "true",  # Enable IMU gyroscope
-            "enable_accel": "true",  # Enable IMU accelerometer
-            "unite_imu_method": "2",  # Combine gyro + accel into single IMU topic
-            "pointcloud_texture_stream": "RS2_STREAM_COLOR",
-            "pointcloud_texture_index": "0",
         }.items(),
     )
 
