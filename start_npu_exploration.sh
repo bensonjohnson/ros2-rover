@@ -8,7 +8,7 @@ echo "ROS2 Tractor - NPU Point Cloud Exploration"
 echo "=================================================="
 echo "This minimal system uses:"
 echo "  ✓ Hiwonder motor control"
-echo "  ✓ RealSense D435i (point clouds only)"
+echo "  ✓ RealSense D435i (point clouds only, IMU disabled, USB optimized)"
 echo "  ✓ NPU-based exploration AI"
 echo "  ✓ Direct safety monitoring"
 echo "  ✓ No SLAM/Nav2 complexity"
@@ -23,12 +23,18 @@ fi
 
 # Build only what we need
 echo "Building minimal workspace..."
-colcon build --packages-select tractor_bringup tractor_control --cmake-args -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "❌ Build failed! Please check for compilation errors."
-    exit 1
+# Check if packages need to be built
+if [ ! -d "build/tractor_bringup" ] || [ ! -d "build/tractor_control" ] || [ ! -d "install/tractor_bringup" ] || [ ! -d "install/tractor_control" ]; then
+    echo "Building packages..."
+    colcon build --packages-select tractor_bringup tractor_control --cmake-args -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo "❌ Build failed! Please check for compilation errors."
+        exit 1
+    fi
+    echo "✓ Workspace built successfully"
+else
+    echo "✓ Packages already built"
 fi
-echo "✓ Workspace built successfully"
 
 # Source environment
 echo "Sourcing ROS2 environment..."
@@ -38,20 +44,43 @@ echo "✓ ROS2 environment sourced"
 
 # USB power management for RealSense
 echo "Configuring USB power management..."
-if [ -d "/sys/bus/usb/devices/8-1" ]; then
-    echo "on" | sudo tee /sys/bus/usb/devices/8-1/power/control > /dev/null 2>&1
-    echo "✓ USB power management configured"
+USB_DEVICE_PATH=""
+# Try common RealSense device paths
+for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+    if [ -d "$path" ]; then
+        USB_DEVICE_PATH="$path"
+        break
+    fi
+done
+
+if [ -n "$USB_DEVICE_PATH" ]; then
+    # Disable autosuspend for the device
+    echo "on" | sudo tee $USB_DEVICE_PATH/power/control > /dev/null 2>&1
+    echo "-1" | sudo tee $USB_DEVICE_PATH/power/autosuspend > /dev/null 2>&1
+    echo "✓ USB power management configured for $USB_DEVICE_PATH"
 else
     echo "⚠ USB device path not found, continuing anyway"
 fi
 
 # Check RealSense
 echo "Checking RealSense D435i..."
-timeout 3s rs-enumerate-devices > /dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo "✓ RealSense D435i detected"
+if command -v rs-enumerate-devices &> /dev/null; then
+    timeout 3s rs-enumerate-devices > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "✓ RealSense D435i detected"
+        # Reset the USB device to clear any error states
+        if [ -n "$USB_DEVICE_PATH" ] && [ -w "$USB_DEVICE_PATH" ]; then
+            echo "Resetting USB device..."
+            echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+            sleep 1
+            echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+            echo "✓ USB device reset"
+        fi
+    else
+        echo "⚠ RealSense not detected - will attempt to continue"
+    fi
 else
-    echo "⚠ RealSense not detected - will attempt to continue"
+    echo "⚠ rs-enumerate-devices command not found - skipping RealSense check"
 fi
 
 # Configuration
@@ -64,6 +93,8 @@ echo "Configuration:"
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
 echo "  Safety Distance: ${SAFETY_DISTANCE} m"
+echo "  IMU Status: Disabled (to reduce USB errors)"
+echo "  USB Mode: Optimized for stability"
 echo ""
 
 # Countdown
@@ -92,10 +123,17 @@ LAUNCH_PID=$!
 shutdown_handler() {
     echo ""
     echo "🛑 Stopping NPU exploration..."
-    kill $LAUNCH_PID 2>/dev/null
-    sleep 2
+    if ps -p $LAUNCH_PID > /dev/null; then
+        kill $LAUNCH_PID 2>/dev/null
+        sleep 2
+        # Force kill if still running
+        if ps -p $LAUNCH_PID > /dev/null; then
+            kill -9 $LAUNCH_PID 2>/dev/null
+        fi
+    fi
     echo "✅ NPU exploration stopped safely"
     echo "=================================================="
+    exit 0
 }
 
 trap shutdown_handler SIGINT SIGTERM

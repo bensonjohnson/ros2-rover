@@ -15,6 +15,7 @@ setup(
         ("share/" + package_name + "/urdf", ["urdf/tractor.urdf.xacro"]),
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         (os.path.join("share", package_name, "maps"), glob("maps/*.yaml") + glob("maps/*.pgm")),
+        ("share/" + package_name + "/models", glob("models/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

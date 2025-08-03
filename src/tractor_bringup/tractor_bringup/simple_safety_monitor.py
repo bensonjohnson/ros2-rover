@@ -49,30 +49,42 @@ class SimpleSafetyMonitor(Node):
             points = self.ros_pc2_to_numpy(msg)
             
             if len(points) == 0:
+                # Clear emergency stop if no points
+                if self.emergency_stop:
+                    self.get_logger().info("Emergency stop cleared - no point cloud data")
+                    self.emergency_stop = False
                 return
                 
-            # Check for very close obstacles in front
-            forward_mask = (points[:, 0] > 0) & (points[:, 0] < self.emergency_distance * 2) & (np.abs(points[:, 1]) < 0.3)
+            # Check for very close obstacles in front (wider detection area)
+            forward_mask = (points[:, 0] > 0) & (points[:, 0] < self.emergency_distance * 3) & (np.abs(points[:, 1]) < 0.5)
             
             if np.any(forward_mask):
                 forward_points = points[forward_mask]
-                min_distance = np.min(np.linalg.norm(forward_points, axis=1))
+                distances = np.linalg.norm(forward_points, axis=1)
+                min_distance = np.min(distances)
                 
+                # Emergency stop if very close
                 if min_distance < self.emergency_distance:
                     if not self.emergency_stop:
                         self.get_logger().warn(f"EMERGENCY STOP: Obstacle at {min_distance:.2f}m")
                         self.emergency_stop = True
-                else:
+                # Clear emergency stop if obstacle moves away
+                elif min_distance > self.emergency_distance * 1.5:
                     if self.emergency_stop:
-                        self.get_logger().info("Emergency stop cleared")
+                        self.get_logger().info(f"Emergency stop cleared - closest obstacle at {min_distance:.2f}m")
                         self.emergency_stop = False
             else:
+                # Clear emergency stop if no forward obstacles detected
                 if self.emergency_stop:
                     self.get_logger().info("Emergency stop cleared - no forward obstacles")
                     self.emergency_stop = False
                     
         except Exception as e:
             self.get_logger().warn(f"Safety check failed: {e}")
+            # Clear emergency stop on error to avoid getting stuck
+            if self.emergency_stop:
+                self.get_logger().info("Emergency stop cleared due to error")
+                self.emergency_stop = False
             
     def cmd_callback(self, msg):
         """Process and potentially modify velocity commands"""
@@ -92,19 +104,40 @@ class SimpleSafetyMonitor(Node):
         
     def ros_pc2_to_numpy(self, pc_msg):
         """Convert ROS PointCloud2 to numpy array"""
-        points = []
-        point_step = pc_msg.point_step
-        
-        for i in range(0, len(pc_msg.data), point_step):
-            if i + 12 <= len(pc_msg.data):
-                try:
-                    x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
-                    if np.isfinite([x, y, z]).all():
-                        points.append([x, y, z])
-                except:
-                    continue
+        try:
+            points = []
+            point_step = pc_msg.point_step
+            height = pc_msg.height
+            width = pc_msg.width
+            
+            # Handle both organized and unorganized point clouds
+            if height > 1 and width > 1:
+                # Organized point cloud
+                for v in range(height):
+                    for u in range(width):
+                        i = (v * width + u) * point_step
+                        if i + 12 <= len(pc_msg.data):
+                            try:
+                                x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
+                                if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
+                                    points.append([x, y, z])
+                            except:
+                                continue
+            else:
+                # Unorganized point cloud
+                for i in range(0, len(pc_msg.data), point_step):
+                    if i + 12 <= len(pc_msg.data):
+                        try:
+                            x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
+                            if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
+                                points.append([x, y, z])
+                        except:
+                            continue
                     
-        return np.array(points) if points else np.zeros((0, 3))
+            return np.array(points) if points else np.zeros((0, 3))
+        except Exception as e:
+            self.get_logger().warn(f"Point cloud conversion failed: {e}")
+            return np.zeros((0, 3))
 
 def main(args=None):
     rclpy.init(args=args)

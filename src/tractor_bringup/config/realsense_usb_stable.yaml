@@ -1,0 +1,44 @@
+# RealSense configuration optimized for USB stability
+# This configuration minimizes USB bandwidth and addresses UVC compliance issues
+camera_name: "camera"
+camera_namespace: "camera"
+
+# Core features - depth only
+enable_sync: false
+enable_pointcloud: true
+pointcloud.enable: true
+align_depth.enable: false
+
+# Depth camera settings - ultra low bandwidth
+depth_module.enable: true
+depth_module.depth_profile: "320x240x6"  # Minimal resolution/framerate
+depth_module.enable_auto_exposure: true
+depth_module.emitter_enabled: 0  # Disable IR emitter
+depth_module.laser_power: 0.0    # Disable laser projector
+
+# Completely disable RGB camera
+rgb_camera.enable: false
+enable_color: false
+
+# Disable infrared streams
+enable_infra1: false
+enable_infra2: false
+
+# Disable IMU completely to avoid USB errors
+enable_gyro: false
+enable_accel: false
+
+# Filters to reduce point cloud density for NPU processing
+decimation_filter.enable: true
+decimation_filter.magnitude: 4  # Reduce point cloud density
+temporal_filter.enable: false  # Disable to reduce processing
+spatial_filter.enable: false   # Disable to reduce processing
+hole_filling_filter.enable: false  # Disable to reduce processing
+
+# Performance settings
+publish_tf: true
+tf_publish_rate: 5.0  # Reduced TF rate to minimize USB traffic
+
+# USB stability settings
+wait_for_device_timeout: 5.0
+reconnect_timeout: 5.0

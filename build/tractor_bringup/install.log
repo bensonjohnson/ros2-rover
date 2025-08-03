@@ -29,6 +29,7 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/hiwonder_motor_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/maps/yard_map.pgm
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/models
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/SOURCES.txt
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/entry_points.txt
 /home/ubuntu/ros2-rover/install/tractor_bringup/lib/python3.12/site-packages/tractor_bringup-0.0.0-py3.12.egg-info/requires.txt

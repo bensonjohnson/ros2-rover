@@ -23,6 +23,7 @@
   <depend>nav2_map_server</depend>
   <depend>urdf</depend>
   <depend>xacro</depend>
+  <depend>rknn</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

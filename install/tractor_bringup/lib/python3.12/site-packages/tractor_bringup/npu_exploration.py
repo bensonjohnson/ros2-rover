@@ -20,16 +20,21 @@ import cv2
 try:
     from rknn.api import RKNN
     RKNN_AVAILABLE = True
-except ImportError:
+    print("RKNN library successfully imported")
+except ImportError as e:
     RKNN_AVAILABLE = False
-    print("RKNN not available - using CPU fallback")
+    print(f"RKNN not available - using CPU fallback. Error: {e}")
 
 try:
     from .rknn_trainer import RKNNTrainer
     TRAINER_AVAILABLE = True
-except ImportError:
+    print("RKNN Trainer successfully imported")
+except ImportError as e:
     TRAINER_AVAILABLE = False
-    print("RKNN Trainer not available - using simple reactive navigation")
+    print(f"RKNN Trainer not available - using simple reactive navigation. Error: {e}")
+except Exception as e:
+    TRAINER_AVAILABLE = False
+    print(f"RKNN Trainer initialization failed - using simple reactive navigation. Error: {e}")
 
 class NPUExplorationNode(Node):
     def __init__(self):
@@ -201,12 +206,16 @@ class NPUExplorationNode(Node):
             
             # Downsample to max_points for efficiency
             if len(points) > self.max_points:
-                indices = np.random.choice(len(points), self.max_points, replace=False)
+                # Use uniform sampling for better distribution
+                indices = np.linspace(0, len(points) - 1, self.max_points, dtype=int)
                 points = points[indices]
-            elif len(points) < self.max_points:
+            elif len(points) < self.max_points and len(points) > 0:
                 # Pad with distant points if needed
                 padding = np.full((self.max_points - len(points), 3), [0, 0, 5.0])
-                points = np.vstack([points, padding]) if len(points) > 0 else padding
+                points = np.vstack([points, padding])
+            elif len(points) == 0:
+                # Return safe fallback if no valid points
+                return np.full((self.max_points, 3), [0, 0, 5.0])
                 
             return points
             
@@ -275,14 +284,29 @@ class NPUExplorationNode(Node):
             self.exploration_mode = "searching"
             return cmd
         
-        # Find minimum distance in front (forward cone)
-        forward_mask = (points[:, 0] > 0) & (np.abs(points[:, 1]) < 0.5)  # Forward 0.5m wide
+        # Find minimum distance in different sectors
+        # Forward sector (0.5m wide)
+        forward_mask = (points[:, 0] > 0) & (np.abs(points[:, 1]) < 0.25)
+        # Left sector
+        left_mask = (points[:, 1] > 0) & (np.abs(points[:, 0]) < 0.25)
+        # Right sector
+        right_mask = (points[:, 1] < 0) & (np.abs(points[:, 0]) < 0.25)
+        
+        min_forward_distance = 5.0
+        min_left_distance = 5.0
+        min_right_distance = 5.0
         
         if np.any(forward_mask):
             forward_points = points[forward_mask]
             min_forward_distance = np.min(np.linalg.norm(forward_points, axis=1))
-        else:
-            min_forward_distance = 5.0  # Assume clear if no points
+            
+        if np.any(left_mask):
+            left_points = points[left_mask]
+            min_left_distance = np.min(np.linalg.norm(left_points, axis=1))
+            
+        if np.any(right_mask):
+            right_points = points[right_mask]
+            min_right_distance = np.min(np.linalg.norm(right_points, axis=1))
             
         # Check movement progress
         position_change = np.linalg.norm(self.position - self.last_position)
@@ -292,17 +316,27 @@ class NPUExplorationNode(Node):
             self.stuck_counter = 0
             self.last_position = self.position.copy()
             
-        # State machine for exploration
+        # State machine for exploration with better obstacle avoidance
         if min_forward_distance < self.safety_distance or self.stuck_counter > 20:
-            # Obstacle ahead or stuck - turn
+            # Obstacle ahead or stuck - turn away from obstacles
             cmd.linear.x = 0.0
-            cmd.angular.z = 1.0 if np.random.random() > 0.5 else -1.0  # Random turn direction
-            self.exploration_mode = "turn_explore"
+            # Turn toward the direction with more space
+            if min_left_distance > min_right_distance:
+                cmd.angular.z = 1.0  # Turn left
+                self.exploration_mode = "turn_left"
+            else:
+                cmd.angular.z = -1.0  # Turn right
+                self.exploration_mode = "turn_right"
         elif min_forward_distance < self.safety_distance * 2:
-            # Slow approach
+            # Slow approach with cautious turning
             cmd.linear.x = self.max_speed * 0.3
-            cmd.angular.z = 0.0
-            self.exploration_mode = "slow_approach"
+            # Slight turn away from closer side
+            if min_left_distance < min_right_distance:
+                cmd.angular.z = -0.3  # Slight right turn
+                self.exploration_mode = "cautious_right"
+            else:
+                cmd.angular.z = 0.3   # Slight left turn
+                self.exploration_mode = "cautious_left"
         else:
             # Clear ahead - move forward
             cmd.linear.x = self.max_speed
@@ -409,17 +443,37 @@ class NPUExplorationNode(Node):
         
     def ros_pc2_to_numpy(self, pc_msg):
         """Convert ROS PointCloud2 to numpy array"""
-        # Basic point cloud conversion
-        points = []
-        point_step = pc_msg.point_step
-        
-        for i in range(0, len(pc_msg.data), point_step):
-            # Extract x, y, z (assuming first 12 bytes are xyz as float32)
-            if i + 12 <= len(pc_msg.data):
-                x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
-                points.append([x, y, z])
+        try:
+            # More robust point cloud conversion
+            points = []
+            point_step = pc_msg.point_step
+            height = pc_msg.height
+            width = pc_msg.width
+            
+            # Handle both organized and unorganized point clouds
+            if height > 1 and width > 1:
+                # Organized point cloud
+                for v in range(height):
+                    for u in range(width):
+                        i = (v * width + u) * point_step
+                        if i + 12 <= len(pc_msg.data):
+                            x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
+                            # Only add valid points (not NaN or Inf)
+                            if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
+                                points.append([x, y, z])
+            else:
+                # Unorganized point cloud
+                for i in range(0, len(pc_msg.data), point_step):
+                    if i + 12 <= len(pc_msg.data):
+                        x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
+                        # Only add valid points (not NaN or Inf)
+                        if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
+                            points.append([x, y, z])
                 
-        return np.array(points) if points else np.zeros((0, 3))
+            return np.array(points) if points else np.zeros((0, 3))
+        except Exception as e:
+            self.get_logger().warn(f"Point cloud conversion failed: {e}")
+            return np.zeros((0, 3))
         
     def quaternion_to_yaw(self, q):
         """Convert quaternion to yaw angle"""

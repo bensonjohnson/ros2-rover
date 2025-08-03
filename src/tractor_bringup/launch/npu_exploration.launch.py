@@ -78,26 +78,27 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "camera_name": "camera", 
             "camera_namespace": "camera",
-            # Use our minimal configuration file
-            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_npu_minimal.yaml"),
-            # Explicit parameters to ensure RGB is disabled
+            # Use our new configuration file optimized for USB stability
+            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_usb_stable.yaml"),
+            # Explicit parameters to ensure RGB is disabled and IMU is off
             "enable_color": "false",
             "rgb_camera.enable": "false",
             "enable_depth": "true",
-            "depth_module.depth_profile": "424x240x15",
+            "depth_module.depth_profile": "320x240x6",  # Ultra low bandwidth
             "pointcloud.enable": "true",
             "align_depth.enable": "false",
-            "enable_gyro": "true",
-            "enable_accel": "true", 
-            "gyro_fps": "200",
-            "accel_fps": "63",
+            "enable_gyro": "false",
+            "enable_accel": "false", 
             "enable_infra1": "false",
             "enable_infra2": "false",
             "depth_module.emitter_enabled": "0",
             # Additional parameters to help with USB issues
             "initial_reset": "true",
             "reconnect_timeout": "5.0",
-            "wait_for_device_timeout": "5.0"
+            "wait_for_device_timeout": "5.0",
+            # USB stability parameters
+            "usb_mode": "2.1",  # Force USB 2.1 mode to avoid UVC compliance issues
+            "device_type": "435i"  # Explicitly specify device type
         }.items(),
     )
 

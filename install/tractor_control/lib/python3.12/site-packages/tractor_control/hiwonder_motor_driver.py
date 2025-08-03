@@ -192,6 +192,15 @@ class HiwonderMotorDriver(Node):
         self.get_logger().info("Initializing motor driver with corrected addresses...")
 
         try:
+            # Check if I2C device is responding
+            # Try to read a byte from the device
+            try:
+                self.bus.read_byte(self.motor_address)
+                self.get_logger().info(f"I2C device found at address 0x{self.motor_address:02X}")
+            except Exception as e:
+                self.get_logger().error(f"I2C device not responding at address 0x{self.motor_address:02X}: {e}")
+                return
+
             # Set motor type based on parameter - using official documentation
             # method
             self.bus.write_byte_data(

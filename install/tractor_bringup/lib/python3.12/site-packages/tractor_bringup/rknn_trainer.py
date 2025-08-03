@@ -83,7 +83,7 @@ class RKNNTrainer:
     Handles model training, data collection, and RKNN conversion
     """
     
-    def __init__(self, model_dir="/home/ubuntu/ros2-rover/models"):
+    def __init__(self, model_dir="models"):
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         
@@ -256,41 +256,60 @@ class RKNNTrainer:
         
     def save_model(self):
         """Save PyTorch model and training state"""
-        
-        timestamp = int(time.time())
-        
-        # Save PyTorch model
-        model_path = os.path.join(self.model_dir, f"exploration_model_{timestamp}.pth")
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'training_step': self.training_step,
-            'buffer_size': len(self.experience_buffer)
-        }, model_path)
-        
-        # Save latest symlink
-        latest_path = os.path.join(self.model_dir, "exploration_model_latest.pth")
-        if os.path.exists(latest_path):
-            os.remove(latest_path)
-        os.symlink(model_path, latest_path)
-        
-        print(f"Model saved: {model_path}")
+        try:
+            # Ensure model directory exists
+            os.makedirs(self.model_dir, exist_ok=True)
+            
+            timestamp = int(time.time())
+            
+            # Save PyTorch model
+            model_path = os.path.join(self.model_dir, f"exploration_model_{timestamp}.pth")
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'training_step': self.training_step,
+                'buffer_size': len(self.experience_buffer)
+            }, model_path)
+            
+            # Save latest symlink
+            latest_path = os.path.join(self.model_dir, "exploration_model_latest.pth")
+            if os.path.exists(latest_path):
+                os.remove(latest_path)
+            os.symlink(os.path.basename(model_path), latest_path)
+            
+            print(f"Model saved: {model_path}")
+        except Exception as e:
+            print(f"Failed to save model: {e}")
         
     def load_latest_model(self):
         """Load the latest saved model"""
-        
-        latest_path = os.path.join(self.model_dir, "exploration_model_latest.pth")
-        
-        if os.path.exists(latest_path):
-            try:
+        try:
+            latest_path = os.path.join(self.model_dir, "exploration_model_latest.pth")
+            
+            if os.path.exists(latest_path) and os.path.islink(latest_path):
+                # Resolve symlink to actual file
+                actual_model_path = os.path.join(self.model_dir, os.readlink(latest_path))
+                if os.path.exists(actual_model_path):
+                    checkpoint = torch.load(actual_model_path, map_location=self.device)
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
+                    self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    self.training_step = checkpoint.get('training_step', 0)
+                    print(f"Loaded model from {actual_model_path}")
+                    print(f"Training steps: {self.training_step}")
+                else:
+                    print(f"Model file {actual_model_path} not found")
+            elif os.path.exists(latest_path):
+                # Direct file (not symlink)
                 checkpoint = torch.load(latest_path, map_location=self.device)
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 self.training_step = checkpoint.get('training_step', 0)
                 print(f"Loaded model from {latest_path}")
                 print(f"Training steps: {self.training_step}")
-            except Exception as e:
-                print(f"Failed to load model: {e}")
+            else:
+                print("No saved model found, starting with fresh model")
+        except Exception as e:
+            print(f"Failed to load model: {e}")
                 
     def convert_to_rknn(self):
         """Convert PyTorch model to RKNN format for NPU inference"""
@@ -300,6 +319,9 @@ class RKNNTrainer:
             return
             
         try:
+            # Ensure model directory exists
+            os.makedirs(self.model_dir, exist_ok=True)
+            
             # Export to ONNX first
             dummy_pc = torch.randn(1, 3, 512).to(self.device)
             dummy_sensor = torch.randn(1, 10).to(self.device)
@@ -326,14 +348,26 @@ class RKNNTrainer:
                 target_platform='rk3588'
             )
             
-            rknn.load_onnx(model=onnx_path)
-            rknn.build(do_quantization=True, dataset='./dataset.txt')
+            ret = rknn.load_onnx(model=onnx_path)
+            if ret != 0:
+                print("Failed to load ONNX model")
+                rknn.release()
+                return
+                
+            ret = rknn.build(do_quantization=True, dataset='../dataset.txt')
+            if ret != 0:
+                print("Failed to build RKNN model")
+                rknn.release()
+                return
             
             rknn_path = os.path.join(self.model_dir, "exploration_model.rknn")
-            rknn.export_rknn(rknn_path)
+            ret = rknn.export_rknn(rknn_path)
+            if ret != 0:
+                print("Failed to export RKNN model")
+            else:
+                print(f"RKNN model saved: {rknn_path}")
+                
             rknn.release()
-            
-            print(f"RKNN model saved: {rknn_path}")
             
         except Exception as e:
             print(f"RKNN conversion failed: {e}")
