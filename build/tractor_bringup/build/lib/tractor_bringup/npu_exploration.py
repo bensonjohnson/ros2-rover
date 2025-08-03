@@ -10,7 +10,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2, Image, Imu
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 import numpy as np
 import struct
 import time
@@ -42,13 +42,13 @@ class NPUExplorationNode(Node):
         
         # Parameters
         self.declare_parameter('max_speed', 0.15)
-        self.declare_parameter('exploration_time', 300)
+        self.declare_parameter('min_battery_percentage', 30.0)
         self.declare_parameter('safety_distance', 0.2)
         self.declare_parameter('max_points', 512)
         self.declare_parameter('npu_inference_rate', 5.0)
         
         self.max_speed = self.get_parameter('max_speed').value
-        self.exploration_time = self.get_parameter('exploration_time').value
+        self.min_battery_percentage = self.get_parameter('min_battery_percentage').value
         self.safety_distance = self.get_parameter('safety_distance').value
         self.max_points = self.get_parameter('max_points').value
         self.inference_rate = self.get_parameter('npu_inference_rate').value
@@ -60,6 +60,10 @@ class NPUExplorationNode(Node):
         self.start_time = time.time()
         self.step_count = 0
         self.last_inference_time = 0.0
+        
+        # Battery monitoring
+        self.current_battery_percentage = 100.0  # Start optimistic
+        self.low_battery_shutdown = False
         
         # Sensor data storage
         self.latest_pointcloud = None
@@ -77,6 +81,9 @@ class NPUExplorationNode(Node):
         self.stuck_counter = 0
         self.last_position = np.array([0.0, 0.0])
         self.movement_threshold = 0.05  # meters
+        
+        # Simple tracking for movement detection
+        self.movement_check_counter = 0
         
         # Initialize NPU or fallback
         self.init_inference_engine()
@@ -103,6 +110,12 @@ class NPUExplorationNode(Node):
             self.odom_callback, 10
         )
         
+        # Battery monitoring subscription
+        self.battery_sub = self.create_subscription(
+            Float32, '/battery_percentage',
+            self.battery_callback, 10
+        )
+        
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/npu_exploration_status', 10)
         
@@ -111,7 +124,7 @@ class NPUExplorationNode(Node):
         
         self.get_logger().info(f"NPU Exploration Node initialized")
         self.get_logger().info(f"  Max Speed: {self.max_speed} m/s")
-        self.get_logger().info(f"  Exploration Time: {self.exploration_time} s")
+        self.get_logger().info(f"  Min Battery: {self.min_battery_percentage}%")
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         
     def init_inference_engine(self):
@@ -189,6 +202,15 @@ class NPUExplorationNode(Node):
         self.current_velocity[0] = msg.twist.twist.linear.x
         self.current_velocity[1] = msg.twist.twist.angular.z
         
+    def battery_callback(self, msg):
+        """Update current battery percentage"""
+        self.current_battery_percentage = msg.data
+        
+        # Check for low battery condition
+        if self.current_battery_percentage <= self.min_battery_percentage and not self.low_battery_shutdown:
+            self.get_logger().warn(f"Low battery detected: {self.current_battery_percentage:.1f}% <= {self.min_battery_percentage}% - Initiating safe shutdown")
+            self.low_battery_shutdown = True
+        
     def preprocess_pointcloud(self, pc_msg):
         """Convert ROS PointCloud2 to numpy array for processing"""
         try:
@@ -226,10 +248,10 @@ class NPUExplorationNode(Node):
             
     def control_loop(self):
         """Main control loop - runs at 10Hz"""
-        # Check if exploration time is up
-        if time.time() - self.start_time > self.exploration_time:
+        # Check if battery is too low
+        if self.low_battery_shutdown:
             self.stop_robot()
-            self.get_logger().info("Exploration time completed")
+            self.get_logger().info(f"Exploration stopped - Battery at {self.current_battery_percentage:.1f}%")
             return
             
         # Check if we have recent point cloud data
@@ -243,106 +265,66 @@ class NPUExplorationNode(Node):
         self.cmd_pub.publish(cmd)
         
     def generate_control_command(self):
-        """Generate control command using neural network or reactive navigation"""
+        """Generate control command - NPU drives, safety only intervenes for emergency stop"""
         cmd = Twist()
         
+        # Check for emergency collision risk
+        emergency_stop = self.check_emergency_collision()
+        
         if self.use_npu and self.trainer and self.all_sensors_ready():
-            # Use neural network inference
+            # Always use neural network when available
             action, confidence = self.npu_inference()
             
-            # Use neural network if confident, otherwise fall back to reactive
-            if confidence > 0.3:  # Confidence threshold
-                cmd.linear.x = float(action[0]) * self.max_speed
-                cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
-                self.exploration_mode = f"neural_net (conf: {confidence:.2f})"
+            # Convert NPU output to command
+            cmd.linear.x = float(action[0]) * self.max_speed
+            cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
+            
+            # Emergency override only for imminent collision
+            if emergency_stop:
+                cmd.linear.x = 0.0
+                cmd.angular.z = 0.0
+                self.exploration_mode = f"EMERGENCY_STOP (NPU conf: {confidence:.2f})"
+                self.collision_detected = True
             else:
-                # Low confidence - use reactive navigation
-                cmd = self.reactive_navigation()
-                self.exploration_mode += f" (fallback, conf: {confidence:.2f})"
+                self.exploration_mode = f"NPU_DRIVING (conf: {confidence:.2f})"
+                self.collision_detected = False
                 
-            # Store action for training
-            self.last_action = np.array([cmd.linear.x / self.max_speed, cmd.angular.z / 2.0])
+            # Store action for training (original NPU decision, not emergency override)
+            self.last_action = np.array([float(action[0]), float(action[1])])
+            
         else:
-            # Use simple reactive navigation
-            cmd = self.reactive_navigation()
-            self.last_action = np.array([cmd.linear.x / self.max_speed, cmd.angular.z / 2.0])
+            # Fallback: stop and wait for NPU
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            self.exploration_mode = "WAITING_FOR_NPU"
+            self.last_action = np.array([0.0, 0.0])
             
         return cmd
         
-    def reactive_navigation(self):
-        """Simple reactive navigation without SLAM"""
-        cmd = Twist()
-        
-        # Analyze point cloud for obstacles
+    def check_emergency_collision(self):
+        """Check for imminent collision requiring emergency stop"""
+        if self.latest_pointcloud is None or len(self.latest_pointcloud) == 0:
+            return False
+            
         points = self.latest_pointcloud
         
-        # Safety check for None point cloud
-        if points is None or len(points) == 0:
-            # No point cloud data - conservative approach
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.5  # Slow turn to find obstacles
-            self.exploration_mode = "searching"
-            return cmd
+        # Check for points very close in front of robot (emergency zone)
+        emergency_distance = 0.1  # 10cm emergency zone
+        front_mask = (points[:, 0] > 0) & (points[:, 0] < emergency_distance) & (np.abs(points[:, 1]) < 0.15)
         
-        # Find minimum distance in different sectors
-        # Forward sector (0.5m wide)
-        forward_mask = (points[:, 0] > 0) & (np.abs(points[:, 1]) < 0.25)
-        # Left sector
-        left_mask = (points[:, 1] > 0) & (np.abs(points[:, 0]) < 0.25)
-        # Right sector
-        right_mask = (points[:, 1] < 0) & (np.abs(points[:, 0]) < 0.25)
+        if np.any(front_mask):
+            front_points = points[front_mask]
+            min_distance = np.min(np.linalg.norm(front_points, axis=1))
+            return min_distance < emergency_distance
+            
+        return False
         
-        min_forward_distance = 5.0
-        min_left_distance = 5.0
-        min_right_distance = 5.0
-        
-        if np.any(forward_mask):
-            forward_points = points[forward_mask]
-            min_forward_distance = np.min(np.linalg.norm(forward_points, axis=1))
-            
-        if np.any(left_mask):
-            left_points = points[left_mask]
-            min_left_distance = np.min(np.linalg.norm(left_points, axis=1))
-            
-        if np.any(right_mask):
-            right_points = points[right_mask]
-            min_right_distance = np.min(np.linalg.norm(right_points, axis=1))
-            
-        # Check movement progress
-        position_change = np.linalg.norm(self.position - self.last_position)
-        if position_change < self.movement_threshold:
-            self.stuck_counter += 1
-        else:
-            self.stuck_counter = 0
-            self.last_position = self.position.copy()
-            
-        # State machine for exploration with better obstacle avoidance
-        if min_forward_distance < self.safety_distance or self.stuck_counter > 20:
-            # Obstacle ahead or stuck - turn away from obstacles
-            cmd.linear.x = 0.0
-            # Turn toward the direction with more space
-            if min_left_distance > min_right_distance:
-                cmd.angular.z = 1.0  # Turn left
-                self.exploration_mode = "turn_left"
-            else:
-                cmd.angular.z = -1.0  # Turn right
-                self.exploration_mode = "turn_right"
-        elif min_forward_distance < self.safety_distance * 2:
-            # Slow approach with cautious turning
-            cmd.linear.x = self.max_speed * 0.3
-            # Slight turn away from closer side
-            if min_left_distance < min_right_distance:
-                cmd.angular.z = -0.3  # Slight right turn
-                self.exploration_mode = "cautious_right"
-            else:
-                cmd.angular.z = 0.3   # Slight left turn
-                self.exploration_mode = "cautious_left"
-        else:
-            # Clear ahead - move forward
-            cmd.linear.x = self.max_speed
-            cmd.angular.z = 0.0
-            self.exploration_mode = "forward_explore"
-            
+    def reactive_navigation(self):
+        """Fallback navigation - not used in NPU mode"""
+        cmd = Twist()
+        cmd.linear.x = 0.0
+        cmd.angular.z = 0.0
+        self.exploration_mode = "NPU_FALLBACK_STOP"
         return cmd
         
     def npu_inference(self):
@@ -395,11 +377,24 @@ class NPUExplorationNode(Node):
             progress = np.linalg.norm(self.position - self.prev_position) 
             exploration_bonus = self.calculate_exploration_bonus()
             
+            # Heavy penalty for emergency stops/collisions
+            collision_penalty = -5.0 if self.collision_detected else 0.0
+            
+            # Reward for forward progress
+            progress_reward = progress * 10.0  # Encourage movement
+            
+            # Small exploration bonus
+            exploration_reward = exploration_bonus * 2.0
+            
+            # Combine rewards
+            total_reward = progress_reward + exploration_reward + collision_penalty
+            
             reward = self.trainer.calculate_reward(
                 action=self.last_action,
                 collision=self.collision_detected,
                 progress=progress,
-                exploration_bonus=exploration_bonus
+                exploration_bonus=exploration_bonus,
+                custom_reward=total_reward
             )
             
             # Add experience to buffer
@@ -498,14 +493,14 @@ class NPUExplorationNode(Node):
             training_stats = self.trainer.get_training_stats()
             status_msg.data = (
                 f"NPU Learning | Mode: {self.exploration_mode} | "
-                f"Time: {elapsed_time:.1f}s/{self.exploration_time}s | "
+                f"Battery: {self.current_battery_percentage:.1f}% | "
                 f"Steps: {self.step_count} | "
                 f"Training: {training_stats['training_steps']} | "
                 f"Buffer: {training_stats['buffer_size']}/10000 | "
                 f"Avg Reward: {training_stats['avg_reward']:.2f}"
             )
         else:
-            status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Time: {elapsed_time:.1f}s/{self.exploration_time}s | Steps: {self.step_count}"
+            status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Battery: {self.current_battery_percentage:.1f}% | Steps: {self.step_count}"
             
         self.status_pub.publish(status_msg)
 

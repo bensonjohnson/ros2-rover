@@ -17,16 +17,9 @@ def generate_launch_description():
     pkg_tractor_bringup = get_package_share_directory("tractor_bringup")
 
     # Launch arguments
-    use_sim_time = LaunchConfiguration("use_sim_time")
     max_speed = LaunchConfiguration("max_speed")
-    exploration_time = LaunchConfiguration("exploration_time")
+    min_battery_percentage = LaunchConfiguration("min_battery_percentage")
     safety_distance = LaunchConfiguration("safety_distance")
-
-    declare_use_sim_time_cmd = DeclareLaunchArgument(
-        "use_sim_time",
-        default_value="false",
-        description="Use simulation clock if true",
-    )
 
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
@@ -34,10 +27,10 @@ def generate_launch_description():
         description="Maximum exploration speed (m/s)",
     )
 
-    declare_exploration_time_cmd = DeclareLaunchArgument(
-        "exploration_time",
-        default_value="300",
-        description="Exploration duration in seconds",
+    declare_min_battery_cmd = DeclareLaunchArgument(
+        "min_battery_percentage",
+        default_value="30.0",
+        description="Minimum battery percentage before shutdown",
     )
 
     declare_safety_distance_cmd = DeclareLaunchArgument(
@@ -51,7 +44,6 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_tractor_bringup, "launch", "robot_description.launch.py")
         ),
-        launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
 
     # 2. Hiwonder Motor Control (REUSE EXISTING - has encoders and odometry)
@@ -61,43 +53,26 @@ def generate_launch_description():
         name="hiwonder_motor_driver",
         output="screen",
         parameters=[
-            os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml"),
-            {"use_sim_time": use_sim_time}
+            os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml")
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_safe")  # Will receive commands from NPU node
         ]
     )
 
-    # 3. RealSense Camera (MINIMAL - optimized for NPU)
+    # 3. RealSense Camera (optimized for pointcloud with color+depth)
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "use_sim_time": use_sim_time,
-            "camera_name": "camera", 
-            "camera_namespace": "camera",
-            # Use our minimal configuration file
-            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_npu_minimal.yaml"),
-            # Explicit parameters to ensure RGB is disabled
-            "enable_color": "false",
-            "rgb_camera.enable": "false",
-            "enable_depth": "true",
-            "depth_module.depth_profile": "424x240x15",
             "pointcloud.enable": "true",
-            "align_depth.enable": "false",
-            "enable_gyro": "true",
-            "enable_accel": "true", 
-            "gyro_fps": "200",
-            "accel_fps": "63",
-            "enable_infra1": "false",
-            "enable_infra2": "false",
-            "depth_module.emitter_enabled": "0",
-            # Additional parameters to help with USB issues
-            "initial_reset": "true",
-            "reconnect_timeout": "5.0",
-            "wait_for_device_timeout": "5.0"
+            "pointcloud.allow_no_texture_points": "true",
+            "align_depth.enable": "true", 
+            "enable_color": "true",
+            "enable_depth": "true",
+            "enable_sync": "true",
+            "device_type": "435i"
         }.items(),
     )
 
@@ -109,9 +84,8 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "use_sim_time": use_sim_time,
                 "max_speed": max_speed,
-                "exploration_time": exploration_time,
+                "min_battery_percentage": min_battery_percentage,
                 "safety_distance": safety_distance,
                 "max_points": 512,  # NPU-optimized point cloud size
                 "npu_inference_rate": 5.0,  # Hz
@@ -132,7 +106,6 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "use_sim_time": use_sim_time,
                 "emergency_stop_distance": 0.1,  # 10cm emergency stop
                 "max_speed_limit": max_speed,
             }
@@ -148,9 +121,8 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     # Add launch arguments
-    ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_max_speed_cmd)
-    ld.add_action(declare_exploration_time_cmd)
+    ld.add_action(declare_min_battery_cmd)
     ld.add_action(declare_safety_distance_cmd)
 
     # Core system - immediate start

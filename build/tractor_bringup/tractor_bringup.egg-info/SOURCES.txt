@@ -14,7 +14,9 @@ config/pointcloud_to_laserscan.yaml
 config/realsense_color_only.yaml
 config/realsense_config.yaml
 config/realsense_low_bandwidth.yaml
+config/realsense_no_imu.yaml
 config/realsense_npu_minimal.yaml
+config/realsense_usb_stable.yaml
 config/slam_toolbox_params.yaml
 launch/autonomous_mapping_minimal.launch.py
 launch/autonomous_slam_mapping.launch.py

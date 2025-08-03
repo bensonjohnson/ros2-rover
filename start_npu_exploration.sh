@@ -45,13 +45,25 @@ echo "✓ ROS2 environment sourced"
 # USB power management for RealSense
 echo "Configuring USB power management..."
 USB_DEVICE_PATH=""
-# Try common RealSense device paths
-for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
-    if [ -d "$path" ]; then
-        USB_DEVICE_PATH="$path"
+# Find D435i device by Product ID (0B3A)
+for device in /sys/bus/usb/devices/*/idProduct; do
+    if [ -f "$device" ] && [ "$(cat $device 2>/dev/null)" = "0b3a" ]; then
+        USB_DEVICE_PATH=$(dirname $device)
+        echo "✓ Found D435i at USB path: $USB_DEVICE_PATH"
         break
     fi
 done
+
+# Fallback to common paths if Product ID detection fails
+if [ -z "$USB_DEVICE_PATH" ]; then
+    for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+        if [ -d "$path" ]; then
+            USB_DEVICE_PATH="$path"
+            echo "✓ Using fallback USB path: $USB_DEVICE_PATH"
+            break
+        fi
+    done
+fi
 
 if [ -n "$USB_DEVICE_PATH" ]; then
     # Disable autosuspend for the device
@@ -62,10 +74,10 @@ else
     echo "⚠ USB device path not found, continuing anyway"
 fi
 
-# Check RealSense
+# Check RealSense D435i specifically
 echo "Checking RealSense D435i..."
 if command -v rs-enumerate-devices &> /dev/null; then
-    timeout 3s rs-enumerate-devices > /dev/null 2>&1
+    timeout 5s rs-enumerate-devices | grep -q "D435I"
     if [ $? -eq 0 ]; then
         echo "✓ RealSense D435i detected"
         # Reset the USB device to clear any error states
@@ -77,7 +89,7 @@ if command -v rs-enumerate-devices &> /dev/null; then
             echo "✓ USB device reset"
         fi
     else
-        echo "⚠ RealSense not detected - will attempt to continue"
+        echo "⚠ RealSense D435i not detected - will attempt to continue"
     fi
 else
     echo "⚠ rs-enumerate-devices command not found - skipping RealSense check"

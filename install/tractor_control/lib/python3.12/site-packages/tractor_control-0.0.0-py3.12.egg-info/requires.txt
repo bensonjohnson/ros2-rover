@@ -1,3 +1,0 @@
-pygame
-setuptools
-smbus2

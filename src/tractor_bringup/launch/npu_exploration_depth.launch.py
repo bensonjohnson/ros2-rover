@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal NPU Point Cloud Exploration Launch File
+NPU Depth Image Exploration Launch File
 Clean architecture: Motor control + RealSense + NPU AI only
 """
 
@@ -60,26 +60,26 @@ def generate_launch_description():
         ]
     )
 
-    # 3. RealSense Camera (optimized for pointcloud with color+depth)
+    # 3. RealSense Camera (optimized for depth images)
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "pointcloud.enable": "true",
-            "pointcloud.allow_no_texture_points": "true",
+            "pointcloud.enable": "false",  # Disable pointcloud for bandwidth
             "align_depth.enable": "true", 
-            "enable_color": "true",
+            "enable_color": "false",  # Disable color for bandwidth
             "enable_depth": "true",
             "enable_sync": "true",
-            "device_type": "435i"
+            "device_type": "435i",
+            "depth_module.depth_profile": "320x240x15"  # Good balance of resolution and performance
         }.items(),
     )
 
     # 4. NPU Exploration Node (Main AI controller)
     npu_exploration_node = Node(
         package="tractor_bringup",
-        executable="npu_exploration.py",
+        executable="npu_exploration_depth.py",
         name="npu_exploration",
         output="screen",
         parameters=[
@@ -87,13 +87,12 @@ def generate_launch_description():
                 "max_speed": max_speed,
                 "min_battery_percentage": min_battery_percentage,
                 "safety_distance": safety_distance,
-                "max_points": 512,  # NPU-optimized point cloud size
                 "npu_inference_rate": 5.0,  # Hz
             }
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_raw"),
-            ("point_cloud", "/camera/camera/depth/color/points"),  # Fixed path
+            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic
             ("odom", "/odom"),  # From motor controller
         ]
     )
@@ -101,7 +100,7 @@ def generate_launch_description():
     # 5. Simple Safety Monitor (Emergency stop only)
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor.py",
+        executable="simple_safety_monitor_depth.py",
         name="simple_safety_monitor",
         output="screen",
         parameters=[
@@ -113,7 +112,7 @@ def generate_launch_description():
         remappings=[
             ("cmd_vel_in", "cmd_vel_raw"),
             ("cmd_vel_out", "cmd_vel_safe"),
-            ("point_cloud", "/camera/camera/depth/color/points"),  # Fixed path
+            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic
         ]
     )
 
