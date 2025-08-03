@@ -1,0 +1,4 @@
+# RealSense D435i specific udev rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="8086", ATTR{idProduct}=="0b3a", ATTR{power/control}="on"
+SUBSYSTEM=="usb", ATTR{idVendor}=="8086", ATTR{idProduct}=="0b3a", ATTR{power/autosuspend}="-1"
+SUBSYSTEM=="usb", ATTR{idVendor}=="8086", ATTR{idProduct}=="0b3a", ATTR{power/autosuspend_delay_ms}="0"

@@ -1,0 +1,46 @@
+# Minimal RealSense configuration for NPU exploration
+# Completely disables RGB camera to avoid USB errors
+
+camera_name: "camera"
+camera_namespace: "camera"
+
+# Core features - depth only
+enable_sync: false
+enable_pointcloud: true
+pointcloud.enable: true
+align_depth.enable: false
+
+# Depth camera settings - ultra minimal configuration
+depth_module.enable: true
+depth_module.depth_profile: "424x240x15"
+depth_module.enable_auto_exposure: true
+depth_module.emitter_enabled: 0  # Disable IR emitter
+
+# Completely disable RGB camera
+rgb_camera.enable: false
+enable_color: false
+
+# Disable infrared streams
+enable_infra1: false
+enable_infra2: false
+
+# IMU settings - reduced rate to minimize USB traffic
+enable_gyro: true
+enable_accel: true
+gyro_fps: 50  # Reduced from 200
+accel_fps: 15  # Reduced from 63
+unite_imu_method: "linear_interpolation"
+
+# Filters to reduce point cloud density
+decimation_filter.enable: true
+decimation_filter.magnitude: 4  # Increased decimation
+temporal_filter.enable: false  # Disable to reduce processing
+spatial_filter.enable: false   # Disable to reduce processing
+hole_filling_filter.enable: false  # Disable to reduce processing
+
+# Performance settings
+publish_tf: true
+tf_publish_rate: 10.0  # Reduced from 15
+
+# Power optimizations
+depth_module.laser_power: 0.0
