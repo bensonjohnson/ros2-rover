@@ -263,6 +263,11 @@ class NPUExplorationDepthNode(Node):
         if self.low_battery_shutdown:
             self.stop_robot()
             self.get_logger().info(f"Exploration stopped - Battery at {self.current_battery_percentage:.1f}%")
+            self.get_logger().info("Initiating graceful shutdown due to low battery...")
+            
+            # Signal ROS2 to shutdown this node
+            self.destroy_node()
+            rclpy.shutdown()
             return
             
         # Check if we have recent depth image data
