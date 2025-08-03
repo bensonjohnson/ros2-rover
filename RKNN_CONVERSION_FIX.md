@@ -133,6 +133,29 @@ rknn.config(
 )
 ```
 
+### 3. Dataset Path Issue
+
+A third issue was discovered during RKNN build phase:
+
+```
+E build: Dataset file ../dataset.txt not found!
+```
+
+This was fixed by:
+1. **Correcting the dataset path**: Using proper path resolution to find the dataset file
+2. **Adding fallback logic**: Building without quantization if dataset is not available
+
+```python
+# Check for dataset file for quantization
+dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'dataset.txt')
+if os.path.exists(dataset_path):
+    print(f"Using dataset for quantization: {dataset_path}")
+    ret = rknn.build(do_quantization=True, dataset=dataset_path)
+else:
+    print("Dataset file not found, building without quantization")
+    ret = rknn.build(do_quantization=False)
+```
+
 ## Next Steps
 
 1. **Test on Target Hardware**: Run the NPU exploration system on the actual robot
