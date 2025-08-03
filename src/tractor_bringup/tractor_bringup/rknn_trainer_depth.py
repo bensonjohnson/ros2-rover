@@ -184,13 +184,13 @@ class RKNNTrainerDepth:
         batch = [self.experience_buffer[i] for i in indices]
         
         # Prepare batch data
-        depth_batch = torch.FloatTensor([exp['depth_image'] for exp in batch]).unsqueeze(1).to(self.device)
-        sensor_batch = torch.FloatTensor([
+        depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch])).unsqueeze(1).to(self.device)
+        sensor_batch = torch.FloatTensor(np.array([
             np.concatenate([exp['imu'], exp['proprioceptive']]) 
             for exp in batch
-        ]).to(self.device)
-        action_batch = torch.FloatTensor([exp['action'] for exp in batch]).to(self.device)
-        reward_batch = torch.FloatTensor([exp['reward'] for exp in batch]).to(self.device)
+        ])).to(self.device)
+        action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch])).to(self.device)
+        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch])).to(self.device)
         
         # Forward pass
         predicted_actions = self.model(depth_batch, sensor_batch)
