@@ -29,6 +29,7 @@ tractor_bringup/__init__.py
 tractor_bringup/autonomous_mapping.py
 tractor_bringup/frontier_explorer.py
 tractor_bringup/npu_exploration.py
+tractor_bringup/rknn_trainer.py
 tractor_bringup/safety_monitor.py
 tractor_bringup/simple_safety_monitor.py
 urdf/tractor.urdf.xacro

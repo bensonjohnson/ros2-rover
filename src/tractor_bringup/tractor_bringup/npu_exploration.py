@@ -7,13 +7,15 @@ Integrates with existing Hiwonder motor controller for odometry
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Image, Imu
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 import numpy as np
 import struct
 import time
+from cv_bridge import CvBridge
+import cv2
 
 try:
     from rknn.api import RKNN
@@ -21,6 +23,13 @@ try:
 except ImportError:
     RKNN_AVAILABLE = False
     print("RKNN not available - using CPU fallback")
+
+try:
+    from .rknn_trainer import RKNNTrainer
+    TRAINER_AVAILABLE = True
+except ImportError:
+    TRAINER_AVAILABLE = False
+    print("RKNN Trainer not available - using simple reactive navigation")
 
 class NPUExplorationNode(Node):
     def __init__(self):
@@ -47,6 +56,17 @@ class NPUExplorationNode(Node):
         self.step_count = 0
         self.last_inference_time = 0.0
         
+        # Sensor data storage
+        self.latest_pointcloud = None
+        self.latest_rgb_image = None
+        self.latest_imu_data = np.zeros(6)  # [ax, ay, az, gx, gy, gz]
+        self.bridge = CvBridge()
+        
+        # Previous state for reward calculation
+        self.prev_position = np.array([0.0, 0.0])
+        self.prev_pointcloud = None
+        self.collision_detected = False
+        
         # Exploration state
         self.exploration_mode = "forward_explore"  # forward_explore, turn_explore, retreat
         self.stuck_counter = 0
@@ -60,6 +80,17 @@ class NPUExplorationNode(Node):
         self.pc_sub = self.create_subscription(
             PointCloud2, 'point_cloud',
             self.pointcloud_callback, 10
+        )
+        
+        # RGB disabled for bandwidth reasons
+        # self.rgb_sub = self.create_subscription(
+        #     Image, '/camera/camera/color/image_raw',
+        #     self.rgb_callback, 10
+        # )
+        
+        self.imu_sub = self.create_subscription(
+            Imu, '/camera/camera/imu',
+            self.imu_callback, 10
         )
         
         self.odom_sub = self.create_subscription(
@@ -79,20 +110,21 @@ class NPUExplorationNode(Node):
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         
     def init_inference_engine(self):
-        """Initialize RKNN NPU or CPU fallback"""
-        if RKNN_AVAILABLE:
+        """Initialize RKNN NPU training system"""
+        self.use_npu = False
+        self.trainer = None
+        
+        if TRAINER_AVAILABLE:
             try:
-                self.rknn = RKNN(verbose=False)
-                # Try to load pre-trained model
-                model_path = "/home/ubuntu/ros2-rover/models/exploration_model.rknn"
-                # For now, use fallback since model doesn't exist yet
-                self.use_npu = False
-                self.get_logger().info("Using CPU fallback - NPU model not found")
+                self.trainer = RKNNTrainer()
+                self.use_npu = True
+                self.get_logger().info("RKNN Trainer initialized - Learning enabled!")
+                self.get_logger().info(f"Training stats: {self.trainer.get_training_stats()}")
             except Exception as e:
+                self.get_logger().warn(f"RKNN Trainer initialization failed: {e}")
                 self.use_npu = False
-                self.get_logger().warn(f"NPU initialization failed: {e}")
         else:
-            self.use_npu = False
+            self.get_logger().info("Using reactive navigation - no learning")
             
     def pointcloud_callback(self, msg):
         """Process point cloud and update internal state"""
@@ -108,8 +140,35 @@ class NPUExplorationNode(Node):
         self.latest_pointcloud = self.preprocess_pointcloud(msg)
         self.step_count += 1
         
+        # Train neural network if available
+        if self.use_npu and self.trainer and self.step_count > 10:
+            self.train_from_experience()
+        
         # Publish status
         self.publish_status()
+        
+    def rgb_callback(self, msg):
+        """Process RGB image from camera"""
+        try:
+            # Convert ROS image to OpenCV format
+            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            # Resize for NPU processing (smaller for efficiency)
+            self.latest_rgb_image = cv2.resize(cv_image, (224, 224))
+        except Exception as e:
+            self.get_logger().warn(f"RGB image processing failed: {e}")
+            
+    def imu_callback(self, msg):
+        """Process IMU data from RealSense"""
+        try:
+            # Store accelerometer and gyroscope data
+            self.latest_imu_data[0] = msg.linear_acceleration.x
+            self.latest_imu_data[1] = msg.linear_acceleration.y  
+            self.latest_imu_data[2] = msg.linear_acceleration.z
+            self.latest_imu_data[3] = msg.angular_velocity.x
+            self.latest_imu_data[4] = msg.angular_velocity.y
+            self.latest_imu_data[5] = msg.angular_velocity.z
+        except Exception as e:
+            self.get_logger().warn(f"IMU processing failed: {e}")
         
     def odom_callback(self, msg):
         """Update position and velocity from motor controller"""
@@ -175,17 +234,29 @@ class NPUExplorationNode(Node):
         self.cmd_pub.publish(cmd)
         
     def generate_control_command(self):
-        """Generate control command using simple reactive navigation or NPU"""
+        """Generate control command using neural network or reactive navigation"""
         cmd = Twist()
         
-        if self.use_npu:
-            # Use NPU inference (when model is available)
-            action = self.npu_inference()
-            cmd.linear.x = float(action[0]) * self.max_speed
-            cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
+        if self.use_npu and self.trainer and self.all_sensors_ready():
+            # Use neural network inference
+            action, confidence = self.npu_inference()
+            
+            # Use neural network if confident, otherwise fall back to reactive
+            if confidence > 0.3:  # Confidence threshold
+                cmd.linear.x = float(action[0]) * self.max_speed
+                cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
+                self.exploration_mode = f"neural_net (conf: {confidence:.2f})"
+            else:
+                # Low confidence - use reactive navigation
+                cmd = self.reactive_navigation()
+                self.exploration_mode += f" (fallback, conf: {confidence:.2f})"
+                
+            # Store action for training
+            self.last_action = np.array([cmd.linear.x / self.max_speed, cmd.angular.z / 2.0])
         else:
             # Use simple reactive navigation
             cmd = self.reactive_navigation()
+            self.last_action = np.array([cmd.linear.x / self.max_speed, cmd.angular.z / 2.0])
             
         return cmd
         
@@ -195,6 +266,14 @@ class NPUExplorationNode(Node):
         
         # Analyze point cloud for obstacles
         points = self.latest_pointcloud
+        
+        # Safety check for None point cloud
+        if points is None or len(points) == 0:
+            # No point cloud data - conservative approach
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.5  # Slow turn to find obstacles
+            self.exploration_mode = "searching"
+            return cmd
         
         # Find minimum distance in front (forward cone)
         forward_mask = (points[:, 0] > 0) & (np.abs(points[:, 1]) < 0.5)  # Forward 0.5m wide
@@ -233,24 +312,100 @@ class NPUExplorationNode(Node):
         return cmd
         
     def npu_inference(self):
-        """Run NPU inference (placeholder for when model is ready)"""
-        # Prepare inputs
-        proprioceptive = np.array([
-            self.current_velocity[0],
-            self.current_velocity[1], 
-            1.0,  # Battery level (placeholder)
-            float(self.step_count % 100) / 100.0
-        ]).astype(np.float32)
-        
-        point_cloud = self.latest_pointcloud.T.reshape(1, 3, self.max_points).astype(np.float32)
-        
-        # TODO: Replace with actual RKNN inference
-        # outputs = self.rknn.inference(inputs=[point_cloud, proprioceptive])
-        # action = outputs[0]  # [linear_x, angular_z]
-        
-        # Placeholder: return random valid action
-        action = np.array([np.random.uniform(0, 1), np.random.uniform(-1, 1)])
-        return action
+        """Run neural network inference"""
+        if not self.all_sensors_ready():
+            return np.array([0.0, 0.0]), 0.0
+            
+        try:
+            # Prepare point cloud input (3 x N points)
+            pc_input = self.latest_pointcloud.T.astype(np.float32)
+            if pc_input.shape[1] < self.max_points:
+                # Pad with zeros
+                padding = np.zeros((3, self.max_points - pc_input.shape[1]))
+                pc_input = np.concatenate([pc_input, padding], axis=1)
+            elif pc_input.shape[1] > self.max_points:
+                # Downsample
+                pc_input = pc_input[:, :self.max_points]
+                
+            # Prepare proprioceptive input
+            proprioceptive = np.array([
+                self.current_velocity[0],
+                self.current_velocity[1], 
+                1.0,  # Battery level (placeholder)
+                float(self.step_count % 100) / 100.0
+            ]).astype(np.float32)
+            
+            # Run inference
+            action, confidence = self.trainer.inference(
+                pc_input, self.latest_imu_data, proprioceptive
+            )
+            
+            return action, confidence
+            
+        except Exception as e:
+            self.get_logger().warn(f"Neural inference failed: {e}")
+            return np.array([0.0, 0.0]), 0.0
+            
+    def all_sensors_ready(self):
+        """Check if all sensor data is available (no RGB)"""
+        return (self.latest_pointcloud is not None and
+                self.latest_imu_data is not None)
+                
+    def train_from_experience(self):
+        """Add experience to training buffer and perform training step"""
+        if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
+            return
+            
+        try:
+            # Calculate reward based on current state
+            progress = np.linalg.norm(self.position - self.prev_position) 
+            exploration_bonus = self.calculate_exploration_bonus()
+            
+            reward = self.trainer.calculate_reward(
+                action=self.last_action,
+                collision=self.collision_detected,
+                progress=progress,
+                exploration_bonus=exploration_bonus
+            )
+            
+            # Add experience to buffer
+            if self.prev_pointcloud is not None:
+                self.trainer.add_experience(
+                    pointcloud=self.prev_pointcloud.T.astype(np.float32),
+                    imu_data=self.latest_imu_data,
+                    proprioceptive=np.array([
+                        self.current_velocity[0], self.current_velocity[1], 1.0, 
+                        float(self.step_count % 100) / 100.0
+                    ]),
+                    action=self.last_action,
+                    reward=reward,
+                    next_pointcloud=self.latest_pointcloud.T.astype(np.float32)
+                )
+                
+            # Perform training step
+            training_stats = self.trainer.train_step()
+            
+            # Log training progress occasionally
+            if self.step_count % 50 == 0:
+                self.get_logger().info(
+                    f"Training: Loss={training_stats['loss']:.4f}, "
+                    f"Reward={training_stats['avg_reward']:.2f}, "
+                    f"Samples={training_stats['samples']}"
+                )
+                
+            # Update previous state
+            self.prev_position = self.position.copy()
+            self.prev_pointcloud = self.latest_pointcloud.copy()
+            
+        except Exception as e:
+            self.get_logger().warn(f"Training step failed: {e}")
+            
+    def calculate_exploration_bonus(self):
+        """Calculate bonus for exploring new areas"""
+        # Simple exploration bonus based on movement
+        if np.linalg.norm(self.position - self.prev_position) > 0.1:
+            return 1.0
+        return 0.0
         
     def ros_pc2_to_numpy(self, pc_msg):
         """Convert ROS PointCloud2 to numpy array"""
@@ -284,7 +439,20 @@ class NPUExplorationNode(Node):
         """Publish exploration status"""
         elapsed_time = time.time() - self.start_time
         status_msg = String()
-        status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Time: {elapsed_time:.1f}s/{self.exploration_time}s | Steps: {self.step_count}"
+        
+        if self.use_npu and self.trainer:
+            training_stats = self.trainer.get_training_stats()
+            status_msg.data = (
+                f"NPU Learning | Mode: {self.exploration_mode} | "
+                f"Time: {elapsed_time:.1f}s/{self.exploration_time}s | "
+                f"Steps: {self.step_count} | "
+                f"Training: {training_stats['training_steps']} | "
+                f"Buffer: {training_stats['buffer_size']}/10000 | "
+                f"Avg Reward: {training_stats['avg_reward']:.2f}"
+            )
+        else:
+            status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Time: {elapsed_time:.1f}s/{self.exploration_time}s | Steps: {self.step_count}"
+            
         self.status_pub.publish(status_msg)
 
 def main(args=None):

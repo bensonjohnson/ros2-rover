@@ -76,18 +76,21 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": use_sim_time,
-            "camera_name": "camera",
+            "camera_name": "camera", 
             "camera_namespace": "camera",
-            # Valid low-bandwidth config based on rs-enumerate-devices
-            "depth_module.depth_profile": "424x240x6",  # Valid Z16 profile
-            "rgb_camera.color_profile": "424x240x6",   # Valid RGB8 profile  
-            "pointcloud.enable": "true",
-            "align_depth.enable": "true",
-            "enable_gyro": "false",  # Disable IMU to reduce bandwidth
-            "enable_accel": "false",
-            "enable_infra1": "false",
-            "enable_infra2": "false", 
-            "depth_module.emitter_enabled": "0",  # Laser off
+            # Correct parameters based on official RealSense ROS2 docs
+            "enable_color": "false",                    # Official parameter to disable RGB
+            "enable_depth": "true",                     # Enable depth stream
+            "depth_module.depth_profile": "424x240x15", # Set depth resolution
+            "pointcloud.enable": "true",                # Enable point clouds
+            "align_depth.enable": "false",              # No RGB to align to
+            "enable_gyro": "true",                      # Enable IMU
+            "enable_accel": "true", 
+            "gyro_fps": "200",                          # Correct IMU rates
+            "accel_fps": "63",
+            "enable_infra1": "false",                   # Disable infrared streams
+            "enable_infra2": "false",
+            "depth_module.emitter_enabled": "0"         # Disable laser emitter
         }.items(),
     )
 
