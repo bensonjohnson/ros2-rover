@@ -30,7 +30,9 @@ setup(
             "safety_monitor.py = tractor_bringup.safety_monitor:main",
             "frontier_explorer.py = tractor_bringup.frontier_explorer:main",
             "npu_exploration.py = tractor_bringup.npu_exploration:main",
+            "npu_exploration_depth.py = tractor_bringup.npu_exploration_depth:main",
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
+            "simple_safety_monitor_depth.py = tractor_bringup.simple_safety_monitor_depth:main",
         ],
     },
 )
