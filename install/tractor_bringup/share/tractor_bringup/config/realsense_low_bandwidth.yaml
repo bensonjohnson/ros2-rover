@@ -11,7 +11,7 @@ align_depth.enable: true
 # Low resolution settings to reduce USB bandwidth
 depth_module.enable: true
 depth_module.depth_profile: "320x240x6"  # Minimal resolution/framerate
-rgb_camera.enable: true
+rgb_camera.enable: false
 rgb_camera.color_profile: "320x240x6"    # Match depth resolution
 
 # Disable bandwidth-heavy features

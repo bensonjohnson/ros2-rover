@@ -78,19 +78,26 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "camera_name": "camera", 
             "camera_namespace": "camera",
-            # Correct parameters based on official RealSense ROS2 docs
-            "enable_color": "false",                    # Official parameter to disable RGB
-            "enable_depth": "true",                     # Enable depth stream
-            "depth_module.depth_profile": "424x240x15", # Set depth resolution
-            "pointcloud.enable": "true",                # Enable point clouds
-            "align_depth.enable": "false",              # No RGB to align to
-            "enable_gyro": "true",                      # Enable IMU
+            # Use our minimal configuration file
+            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_npu_minimal.yaml"),
+            # Explicit parameters to ensure RGB is disabled
+            "enable_color": "false",
+            "rgb_camera.enable": "false",
+            "enable_depth": "true",
+            "depth_module.depth_profile": "424x240x15",
+            "pointcloud.enable": "true",
+            "align_depth.enable": "false",
+            "enable_gyro": "true",
             "enable_accel": "true", 
-            "gyro_fps": "200",                          # Correct IMU rates
+            "gyro_fps": "200",
             "accel_fps": "63",
-            "enable_infra1": "false",                   # Disable infrared streams
+            "enable_infra1": "false",
             "enable_infra2": "false",
-            "depth_module.emitter_enabled": "0"         # Disable laser emitter
+            "depth_module.emitter_enabled": "0",
+            # Additional parameters to help with USB issues
+            "initial_reset": "true",
+            "reconnect_timeout": "5.0",
+            "wait_for_device_timeout": "5.0"
         }.items(),
     )
 

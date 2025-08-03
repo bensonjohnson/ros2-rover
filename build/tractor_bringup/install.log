@@ -20,6 +20,7 @@
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/launch/npu_exploration.launch.py
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/urdf/tractor.urdf.xacro
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/realsense_color_only.yaml
+/home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/realsense_npu_minimal.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/realsense_config.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/nav2_params.yaml
 /home/ubuntu/ros2-rover/install/tractor_bringup/share/tractor_bringup/config/slam_toolbox_params.yaml
