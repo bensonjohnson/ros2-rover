@@ -107,6 +107,7 @@ class HiwonderMotorDriver(Node):
         self.MOTOR_FIXED_PWM_ADDR = 0x1F  # PWM control for non-encoder motors
         self.MOTOR_FIXED_SPEED_ADDR = 0x33  # Speed control for encoder motors
         self.MOTOR_ENCODER_TOTAL_ADDR = 0x3C
+        self.MOTOR_ENCODER_CLEAR_ADDR = 0x52  # Clear/reset encoder counts
 
         # Motor types
         # For 3865-520 motors (if no encoder)
@@ -232,6 +233,9 @@ class HiwonderMotorDriver(Node):
                 # Delay based on official documentation or hardware needs.
                 time.sleep(self.init_encoder_polarity_delay)
 
+            # Reset/clear encoder counts to start fresh
+            self.reset_encoders()
+
             # Log control method being used
             control_method = (
                 "Speed control (with encoders)"
@@ -244,6 +248,31 @@ class HiwonderMotorDriver(Node):
 
         except Exception as e:
             self.get_logger().error(f"Failed to initialize motor driver: {e}")
+
+    def reset_encoders(self):
+        """Reset encoder counts to zero via I2C"""
+        try:
+            # Send encoder clear command - typically a specific value to the clear register
+            # Based on Hiwonder documentation, this should reset both encoder counts
+            self.bus.write_byte_data(self.motor_address, self.MOTOR_ENCODER_CLEAR_ADDR, 1)
+            time.sleep(0.1)  # Allow time for reset to take effect
+            
+            # Reset our internal tracking
+            with self.encoder_lock:
+                self.prev_left_encoder = 0
+                self.prev_right_encoder = 0
+                self.left_velocity = 0.0
+                self.right_velocity = 0.0
+            
+            # Reset odometry
+            self.x = 0.0
+            self.y = 0.0
+            self.theta = 0.0
+            
+            self.get_logger().info("Encoder counts reset to zero")
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to reset encoders: {e}")
 
     def write_byte(self, val):
         """Write a single byte to I2C device"""

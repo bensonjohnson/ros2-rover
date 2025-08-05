@@ -1,2 +1,0 @@
-/usr/lib/python3/dist-packages/setuptools/command/easy_install.py:363: UserWarning: Unbuilt egg for tractor-coverage [unknown version] (/home/ubuntu/ros2-rover/build/tractor_coverage)
-  self.local_index = Environment(self.shadow_path + sys.path)
