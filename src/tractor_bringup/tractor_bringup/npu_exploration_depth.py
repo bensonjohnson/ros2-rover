@@ -65,7 +65,6 @@ class NPUExplorationDepthNode(Node):
         
         # Sensor data storage
         self.latest_depth_image = None
-        self.latest_imu_data = np.zeros(6)  # [ax, ay, az, gx, gy, gz]
         self.bridge = CvBridge()
         
         # Previous state for reward calculation
@@ -91,10 +90,6 @@ class NPUExplorationDepthNode(Node):
             self.depth_callback, 10
         )
         
-        self.imu_sub = self.create_subscription(
-            Imu, '/camera/camera/imu',
-            self.imu_callback, 10
-        )
         
         self.odom_sub = self.create_subscription(
             Odometry, 'odom',
@@ -162,18 +157,6 @@ class NPUExplorationDepthNode(Node):
         # Publish status
         self.publish_status()
         
-    def imu_callback(self, msg):
-        """Process IMU data from RealSense"""
-        try:
-            # Store accelerometer and gyroscope data
-            self.latest_imu_data[0] = msg.linear_acceleration.x
-            self.latest_imu_data[1] = msg.linear_acceleration.y  
-            self.latest_imu_data[2] = msg.linear_acceleration.z
-            self.latest_imu_data[3] = msg.angular_velocity.x
-            self.latest_imu_data[4] = msg.angular_velocity.y
-            self.latest_imu_data[5] = msg.angular_velocity.z
-        except Exception as e:
-            self.get_logger().warn(f"IMU processing failed: {e}")
         
     def odom_callback(self, msg):
         """Update position and velocity from motor controller"""
@@ -375,7 +358,7 @@ class NPUExplorationDepthNode(Node):
             
             # Run inference
             action, confidence = self.trainer.inference(
-                depth_input, self.latest_imu_data, proprioceptive
+                depth_input, proprioceptive
             )
             
             # Log the action and confidence for debugging
@@ -389,8 +372,7 @@ class NPUExplorationDepthNode(Node):
             
     def all_sensors_ready(self):
         """Check if all sensor data is available"""
-        return (self.latest_depth_image is not None and
-                self.latest_imu_data is not None)
+        return self.latest_depth_image is not None
                 
     def train_from_experience(self):
         """Add experience to training buffer and perform training step"""
@@ -398,27 +380,19 @@ class NPUExplorationDepthNode(Node):
             return
             
         try:
-            # Calculate reward based on current state
-            progress = np.linalg.norm(self.position - self.prev_position) 
-            exploration_bonus = self.calculate_exploration_bonus()
+            # Calculate progress for the reward function. This is used by the reward calculator.
+            progress = np.linalg.norm(self.position - self.prev_position)
             
-            # Heavy penalty for emergency stops/collisions
-            collision_penalty = -5.0 if self.collision_detected else 0.0
-            
-            # Reward for forward progress
-            progress_reward = progress * 10.0  # Encourage movement
-            
-            # Small exploration bonus
-            exploration_reward = exploration_bonus * 2.0
-            
-            # Combine rewards
-            total_reward = progress_reward + exploration_reward + collision_penalty
-            
+            # The improved reward system is self-contained and handles all reward logic,
+            # including exploration bonuses. The old local calculation is removed to avoid
+            # confusion and align with the intended architecture.
             reward = self.trainer.calculate_reward(
                 action=self.last_action,
                 collision=self.collision_detected,
                 progress=progress,
-                exploration_bonus=exploration_bonus,
+                # This parameter is deprecated. The improved system calculates exploration internally
+                # and this is only used by the fallback basic reward system.
+                exploration_bonus=0.0,
                 position=self.position,
                 depth_data=self.latest_depth_image,
                 wheel_velocities=self.wheel_velocities
@@ -428,9 +402,8 @@ class NPUExplorationDepthNode(Node):
             if self.prev_depth_image is not None:
                 self.trainer.add_experience(
                     depth_image=self.prev_depth_image.astype(np.float32),
-                    imu_data=self.latest_imu_data,
                     proprioceptive=np.array([
-                        self.current_velocity[0], self.current_velocity[1], 1.0, 
+                        self.current_velocity[0], self.current_velocity[1], 1.0,
                         float(self.step_count % 100) / 100.0
                     ]),
                     action=self.last_action,
@@ -455,13 +428,6 @@ class NPUExplorationDepthNode(Node):
             
         except Exception as e:
             self.get_logger().warn(f"Training step failed: {e}")
-            
-    def calculate_exploration_bonus(self):
-        """Calculate bonus for exploring new areas"""
-        # Simple exploration bonus based on movement
-        if np.linalg.norm(self.position - self.prev_position) > 0.1:
-            return 1.0
-        return 0.0
         
     def quaternion_to_yaw(self, q):
         """Convert quaternion to yaw angle"""
