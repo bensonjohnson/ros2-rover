@@ -42,10 +42,10 @@ class ImprovedRewardCalculator:
             'speed_bonus_multiplier': 3.0,
             
             # Straight-line movement rewards
-            'straight_line_bonus': 8.0,  # Strong reward for going straight
-            'forward_progress_multiplier': 25.0,  # Heavy emphasis on forward movement
+            'straight_line_bonus': 12.0,  # Strong reward for going straight
+            'forward_progress_multiplier': 40.0,  # Heavy emphasis on forward movement
             'angular_penalty_threshold': 0.3,  # rad/s threshold for penalizing turning
-            'excessive_turning_penalty': -4.0,  # Penalty for too much turning
+            'excessive_turning_penalty': -10.0,  # Penalty for too much turning
             
             # Wall following and frontier exploration
             'wall_following_bonus': 5.0,  # Reward for maintaining distance from walls
@@ -73,8 +73,8 @@ class ImprovedRewardCalculator:
             
             # Differential drive tracking
             'track_efficiency_bonus': 4.0,      # Reward for efficient differential drive
-            'wheel_slip_penalty': -2.0,         # Penalty for wheel slippage
-            'coordinated_turning_bonus': 3.0,   # Reward for proper tank steering
+            'wheel_slip_penalty': -4.0,         # Penalty for wheel slippage
+            'coordinated_turning_bonus': 5.0,   # Reward for proper tank steering
         }
     
     def calculate_comprehensive_reward(self, 
