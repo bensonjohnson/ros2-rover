@@ -417,16 +417,8 @@ class RKNNTrainerDepth:
                 print("Failed to load ONNX model")
                 rknn.release()
                 return
-            
-            # Check for dataset file for quantization
-            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'dataset.txt')
-            if os.path.exists(dataset_path):
-                print(f"Using dataset for quantization: {dataset_path}")
-                ret = rknn.build(do_quantization=True, dataset=dataset_path)
-            else:
-                print("Dataset file not found, building without quantization")
-                ret = rknn.build(do_quantization=False)
                 
+            ret = rknn.build(do_quantization=True, dataset='../dataset.txt')
             if ret != 0:
                 print("Failed to build RKNN model")
                 rknn.release()
