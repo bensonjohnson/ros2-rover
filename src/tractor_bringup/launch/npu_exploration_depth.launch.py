@@ -84,9 +84,9 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "max_speed": max_speed,
-                "min_battery_percentage": min_battery_percentage,
-                "safety_distance": safety_distance,
+                "max_speed": LaunchConfiguration("max_speed"),
+                "min_battery_percentage": LaunchConfiguration("min_battery_percentage"),
+                "safety_distance": LaunchConfiguration("safety_distance"),
                 "npu_inference_rate": 5.0,  # Hz
             }
         ],
@@ -106,7 +106,7 @@ def generate_launch_description():
         parameters=[
             {
                 "emergency_stop_distance": 0.1,  # 10cm emergency stop
-                "max_speed_limit": max_speed,
+                "max_speed_limit": LaunchConfiguration("max_speed"),
             }
         ],
         remappings=[

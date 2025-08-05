@@ -404,6 +404,10 @@ class RKNNTrainerDepth:
                 output_names=['action_confidence']
             )
             
+            # Check if dataset.txt exists and has content
+            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
+            dataset_path = os.path.abspath(dataset_path)
+            
             # Convert ONNX to RKNN
             rknn = RKNN(verbose=False)
             rknn.config(
@@ -418,7 +422,24 @@ class RKNNTrainerDepth:
                 rknn.release()
                 return
                 
-            ret = rknn.build(do_quantization=True, dataset='../dataset.txt')
+            # Check if dataset exists and has content for quantization
+            do_quantization = False
+            if os.path.exists(dataset_path):
+                try:
+                    with open(dataset_path, 'r') as f:
+                        content = f.read().strip()
+                        if content and not content.startswith('#'):
+                            do_quantization = True
+                except Exception as e:
+                    print(f"Error reading dataset file: {e}")
+            
+            if do_quantization:
+                print(f"Building RKNN model with quantization using dataset: {dataset_path}")
+                ret = rknn.build(do_quantization=True, dataset=dataset_path)
+            else:
+                print("Building RKNN model without quantization (dataset not available or empty)")
+                ret = rknn.build(do_quantization=False)
+                
             if ret != 0:
                 print("Failed to build RKNN model")
                 rknn.release()

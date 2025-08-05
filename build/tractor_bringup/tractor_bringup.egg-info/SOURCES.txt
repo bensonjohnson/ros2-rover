@@ -21,6 +21,7 @@ config/slam_toolbox_params.yaml
 launch/autonomous_mapping_minimal.launch.py
 launch/autonomous_slam_mapping.launch.py
 launch/npu_exploration.launch.py
+launch/npu_exploration_depth.launch.py
 launch/robot_description.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
@@ -31,8 +32,12 @@ test/test_pep257.py
 tractor_bringup/__init__.py
 tractor_bringup/autonomous_mapping.py
 tractor_bringup/frontier_explorer.py
+tractor_bringup/improved_reward_system.py
 tractor_bringup/npu_exploration.py
+tractor_bringup/npu_exploration_depth.py
 tractor_bringup/rknn_trainer.py
+tractor_bringup/rknn_trainer_depth.py
 tractor_bringup/safety_monitor.py
 tractor_bringup/simple_safety_monitor.py
+tractor_bringup/simple_safety_monitor_depth.py
 urdf/tractor.urdf.xacro

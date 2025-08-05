@@ -23,6 +23,10 @@ WORKSPACE_ROOT=$(dirname "$(readlink -f "$0")")
 cd "$WORKSPACE_ROOT"
 echo "Building workspace at $WORKSPACE_ROOT"
 
+# Clean previous build artifacts to avoid conflicts
+echo "Cleaning previous build artifacts..."
+rm -rf build/ install/ log/
+
 # Build the workspace
 # --symlink-install is recommended for development to avoid re-copying files
 # --event-handlers console_direct+ shows output directly in the console
