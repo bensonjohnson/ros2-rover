@@ -57,9 +57,9 @@ class DepthImageExplorationNet(nn.Module):
         # Calculate the size after conv layers
         self.depth_fc = nn.Linear(256 * 9 * 5, 512)
         
-        # IMU + Proprioceptive branch
+        # Proprioceptive branch (wheel encoders, etc.)
         self.sensor_fc = nn.Sequential(
-            nn.Linear(10, 128),  # 6 IMU + 4 proprioceptive
+            nn.Linear(4, 128),  # 4 proprioceptive inputs, IMU removed
             nn.ReLU(),
             nn.Linear(128, 256),
             nn.ReLU(),
@@ -132,19 +132,17 @@ class RKNNTrainerDepth:
         # Load existing model if available
         self.load_latest_model()
         
-    def add_experience(self, 
-                      depth_image: np.ndarray, 
-                      imu_data: np.ndarray,
+    def add_experience(self,
+                      depth_image: np.ndarray,
                       proprioceptive: np.ndarray,
                       action: np.ndarray,
                       reward: float,
                       next_depth_image: np.ndarray = None,
                       done: bool = False):
         """Add experience to replay buffer"""
-        
+
         experience = {
             'depth_image': depth_image.copy(),
-            'imu': imu_data.copy(),
             'proprioceptive': proprioceptive.copy(),
             'action': action.copy(),
             'reward': reward,
@@ -236,8 +234,7 @@ class RKNNTrainerDepth:
         # Prepare batch data
         depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch])).unsqueeze(1).to(self.device)
         sensor_batch = torch.FloatTensor(np.array([
-            np.concatenate([exp['imu'], exp['proprioceptive']]) 
-            for exp in batch
+            exp['proprioceptive'] for exp in batch
         ])).to(self.device)
         action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch])).to(self.device)
         reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch])).to(self.device)
@@ -283,20 +280,17 @@ class RKNNTrainerDepth:
             "avg_reward": np.mean(self.reward_history) if self.reward_history else 0.0
         }
         
-    def inference(self, 
+    def inference(self,
                   depth_image: np.ndarray,
-                  imu_data: np.ndarray,
                   proprioceptive: np.ndarray) -> Tuple[np.ndarray, float]:
         """Run inference to get action and confidence"""
-        
+
         self.model.eval()
         with torch.no_grad():
             # Prepare inputs
             depth_tensor = torch.FloatTensor(depth_image).unsqueeze(0).unsqueeze(0).to(self.device)
-            sensor_tensor = torch.FloatTensor(
-                np.concatenate([imu_data, proprioceptive])
-            ).unsqueeze(0).to(self.device)
-            
+            sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
+
             # Log input shapes for debugging
             print(f"Depth tensor shape: {depth_tensor.shape}")
             print(f"Sensor tensor shape: {sensor_tensor.shape}")
@@ -388,10 +382,10 @@ class RKNNTrainerDepth:
             
             # Export to ONNX first
             dummy_depth = torch.randn(1, 1, 240, 424).to(self.device)  # 240x424 depth image
-            dummy_sensor = torch.randn(1, 10).to(self.device)
-            
+            dummy_sensor = torch.randn(1, 4).to(self.device)  # 4 proprioceptive inputs
+
             onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")
-            
+
             self.model.eval()
             torch.onnx.export(
                 self.model,
@@ -403,16 +397,16 @@ class RKNNTrainerDepth:
                 input_names=['depth_image', 'sensor'],
                 output_names=['action_confidence']
             )
-            
+
             # Check if dataset.txt exists and has content
             dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
             dataset_path = os.path.abspath(dataset_path)
-            
+
             # Convert ONNX to RKNN
             rknn = RKNN(verbose=False)
             rknn.config(
-                mean_values=[[0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],  # Depth image (1 channel), Sensor data (10 channels)
-                std_values=[[1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]],   # Corresponding std values
+                mean_values=[[0], [0, 0, 0, 0]],  # Depth image (1 channel), Sensor data (4 channels)
+                std_values=[[1], [1, 1, 1, 1]],   # Corresponding std values
                 target_platform='rk3588'
             )
             
