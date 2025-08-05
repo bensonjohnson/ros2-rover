@@ -67,12 +67,15 @@ def generate_launch_description():
         ),
         launch_arguments={
             "pointcloud.enable": "false",  # Disable pointcloud for bandwidth
-            "align_depth.enable": "true", 
+            "align_depth.enable": "true",
             "enable_color": "false",  # Disable color for bandwidth
             "enable_depth": "true",
             "enable_sync": "true",
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x15"  # Good balance of resolution and performance
+            "depth_module.depth_profile": "424x240x15",  # Good balance of resolution and performance
+            "enable_imu": "false",
+            "enable_gyro": "false",
+            "enable_accel": "false",
         }.items(),
     )
 
