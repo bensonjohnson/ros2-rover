@@ -123,6 +123,13 @@ echo "Launching NPU depth exploration system..."
 echo "Press Ctrl+C to stop safely"
 echo ""
 
+# Launch Foxglove bridge for visualization
+echo "Launching Foxglove bridge..."
+ros2 launch foxglove_bridge foxglove_bridge_launch.py &
+FOXGLOVE_PID=$!
+echo "✓ Foxglove bridge launched with PID: $FOXGLOVE_PID"
+echo ""
+
 ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     max_speed:=${MAX_SPEED} \
     exploration_time:=${EXPLORATION_TIME} \
@@ -142,6 +149,9 @@ shutdown_handler() {
         if ps -p $LAUNCH_PID > /dev/null; then
             kill -9 $LAUNCH_PID 2>/dev/null
         fi
+    fi
+    if ps -p $FOXGLOVE_PID > /dev/null; then
+        kill $FOXGLOVE_PID 2>/dev/null
     fi
     echo "✅ NPU depth exploration stopped safely"
     echo "=================================================="
