@@ -324,7 +324,7 @@ class NPUExplorationDepthNode(Node):
                 min_distance = np.min(valid_depths)
                 # Log the minimum distance for debugging
                 self.get_logger().debug(f"Min distance to obstacle: {min_distance:.2f}m")
-                return min_distance < 0.3  # 30cm emergency zone (increased from 10cm)
+                return min_distance < 0.15  # 15cm emergency zone (reduced for better learning)
                 
         except Exception as e:
             self.get_logger().warn(f"Emergency collision check failed: {e}")

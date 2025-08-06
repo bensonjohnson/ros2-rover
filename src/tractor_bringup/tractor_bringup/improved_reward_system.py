@@ -44,8 +44,8 @@ class ImprovedRewardCalculator:
             # Straight-line movement rewards
             'straight_line_bonus': 12.0,  # Strong reward for going straight
             'forward_progress_multiplier': 40.0,  # Heavy emphasis on forward movement
-            'angular_penalty_threshold': 0.3,  # rad/s threshold for penalizing turning
-            'excessive_turning_penalty': -10.0,  # Penalty for too much turning
+            'angular_penalty_threshold': 0.8,  # rad/s threshold for penalizing turning (increased)
+            'excessive_turning_penalty': -3.0,  # Penalty for too much turning (reduced)
             
             # Wall following and frontier exploration
             'wall_following_bonus': 5.0,  # Reward for maintaining distance from walls
@@ -292,9 +292,14 @@ class ImprovedRewardCalculator:
                 if angular_speed > 0.5:  # Spinning while moving
                     reward += self.reward_config['excessive_turning_penalty']
         
-        # Penalize pure spinning (high angular, low linear)
+        # Handle pure spinning - encourage turning when stuck, penalize when not needed
         if angular_speed > 0.4 and linear_speed < 0.03:
-            reward += self.reward_config['excessive_turning_penalty'] * 2.0  # Double penalty for pure spinning
+            if self._is_robot_stuck():
+                # Robot is stuck - encourage turning to get unstuck
+                reward += 5.0  # Encourage getting unstuck
+            else:
+                # Robot spinning unnecessarily
+                reward += self.reward_config['excessive_turning_penalty']
         
         return reward
     
@@ -360,6 +365,27 @@ class ImprovedRewardCalculator:
             pass
         
         return reward
+    
+    def _is_robot_stuck(self) -> bool:
+        """Check if the robot appears to be stuck and needs to turn"""
+        if len(self.position_history) < 5:
+            return False
+            
+        try:
+            # Check if robot hasn't moved much in recent history
+            recent_positions = list(self.position_history)[-5:]
+            position_changes = []
+            
+            for i in range(1, len(recent_positions)):
+                change = np.linalg.norm(recent_positions[i] - recent_positions[i-1])
+                position_changes.append(change)
+            
+            # If average movement is very small, robot is likely stuck
+            avg_movement = np.mean(position_changes) if position_changes else 0.0
+            return avg_movement < 0.02  # Less than 2cm average movement
+            
+        except Exception:
+            return False
     
     def _is_moving_in_straight_line(self, recent_positions: List[np.ndarray], current_position: np.ndarray) -> bool:
         """Check if robot is moving in a relatively straight line"""

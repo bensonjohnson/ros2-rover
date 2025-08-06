@@ -1,13 +1,6 @@
 package.xml
 setup.cfg
 setup.py
-../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
-../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/entry_points.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
 config/pointcloud_to_laserscan.yaml
@@ -26,9 +19,6 @@ launch/robot_description.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
 resource/tractor_bringup
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
 tractor_bringup/__init__.py
 tractor_bringup/autonomous_mapping.py
 tractor_bringup/frontier_explorer.py
@@ -40,4 +30,11 @@ tractor_bringup/rknn_trainer_depth.py
 tractor_bringup/safety_monitor.py
 tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_depth.py
+tractor_bringup.egg-info/PKG-INFO
+tractor_bringup.egg-info/SOURCES.txt
+tractor_bringup.egg-info/dependency_links.txt
+tractor_bringup.egg-info/entry_points.txt
+tractor_bringup.egg-info/requires.txt
+tractor_bringup.egg-info/top_level.txt
+tractor_bringup.egg-info/zip-safe
 urdf/tractor.urdf.xacro
