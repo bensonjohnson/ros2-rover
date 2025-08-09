@@ -101,9 +101,11 @@ class RKNNTrainerDepth:
         self.clip_max_distance = 4.0
         self.stacked_frames = stacked_frames
         self.frame_stack: deque = deque(maxlen=stacked_frames)
+        # Extended proprio feature count: last_action(2) + wheel_diff(1) + min_d(1) + mean_d(1) + near_collision(1) = 6
+        self.extra_proprio = 6
         # Neural network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = DepthImageExplorationNet(stacked_frames=stacked_frames).to(self.device)
+        self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
         
@@ -309,11 +311,12 @@ class RKNNTrainerDepth:
         """Run inference to get action and confidence (Phase1: still returns 3 outputs)."""
         self.model.eval()
         with torch.no_grad():
-            processed = self.preprocess_depth_for_model(depth_image)  # (C,H,W)
+            processed = self.preprocess_depth_for_model(depth_image)
             depth_tensor = torch.from_numpy(processed).unsqueeze(0).to(self.device)
             sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
             output = self.model(depth_tensor, sensor_tensor)
-            action = output[0, :2].cpu().numpy()
+            # Apply tanh squashing to first two outputs for bounded actions
+            action = torch.tanh(output[0, :2]).cpu().numpy()
             confidence = torch.sigmoid(output[0, 2]).item()
         self.model.train()
         return action, float(confidence)
@@ -467,3 +470,9 @@ class RKNNTrainerDepth:
             "avg_reward": np.mean(self.reward_history) if self.reward_history else 0.0,
             "buffer_full": len(self.experience_buffer) / self.buffer_size
         }
+    
+    def safe_save(self):
+        try:
+            self.save_model()
+        except Exception as e:
+            print(f"Model save failed during shutdown: {e}")

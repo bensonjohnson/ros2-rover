@@ -114,7 +114,7 @@ NOTE: Phase 0 baseline capture intentionally skipped per decision (poor initial 
 ## Immediate Low-Effort Wins
 [x] Remove verbose prints in inference loop
 [x] Normalize depth & clamp distances
-[ ] Add save on shutdown
-[ ] Add tanh squashing
+[x] Add save on shutdown
+[x] Add tanh squashing
 
 (End of plan)
