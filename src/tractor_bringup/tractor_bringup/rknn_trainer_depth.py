@@ -145,12 +145,17 @@ class RKNNTrainerDepth:
                       done: bool = False):
         """Add experience to replay buffer"""
 
+        # Preprocess depth images into (C,H,W)
+        processed = depth_image if depth_image.ndim == 3 else self.preprocess_depth_for_storage(depth_image)
+        processed_next = None
+        if next_depth_image is not None:
+            processed_next = next_depth_image if next_depth_image.ndim == 3 else self.preprocess_depth_for_storage(next_depth_image)
         experience = {
-            'depth_image': depth_image.copy(),
+            'depth_image': processed.copy(),
             'proprioceptive': proprioceptive.copy(),
             'action': action.copy(),
             'reward': reward,
-            'next_depth_image': next_depth_image.copy() if next_depth_image is not None else None,
+            'next_depth_image': processed_next.copy() if processed_next is not None else None,
             'done': done
         }
         
@@ -235,13 +240,20 @@ class RKNNTrainerDepth:
         indices = np.random.choice(len(self.experience_buffer), self.batch_size, replace=False)
         batch = [self.experience_buffer[i] for i in indices]
         
+        # Detect legacy shape and purge if necessary
+        if any(exp['depth_image'].ndim != 3 for exp in batch):
+            self.experience_buffer.clear()
+            return {"loss": 0.0, "samples": 0}
+        
         # Prepare batch data
-        depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch])).unsqueeze(1).to(self.device)
-        sensor_batch = torch.FloatTensor(np.array([
-            exp['proprioceptive'] for exp in batch
-        ])).to(self.device)
-        action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch])).to(self.device)
-        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch])).to(self.device)
+        depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch]))  # (B,C,H,W)
+        sensor_batch = torch.FloatTensor(np.array([exp['proprioceptive'] for exp in batch]))
+        action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch]))
+        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch]))
+        depth_batch = depth_batch.to(self.device)
+        sensor_batch = sensor_batch.to(self.device)
+        action_batch = action_batch.to(self.device)
+        reward_batch = reward_batch.to(self.device)
         
         # Forward pass
         predicted_actions = self.model(depth_batch, sensor_batch)
@@ -305,6 +317,20 @@ class RKNNTrainerDepth:
             return stacked
         except Exception:
             # Fallback zero tensor
+            return np.zeros((self.stacked_frames, self.target_h, self.target_w), dtype=np.float32)
+    
+    def preprocess_depth_for_storage(self, depth_image: np.ndarray) -> np.ndarray:
+        """Preprocess without mutating frame stack (single frame replicated)."""
+        try:
+            depth = np.nan_to_num(depth_image, nan=0.0, posinf=self.clip_max_distance, neginf=0.0)
+            depth = np.clip(depth, 0.0, self.clip_max_distance)
+            depth_resized = cv2.resize(depth, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
+            depth_norm = depth_resized / self.clip_max_distance
+            if self.stacked_frames == 1:
+                return depth_norm.astype(np.float32)[None, ...]
+            else:
+                return np.repeat(depth_norm[None, ...], self.stacked_frames, axis=0)
+        except Exception:
             return np.zeros((self.stacked_frames, self.target_h, self.target_w), dtype=np.float32)
         
     def inference(self, depth_image: np.ndarray, proprioceptive: np.ndarray) -> Tuple[np.ndarray, float]:
