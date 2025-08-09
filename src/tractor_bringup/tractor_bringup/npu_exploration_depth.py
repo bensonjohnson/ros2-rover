@@ -45,6 +45,11 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('safety_distance', 0.2)
         self.declare_parameter('npu_inference_rate', 5.0)
         self.declare_parameter('stacked_frames', 1)
+        # Initialize critical attributes BEFORE subscriptions / inference
+        self.last_action = np.array([0.0, 0.0])
+        self.exploration_warmup_steps = 300  # steps of forced exploration
+        self.random_action_prob = 0.3        # probability to inject random action during warmup
+        self.min_forward_bias = 0.2          # bias for forward movement (scaled later)
         
         self.max_speed = self.get_parameter('max_speed').value
         self.min_battery_percentage = self.get_parameter('min_battery_percentage').value
@@ -115,11 +120,13 @@ class NPUExplorationDepthNode(Node):
         
         # Control timer
         self.control_timer = self.create_timer(0.1, self.control_loop)  # 10Hz control
-        
+        # Separate status timer (1 Hz) to reduce coupling to depth rate
+        self.status_timer = self.create_timer(1.0, self.publish_status)
         self.get_logger().info(f"NPU Depth Exploration Node initialized")
         self.get_logger().info(f"  Max Speed: {self.max_speed} m/s")
         self.get_logger().info(f"  Min Battery: {self.min_battery_percentage}%")
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
+        self.get_logger().info(f"  Inference target rate: {self.inference_rate} Hz")
         
     def init_inference_engine(self):
         self.use_npu = False
@@ -153,10 +160,7 @@ class NPUExplorationDepthNode(Node):
         if self.use_npu and self.trainer and self.step_count > 10:
             self.train_from_experience()
         
-        # Publish status
-        self.publish_status()
-        
-        
+        # status now handled by status timer
     def odom_callback(self, msg):
         """Update position and velocity from motor controller"""
         # Extract position
@@ -343,7 +347,6 @@ class NPUExplorationDepthNode(Node):
             return np.array([0.0, 0.0]), 0.0
         try:
             depth_input = self.latest_depth_image.astype(np.float32)
-            # Depth stats for proprio features
             valid = depth_input[(depth_input > 0.05) & (depth_input < 4.0)]
             min_d = float(np.min(valid)) if valid.size else 0.0
             mean_d = float(np.mean(valid)) if valid.size else 0.0
@@ -361,6 +364,21 @@ class NPUExplorationDepthNode(Node):
                 near_collision_flag
             ], dtype=np.float32)
             action, confidence = self.trainer.inference(depth_input, proprioceptive)
+            # Exploration warmup logic: encourage movement & diversity early
+            if self.step_count < self.exploration_warmup_steps:
+                if np.random.rand() < self.random_action_prob:
+                    # Inject random action
+                    action = np.array([
+                        np.random.uniform(self.min_forward_bias, 1.0),
+                        np.random.uniform(-0.6, 0.6)
+                    ], dtype=np.float32)
+                else:
+                    # Forward bias if nearly stationary
+                    if abs(action[0]) < 0.1:
+                        action[0] = self.min_forward_bias
+                # Slight decay of bias over warmup
+                decay = 1.0 - (self.step_count / self.exploration_warmup_steps)
+                action[0] = np.clip(action[0] + 0.1 * decay, -1.0, 1.0)
             return action, confidence
         except Exception as e:
             self.get_logger().warn(f"Inference failed: {e}")
@@ -384,6 +402,8 @@ class NPUExplorationDepthNode(Node):
                 depth_data=self.latest_depth_image,
                 wheel_velocities=self.wheel_velocities
             )
+            # Clip extreme negative reward to avoid early policy collapse
+            reward = float(np.clip(reward, -2.0, 10.0))
             if self.prev_depth_image is not None:
                 depth_input_prev = self.prev_depth_image
                 valid_prev = depth_input_prev[(depth_input_prev > 0.05) & (depth_input_prev < 4.0)]
@@ -410,9 +430,11 @@ class NPUExplorationDepthNode(Node):
                     next_depth_image=self.latest_depth_image.astype(np.float32),
                     done=False
                 )
-            training_stats = self.trainer.train_step()
-            if self.step_count % 50 == 0 and 'loss' in training_stats:
-                self.get_logger().info(f"Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
+            # Delay training until buffer has minimal size
+            if len(self.trainer.experience_buffer) >= max(32, self.trainer.batch_size):
+                training_stats = self.trainer.train_step()
+                if self.step_count % 50 == 0 and 'loss' in training_stats:
+                    self.get_logger().info(f"Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
             self.prev_position = self.position.copy()
             self.prev_depth_image = self.latest_depth_image.copy()
         except Exception as e:
