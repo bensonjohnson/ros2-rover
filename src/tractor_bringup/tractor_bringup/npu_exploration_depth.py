@@ -44,11 +44,13 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('min_battery_percentage', 30.0)
         self.declare_parameter('safety_distance', 0.2)
         self.declare_parameter('npu_inference_rate', 5.0)
+        self.declare_parameter('stacked_frames', 1)
         
         self.max_speed = self.get_parameter('max_speed').value
         self.min_battery_percentage = self.get_parameter('min_battery_percentage').value
         self.safety_distance = self.get_parameter('safety_distance').value
         self.inference_rate = self.get_parameter('npu_inference_rate').value
+        self.stacked_frames = self.get_parameter('stacked_frames').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -120,21 +122,18 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         
     def init_inference_engine(self):
-        """Initialize RKNN NPU training system"""
         self.use_npu = False
         self.trainer = None
         
         if TRAINER_AVAILABLE:
             try:
-                self.trainer = RKNNTrainerDepth()
+                self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames)
                 self.use_npu = True
-                self.get_logger().info("RKNN Trainer initialized - Learning enabled!")
-                self.get_logger().info(f"Training stats: {self.trainer.get_training_stats()}")
+                self.get_logger().info("RKNN Trainer initialized (Phase1 preprocessing)")
             except Exception as e:
-                self.get_logger().warn(f"RKNN Trainer initialization failed: {e}")
-                self.use_npu = False
+                self.get_logger().warn(f"RKNN Trainer init failed: {e}")
         else:
-            self.get_logger().info("Using reactive navigation - no learning")
+            self.get_logger().info("Trainer not available")
             
     def depth_callback(self, msg):
         """Process depth image and update internal state"""
@@ -340,91 +339,82 @@ class NPUExplorationDepthNode(Node):
         return cmd
         
     def npu_inference(self):
-        """Run neural network inference"""
         if not self.all_sensors_ready():
             return np.array([0.0, 0.0]), 0.0
-            
         try:
-            # Prepare depth image input (H x W)
             depth_input = self.latest_depth_image.astype(np.float32)
-            
-            # Prepare proprioceptive input
+            # Depth stats for proprio features
+            valid = depth_input[(depth_input > 0.05) & (depth_input < 4.0)]
+            min_d = float(np.min(valid)) if valid.size else 0.0
+            mean_d = float(np.mean(valid)) if valid.size else 0.0
+            near_collision_flag = 1.0 if (valid.size and np.percentile(valid,5) < 0.25) else 0.0
+            wheel_diff = self.wheel_velocities[0] - self.wheel_velocities[1]
             proprioceptive = np.array([
                 self.current_velocity[0],
-                self.current_velocity[1], 
-                float(self.step_count % 100) / 100.0
-            ]).astype(np.float32)
-            
-            # Run inference
-            action, confidence = self.trainer.inference(
-                depth_input, proprioceptive
-            )
-            
-            # Log the action and confidence for debugging
-            self.get_logger().debug(f"NPU Action: linear={action[0]:.2f}, angular={action[1]:.2f}, confidence={confidence:.2f}")
-            
+                self.current_velocity[1],
+                float(self.step_count % 100) / 100.0,
+                self.last_action[0],
+                self.last_action[1],
+                wheel_diff,
+                min_d,
+                mean_d,
+                near_collision_flag
+            ], dtype=np.float32)
+            action, confidence = self.trainer.inference(depth_input, proprioceptive)
             return action, confidence
-            
         except Exception as e:
-            self.get_logger().warn(f"Neural inference failed: {e}")
-            return np.array([0.0, 0.0]), 0.0
+            self.get_logger().warn(f"Inference failed: {e}")
+            return np.array([0.0,0.0]), 0.0
             
     def all_sensors_ready(self):
         """Check if all sensor data is available"""
         return self.latest_depth_image is not None
                 
     def train_from_experience(self):
-        """Add experience to training buffer and perform training step"""
         if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
             return
-            
         try:
-            # Calculate progress for the reward function. This is used by the reward calculator.
             progress = np.linalg.norm(self.position - self.prev_position)
-            
-            # The improved reward system is self-contained and handles all reward logic,
-            # including exploration bonuses. The old local calculation is removed to avoid
-            # confusion and align with the intended architecture.
             reward = self.trainer.calculate_reward(
                 action=self.last_action,
                 collision=self.collision_detected,
                 progress=progress,
-                # This parameter is deprecated. The improved system calculates exploration internally
-                # and this is only used by the fallback basic reward system.
                 exploration_bonus=0.0,
                 position=self.position,
                 depth_data=self.latest_depth_image,
                 wheel_velocities=self.wheel_velocities
             )
-            
-            # Add experience to buffer
             if self.prev_depth_image is not None:
+                # Build extended proprio (must match inference): duplicate logic
+                depth_input_prev = self.prev_depth_image
+                valid_prev = depth_input_prev[(depth_input_prev > 0.05) & (depth_input_prev < 4.0)]
+                min_d_prev = float(np.min(valid_prev)) if valid_prev.size else 0.0
+                mean_d_prev = float(np.mean(valid_prev)) if valid_prev.size else 0.0
+                near_collision_prev = 1.0 if (valid_prev.size and np.percentile(valid_prev,5) < 0.25) else 0.0
+                wheel_diff_prev = self.wheel_velocities[0] - self.wheel_velocities[1]
+                proprio_prev = np.array([
+                    self.current_velocity[0],
+                    self.current_velocity[1],
+                    float(self.step_count % 100) / 100.0,
+                    self.last_action[0],
+                    self.last_action[1],
+                    wheel_diff_prev,
+                    min_d_prev,
+                    mean_d_prev,
+                    near_collision_prev
+                ], dtype=np.float32)
                 self.trainer.add_experience(
                     depth_image=self.prev_depth_image.astype(np.float32),
-                    proprioceptive=np.array([
-                        self.current_velocity[0], self.current_velocity[1],
-                        float(self.step_count % 100) / 100.0
-                    ]),
+                    proprioceptive=proprio_prev,
                     action=self.last_action,
                     reward=reward,
                     next_depth_image=self.latest_depth_image.astype(np.float32)
                 )
-                
-            # Perform training step
             training_stats = self.trainer.train_step()
-            
-            # Log training progress occasionally
-            if self.step_count % 50 == 0:
-                self.get_logger().info(
-                    f"Training: Loss={training_stats['loss']:.4f}, "
-                    f"Reward={training_stats['avg_reward']:.2f}, "
-                    f"Samples={training_stats['samples']}"
-                )
-                
-            # Update previous state
+            if self.step_count % 50 == 0 and 'loss' in training_stats:
+                self.get_logger().info(f"Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
             self.prev_position = self.position.copy()
             self.prev_depth_image = self.latest_depth_image.copy()
-            
         except Exception as e:
             self.get_logger().warn(f"Training step failed: {e}")
         
