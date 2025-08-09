@@ -347,7 +347,6 @@ class NPUExplorationNode(Node):
             proprioceptive = np.array([
                 self.current_velocity[0],
                 self.current_velocity[1], 
-                1.0,  # Battery level (placeholder)
                 float(self.step_count % 100) / 100.0
             ]).astype(np.float32)
             
@@ -403,7 +402,7 @@ class NPUExplorationNode(Node):
                     pointcloud=self.prev_pointcloud.T.astype(np.float32),
                     imu_data=self.latest_imu_data,
                     proprioceptive=np.array([
-                        self.current_velocity[0], self.current_velocity[1], 1.0, 
+                        self.current_velocity[0], self.current_velocity[1],
                         float(self.step_count % 100) / 100.0
                     ]),
                     action=self.last_action,

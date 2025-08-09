@@ -59,7 +59,7 @@ class DepthImageExplorationNet(nn.Module):
         
         # Proprioceptive branch (wheel encoders, etc.)
         self.sensor_fc = nn.Sequential(
-            nn.Linear(4, 128),  # 4 proprioceptive inputs, IMU removed
+            nn.Linear(3, 128),  # 3 proprioceptive inputs (removed battery)
             nn.ReLU(),
             nn.Linear(128, 256),
             nn.ReLU(),
@@ -382,7 +382,7 @@ class RKNNTrainerDepth:
             
             # Export to ONNX first
             dummy_depth = torch.randn(1, 1, 240, 424).to(self.device)  # 240x424 depth image
-            dummy_sensor = torch.randn(1, 4).to(self.device)  # 4 proprioceptive inputs
+            dummy_sensor = torch.randn(1, 3).to(self.device)  # 3 proprioceptive inputs
 
             onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")
 
@@ -405,8 +405,8 @@ class RKNNTrainerDepth:
             # Convert ONNX to RKNN
             rknn = RKNN(verbose=False)
             rknn.config(
-                mean_values=[[0], [0, 0, 0, 0]],  # Depth image (1 channel), Sensor data (4 channels)
-                std_values=[[1], [1, 1, 1, 1]],   # Corresponding std values
+                mean_values=[[0], [0, 0, 0]],  # Depth image (1 channel), Sensor data (3 channels)
+                std_values=[[1], [1, 1, 1]],   # Corresponding std values
                 target_platform='rk3588'
             )
             
