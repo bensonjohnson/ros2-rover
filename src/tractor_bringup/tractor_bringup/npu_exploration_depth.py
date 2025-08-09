@@ -385,7 +385,6 @@ class NPUExplorationDepthNode(Node):
                 wheel_velocities=self.wheel_velocities
             )
             if self.prev_depth_image is not None:
-                # Build extended proprio (must match inference): duplicate logic
                 depth_input_prev = self.prev_depth_image
                 valid_prev = depth_input_prev[(depth_input_prev > 0.05) & (depth_input_prev < 4.0)]
                 min_d_prev = float(np.min(valid_prev)) if valid_prev.size else 0.0
@@ -408,7 +407,8 @@ class NPUExplorationDepthNode(Node):
                     proprioceptive=proprio_prev,
                     action=self.last_action,
                     reward=reward,
-                    next_depth_image=self.latest_depth_image.astype(np.float32)
+                    next_depth_image=self.latest_depth_image.astype(np.float32),
+                    done=False
                 )
             training_stats = self.trainer.train_step()
             if self.step_count % 50 == 0 and 'loss' in training_stats:
