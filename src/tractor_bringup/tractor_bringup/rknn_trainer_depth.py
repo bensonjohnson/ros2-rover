@@ -35,45 +35,42 @@ class DepthImageExplorationNet(nn.Module):
     Outputs: Linear velocity, angular velocity, exploration confidence
     """
     
-    def __init__(self):
+    def __init__(self, stacked_frames: int = 1, extra_proprio: int = 0):
         super().__init__()
-        
+        self.stacked_frames = stacked_frames
+        in_channels = stacked_frames  # depth frames stacked along channel dim
         # Depth image branch (CNN)
         self.depth_conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # 424x240 -> 212x120
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 212x120 -> 106x60
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # 106x60 -> 53x30
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # 53x30 -> 27x15
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),  # 27x15 -> 27x15
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.AvgPool2d(kernel_size=(3, 3), stride=(3, 3)),  # 27x15 -> 9x5
+            nn.AvgPool2d(kernel_size=(3, 3), stride=(3, 3)),
             nn.Flatten()
         )
-        
-        # Calculate the size after conv layers
-        self.depth_fc = nn.Linear(256 * 9 * 5, 512)
-        
-        # Proprioceptive branch (wheel encoders, etc.)
+        # After conv stack with input 160x288 -> sizes: /2=80x144 /2=40x72 /2=20x36 /2=10x18 then pool /3 -> 3x6
+        self.depth_fc = nn.Linear(256 * 3 * 6, 512)
+        proprio_inputs = 3 + extra_proprio  # base + added features
         self.sensor_fc = nn.Sequential(
-            nn.Linear(3, 128),  # 3 proprioceptive inputs (removed battery)
+            nn.Linear(proprio_inputs, 128),
             nn.ReLU(),
             nn.Linear(128, 256),
             nn.ReLU(),
             nn.Linear(256, 128)
         )
-        
-        # Fusion and output
         self.fusion = nn.Sequential(
             nn.Linear(512 + 128, 512),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(256, 3)  # [linear_vel, angular_vel, confidence]
+            nn.Linear(256, 3)
         )
         
     def forward(self, depth_image, sensor_data):
@@ -95,13 +92,18 @@ class RKNNTrainerDepth:
     Handles model training, data collection, and RKNN conversion for depth images
     """
     
-    def __init__(self, model_dir="models"):
+    def __init__(self, model_dir="models", stacked_frames: int = 1, enable_debug: bool = False):
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
-        
+        self.enable_debug = enable_debug
+        self.target_h = 160
+        self.target_w = 288
+        self.clip_max_distance = 4.0
+        self.stacked_frames = stacked_frames
+        self.frame_stack: deque = deque(maxlen=stacked_frames)
         # Neural network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = DepthImageExplorationNet().to(self.device)
+        self.model = DepthImageExplorationNet(stacked_frames=stacked_frames).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
         
@@ -280,34 +282,39 @@ class RKNNTrainerDepth:
             "avg_reward": np.mean(self.reward_history) if self.reward_history else 0.0
         }
         
-    def inference(self,
-                  depth_image: np.ndarray,
-                  proprioceptive: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Run inference to get action and confidence"""
-
+    def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
+        """Normalize, resize, clip and optionally stack frames.
+        Input depth_image: (H,W) meters.
+        Returns (stacked_frames, target_h, target_w) float32 in [0,1]."""
+        try:
+            # Clip far ranges to reduce dynamic range then normalize
+            depth = np.nan_to_num(depth_image, nan=0.0, posinf=self.clip_max_distance, neginf=0.0)
+            depth = np.clip(depth, 0.0, self.clip_max_distance)
+            # Resize to target
+            depth_resized = cv2.resize(depth, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
+            # Scale to [0,1]
+            depth_norm = depth_resized / self.clip_max_distance
+            # Append to stack
+            self.frame_stack.append(depth_norm.astype(np.float32))
+            # If stack not full yet, pad with copies of first
+            while len(self.frame_stack) < self.stacked_frames:
+                self.frame_stack.append(self.frame_stack[0])
+            stacked = np.stack(list(self.frame_stack), axis=0)  # (C,H,W)
+            return stacked
+        except Exception:
+            # Fallback zero tensor
+            return np.zeros((self.stacked_frames, self.target_h, self.target_w), dtype=np.float32)
+        
+    def inference(self, depth_image: np.ndarray, proprioceptive: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Run inference to get action and confidence (Phase1: still returns 3 outputs)."""
         self.model.eval()
         with torch.no_grad():
-            # Prepare inputs
-            depth_tensor = torch.FloatTensor(depth_image).unsqueeze(0).unsqueeze(0).to(self.device)
+            processed = self.preprocess_depth_for_model(depth_image)  # (C,H,W)
+            depth_tensor = torch.from_numpy(processed).unsqueeze(0).to(self.device)
             sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
-
-            # Log input shapes for debugging
-            print(f"Depth tensor shape: {depth_tensor.shape}")
-            print(f"Sensor tensor shape: {sensor_tensor.shape}")
-            
-            # Forward pass
             output = self.model(depth_tensor, sensor_tensor)
-            
-            # Log output for debugging
-            print(f"Model output: {output}")
-            
-            # Extract action and confidence
             action = output[0, :2].cpu().numpy()
-            confidence = torch.sigmoid(output[0, 2]).cpu().numpy()
-            
-            # Log action and confidence for debugging
-            print(f"Action: {action}, Confidence: {confidence}")
-            
+            confidence = torch.sigmoid(output[0, 2]).item()
         self.model.train()
         return action, float(confidence)
         
