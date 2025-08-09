@@ -245,9 +245,9 @@ class NPUExplorationDepthNode(Node):
         if self.low_battery_shutdown:
             self.stop_robot()
             self.get_logger().info(f"Exploration stopped - Battery at {self.current_battery_percentage:.1f}%")
+            if self.trainer:
+                self.trainer.safe_save()
             self.get_logger().info("Initiating graceful shutdown due to low battery...")
-            
-            # Signal ROS2 to shutdown this node
             self.destroy_node()
             rclpy.shutdown()
             return
@@ -273,7 +273,7 @@ class NPUExplorationDepthNode(Node):
             # Always use neural network when available
             action, confidence = self.npu_inference()
             
-            # Convert NPU output to command
+            # action already tanh squashed in trainer; scale here
             cmd.linear.x = float(action[0]) * self.max_speed
             cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
             
@@ -281,7 +281,7 @@ class NPUExplorationDepthNode(Node):
             if emergency_stop:
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
-                self.exploration_mode = f"EMERGENCY_STOP (NPU conf: {confidence:.2f})"
+                self.exploration_mode = f"EMERGENCY_STOP (conf: {confidence:.2f})"
                 self.collision_detected = True
             else:
                 self.exploration_mode = f"NPU_DRIVING (conf: {confidence:.2f})"
@@ -431,6 +431,8 @@ class NPUExplorationDepthNode(Node):
         cmd.linear.x = 0.0
         cmd.angular.z = 0.0
         self.cmd_pub.publish(cmd)
+        if self.trainer:
+            self.trainer.safe_save()
         
     def publish_status(self):
         """Publish exploration status"""
