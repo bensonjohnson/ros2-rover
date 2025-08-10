@@ -34,6 +34,11 @@ class SimpleSafetyMonitorDepth(Node):
         self.declare_parameter('minimum_hold_time_secs', 0.4)
         # Publish zero command immediately on trigger
         self.declare_parameter('publish_zero_on_trigger', True)
+        # Reverse escape allowances while in emergency stop
+        self.declare_parameter('allow_reverse_escape', True)
+        self.declare_parameter('reverse_escape_max_speed', 0.08)
+        self.declare_parameter('allow_turn_during_escape', True)
+        self.declare_parameter('escape_turn_scale', 0.6)
         # ROI percentages (center crop)
         self.declare_parameter('roi_top_pct', 0.3)
         self.declare_parameter('roi_bottom_pct', 0.7)
@@ -52,6 +57,10 @@ class SimpleSafetyMonitorDepth(Node):
         self.smoothing_window = int(self.get_parameter('smoothing_window').value)
         self.minimum_hold_time = float(self.get_parameter('minimum_hold_time_secs').value)
         self.publish_zero_on_trigger = bool(self.get_parameter('publish_zero_on_trigger').value)
+        self.allow_reverse_escape = bool(self.get_parameter('allow_reverse_escape').value)
+        self.reverse_escape_max_speed = float(self.get_parameter('reverse_escape_max_speed').value)
+        self.allow_turn_during_escape = bool(self.get_parameter('allow_turn_during_escape').value)
+        self.escape_turn_scale = float(self.get_parameter('escape_turn_scale').value)
         self.roi_top_pct = float(self.get_parameter('roi_top_pct').value)
         self.roi_bottom_pct = float(self.get_parameter('roi_bottom_pct').value)
         self.roi_left_pct = float(self.get_parameter('roi_left_pct').value)
@@ -162,8 +171,16 @@ class SimpleSafetyMonitorDepth(Node):
         """Process and potentially modify velocity commands"""
         safe_cmd = Twist()
         if self.emergency_stop:
-            safe_cmd.linear.x = 0.0
-            safe_cmd.angular.z = 0.0
+            # Allow controlled reverse + limited turn to actively clear obstacle
+            if (self.allow_reverse_escape and msg.linear.x < -0.01):
+                safe_cmd.linear.x = max(-self.reverse_escape_max_speed, msg.linear.x)
+                if self.allow_turn_during_escape:
+                    safe_cmd.angular.z = float(np.clip(msg.angular.z, -self.escape_turn_scale, self.escape_turn_scale))
+                else:
+                    safe_cmd.angular.z = 0.0
+            else:
+                safe_cmd.linear.x = 0.0
+                safe_cmd.angular.z = 0.0
         else:
             safe_cmd.linear.x = max(-self.max_speed, min(self.max_speed, msg.linear.x))
             safe_cmd.angular.z = max(-2.0, min(2.0, msg.angular.z))
