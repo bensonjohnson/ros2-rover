@@ -437,9 +437,9 @@ class RKNNTrainerDepth:
             print("Starting with fresh model")
             
     def _proprio_feature_size(self):
-        # Base features: linear_vel, angular_vel, last_action_lin, last_action_ang, wheel_diff, min_depth, mean_depth, near_collision
-        base = 8
-        return base + self.extra_proprio
+        """Return proprioceptive feature size consistent with network construction.
+        Matches 'proprio_inputs = 3 + extra_proprio' used in __init__."""
+        return 3 + self.extra_proprio
 
     def convert_to_rknn(self):
         """Convert PyTorch model to RKNN format for NPU inference (fixed input shapes) with detailed debug."""
