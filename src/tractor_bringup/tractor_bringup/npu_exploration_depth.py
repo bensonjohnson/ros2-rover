@@ -139,7 +139,16 @@ class NPUExplorationDepthNode(Node):
         # Recovery features
         self.recovery_active = False
         self.last_min_distance = None
-        
+        # Scripted recovery state
+        self.recovery_phase = 0          # 0=reverse,1=rotate,2=probe
+        self.recovery_phase_ticks = 0
+        self.recovery_phase_target = 0
+        self.recovery_total_ticks = 0
+        self.recovery_direction = 0      # +1 CCW, -1 CW
+        self.recovery_no_progress_ticks = 0
+        self.recovery_last_min_d = None
+        self.recovery_clear_ticks = 0
+
     def init_inference_engine(self):
         self.use_npu = False
         self.trainer = None
@@ -308,32 +317,63 @@ class NPUExplorationDepthNode(Node):
     def generate_control_command(self):
         """Generate control command - NPU drives, safety only intervenes for emergency stop"""
         cmd = Twist()
-        
         # Check for emergency collision risk
         emergency_stop, min_d, left_free, right_free, center_free = self.check_emergency_collision()
-        
-        if self.use_npu and self.trainer and self.all_sensors_ready():
-            action, confidence = self.npu_inference(emergency_stop, min_d, left_free, right_free, center_free)
-            # Scale
-            cmd.linear.x = float(action[0]) * self.max_speed
-            cmd.angular.z = float(action[1]) * self.angular_scale
-            if emergency_stop:
-                self.exploration_mode = f"RECOVERY (d={min_d:.2f} conf:{confidence:.2f})"
-                self.collision_detected = True
+        # Decide if in recovery context
+        in_recovery_context = emergency_stop or self.recovery_active
+        if in_recovery_context:
+            if not self.recovery_active:
+                # Initialize recovery session
                 self.recovery_active = True
+                self.recovery_phase = 0
+                self.recovery_phase_ticks = 0
+                self.recovery_total_ticks = 0
+                self.recovery_no_progress_ticks = 0
+                self.recovery_last_min_d = min_d
+                # Choose direction based on freer side (positive angular = left/CCW)
+                self.recovery_direction = 1 if left_free >= right_free else -1
+                # Phase target durations (set first)
+                self.recovery_phase_target = np.random.randint(8, 13)  # reverse phase length
+            # Obtain network suggestion if sensors ready
+            net_action = np.array([0.0, 0.0])
+            confidence = 0.0
+            if self.use_npu and self.trainer and self.all_sensors_ready():
+                net_action, confidence = self.npu_inference(emergency_stop, min_d, left_free, right_free, center_free)
+            scripted_action = self.compute_recovery_action(min_d, left_free, right_free, center_free)
+            # Blend: if net action weak or low confidence use scripted
+            if (abs(net_action[0]) < 0.05 and abs(net_action[1]) < 0.05) or confidence < 0.3:
+                final_action = scripted_action
             else:
+                final_action = 0.5 * scripted_action + 0.5 * net_action
+            # Scale to cmd
+            cmd.linear.x = float(np.clip(final_action[0], -1.0, 1.0)) * self.max_speed
+            cmd.angular.z = float(np.clip(final_action[1], -1.0, 1.0)) * self.angular_scale
+            self.exploration_mode = f"RECOVERY P{self.recovery_phase} d={min_d:.2f}"
+            self.last_action = np.array([cmd.linear.x / self.max_speed if self.max_speed>0 else 0.0,
+                                         cmd.angular.z / self.angular_scale if self.angular_scale!=0 else 0.0])
+            # Clear condition: stable clear distance
+            if not emergency_stop and min_d > 0.28:
+                self.recovery_clear_ticks += 1
+            else:
+                self.recovery_clear_ticks = 0
+            if self.recovery_clear_ticks >= 5:
+                self.reset_recovery_state()
+        else:
+            if self.use_npu and self.trainer and self.all_sensors_ready():
+                action, confidence = self.npu_inference(emergency_stop, min_d, left_free, right_free, center_free)
+                cmd.linear.x = float(action[0]) * self.max_speed
+                cmd.angular.z = float(action[1]) * self.angular_scale
                 if self.recovery_active and min_d and min_d > 0.25:
-                    self.recovery_active = False
+                    self.reset_recovery_state()
                 self.exploration_mode = f"NPU_DRIVING (conf: {confidence:.2f})"
                 self.collision_detected = False
-            self.last_action = np.array([float(action[0]), float(action[1])])
-        else:
-            # Fallback: stop and wait for NPU
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            self.exploration_mode = "WAITING_FOR_NPU"
-            self.last_action = np.array([0.0, 0.0])
-            
+                self.last_action = np.array([float(action[0]), float(action[1])])
+            else:
+                # Fallback: stop and wait for NPU
+                cmd.linear.x = 0.0
+                cmd.angular.z = 0.0
+                self.exploration_mode = "WAITING_FOR_NPU"
+                self.last_action = np.array([0.0, 0.0])
         return cmd
         
     def check_emergency_collision(self):
@@ -411,6 +451,78 @@ class NPUExplorationDepthNode(Node):
             self.get_logger().warn(f"Inference failed: {e}")
             return np.array([0.0,0.0]), 0.0
 
+    def compute_recovery_action(self, min_d, left_free, right_free, center_free):
+        """Scripted multi-phase recovery policy.
+        Phases:
+          0: Reverse to create space
+          1: Rotate toward freer side
+          2: Forward probe
+        Transitions based on ticks and distance improvement.
+        """
+        # Safety immediate reverse if extremely close
+        if min_d < 0.10:
+            return np.array([-0.6, 0.0], dtype=np.float32)
+        # Track distance improvement
+        improved = False
+        if self.recovery_last_min_d is not None and min_d > self.recovery_last_min_d + 0.015:
+            improved = True
+        # Phase logic
+        if self.recovery_phase == 0:
+            # Reverse phase
+            action = np.array([-0.5, 0.0], dtype=np.float32)
+            if self.recovery_phase_ticks >= self.recovery_phase_target or improved:
+                self.recovery_phase = 1
+                self.recovery_phase_ticks = 0
+                # Set rotation duration
+                self.recovery_phase_target = np.random.randint(18, 26)
+        elif self.recovery_phase == 1:
+            # Rotate toward freer side (direction chosen at start)
+            # Re-evaluate direction mid-way if large disparity
+            if self.recovery_phase_ticks == 0 or (self.recovery_phase_ticks % 10 == 0):
+                self.recovery_direction = 1 if left_free >= right_free else -1
+            action = np.array([0.0, 0.9 * self.recovery_direction], dtype=np.float32)
+            if self.recovery_phase_ticks >= self.recovery_phase_target or improved:
+                self.recovery_phase = 2
+                self.recovery_phase_ticks = 0
+                self.recovery_phase_target = np.random.randint(8, 13)  # probe duration
+        else:
+            # Forward probe
+            forward_speed = 0.4 if min_d > 0.22 else 0.25
+            action = np.array([forward_speed, 0.0], dtype=np.float32)
+            # If still blocked quickly, go back to rotate with opposite direction
+            if min_d < 0.20 and self.recovery_phase_ticks > 3:
+                self.recovery_phase = 1
+                self.recovery_phase_ticks = 0
+                self.recovery_direction *= -1
+                self.recovery_phase_target = np.random.randint(18, 26)
+            elif self.recovery_phase_ticks >= self.recovery_phase_target or improved:
+                # Loop rotation-probe cycle until clear
+                self.recovery_phase = 1
+                self.recovery_phase_ticks = 0
+                self.recovery_phase_target = np.random.randint(18, 26)
+        # Update counters
+        self.recovery_phase_ticks += 1
+        self.recovery_total_ticks += 1
+        if not improved:
+            self.recovery_no_progress_ticks += 1
+        else:
+            self.recovery_no_progress_ticks = 0
+        self.recovery_last_min_d = min_d
+        # Abort recovery if taking too long
+        if self.recovery_total_ticks > 120:
+            self.reset_recovery_state()
+        return action
+
+    def reset_recovery_state(self):
+        self.recovery_active = False
+        self.recovery_phase = 0
+        self.recovery_phase_ticks = 0
+        self.recovery_total_ticks = 0
+        self.recovery_no_progress_ticks = 0
+        self.recovery_last_min_d = None
+        self.recovery_clear_ticks = 0
+        self.exploration_mode = "NPU_DRIVING"
+
     def train_from_experience(self):
         if self.operation_mode == 'inference':
             return
@@ -441,6 +553,9 @@ class NPUExplorationDepthNode(Node):
                 reward += 4.0 * distance_improved  # positive when clearing space
                 if distance_improved == 0.0:
                     reward -= 0.5  # small penalty for ineffective recovery step
+                # Extra penalty if many steps with no progress
+                if hasattr(self, 'recovery_no_progress_ticks') and self.recovery_no_progress_ticks > 25:
+                    reward -= 1.0
             reward = float(np.clip(reward, -10.0, 15.0))
             # Prepare previous frame experience (unchanged core logic)
             if self.prev_depth_image is not None:
