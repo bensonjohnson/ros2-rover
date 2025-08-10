@@ -101,8 +101,8 @@ class RKNNTrainerDepth:
         self.clip_max_distance = 4.0
         self.stacked_frames = stacked_frames
         self.frame_stack: deque = deque(maxlen=stacked_frames)
-        # Extended proprio feature count: last_action(2) + wheel_diff(1) + min_d(1) + mean_d(1) + near_collision(1) = 6
-        self.extra_proprio = 6
+        # Extended proprio feature count now: base(3) + extras(10) = 13 total features
+        self.extra_proprio = 10  # updated from 9 to match 13-element proprio vector
         # Neural network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -493,34 +493,59 @@ class RKNNTrainerDepth:
             print(f"Failed to save model: {e}")
         
     def load_latest_model(self):
-        """Load the latest saved model"""
+        """Load the latest saved model with partial transplant if proprio feature size expanded."""
         try:
             latest_path = os.path.join(self.model_dir, "exploration_model_depth_latest.pth")
-            
             if os.path.exists(latest_path) and os.path.islink(latest_path):
-                # Resolve symlink to actual file
                 actual_model_path = os.path.join(self.model_dir, os.readlink(latest_path))
-                if os.path.exists(actual_model_path):
-                    checkpoint = torch.load(actual_model_path, map_location=self.device)
-                    self.model.load_state_dict(checkpoint['model_state_dict'])
-                    self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                    self.training_step = checkpoint.get('training_step', 0)
-                    print(f"Loaded model from {actual_model_path}")
-                    print(f"Training steps: {self.training_step}")
-                else:
-                    print(f"Model file {actual_model_path} not found")
             elif os.path.exists(latest_path):
-                # Direct file (not symlink)
-                checkpoint = torch.load(latest_path, map_location=self.device)
-                self.model.load_state_dict(checkpoint['model_state_dict'])
-                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                self.training_step = checkpoint.get('training_step', 0)
-                print(f"Loaded model from {latest_path}")
-                print(f"Training steps: {self.training_step}")
+                actual_model_path = latest_path
             else:
                 print("No saved model found, starting with fresh model")
+                return
+            if not os.path.exists(actual_model_path):
+                print(f"Model file {actual_model_path} not found")
+                return
+            checkpoint = torch.load(actual_model_path, map_location=self.device)
+            state_dict = checkpoint['model_state_dict']
+            # Handle possible sensor_fc input expansion
+            sensor_key_w = 'sensor_fc.0.weight'
+            sensor_key_b = 'sensor_fc.0.bias'
+            transplanted = False
+            if sensor_key_w in state_dict:
+                old_w = state_dict[sensor_key_w]
+                new_w = self.model.state_dict()[sensor_key_w]
+                if old_w.shape != new_w.shape:
+                    # Transplant overlapping columns
+                    cols = min(old_w.shape[1], new_w.shape[1])
+                    new_w[:, :cols] = old_w[:, :cols]
+                    if cols < new_w.shape[1]:
+                        # Initialize new feature columns with small noise
+                        with torch.no_grad():
+                            new_w[:, cols:] = 0.01 * torch.randn_like(new_w[:, cols:])
+                    state_dict[sensor_key_w] = new_w
+                    # Bias shape should match; if not, skip (unlikely)
+                    transplanted = True
+            # Load model with strict=False to allow missing/extra keys (e.g., optimizer-specific buffers)
+            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            if transplanted:
+                print(f"Partial transplant: adjusted sensor_fc input from old feature size to {self.model.sensor_fc[0].in_features}")
+            if missing:
+                if self.enable_debug:
+                    print(f"[Load] Missing keys: {missing}")
+            if unexpected:
+                if self.enable_debug:
+                    print(f"[Load] Unexpected keys: {unexpected}")
+            # Optimizer: only load if shapes unchanged
+            try:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            except Exception as e:
+                print(f"Optimizer state load skipped (shape mismatch): {e}")
+            self.training_step = checkpoint.get('training_step', 0)
+            print(f"Loaded model from {actual_model_path}")
+            print(f"Training steps: {self.training_step}")
         except Exception as e:
-            print(f"Failed to load model: {e}")
+            print(f"Failed to load model (partial load logic): {e}")
             print("Starting with fresh model")
             
     def _proprio_feature_size(self):

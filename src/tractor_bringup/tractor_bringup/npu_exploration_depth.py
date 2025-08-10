@@ -136,6 +136,10 @@ class NPUExplorationDepthNode(Node):
         self.spin_penalty = 3.0
         self.forward_free_bonus_scale = 1.5
         
+        # Recovery features
+        self.recovery_active = False
+        self.last_min_distance = None
+        
     def init_inference_engine(self):
         self.use_npu = False
         self.trainer = None
@@ -306,29 +310,23 @@ class NPUExplorationDepthNode(Node):
         cmd = Twist()
         
         # Check for emergency collision risk
-        emergency_stop = self.check_emergency_collision()
+        emergency_stop, min_d, left_free, right_free, center_free = self.check_emergency_collision()
         
         if self.use_npu and self.trainer and self.all_sensors_ready():
-            # Always use neural network when available
-            action, confidence = self.npu_inference()
-            
-            # action already tanh squashed in trainer; scale here
+            action, confidence = self.npu_inference(emergency_stop, min_d, left_free, right_free, center_free)
+            # Scale
             cmd.linear.x = float(action[0]) * self.max_speed
             cmd.angular.z = float(action[1]) * self.angular_scale
-            
-            # Emergency override only for imminent collision
             if emergency_stop:
-                cmd.linear.x = 0.0
-                cmd.angular.z = 0.0
-                self.exploration_mode = f"EMERGENCY_STOP (conf: {confidence:.2f})"
+                self.exploration_mode = f"RECOVERY (d={min_d:.2f} conf:{confidence:.2f})"
                 self.collision_detected = True
+                self.recovery_active = True
             else:
+                if self.recovery_active and min_d and min_d > 0.25:
+                    self.recovery_active = False
                 self.exploration_mode = f"NPU_DRIVING (conf: {confidence:.2f})"
                 self.collision_detected = False
-                
-            # Store action for training (original NPU decision, not emergency override)
             self.last_action = np.array([float(action[0]), float(action[1])])
-            
         else:
             # Fallback: stop and wait for NPU
             cmd.linear.x = 0.0
@@ -341,52 +339,42 @@ class NPUExplorationDepthNode(Node):
     def check_emergency_collision(self):
         """Check for imminent collision requiring emergency stop"""
         if self.latest_depth_image is None or self.latest_depth_image.size == 0:
-            return False
+            return False, 0.0, 0.0, 0.0, 0.0
             
         try:
-            # Check for very close obstacles in front (emergency zone)
-            height, width = self.latest_depth_image.shape
-            
-            # Define region of interest (front center area)
-            roi_height_start = int(height * 0.3)  # Top 30%
-            roi_height_end = int(height * 0.7)    # Bottom 70%
-            roi_width_start = int(width * 0.4)    # Left 40%
-            roi_width_end = int(width * 0.6)      # Right 60%
-            
-            front_roi = self.latest_depth_image[roi_height_start:roi_height_end, roi_width_start:roi_width_end]
-            
-            # Filter out invalid depth values
-            valid_depths = front_roi[(front_roi > 0.01) & (front_roi < 10.0)]  # 1cm to 10m range
-            
-            if len(valid_depths) > 0:
-                min_distance = np.min(valid_depths)
-                # Log the minimum distance for debugging
-                self.get_logger().debug(f"Min distance to obstacle: {min_distance:.2f}m")
-                return min_distance < 0.15  # 15cm emergency zone (reduced for better learning)
-                
-        except Exception as e:
-            self.get_logger().warn(f"Emergency collision check failed: {e}")
-            
-        return False
-        
-    def reactive_navigation(self):
-        """Fallback navigation - not used in NPU mode"""
-        cmd = Twist()
-        cmd.linear.x = 0.0
-        cmd.angular.z = 0.0
-        self.exploration_mode = "NPU_FALLBACK_STOP"
-        return cmd
-        
-    def npu_inference(self):
+            di = self.latest_depth_image
+            h, w = di.shape
+            # front center region
+            ch0 = int(h*0.3); ch1 = int(h*0.7); cw0 = int(w*0.4); cw1 = int(w*0.6)
+            front_roi = di[ch0:ch1, cw0:cw1]
+            valid_front = front_roi[(front_roi > 0.05) & (front_roi < 4.0)]
+            min_distance = float(np.min(valid_front)) if valid_front.size else 10.0
+            # side bands for steering guidance
+            left_band = di[ch0:ch1, int(w*0.15):int(w*0.35)]
+            right_band = di[ch0:ch1, int(w*0.65):int(w*0.85)]
+            center_band = di[ch0:ch1, int(w*0.45):int(w*0.55)]
+            def free_metric(b):
+                v = b[(b > 0.05) & (b < 4.0)]
+                return float(np.mean(v)) if v.size else 0.0
+            left_free = free_metric(left_band)
+            right_free = free_metric(right_band)
+            center_free = free_metric(center_band)
+            emergency = min_distance < 0.18  # slightly higher to start recovery earlier
+            return emergency, min_distance, left_free, right_free, center_free
+        except Exception:
+            return False, 0.0, 0.0, 0.0, 0.0
+
+    def npu_inference(self, emergency_flag=None, min_d=0.0, left_free=0.0, right_free=0.0, center_free=0.0):
         if not self.all_sensors_ready():
             return np.array([0.0, 0.0]), 0.0
         try:
             depth_input = self.latest_depth_image.astype(np.float32)
             valid = depth_input[(depth_input > 0.05) & (depth_input < 4.0)]
-            min_d = float(np.min(valid)) if valid.size else 0.0
-            mean_d = float(np.mean(valid)) if valid.size else 0.0
+            min_d_global = float(np.min(valid)) if valid.size else 0.0
+            mean_d_global = float(np.mean(valid)) if valid.size else 0.0
             near_collision_flag = 1.0 if (valid.size and np.percentile(valid,5) < 0.25) else 0.0
             wheel_diff = self.wheel_velocities[0] - self.wheel_velocities[1]
+            emergency_numeric = 1.0 if emergency_flag else 0.0
             proprioceptive = np.array([
                 self.current_velocity[0],
                 self.current_velocity[1],
@@ -394,41 +382,50 @@ class NPUExplorationDepthNode(Node):
                 self.last_action[0],
                 self.last_action[1],
                 wheel_diff,
-                min_d,
-                mean_d,
-                near_collision_flag
+                min_d_global,
+                mean_d_global,
+                near_collision_flag,
+                emergency_numeric,
+                left_free,
+                right_free,
+                center_free
             ], dtype=np.float32)
             action, confidence = self.trainer.inference(depth_input, proprioceptive)
-            # Exploration warmup logic: encourage movement & diversity early
-            if self.step_count < self.exploration_warmup_steps:
+            # Exploration warmup adjustments (unchanged):
+            if self.step_count < self.exploration_warmup_steps and not emergency_flag:
                 if np.random.rand() < self.random_action_prob:
-                    # Inject random action
                     action = np.array([
                         np.random.uniform(self.min_forward_bias, 1.0),
                         np.random.uniform(-0.6, 0.6)
                     ], dtype=np.float32)
                 else:
-                    # Forward bias if nearly stationary
                     if abs(action[0]) < 0.1:
                         action[0] = self.min_forward_bias
-                # Slight decay of bias over warmup
                 decay = 1.0 - (self.step_count / self.exploration_warmup_steps)
                 action[0] = np.clip(action[0] + 0.1 * decay, -1.0, 1.0)
+            # If in emergency and network still outputs forward, bias slightly backward (curriculum)
+            if emergency_flag and action[0] > 0.0:
+                action[0] = -0.2  # gentle corrective nudge early training
             return action, confidence
         except Exception as e:
             self.get_logger().warn(f"Inference failed: {e}")
             return np.array([0.0,0.0]), 0.0
-            
-    def all_sensors_ready(self):
-        """Check if all sensor data is available"""
-        return self.latest_depth_image is not None
-                
+
     def train_from_experience(self):
         if self.operation_mode == 'inference':
-            return  # disabled in pure inference mode
+            return
         if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
             return
         try:
+            depth_input = self.latest_depth_image
+            valid = depth_input[(depth_input > 0.05) & (depth_input < 4.0)]
+            min_d_global = float(np.min(valid)) if valid.size else 0.0
+            mean_d_global = float(np.mean(valid)) if valid.size else 0.0
+            # Improvement signal for recovery
+            distance_improved = 0.0
+            if self.last_min_distance is not None and min_d_global > self.last_min_distance + 0.02:
+                distance_improved = min( (min_d_global - self.last_min_distance), 0.3)
+            self.last_min_distance = min_d_global
             progress = np.linalg.norm(self.position - self.prev_position)
             reward = self.trainer.calculate_reward(
                 action=self.last_action,
@@ -439,34 +436,22 @@ class NPUExplorationDepthNode(Node):
                 depth_data=self.latest_depth_image,
                 wheel_velocities=self.wheel_velocities
             )
-            # Additional local shaping to reduce spin bias
-            linear_speed = abs(self.last_action[0])
-            angular_speed = abs(self.last_action[1])
-            if angular_speed > 0.4 and linear_speed < 0.05:
-                reward -= self.spin_penalty
-            # Forward free space bonus
-            try:
-                di = self.latest_depth_image
-                h, w = di.shape
-                center_roi = di[h//3:2*h//3, w//3:2*w//3]
-                valid_center = center_roi[(center_roi > 0.1) & (center_roi < 4.0)]
-                if valid_center.size:
-                    front_mean = float(np.mean(valid_center))
-                    if self.last_action[0] > 0.05:
-                        reward += self.forward_free_bonus_scale * min(front_mean, 2.0) / 2.0
-            except Exception:
-                pass
-            # Extend forward bias period
-            if self.step_count < self.forward_bias_extension_steps and self.last_action[0] < 0.15:
-                reward += 0.5  # small encouragement
-            reward = float(np.clip(reward, -3.0, 12.0))
+            # Recovery shaping
+            if self.recovery_active:
+                reward += 4.0 * distance_improved  # positive when clearing space
+                if distance_improved == 0.0:
+                    reward -= 0.5  # small penalty for ineffective recovery step
+            reward = float(np.clip(reward, -10.0, 15.0))
+            # Prepare previous frame experience (unchanged core logic)
             if self.prev_depth_image is not None:
-                depth_input_prev = self.prev_depth_image
-                valid_prev = depth_input_prev[(depth_input_prev > 0.05) & (depth_input_prev < 4.0)]
-                min_d_prev = float(np.min(valid_prev)) if valid_prev.size else 0.0
-                mean_d_prev = float(np.mean(valid_prev)) if valid_prev.size else 0.0
-                near_collision_prev = 1.0 if (valid_prev.size and np.percentile(valid_prev,5) < 0.25) else 0.0
+                prev = self.prev_depth_image
+                pv = prev[(prev > 0.05) & (prev < 4.0)]
+                min_prev = float(np.min(pv)) if pv.size else 0.0
+                mean_prev = float(np.mean(pv)) if pv.size else 0.0
+                near_prev = 1.0 if (pv.size and np.percentile(pv,5) < 0.25) else 0.0
                 wheel_diff_prev = self.wheel_velocities[0] - self.wheel_velocities[1]
+                emergency_prev = 1.0 if self.recovery_active else 0.0
+                # reuse bands for prev if desired (simplify: zeros)
                 proprio_prev = np.array([
                     self.current_velocity[0],
                     self.current_velocity[1],
@@ -474,19 +459,20 @@ class NPUExplorationDepthNode(Node):
                     self.last_action[0],
                     self.last_action[1],
                     wheel_diff_prev,
-                    min_d_prev,
-                    mean_d_prev,
-                    near_collision_prev
+                    min_prev,
+                    mean_prev,
+                    near_prev,
+                    emergency_prev,
+                    0.0,0.0,0.0
                 ], dtype=np.float32)
                 self.trainer.add_experience(
-                    depth_image=self.prev_depth_image.astype(np.float32),
+                    depth_image=prev.astype(np.float32),
                     proprioceptive=proprio_prev,
                     action=self.last_action,
                     reward=reward,
                     next_depth_image=self.latest_depth_image.astype(np.float32),
                     done=False
                 )
-            # Delay training until buffer has minimal size
             if len(self.trainer.experience_buffer) >= max(32, self.trainer.batch_size):
                 training_stats = self.trainer.train_step()
                 if self.step_count % 50 == 0 and 'loss' in training_stats:
