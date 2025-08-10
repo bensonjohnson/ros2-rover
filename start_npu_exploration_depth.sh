@@ -112,12 +112,20 @@ else
 fi
 
 # Configuration
+MODE=${1:-cpu_training}      # cpu_training | hybrid | inference
+shift || true
 MAX_SPEED=${1:-0.15}        # Conservative speed for AI learning
 EXPLORATION_TIME=${2:-300}  # 5 minutes default
 SAFETY_DISTANCE=${3:-0.2}   # 20cm safety bubble
 
+if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" ]]; then
+  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference"
+  exit 1
+fi
+
 echo ""
 echo "Configuration:"
+echo "  Operation Mode: ${MODE}"
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
 echo "  Safety Distance: ${SAFETY_DISTANCE} m"
@@ -147,6 +155,7 @@ echo "✓ Foxglove bridge launched with PID: $FOXGLOVE_PID"
 echo ""
 
 ros2 launch tractor_bringup npu_exploration_depth.launch.py \
+    operation_mode:=${MODE} \
     max_speed:=${MAX_SPEED} \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \

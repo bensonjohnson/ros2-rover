@@ -20,6 +20,7 @@ def generate_launch_description():
     max_speed = LaunchConfiguration("max_speed")
     min_battery_percentage = LaunchConfiguration("min_battery_percentage")
     safety_distance = LaunchConfiguration("safety_distance")
+    operation_mode = LaunchConfiguration("operation_mode")
 
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
@@ -37,6 +38,12 @@ def generate_launch_description():
         "safety_distance",
         default_value="0.2",
         description="Safety distance for obstacle avoidance (meters)",
+    )
+
+    declare_operation_mode_cmd = DeclareLaunchArgument(
+        "operation_mode",
+        default_value="cpu_training",
+        description="Operation mode: cpu_training | hybrid | inference",
     )
 
     # 1. Robot Description (TF only)
@@ -90,13 +97,14 @@ def generate_launch_description():
                 "max_speed": LaunchConfiguration("max_speed"),
                 "min_battery_percentage": LaunchConfiguration("min_battery_percentage"),
                 "safety_distance": LaunchConfiguration("safety_distance"),
-                "npu_inference_rate": 5.0,  # Hz
+                "npu_inference_rate": 5.0,
+                "operation_mode": LaunchConfiguration("operation_mode"),
             }
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_raw"),
-            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic
-            ("odom", "/odom"),  # From motor controller
+            ("depth_image", "/camera/camera/depth/image_rect_raw"),
+            ("odom", "/odom"),
         ]
     )
 
@@ -126,6 +134,7 @@ def generate_launch_description():
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_min_battery_cmd)
     ld.add_action(declare_safety_distance_cmd)
+    ld.add_action(declare_operation_mode_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)
