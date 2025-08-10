@@ -478,7 +478,8 @@ class RKNNTrainerDepth:
             with torch.no_grad():
                 self.model.eval()
                 depth_features = self.model.depth_conv(dummy_depth)
-                flat_dim = depth_features.shape[1] * depth_features.shape[2] * depth_features.shape[3]
+                # depth_conv ends with Flatten(), so depth_features is (B, F)
+                flat_dim = depth_features.shape[1]
                 expected = self.model.depth_fc.in_features
                 if self.enable_debug:
                     print(f"[RKNN] Depth feature flatten size={flat_dim} expected={expected}")
