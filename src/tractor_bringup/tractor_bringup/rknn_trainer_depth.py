@@ -258,9 +258,23 @@ class RKNNTrainerDepth:
         
         # Prepare batch data
         depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch]))  # (B,C,H,W)
-        sensor_batch = torch.FloatTensor(np.array([exp['proprioceptive'] for exp in batch]))
+        sensor_list = []
+        expected = 3 + self.extra_proprio
+        legacy_count = 0
+        for exp in batch:
+            p = exp['proprioceptive']
+            if p.shape[0] < expected:
+                legacy_count += 1
+                pad = np.zeros(expected - p.shape[0], dtype=p.dtype)
+                p = np.concatenate([p, pad], axis=0)
+            elif p.shape[0] > expected:
+                p = p[:expected]
+            sensor_list.append(p)
+        if legacy_count and self.enable_debug:
+            print(f"[Train] Padded {legacy_count} legacy proprio samples to length {expected}")
+        sensor_batch = torch.FloatTensor(np.array(sensor_list))
         action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch]))
-        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch]))
+        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch])).unsqueeze(1)
         depth_batch = depth_batch.to(self.device)
         sensor_batch = sensor_batch.to(self.device)
         action_batch = action_batch.to(self.device)
