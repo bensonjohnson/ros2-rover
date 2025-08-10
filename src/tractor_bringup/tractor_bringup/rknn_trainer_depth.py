@@ -391,12 +391,24 @@ class RKNNTrainerDepth:
                 print(f"[RKNN] Loading RKNN runtime from {rknn_path}")
             ret = r.load_rknn(rknn_path)
             if ret != 0:
-                print("[RKNN] load_rknn failed")
+                print("[RKNN] load_rknn failed (ret != 0)")
                 return False
-            ret = r.init_runtime()
+            # Always specify target to avoid simulator warning
+            if self.enable_debug:
+                print("[RKNN] Initializing runtime target=rk3588")
+            ret = r.init_runtime(target='rk3588')
             if ret != 0:
-                print("[RKNN] init_runtime failed")
-                return False
+                print(f"[RKNN] init_runtime failed (ret={ret}), retrying once without explicit target")
+                try:
+                    ret2 = r.init_runtime()
+                    if ret2 != 0:
+                        print(f"[RKNN] init_runtime retry failed (ret={ret2})")
+                        r.release()
+                        return False
+                except Exception as e2:
+                    print(f"[RKNN] init_runtime retry exception: {e2}")
+                    r.release()
+                    return False
             self.rknn_runtime = r
             self.use_rknn_inference = True
             if self.enable_debug:
