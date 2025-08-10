@@ -42,6 +42,22 @@ source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 echo "✓ ROS2 environment sourced"
 
+# Initial RKNN conversion step
+echo "Checking/performing initial RKNN conversion..."
+python3 - <<'PYCODE'
+try:
+    from tractor_bringup.rknn_trainer_depth import RKNNTrainerDepth, RKNN_AVAILABLE
+    trainer = RKNNTrainerDepth(model_dir="models", enable_debug=True)
+    if RKNN_AVAILABLE:
+        trainer.convert_to_rknn()
+    else:
+        print("RKNN toolkit not available - skipping initial conversion")
+except Exception as e:
+    print(f"Initial RKNN conversion failed: {e}")
+PYCODE
+
+echo "Initial RKNN conversion step complete"
+
 # USB power management for RealSense
 echo "Configuring USB power management..."
 USB_DEVICE_PATH=""
