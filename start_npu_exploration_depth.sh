@@ -111,12 +111,79 @@ else
     echo "⚠ rs-enumerate-devices command not found - skipping RealSense check"
 fi
 
-# Configuration
-MODE=${1:-cpu_training}      # cpu_training | hybrid | inference
-shift || true
-MAX_SPEED=${1:-0.15}        # Conservative speed for AI learning
-EXPLORATION_TIME=${2:-300}  # 5 minutes default
-SAFETY_DISTANCE=${3:-0.2}   # 20cm safety bubble
+# Configuration (interactive if no args supplied)
+# Existing positional usage still works:
+#   ./start_npu_exploration_depth.sh <mode> <max_speed> <exploration_time> <safety_distance>
+# If no args -> interactive menu with arrow keys.
+
+DEFAULT_MODE="cpu_training"
+DEFAULT_MAX_SPEED="0.15"
+DEFAULT_EXPLORATION_TIME="300"
+DEFAULT_SAFETY_DISTANCE="0.2"
+
+choose_mode() {
+  local options=("cpu_training" "hybrid" "inference")
+  local index=0
+  local key
+  while true; do
+    echo "Select Operation Mode (↑/↓ then Enter):"
+    for i in "${!options[@]}"; do
+      if [ $i -eq $index ]; then
+        printf "  > %s\n" "${options[$i]}"
+      else
+        printf "    %s\n" "${options[$i]}"
+      fi
+    done
+    # Read single key (including arrows)
+    IFS= read -rsn1 key
+    if [[ $key == $'\x1b' ]]; then
+      # Possible escape sequence
+      read -rsn2 -t 0.0005 key_rest || true
+      key+="$key_rest"
+      case "$key" in
+        $'\x1b[A') # Up
+          ((index--))
+          (( index < 0 )) && index=$(( ${#options[@]} - 1 ))
+          ;;
+        $'\x1b[B') # Down
+          ((index++))
+          (( index >= ${#options[@]} )) && index=0
+          ;;
+      esac
+    elif [[ $key == $'\n' || $key == $'\r' ]]; then
+      echo ""
+      echo "Selected: ${options[$index]}"
+      MODE="${options[$index]}"
+      return 0
+    fi
+    # Move cursor up to redraw menu (options count + header line)
+    local lines=$(( ${#options[@]} + 1 ))
+    tput cuu $lines 2>/dev/null || {
+      # Fallback: clear screen if tput not available
+      clear
+    }
+  done
+}
+
+if [ $# -eq 0 ] && [ -t 0 ]; then
+  # Interactive mode
+  echo "No arguments supplied - entering interactive setup..."
+  choose_mode
+  # Prompt for remaining parameters with defaults
+  read -p "Maximum Speed [${DEFAULT_MAX_SPEED}]: " INPUT_MAX_SPEED
+  read -p "Exploration Time seconds [${DEFAULT_EXPLORATION_TIME}]: " INPUT_EXPLORATION_TIME
+  read -p "Safety Distance meters [${DEFAULT_SAFETY_DISTANCE}]: " INPUT_SAFETY_DISTANCE
+  MAX_SPEED=${INPUT_MAX_SPEED:-$DEFAULT_MAX_SPEED}
+  EXPLORATION_TIME=${INPUT_EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
+  SAFETY_DISTANCE=${INPUT_SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
+else
+  # Non-interactive / arguments path (existing behavior)
+  MODE=${1:-$DEFAULT_MODE}
+  shift || true
+  MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
+  EXPLORATION_TIME=${2:-$DEFAULT_EXPLORATION_TIME}
+  SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
+fi
 
 if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" ]]; then
   echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference"
