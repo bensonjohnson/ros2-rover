@@ -45,6 +45,7 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('safety_distance', 0.2)
         self.declare_parameter('npu_inference_rate', 5.0)
         self.declare_parameter('stacked_frames', 1)
+        self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -57,6 +58,7 @@ class NPUExplorationDepthNode(Node):
         self.safety_distance = self.get_parameter('safety_distance').value
         self.inference_rate = self.get_parameter('npu_inference_rate').value
         self.stacked_frames = self.get_parameter('stacked_frames').value
+        self.operation_mode = self.get_parameter('operation_mode').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -128,6 +130,7 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  Min Battery: {self.min_battery_percentage}%")
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         self.get_logger().info(f"  Inference target rate: {self.inference_rate} Hz")
+        self.get_logger().info(f"  Operation Mode: {self.operation_mode}")
         
         self.angular_scale = 1.0  # reduced from 2.0 to lessen spin dominance
         self.spin_penalty = 3.0
@@ -139,9 +142,35 @@ class NPUExplorationDepthNode(Node):
         
         if TRAINER_AVAILABLE:
             try:
-                self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames)
-                self.use_npu = True
-                self.get_logger().info("RKNN Trainer initialized (Phase1 preprocessing)")
+                enable_debug = (self.get_parameter('operation_mode').value != 'inference')
+                self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)
+                mode = self.get_parameter('operation_mode').value
+                if mode == 'cpu_training':
+                    # Training on CPU only; no RKNN runtime inference
+                    self.use_npu = True  # still use trainer inference (PyTorch)
+                    self.get_logger().info("Mode: CPU training (PyTorch inference, periodic RKNN export)")
+                elif mode == 'hybrid':
+                    # Try to enable RKNN runtime; fall back to PyTorch if missing
+                    if self.trainer.enable_rknn_inference():
+                        self.use_npu = True
+                        self.get_logger().info("Mode: Hybrid (RKNN runtime inference + ongoing training)")
+                    else:
+                        self.use_npu = True
+                        self.get_logger().warn("Hybrid mode requested but RKNN runtime not available - using PyTorch")
+                elif mode == 'inference':
+                    # Pure inference: load RKNN and disable training logic
+                    if self.trainer.enable_rknn_inference():
+                        self.use_npu = True
+                        # Disable optimizer to avoid accidental training
+                        self.trainer.optimizer = None
+                        self.get_logger().info("Mode: Pure RKNN inference (no training)")
+                    else:
+                        self.use_npu = True
+                        self.get_logger().warn("Pure inference mode requested but RKNN file/runtime not available - falling back to PyTorch")
+                else:
+                    self.use_npu = True
+                    self.get_logger().warn(f"Unknown operation_mode '{mode}' - defaulting to cpu_training")
+                self.get_logger().info("RKNN Trainer initialized")
             except Exception as e:
                 self.get_logger().warn(f"RKNN Trainer init failed: {e}")
         else:
@@ -163,7 +192,8 @@ class NPUExplorationDepthNode(Node):
         
         # Train neural network if available
         if self.use_npu and self.trainer and self.step_count > 10:
-            self.train_from_experience()
+            if self.operation_mode != 'inference':
+                self.train_from_experience()
         
         # status now handled by status timer
     def odom_callback(self, msg):
@@ -394,6 +424,8 @@ class NPUExplorationDepthNode(Node):
         return self.latest_depth_image is not None
                 
     def train_from_experience(self):
+        if self.operation_mode == 'inference':
+            return  # disabled in pure inference mode
         if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
             return
         try:

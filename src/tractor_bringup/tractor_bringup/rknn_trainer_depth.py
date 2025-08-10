@@ -143,7 +143,10 @@ class RKNNTrainerDepth:
         
         # Load existing model if available
         self.load_latest_model()
-        
+        # Runtime inference flags
+        self.use_rknn_inference = False
+        self.rknn_runtime = None
+
     def add_experience(self,
                       depth_image: np.ndarray,
                       proprioceptive: np.ndarray,
@@ -364,15 +367,87 @@ class RKNNTrainerDepth:
         except Exception:
             return np.zeros((self.stacked_frames, self.target_h, self.target_w), dtype=np.float32)
         
+    def enable_rknn_inference(self):
+        """Enable RKNN runtime inference if model file exists."""
+        if not RKNN_AVAILABLE:
+            if self.enable_debug:
+                print("[RKNN] Toolkit not available - cannot enable RKNN inference")
+            return False
+        rknn_path = os.path.join(self.model_dir, "exploration_model_depth.rknn")
+        if not os.path.exists(rknn_path):
+            if self.enable_debug:
+                print(f"[RKNN] No RKNN file found at {rknn_path}")
+            return False
+        try:
+            # Release previous runtime
+            if self.rknn_runtime is not None:
+                try:
+                    self.rknn_runtime.release()
+                except Exception:
+                    pass
+                self.rknn_runtime = None
+            r = RKNN(verbose=self.enable_debug)
+            if self.enable_debug:
+                print(f"[RKNN] Loading RKNN runtime from {rknn_path}")
+            ret = r.load_rknn(rknn_path)
+            if ret != 0:
+                print("[RKNN] load_rknn failed")
+                return False
+            ret = r.init_runtime()
+            if ret != 0:
+                print("[RKNN] init_runtime failed")
+                return False
+            self.rknn_runtime = r
+            self.use_rknn_inference = True
+            if self.enable_debug:
+                print("[RKNN] Runtime initialized and inference enabled")
+            return True
+        except Exception as e:
+            print(f"[RKNN] Failed to enable runtime: {e}")
+            return False
+
+    def disable_rknn_inference(self):
+        self.use_rknn_inference = False
+        if self.rknn_runtime is not None:
+            try:
+                self.rknn_runtime.release()
+            except Exception:
+                pass
+            self.rknn_runtime = None
+            if self.enable_debug:
+                print("[RKNN] Runtime released")
+
     def inference(self, depth_image: np.ndarray, proprioceptive: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Run inference to get action and confidence (Phase1: still returns 3 outputs)."""
+        """Run inference to get action and confidence.
+        Uses RKNN runtime when enabled; otherwise PyTorch."""
+        if self.use_rknn_inference and self.rknn_runtime is not None:
+            try:
+                processed = self.preprocess_depth_for_model(depth_image)  # (C,H,W)
+                depth_input = processed[np.newaxis, ...].astype(np.float32)
+                sensor_input = proprioceptive.astype(np.float32)[np.newaxis, ...]
+                # RKNN expects list of inputs in same order as export
+                outputs = self.rknn_runtime.inference(inputs=[depth_input, sensor_input])
+                if not outputs:
+                    raise RuntimeError("RKNN inference returned no outputs")
+                out = outputs[0]  # (1,3)
+                if out is None:
+                    raise RuntimeError("RKNN output None")
+                raw = out[0]
+                # Apply same post-processing as PyTorch path
+                action = np.tanh(raw[:2])
+                confidence = 1.0 / (1.0 + np.exp(-raw[2]))  # sigmoid
+                return action.astype(np.float32), float(confidence)
+            except Exception as e:
+                if self.enable_debug:
+                    print(f"[RKNN] Inference failed, falling back to PyTorch: {e}")
+                # Fallback to PyTorch
+        # Default PyTorch path
         self.model.eval()
         with torch.no_grad():
             processed = self.preprocess_depth_for_model(depth_image)
             depth_tensor = torch.from_numpy(processed).unsqueeze(0).to(self.device)
             sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
             output = self.model(depth_tensor, sensor_tensor)
-            # Apply tanh squashing to first two outputs for bounded actions
             action = torch.tanh(output[0, :2]).cpu().numpy()
             confidence = torch.sigmoid(output[0, 2]).item()
         self.model.train()
@@ -561,6 +636,11 @@ class RKNNTrainerDepth:
                 print("[RKNN] Failed to export RKNN model")
             else:
                 print(f"RKNN model saved: {rknn_path}")
+                # Hot-reload runtime if currently using RKNN inference
+                if getattr(self, 'use_rknn_inference', False):
+                    if self.enable_debug:
+                        print("[RKNN] Reloading runtime with new model")
+                    self.enable_rknn_inference()
             rknn.release()
             if self.enable_debug:
                 print("[RKNN] Pipeline complete")
