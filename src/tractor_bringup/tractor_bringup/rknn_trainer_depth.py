@@ -146,6 +146,7 @@ class RKNNTrainerDepth:
         # Runtime inference flags
         self.use_rknn_inference = False
         self.rknn_runtime = None
+        print(f"[TrainerInit] Using trainer file: {__file__} expected_proprio={3 + self.extra_proprio}")
 
     def add_experience(self,
                       depth_image: np.ndarray,
@@ -161,6 +162,16 @@ class RKNNTrainerDepth:
         processed_next = None
         if next_depth_image is not None:
             processed_next = next_depth_image if next_depth_image.ndim == 3 else self.preprocess_depth_for_storage(next_depth_image)
+        # Defensive padding/truncation for proprioceptive data
+        expected = 3 + self.extra_proprio
+        if proprioceptive.shape[0] < expected:
+            if self.enable_debug:
+                print(f"[AddExp] Padding proprio {proprioceptive.shape[0]} -> {expected}")
+            proprioceptive = np.concatenate([proprioceptive, np.zeros(expected - proprioceptive.shape[0], dtype=proprioceptive.dtype)])
+        elif proprioceptive.shape[0] > expected:
+            if self.enable_debug:
+                print(f"[AddExp] Truncating proprio {proprioceptive.shape[0]} -> {expected}")
+            proprioceptive = proprioceptive[:expected]
         experience = {
             'depth_image': processed.copy(),
             'proprioceptive': proprioceptive.copy(),
