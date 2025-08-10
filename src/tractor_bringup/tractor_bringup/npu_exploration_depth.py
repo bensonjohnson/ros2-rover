@@ -49,7 +49,8 @@ class NPUExplorationDepthNode(Node):
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
         self.random_action_prob = 0.3        # probability to inject random action during warmup
-        self.min_forward_bias = 0.2          # bias for forward movement (scaled later)
+        self.min_forward_bias = 0.25          # bias for forward movement (scaled later)
+        self.forward_bias_extension_steps = 800  # extend bias period
         
         self.max_speed = self.get_parameter('max_speed').value
         self.min_battery_percentage = self.get_parameter('min_battery_percentage').value
@@ -127,6 +128,10 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  Min Battery: {self.min_battery_percentage}%")
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         self.get_logger().info(f"  Inference target rate: {self.inference_rate} Hz")
+        
+        self.angular_scale = 1.0  # reduced from 2.0 to lessen spin dominance
+        self.spin_penalty = 3.0
+        self.forward_free_bonus_scale = 1.5
         
     def init_inference_engine(self):
         self.use_npu = False
@@ -279,7 +284,7 @@ class NPUExplorationDepthNode(Node):
             
             # action already tanh squashed in trainer; scale here
             cmd.linear.x = float(action[0]) * self.max_speed
-            cmd.angular.z = float(action[1]) * 2.0  # Max 2 rad/s angular
+            cmd.angular.z = float(action[1]) * self.angular_scale
             
             # Emergency override only for imminent collision
             if emergency_stop:
@@ -402,8 +407,27 @@ class NPUExplorationDepthNode(Node):
                 depth_data=self.latest_depth_image,
                 wheel_velocities=self.wheel_velocities
             )
-            # Clip extreme negative reward to avoid early policy collapse
-            reward = float(np.clip(reward, -2.0, 10.0))
+            # Additional local shaping to reduce spin bias
+            linear_speed = abs(self.last_action[0])
+            angular_speed = abs(self.last_action[1])
+            if angular_speed > 0.4 and linear_speed < 0.05:
+                reward -= self.spin_penalty
+            # Forward free space bonus
+            try:
+                di = self.latest_depth_image
+                h, w = di.shape
+                center_roi = di[h//3:2*h//3, w//3:2*w//3]
+                valid_center = center_roi[(center_roi > 0.1) & (center_roi < 4.0)]
+                if valid_center.size:
+                    front_mean = float(np.mean(valid_center))
+                    if self.last_action[0] > 0.05:
+                        reward += self.forward_free_bonus_scale * min(front_mean, 2.0) / 2.0
+            except Exception:
+                pass
+            # Extend forward bias period
+            if self.step_count < self.forward_bias_extension_steps and self.last_action[0] < 0.15:
+                reward += 0.5  # small encouragement
+            reward = float(np.clip(reward, -3.0, 12.0))
             if self.prev_depth_image is not None:
                 depth_input_prev = self.prev_depth_image
                 valid_prev = depth_input_prev[(depth_input_prev > 0.05) & (depth_input_prev < 4.0)]

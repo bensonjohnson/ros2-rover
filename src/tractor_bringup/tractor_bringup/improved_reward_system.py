@@ -15,7 +15,7 @@ class ImprovedRewardCalculator:
     while maintaining safety constraints
     """
     
-    def __init__(self):
+    def __init__(self, **kwargs):
         # Movement tracking
         self.position_history = deque(maxlen=100)
         self.action_history = deque(maxlen=50)
@@ -76,6 +76,11 @@ class ImprovedRewardCalculator:
             'wheel_slip_penalty': -4.0,         # Penalty for wheel slippage
             'coordinated_turning_bonus': 5.0,   # Reward for proper tank steering
         }
+        
+        # Additional parameters
+        self.enable_wall_frontier = False  # temporarily disable to reduce spin incentives
+        self.spin_penalty = kwargs.get('spin_penalty', 3.0)
+        self.forward_free_bonus_scale = kwargs.get('forward_free_bonus_scale', 1.5)
     
     def calculate_comprehensive_reward(self, 
                                      action: np.ndarray,
@@ -126,7 +131,7 @@ class ImprovedRewardCalculator:
         total_reward += straight_line_reward
         
         # 7. Wall following and frontier exploration (if depth data available)
-        if depth_data is not None:
+        if depth_data is not None and self.enable_wall_frontier:
             wall_frontier_reward = self._calculate_wall_frontier_reward(depth_data, action, position)
             reward_breakdown['wall_frontier'] = wall_frontier_reward
             total_reward += wall_frontier_reward
@@ -416,62 +421,8 @@ class ImprovedRewardCalculator:
         except Exception:
             return False
     
-    def _calculate_differential_drive_reward(self, action: np.ndarray, wheel_velocities: Tuple[float, float]) -> float:
-        """Reward efficient differential drive control based on actual wheel encoder feedback"""
-        reward = 0.0
-        left_vel, right_vel = wheel_velocities
-        
-        # Store wheel velocities for tracking
-        self.wheel_velocity_history.append((left_vel, right_vel))
-        
-        commanded_linear = action[0]   # Desired linear velocity
-        commanded_angular = action[1]  # Desired angular velocity
-        
-        # Calculate expected wheel velocities from commanded actions
-        # Tank steering: left = linear - angular*width/2, right = linear + angular*width/2
-        wheel_separation = 0.5  # From motor driver parameters
-        expected_left = commanded_linear - (commanded_angular * wheel_separation / 2.0)
-        expected_right = commanded_linear + (commanded_angular * wheel_separation / 2.0)
-        
-        # 1. Reward accurate differential drive control
-        left_error = abs(left_vel - expected_left)
-        right_error = abs(right_vel - expected_right)
-        total_error = left_error + right_error
-        
-        # Strong reward for low tracking error (good control)
-        if total_error < 0.1:  # Very accurate
-            reward += self.reward_config['track_efficiency_bonus'] * 2.0
-        elif total_error < 0.3:  # Reasonably accurate
-            reward += self.reward_config['track_efficiency_bonus']
-        elif total_error > 0.8:  # Poor tracking
-            reward += self.reward_config['wheel_slip_penalty']
-        
-        # 2. Reward coordinated movement for straight lines
-        if abs(commanded_angular) < 0.1:  # Trying to go straight
-            wheel_velocity_difference = abs(left_vel - right_vel)
-            if wheel_velocity_difference < 0.2:  # Both wheels moving similarly
-                reward += self.reward_config['coordinated_turning_bonus'] * 2.0  # Double bonus for straight
-            elif wheel_velocity_difference > 0.5:  # Wheels fighting each other
-                reward += self.reward_config['wheel_slip_penalty']
-        
-        # 3. Penalty for opposite wheel directions when trying to go straight
-        if abs(commanded_angular) < 0.1 and commanded_linear > 0.05:  # Should go straight forward
-            if (left_vel > 0 and right_vel < 0) or (left_vel < 0 and right_vel > 0):
-                # Wheels spinning in opposite directions = spinning in place
-                reward += self.reward_config['excessive_turning_penalty'] * 3.0  # Triple penalty
-        
-        # 4. Reward both wheels moving forward together
-        if commanded_linear > 0.05:  # Commanded forward movement
-            if left_vel > 0.05 and right_vel > 0.05:  # Both wheels actually moving forward
-                average_forward_speed = (left_vel + right_vel) / 2.0
-                reward += self.reward_config['coordinated_turning_bonus'] * average_forward_speed
-        
-        # 5. Penalty for wheel slip/stall detection
-        if abs(commanded_linear) > 0.05:  # Commanding movement
-            if abs(left_vel) < 0.02 and abs(right_vel) < 0.02:  # But wheels not moving
-                reward += self.reward_config['wheel_slip_penalty'] * 2.0  # Stall penalty
-        
-        return reward
+    def _calculate_differential_drive_reward(self, action, wheel_velocities):
+        return 0.0  # disabled
     
     def _update_tracking(self, action: np.ndarray, position: np.ndarray, wheel_velocities: Optional[Tuple[float, float]] = None):
         """Update internal tracking state"""
