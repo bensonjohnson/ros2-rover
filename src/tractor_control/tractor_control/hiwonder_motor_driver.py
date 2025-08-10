@@ -71,6 +71,10 @@ class HiwonderMotorDriver(Node):
         self.declare_parameter("hardware_clear_encoders", True)
         # Tolerance in encoder counts for verifying successful hardware clear.
         self.declare_parameter("encoder_clear_verify_tolerance", 50)  # counts within which hardware clear considered successful
+        # NEW: Timeout for receiving /cmd_vel before auto stop (seconds)
+        self.declare_parameter("cmd_vel_timeout_secs", 0.5)
+        # NEW: Watchdog check frequency (Hz)
+        self.declare_parameter("watchdog_check_hz", 20.0)
 
         self.i2c_bus = self.get_parameter("i2c_bus").value
         self.motor_address = self.get_parameter("motor_controller_address").value
@@ -101,6 +105,9 @@ class HiwonderMotorDriver(Node):
         ).value
         self.hardware_clear_encoders = self.get_parameter("hardware_clear_encoders").value
         self.encoder_clear_verify_tolerance = self.get_parameter("encoder_clear_verify_tolerance").value
+        # NEW: Retrieve watchdog parameters
+        self.cmd_vel_timeout_secs = self.get_parameter("cmd_vel_timeout_secs").value
+        self.watchdog_check_hz = self.get_parameter("watchdog_check_hz").value
 
         # Battery monitoring history
         # List of (timestamp, voltage, percentage) tuples
@@ -130,8 +137,7 @@ class HiwonderMotorDriver(Node):
         try:
             self.bus = smbus.SMBus(self.i2c_bus)
             self.get_logger().info(
-                f"I2C bus {
-                    self.i2c_bus} initialized successfully"
+                f"I2C bus {self.i2c_bus} initialized successfully"
             )
             self.init_motor_driver()
         except Exception as e:
@@ -149,15 +155,18 @@ class HiwonderMotorDriver(Node):
 
         # Motor command rate limiting
         self.last_motor_command_time = 0.0
-        # Min interval (seconds) between motor commands. Helps prevent I2C bus saturation.
-        # Current: 100ms. Sensor callback is 10ms (100Hz).
-        # This means motor commands are sent at most every 10 sensor readings/odometry updates.
-        # Consider if this is optimal for responsiveness vs. I2C stability.
+        # Track last sent speeds for immediate stop logic
+        self.last_sent_left = 0
+        self.last_sent_right = 0
 
         # Odometry state
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
+
+        # Watchdog tracking
+        self.last_cmd_vel_msg_time = time.time()
+        self.watchdog_last_active = True  # motors considered active until proven idle
 
         # Subscribers
         self.cmd_vel_sub = self.create_subscription(
@@ -192,6 +201,11 @@ class HiwonderMotorDriver(Node):
         self.battery_timer = self.create_timer(
             5.0, self.battery_callback
         )  # Every 5 seconds
+        # NEW: Watchdog timer for cmd_vel timeout
+        if self.watchdog_check_hz > 0:
+            self.watchdog_timer = self.create_timer(1.0 / self.watchdog_check_hz, self.watchdog_check)
+        else:
+            self.watchdog_timer = None
 
         self.get_logger().info("Hiwonder Motor Driver initialized")
 
@@ -421,47 +435,53 @@ class HiwonderMotorDriver(Node):
         if left_motor != 0 or right_motor != 0:
             self.get_logger().debug(f"Motor speeds: L={left_motor}, R={right_motor}")
 
+        # Update watchdog timestamp
+        self.last_cmd_vel_msg_time = time.time()
+
     def send_motor_speeds(self, left_speed, right_speed):
-        """Send motor speeds via I2C using corrected protocol with rate limiting"""
+        """Send motor speeds via I2C using corrected protocol with rate limiting
+
+        Immediate stop (both speeds zero) bypasses rate limiting if previous command was non-zero.
+        """
         if self.bus is None:
             return
 
-        # Rate limiting to prevent I2C bus overload
         current_time = time.time()
-        if current_time - self.last_motor_command_time < self.motor_command_rate_limit:
+        # Determine if this is an emergency / immediate stop
+        is_stop_command = (left_speed == 0 and right_speed == 0)
+        was_moving = (self.last_sent_left != 0 or self.last_sent_right != 0)
+        bypass_rate_limit = is_stop_command and was_moving
+
+        # Rate limiting to prevent I2C bus overload (unless bypass)
+        if not bypass_rate_limit and (current_time - self.last_motor_command_time < self.motor_command_rate_limit):
             self.get_logger().debug("Motor command rate limited")
             return
 
         try:
-            # Pack speeds as signed integers (M1=right, M2=left, M3=0, M4=0)
-            # Official documentation uses signed values directly:
-            # [-50,-50,-50,-50]
             speeds = [right_speed, left_speed, 0, 0]
-            # Clamp to reasonable range for JGB37 motors
             speeds_bytes = [max(-127, min(127, int(s))) for s in speeds]
 
-            # Add logging to see if commands are being sent
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
                 self.get_logger().debug(
                     f"Sending {control_type} motor command: L={left_speed}, R={right_speed}"
                 )
+            elif bypass_rate_limit:
+                self.get_logger().debug("Immediate STOP command sent (bypassed rate limit)")
 
-            # Choose control register based on motor type
             control_addr = (
                 self.MOTOR_FIXED_PWM_ADDR
                 if self.use_pwm_control
                 else self.MOTOR_FIXED_SPEED_ADDR
             )
-
-            # Send to motor controller using official documentation method
             self.bus.write_i2c_block_data(
                 self.motor_address, control_addr, speeds_bytes
             )
             if left_speed != 0 or right_speed != 0:
                 self.get_logger().debug("Motor command sent successfully")
             self.last_motor_command_time = current_time
-
+            self.last_sent_left = left_speed
+            self.last_sent_right = right_speed
         except Exception as e:
             self.get_logger().error(f"Motor command error: {e}")
 
@@ -763,13 +783,27 @@ class HiwonderMotorDriver(Node):
 
         return max(0.0, runtime_hours)
 
+    def watchdog_check(self):
+        """Stop motors if /cmd_vel not received recently."""
+        if self.cmd_vel_timeout_secs <= 0:
+            return
+        elapsed = time.time() - self.last_cmd_vel_msg_time
+        if elapsed > self.cmd_vel_timeout_secs:
+            # Timeout expired; ensure motors stopped
+            if self.last_sent_left != 0 or self.last_sent_right != 0:
+                self.get_logger().warn(
+                    f"/cmd_vel timeout ({elapsed:.2f}s > {self.cmd_vel_timeout_secs}s). Stopping motors." 
+                )
+                self.send_motor_speeds(0, 0)
+        # (Optional future: publish diagnostic status)
+
     def destroy_node(self):
         """Clean shutdown"""
         if self.bus is not None:
             try:
-                # Stop motors
+                # Stop motors immediately (bypass rate limit) before closing
                 self.send_motor_speeds(0, 0)
-                time.sleep(0.1)
+                time.sleep(0.05)
                 self.bus.close()
                 self.get_logger().info("Motor driver shutdown complete")
             except Exception as e:

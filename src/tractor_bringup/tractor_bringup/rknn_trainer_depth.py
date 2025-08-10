@@ -119,7 +119,14 @@ class RKNNTrainerDepth:
         self.last_save_time = time.time()
         self.save_interval = 300  # Save every 5 minutes
         self.last_rknn_conversion = 0
-        self.rknn_conversion_interval = 1800  # Convert to RKNN every 30 minutes
+        self.rknn_conversion_interval = 1800  # hard max interval (seconds)
+        # Metric-gated export parameters
+        self.rknn_min_interval = 600  # minimum seconds between exports if improvement seen
+        self.rknn_loss_improve_ratio = 0.90  # export if median loss improved by >=10%
+        self.rknn_reward_improve_delta = 0.5  # or avg reward improved by this amount
+        self.loss_history = deque(maxlen=200)
+        self.last_export_loss = None
+        self.last_export_avg_reward = None
         
         # Data collection
         self.reward_history = deque(maxlen=1000)
@@ -273,6 +280,8 @@ class RKNNTrainerDepth:
         total_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
+        # Track loss history
+        self.loss_history.append(float(total_loss.item()))
         
         self.training_step += 1
         
@@ -281,19 +290,35 @@ class RKNNTrainerDepth:
         if current_time - self.last_save_time > self.save_interval:
             self.save_model()
             self.last_save_time = current_time
-            
-        # Periodic RKNN conversion
-        if current_time - self.last_rknn_conversion > self.rknn_conversion_interval:
-            self.convert_to_rknn()
-            self.last_rknn_conversion = current_time
-            
+        # Metric-gated RKNN conversion
+        force_due_interval = (current_time - self.last_rknn_conversion) > self.rknn_conversion_interval
+        can_check_improvement = (current_time - self.last_rknn_conversion) > self.rknn_min_interval
+        median_loss = float(np.median(self.loss_history)) if self.loss_history else None
+        avg_reward = float(np.mean(self.reward_history)) if self.reward_history else 0.0
+        improved = False
+        if can_check_improvement and median_loss is not None:
+            loss_improved = (self.last_export_loss is None) or (median_loss < self.last_export_loss * self.rknn_loss_improve_ratio)
+            reward_improved = (self.last_export_avg_reward is None) or (avg_reward > self.last_export_avg_reward + self.rknn_reward_improve_delta)
+            if loss_improved or reward_improved:
+                improved = True
+        if (improved or force_due_interval) and median_loss is not None:
+            try:
+                self.convert_to_rknn()
+                self.last_rknn_conversion = current_time
+                self.last_export_loss = median_loss
+                self.last_export_avg_reward = avg_reward
+                if self.enable_debug:
+                    print(f"RKNN export triggered (improved={improved}, force={force_due_interval}) median_loss={median_loss:.4f} avg_reward={avg_reward:.2f}")
+            except Exception as e:
+                print(f"RKNN export attempt failed: {e}")
         return {
             "loss": total_loss.item(),
             "action_loss": action_loss.item(),
             "confidence_loss": confidence_loss.item(),
             "samples": len(self.experience_buffer),
             "training_steps": self.training_step,
-            "avg_reward": np.mean(self.reward_history) if self.reward_history else 0.0
+            "avg_reward": avg_reward,
+            "median_loss": median_loss if median_loss is not None else 0.0
         }
         
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
