@@ -121,12 +121,44 @@ DEFAULT_MAX_SPEED="0.15"
 DEFAULT_EXPLORATION_TIME="300"
 DEFAULT_SAFETY_DISTANCE="0.2"
 
+# Fallback-friendly interactive helpers
+supports_arrows() {
+  # Disable with env var or if terminal looks incompatible
+  if [[ -n "$DISABLE_INTERACTIVE_ARROWS" ]]; then return 1; fi
+  if [[ ! -t 0 ]]; then return 1; fi
+  if [[ "$TERM" == "dumb" || "$TERM" == "" ]]; then return 1; fi
+  command -v tput >/dev/null 2>&1 || return 1
+  # Ensure cursor up works
+  tput cuu 0 >/dev/null 2>&1 || return 1
+  return 0
+}
+
+numeric_mode_menu() {
+  echo "Select Operation Mode:";
+  echo "  1) cpu_training (PyTorch training + periodic export)";
+  echo "  2) hybrid       (RKNN inference + ongoing training)";
+  echo "  3) inference    (Pure RKNN inference, no training)";
+  read -p "Enter choice [1-3] (default 1): " choice
+  case "$choice" in
+    2) MODE="hybrid";;
+    3) MODE="inference";;
+    1|"" ) MODE="cpu_training";;
+    *) echo "Invalid choice, defaulting to cpu_training"; MODE="cpu_training";;
+  esac
+  echo "Selected: $MODE"
+}
+
 choose_mode() {
+  # If arrows unsupported, fall back immediately
+  if ! supports_arrows; then
+    numeric_mode_menu
+    return 0
+  fi
   local options=("cpu_training" "hybrid" "inference")
   local index=0
   local key
+  echo "(Use ↑/↓ then Enter, or press Enter now for default: ${options[0]})"
   while true; do
-    echo "Select Operation Mode (↑/↓ then Enter):"
     for i in "${!options[@]}"; do
       if [ $i -eq $index ]; then
         printf "  > %s\n" "${options[$i]}"
@@ -134,42 +166,30 @@ choose_mode() {
         printf "    %s\n" "${options[$i]}"
       fi
     done
-    # Read single key (including arrows)
-    IFS= read -rsn1 key
-    if [[ $key == $'\x1b' ]]; then
-      # Possible escape sequence
-      read -rsn2 -t 0.0005 key_rest || true
+    IFS= read -rsn1 key 2>/dev/null || true
+    # Empty input (user just pressed Enter but read may have timed out)
+    if [[ -z "$key" ]]; then
+      MODE="${options[$index]}"; echo "Selected: $MODE"; return 0
+    fi
+    if [[ $key == $'\n' || $key == $'\r' ]]; then
+      MODE="${options[$index]}"; echo "Selected: $MODE"; return 0
+    elif [[ $key == $'\x1b' ]]; then
+      read -rsn2 -t 0.002 key_rest || true
       key+="$key_rest"
       case "$key" in
-        $'\x1b[A') # Up
-          ((index--))
-          (( index < 0 )) && index=$(( ${#options[@]} - 1 ))
-          ;;
-        $'\x1b[B') # Down
-          ((index++))
-          (( index >= ${#options[@]} )) && index=0
-          ;;
+        $'\x1b[A') ((index--)); (( index < 0 )) && index=$(( ${#options[@]} - 1 )) ;;
+        $'\x1b[B') ((index++)); (( index >= ${#options[@]} )) && index=0 ;;
       esac
-    elif [[ $key == $'\n' || $key == $'\r' ]]; then
-      echo ""
-      echo "Selected: ${options[$index]}"
-      MODE="${options[$index]}"
-      return 0
     fi
-    # Move cursor up to redraw menu (options count + header line)
-    local lines=$(( ${#options[@]} + 1 ))
-    tput cuu $lines 2>/dev/null || {
-      # Fallback: clear screen if tput not available
-      clear
-    }
+    # Redraw: move cursor up number of option lines
+    local lines=${#options[@]}
+    tput cuu $lines 2>/dev/null || clear
   done
 }
 
 if [ $# -eq 0 ] && [ -t 0 ]; then
-  # Interactive mode
   echo "No arguments supplied - entering interactive setup..."
   choose_mode
-  # Prompt for remaining parameters with defaults
   read -p "Maximum Speed [${DEFAULT_MAX_SPEED}]: " INPUT_MAX_SPEED
   read -p "Exploration Time seconds [${DEFAULT_EXPLORATION_TIME}]: " INPUT_EXPLORATION_TIME
   read -p "Safety Distance meters [${DEFAULT_SAFETY_DISTANCE}]: " INPUT_SAFETY_DISTANCE
@@ -177,7 +197,6 @@ if [ $# -eq 0 ] && [ -t 0 ]; then
   EXPLORATION_TIME=${INPUT_EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
   SAFETY_DISTANCE=${INPUT_SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
 else
-  # Non-interactive / arguments path (existing behavior)
   MODE=${1:-$DEFAULT_MODE}
   shift || true
   MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
