@@ -117,7 +117,8 @@ class RKNNTrainerDepth:
         # Training state
         self.training_step = 0
         self.last_save_time = time.time()
-        self.save_interval = 300  # Save every 5 minutes
+        self.save_interval = 300  # Save every 5 minutes (time-based)
+        self.step_save_interval = 250  # NEW: fallback checkpoint every N steps
         self.last_rknn_conversion = 0
         self.rknn_conversion_interval = 1800  # hard max interval (seconds)
         # Metric-gated export parameters
@@ -285,7 +286,12 @@ class RKNNTrainerDepth:
         
         self.training_step += 1
         
-        # Periodic saving
+        # NEW: Step-based periodic saving (fallback for early training before metrics improve)
+        if self.step_save_interval > 0 and (self.training_step % self.step_save_interval == 0):
+            self.save_model()
+            self.last_save_time = time.time()  # Sync last_save_time to avoid immediate time-based save
+        
+        # Periodic saving (time-based)
         current_time = time.time()
         if current_time - self.last_save_time > self.save_interval:
             self.save_model()
