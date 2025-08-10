@@ -66,6 +66,11 @@ class HiwonderMotorDriver(Node):
         self.declare_parameter("init_motor_type_delay_secs", 0.5)
         # Delay after setting encoder polarity during initialization.
         self.declare_parameter("init_encoder_polarity_delay_secs", 0.1)
+        # Use hardware encoder clear/reset on startup (I2C register 0x52)?
+        # If false, will establish software baseline for encoder counts.
+        self.declare_parameter("hardware_clear_encoders", True)
+        # Tolerance in encoder counts for verifying successful hardware clear.
+        self.declare_parameter("encoder_clear_verify_tolerance", 50)  # counts within which hardware clear considered successful
 
         self.i2c_bus = self.get_parameter("i2c_bus").value
         self.motor_address = self.get_parameter("motor_controller_address").value
@@ -94,6 +99,8 @@ class HiwonderMotorDriver(Node):
         self.init_encoder_polarity_delay = self.get_parameter(
             "init_encoder_polarity_delay_secs"
         ).value
+        self.hardware_clear_encoders = self.get_parameter("hardware_clear_encoders").value
+        self.encoder_clear_verify_tolerance = self.get_parameter("encoder_clear_verify_tolerance").value
 
         # Battery monitoring history
         # List of (timestamp, voltage, percentage) tuples
@@ -250,29 +257,67 @@ class HiwonderMotorDriver(Node):
             self.get_logger().error(f"Failed to initialize motor driver: {e}")
 
     def reset_encoders(self):
-        """Reset encoder counts to zero via I2C"""
+        """Reset encoder counts to zero via I2C or establish software baseline."""
         try:
-            # Send encoder clear command - typically a specific value to the clear register
-            # Based on Hiwonder documentation, this should reset both encoder counts
-            self.bus.write_byte_data(self.motor_address, self.MOTOR_ENCODER_CLEAR_ADDR, 1)
-            time.sleep(0.1)  # Allow time for reset to take effect
-            
-            # Reset our internal tracking
-            with self.encoder_lock:
-                self.prev_left_encoder = 0
-                self.prev_right_encoder = 0
-                self.left_velocity = 0.0
-                self.right_velocity = 0.0
-            
-            # Reset odometry
-            self.x = 0.0
-            self.y = 0.0
-            self.theta = 0.0
-            
-            self.get_logger().info("Encoder counts reset to zero")
-            
+            hw_attempted = False
+            hw_success = False
+            raw_left = None
+            raw_right = None
+            if self.bus is not None and self.hardware_clear_encoders:
+                try:
+                    self.bus.write_byte_data(self.motor_address, self.MOTOR_ENCODER_CLEAR_ADDR, 1)
+                    hw_attempted = True
+                    time.sleep(0.1)
+                    # Read back counts to verify
+                    encoder_data = self.read_data_array(self.MOTOR_ENCODER_TOTAL_ADDR, 8)
+                    if encoder_data and len(encoder_data) == 8:
+                        encoders = struct.unpack("<2i", bytes(encoder_data))
+                        raw_right = encoders[0]
+                        raw_left = encoders[1]
+                        if (
+                            abs(raw_left) <= self.encoder_clear_verify_tolerance and
+                            abs(raw_right) <= self.encoder_clear_verify_tolerance
+                        ):
+                            hw_success = True
+                except Exception as e:
+                    self.get_logger().warn(f"Hardware encoder clear failed: {e}")
+            if hw_success:
+                with self.encoder_lock:
+                    self.encoder_baseline_left = 0
+                    self.encoder_baseline_right = 0
+                    self.prev_left_encoder = 0
+                    self.prev_right_encoder = 0
+                    self.left_velocity = 0.0
+                    self.right_velocity = 0.0
+                self.x = 0.0; self.y = 0.0; self.theta = 0.0
+                self.get_logger().info("Encoder hardware clear succeeded (counts near zero)")
+            else:
+                # Establish software baseline from first read of current (if not already provided)
+                if raw_left is None or raw_right is None:
+                    encoder_data = self.read_data_array(self.MOTOR_ENCODER_TOTAL_ADDR, 8)
+                    if encoder_data and len(encoder_data) == 8:
+                        encoders = struct.unpack("<2i", bytes(encoder_data))
+                        raw_right = encoders[0]
+                        raw_left = encoders[1]
+                if raw_left is not None and raw_right is not None:
+                    self.encoder_baseline_left = raw_left
+                    self.encoder_baseline_right = raw_right
+                    with self.encoder_lock:
+                        self.prev_left_encoder = 0
+                        self.prev_right_encoder = 0
+                        self.left_velocity = 0.0
+                        self.right_velocity = 0.0
+                    self.x = 0.0; self.y = 0.0; self.theta = 0.0
+                    source = "hardware clear failed" if hw_attempted else "hardware clear skipped"
+                    self.get_logger().warn(
+                        f"Using software encoder baseline (left={raw_left}, right={raw_right}) because {source}. Effective counts will start at zero.")
+                else:
+                    self.get_logger().error("Unable to read encoders to set software baseline; proceeding with zeros")
+                    self.encoder_baseline_left = 0
+                    self.encoder_baseline_right = 0
+            self.get_logger().debug(f"Encoder baselines: L={self.encoder_baseline_left}, R={self.encoder_baseline_right}")
         except Exception as e:
-            self.get_logger().error(f"Failed to reset encoders: {e}")
+            self.get_logger().error(f"Failed to reset/initialize encoders: {e}")
 
     def write_byte(self, val):
         """Write a single byte to I2C device"""
@@ -424,74 +469,54 @@ class HiwonderMotorDriver(Node):
         """Read encoders and publish sensor data"""
         if self.bus is None:
             return
-
         try:
-            # Read encoder data from I2C motor controller (only need first 8
-            # bytes for M1 and M2)
             encoder_data = self.read_data_array(self.MOTOR_ENCODER_TOTAL_ADDR, 8)
             if encoder_data and len(encoder_data) == 8:
-                # Unpack 2 signed 32-bit integers (M1=right, M2=left encoder
-                # counts)
                 encoders = struct.unpack("<2i", bytes(encoder_data))
-                right_encoder = encoders[0]  # M1 (right motor)
-                left_encoder = encoders[1]  # M2 (left motor)
+                raw_right = encoders[0]
+                raw_left = encoders[1]
+                # Apply software baseline if set
+                if self.encoder_baseline_left is None or self.encoder_baseline_right is None:
+                    # First time sensor callback before reset_encoders established baseline
+                    self.encoder_baseline_left = raw_left
+                    self.encoder_baseline_right = raw_right
+                    self.get_logger().info(f"Encoder baseline auto-set in sensor loop L={raw_left} R={raw_right}")
+                effective_left = raw_left - self.encoder_baseline_left
+                effective_right = raw_right - self.encoder_baseline_right
                 self.read_count += 1
-
-                # Calculate velocities
                 current_time = time.time()
                 dt = current_time - self.last_encoder_time
-
                 if dt > 0:
                     with self.encoder_lock:
-                        left_delta = left_encoder - self.prev_left_encoder
-                        right_delta = right_encoder - self.prev_right_encoder
-
-                        # Convert encoder deltas to wheel velocities (rad/s)
-                        if dt > 0.001:  # Avoid division by very small dt
-                            self.left_velocity = (
-                                (left_delta / self.encoder_ppr) * 2 * math.pi / dt
-                            )
-                            self.right_velocity = (
-                                (right_delta / self.encoder_ppr) * 2 * math.pi / dt
-                            )
-                        else:
-                            # Keep previous velocities if dt too small
-                            pass
-
-                        self.prev_left_encoder = left_encoder
-                        self.prev_right_encoder = right_encoder
-
+                        left_delta = effective_left - self.prev_left_encoder
+                        right_delta = effective_right - self.prev_right_encoder
+                        if dt > 0.001:
+                            self.left_velocity = (left_delta / self.encoder_ppr) * 2 * math.pi / dt
+                            self.right_velocity = (right_delta / self.encoder_ppr) * 2 * math.pi / dt
+                        self.prev_left_encoder = effective_left
+                        self.prev_right_encoder = effective_right
                 self.last_encoder_time = current_time
-
-                # Publish joint states and odometry with real encoder data
-                self.publish_joint_states(left_encoder, right_encoder)
+                # Publish using effective counts so downstream sees zeroed start
+                self.publish_joint_states(effective_left, effective_right)
                 self.publish_odometry()
-
                 # Log at reduced rate to avoid spam (every 2.5 seconds = 250
                 # reads at 100Hz)
                 if self.read_count % 250 == 0:
                     self.get_logger().info(
-                        f"Encoders @100Hz: L={left_encoder}, R={right_encoder}, "
-                        f"Velocities: L={
-                            self.left_velocity:.2f}, R={
-                            self.right_velocity:.2f}"
-                    )
+                        f"Encoders @100Hz raw L={raw_left} R={raw_right} eff L={effective_left} R={effective_right} Vel L={self.left_velocity:.2f} R={self.right_velocity:.2f}")
                 else:
                     self.get_logger().debug(
-                        f"Encoders: L={left_encoder}, R={right_encoder}, "
+                        f"Encoders: L={raw_left}, R={raw_right}, "
                         f"Velocities: L={
                             self.left_velocity:.2f}, R={
                             self.right_velocity:.2f}"
                     )
             else:
                 self.get_logger().warning("Invalid encoder data received")
-                # Publish zero values if read fails
                 self.publish_joint_states(0, 0)
                 self.publish_odometry()
-
         except Exception as e:
             self.get_logger().error(f"Encoder reading error: {e}")
-            # Publish zero values on error
             self.publish_joint_states(0, 0)
             self.publish_odometry()
 
