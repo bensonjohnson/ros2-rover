@@ -296,12 +296,12 @@ class RKNNTrainerDepth:
         
         # Calculate target actions with reward weighting
         target_actions = action_batch.clone()
-        confidence_weight = torch.sigmoid(reward_batch).unsqueeze(1)
-        target_actions = target_actions * confidence_weight
+        confidence_weight = torch.sigmoid(reward_batch)  # (B,1) keeps broadcast simple
+        target_actions = target_actions * confidence_weight  # broadcasts (B,1) -> (B,2)
         
         # Loss calculation
         action_loss = self.criterion(predicted_actions[:, :2], target_actions)
-        confidence_loss = self.criterion(predicted_actions[:, 2], torch.sigmoid(reward_batch))
+        confidence_loss = self.criterion(predicted_actions[:, 2], torch.sigmoid(reward_batch).squeeze(1))
         total_loss = action_loss + 0.1 * confidence_loss
         
         # Backward pass
