@@ -442,26 +442,53 @@ class RKNNTrainerDepth:
         return base + self.extra_proprio
 
     def convert_to_rknn(self):
-        """Convert PyTorch model to RKNN format for NPU inference (fixed input shapes)."""
+        """Convert PyTorch model to RKNN format for NPU inference (fixed input shapes) with detailed debug."""
         if not RKNN_AVAILABLE:
             print("RKNN not available - skipping conversion")
+            # Still export ONNX for inspection
+            try:
+                onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")
+                dummy_depth = torch.randn(1, self.stacked_frames, self.target_h, self.target_w).to(self.device)
+                dummy_sensor = torch.randn(1, self._proprio_feature_size()).to(self.device)
+                torch.onnx.export(
+                    self.model,
+                    (dummy_depth, dummy_sensor),
+                    onnx_path,
+                    export_params=True,
+                    opset_version=11,
+                    do_constant_folding=True,
+                    input_names=['depth_image', 'sensor'],
+                    output_names=['action_confidence'],
+                    dynamic_axes=None
+                )
+                print(f"ONNX exported (without RKNN toolkit): {onnx_path}")
+            except Exception as e:
+                print(f"ONNX export failed (no RKNN toolkit): {e}")
             return
         try:
+            if self.enable_debug:
+                print("[RKNN] Starting conversion pipeline")
             os.makedirs(self.model_dir, exist_ok=True)
             dummy_depth = torch.randn(1, self.stacked_frames, self.target_h, self.target_w).to(self.device)
             proprio_size = self._proprio_feature_size()
             dummy_sensor = torch.randn(1, proprio_size).to(self.device)
+            if self.enable_debug:
+                print(f"[RKNN] Dummy tensors created depth_shape={tuple(dummy_depth.shape)} sensor_shape={tuple(dummy_sensor.shape)}")
             # Sanity check flatten size
             with torch.no_grad():
                 self.model.eval()
                 depth_features = self.model.depth_conv(dummy_depth)
                 flat_dim = depth_features.shape[1] * depth_features.shape[2] * depth_features.shape[3]
                 expected = self.model.depth_fc.in_features
+                if self.enable_debug:
+                    print(f"[RKNN] Depth feature flatten size={flat_dim} expected={expected}")
                 if flat_dim != expected:
                     print(f"[RKNN Export] WARNING: depth flatten size {flat_dim} != expected {expected}. Aborting export.")
                     self.model.train()
                     return
             onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")
+            if self.enable_debug:
+                print(f"[RKNN] Exporting ONNX to {onnx_path}")
             torch.onnx.export(
                 self.model,
                 (dummy_depth, dummy_sensor),
@@ -473,18 +500,39 @@ class RKNNTrainerDepth:
                 output_names=['action_confidence'],
                 dynamic_axes=None
             )
+            if self.enable_debug:
+                print("[RKNN] ONNX export complete")
             dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
             dataset_path = os.path.abspath(dataset_path)
-            rknn = RKNN(verbose=False)
-            mean_values = [ [0.0] * self.stacked_frames, [0.0] * proprio_size ]
-            std_values =  [ [1.0] * self.stacked_frames, [1.0] * proprio_size ]
-            rknn.config(mean_values=mean_values, std_values=std_values, target_platform='rk3588')
+            if self.enable_debug:
+                print(f"[RKNN] Dataset path: {dataset_path}")
+            rknn = RKNN(verbose=self.enable_debug)
+            # First try simplest config (some toolkit versions choke on multi-input mean/std lists)
+            try:
+                if self.enable_debug:
+                    print("[RKNN] Calling config (simple)")
+                rknn.config(target_platform='rk3588')
+            except Exception as e:
+                print(f"[RKNN] Simple config failed: {e}. Trying depth-only mean/std.")
+                try:
+                    mean_values = [[0.0] * self.stacked_frames]
+                    std_values = [[1.0] * self.stacked_frames]
+                    rknn.config(mean_values=mean_values, std_values=std_values, target_platform='rk3588')
+                except Exception as e2:
+                    print(f"[RKNN] Depth-only config failed: {e2}. Aborting.")
+                    rknn.release()
+                    self.model.train()
+                    return
+            if self.enable_debug:
+                print("[RKNN] Loading ONNX model")
             ret = rknn.load_onnx(model=onnx_path)
             if ret != 0:
-                print("Failed to load ONNX model")
+                print("[RKNN] Failed to load ONNX model (ret != 0)")
                 rknn.release()
                 self.model.train()
                 return
+            if self.enable_debug:
+                print("[RKNN] ONNX loaded successfully")
             do_quantization = False
             if os.path.exists(dataset_path):
                 try:
@@ -492,28 +540,34 @@ class RKNNTrainerDepth:
                         if f.read().strip():
                             do_quantization = True
                 except Exception as e:
-                    print(f"Error reading dataset file: {e}")
+                    print(f"[RKNN] Error reading dataset file: {e}")
+            if self.enable_debug:
+                print(f"[RKNN] Building (quantization={do_quantization})")
             if do_quantization:
-                print(f"Building RKNN model with quantization using dataset: {dataset_path}")
                 ret = rknn.build(do_quantization=True, dataset=dataset_path)
             else:
-                print("Building RKNN model without quantization (dataset not available or empty)")
                 ret = rknn.build(do_quantization=False)
             if ret != 0:
-                print("Failed to build RKNN model")
+                print("[RKNN] Failed to build RKNN model (ret != 0)")
                 rknn.release()
                 self.model.train()
                 return
+            if self.enable_debug:
+                print("[RKNN] Build successful, exporting RKNN")
             rknn_path = os.path.join(self.model_dir, "exploration_model_depth.rknn")
             ret = rknn.export_rknn(rknn_path)
             if ret != 0:
-                print("Failed to export RKNN model")
+                print("[RKNN] Failed to export RKNN model")
             else:
                 print(f"RKNN model saved: {rknn_path}")
             rknn.release()
+            if self.enable_debug:
+                print("[RKNN] Pipeline complete")
             self.model.train()
         except Exception as e:
-            print(f"RKNN conversion failed: {e}")
+            print(f"RKNN conversion failed (exception): {e}")
+            import traceback
+            traceback.print_exc()
             self.model.train()
     
     def get_training_stats(self) -> Dict[str, float]:
