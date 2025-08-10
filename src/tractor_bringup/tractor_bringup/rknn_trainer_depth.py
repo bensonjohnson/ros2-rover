@@ -120,7 +120,7 @@ class RKNNTrainerDepth:
         self.save_interval = 300  # Save every 5 minutes (time-based)
         self.step_save_interval = 250  # NEW: fallback checkpoint every N steps
         self.last_rknn_conversion = 0
-        self.rknn_conversion_interval = 1800  # hard max interval (seconds)
+        self.rknn_conversion_interval = 300  # hard max interval (seconds) (was 1800)
         # Metric-gated export parameters
         self.rknn_min_interval = 600  # minimum seconds between exports if improvement seen
         self.rknn_loss_improve_ratio = 0.90  # export if median loss improved by >=10%
