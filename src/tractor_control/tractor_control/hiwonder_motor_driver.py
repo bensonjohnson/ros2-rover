@@ -72,7 +72,7 @@ class HiwonderMotorDriver(Node):
         # Tolerance in encoder counts for verifying successful hardware clear.
         self.declare_parameter("encoder_clear_verify_tolerance", 50)  # counts within which hardware clear considered successful
         # NEW: Timeout for receiving /cmd_vel before auto stop (seconds)
-        self.declare_parameter("cmd_vel_timeout_secs", 0.5)
+        self.declare_parameter("cmd_vel_timeout_secs", 1.0)
         # NEW: Watchdog check frequency (Hz)
         self.declare_parameter("watchdog_check_hz", 20.0)
 
