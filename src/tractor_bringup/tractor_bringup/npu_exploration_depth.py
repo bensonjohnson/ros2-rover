@@ -517,6 +517,20 @@ class NPUExplorationDepthNode(Node):
             status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Battery: {self.current_battery_percentage:.1f}% | Steps: {self.step_count}"
             
         self.status_pub.publish(status_msg)
+    
+    def all_sensors_ready(self):
+        """Check minimal sensor readiness for depth-based inference.
+        Requirements:
+          - A processed depth frame received
+          - Odometry updated at least once (position defaults change) OR step_count threshold
+          - Wheel velocities tuple populated (len==2)
+        """
+        if self.latest_depth_image is None:
+            return False
+        # Basic odom evidence: position not both zeros after some steps OR we have advanced step_count
+        odom_ok = (self.step_count > 5) or not np.allclose(self.position, [0.0, 0.0])
+        wheels_ok = isinstance(self.wheel_velocities, tuple) and len(self.wheel_velocities) == 2
+        return odom_ok and wheels_ok
 
 def main(args=None):
     rclpy.init(args=args)
