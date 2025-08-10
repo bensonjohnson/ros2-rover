@@ -24,6 +24,10 @@ from threading import Lock
 class HiwonderMotorDriver(Node):
     def __init__(self):
         super().__init__("hiwonder_motor_driver")
+        # Initialize encoder baselines early to avoid AttributeError if sensor_callback
+        # runs or an exception occurs before reset_encoders() finishes.
+        self.encoder_baseline_left = None
+        self.encoder_baseline_right = None
 
         # Parameters (using corrected addresses from ESP32 testing)
         self.declare_parameter("i2c_bus", 5)
