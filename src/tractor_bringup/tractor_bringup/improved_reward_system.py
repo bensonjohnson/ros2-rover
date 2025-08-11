@@ -71,6 +71,12 @@ class ImprovedRewardCalculator:
             'continuous_movement_bonus': 1.5,
             'stagnation_penalty': -3.0,
             
+            # Open space navigation rewards
+            'open_space_bonus': 8.0,           # Reward for orienting toward open space
+            'brightness_gradient_bonus': 6.0,   # Reward for following brightness gradients
+            'free_path_multiplier': 2.5,        # Multiplier for clear forward path
+            'peripheral_open_bonus': 3.0,       # Reward for open space on sides
+            
             # Differential drive tracking
             'track_efficiency_bonus': 4.0,      # Reward for efficient differential drive
             'wheel_slip_penalty': -4.0,         # Penalty for wheel slippage
@@ -79,6 +85,7 @@ class ImprovedRewardCalculator:
         
         # Additional parameters
         self.enable_wall_frontier = False  # temporarily disable to reduce spin incentives
+        self.enable_open_space_orientation = kwargs.get('enable_open_space_orientation', True)  # NEW feature
         self.spin_penalty = kwargs.get('spin_penalty', 3.0)
         self.forward_free_bonus_scale = kwargs.get('forward_free_bonus_scale', 1.5)
     
@@ -142,7 +149,13 @@ class ImprovedRewardCalculator:
             reward_breakdown['curiosity'] = curiosity_reward
             total_reward += curiosity_reward
         
-        # 9. Differential Drive Efficiency (if wheel velocities available)
+        # 9. Open Space Orientation Reward (NEW - based on depth brightness)
+        if depth_data is not None and self.enable_open_space_orientation:
+            open_space_reward = self._calculate_open_space_orientation_reward(depth_data, action)
+            reward_breakdown['open_space_orientation'] = open_space_reward
+            total_reward += open_space_reward
+        
+        # 10. Differential Drive Efficiency (if wheel velocities available)
         if wheel_velocities is not None:
             differential_reward = self._calculate_differential_drive_reward(action, wheel_velocities)
             reward_breakdown['differential_drive'] = differential_reward
@@ -365,6 +378,85 @@ class ImprovedRewardCalculator:
                         if all(abs(a[0]) > 0.05 and abs(a[1]) < 0.2 for a in recent_actions):
                             reward += self.reward_config['exploration_efficiency_bonus']
             
+        except Exception as e:
+            # Don't let depth processing errors crash the reward calculation
+            pass
+        
+        return reward
+    
+    def _calculate_open_space_orientation_reward(self, depth_data: np.ndarray, action: np.ndarray) -> float:
+        """
+        Reward robot for orienting toward open space (lighter/brighter depth pixels).
+        This implements the core idea: robot should prefer moving toward areas with 
+        higher depth values (farther distances) which appear as lighter pixels.
+        """
+        reward = 0.0
+        
+        try:
+            if depth_data.size == 0:
+                return 0.0
+                
+            height, width = depth_data.shape
+            linear_speed = abs(action[0])
+            angular_velocity = action[1]  # Negative = left turn, Positive = right turn
+            
+            # Normalize depth to 0-1 range for "brightness" analysis
+            # Higher values = farther distances = "brighter" pixels = more open space
+            valid_mask = (depth_data > 0.1) & (depth_data < 8.0)  # Valid depth range
+            if not np.any(valid_mask):
+                return 0.0
+                
+            normalized_depth = np.zeros_like(depth_data)
+            normalized_depth[valid_mask] = np.clip(depth_data[valid_mask] / 8.0, 0.0, 1.0)
+            
+            # Analyze different regions for open space
+            center_region = normalized_depth[height//3:2*height//3, width//3:2*width//3]
+            left_region = normalized_depth[:, :width//3]
+            right_region = normalized_depth[:, 2*width//3:]
+            front_region = normalized_depth[:height//2, :]  # Upper half = farther ahead
+            
+            # Calculate "openness" (average brightness) of each region
+            center_openness = np.mean(center_region[center_region > 0.1]) if np.any(center_region > 0.1) else 0.0
+            left_openness = np.mean(left_region[left_region > 0.1]) if np.any(left_region > 0.1) else 0.0
+            right_openness = np.mean(right_region[right_region > 0.1]) if np.any(right_region > 0.1) else 0.0
+            front_openness = np.mean(front_region[front_region > 0.1]) if np.any(front_region > 0.1) else 0.0
+            
+            # 1. Reward forward movement toward open center area
+            if linear_speed > 0.05 and center_openness > 0.4:  # Moving forward into open space
+                center_reward = self.reward_config['open_space_bonus'] * center_openness * linear_speed
+                reward += center_reward
+                
+                # Extra bonus for very open areas ahead
+                if center_openness > 0.7:
+                    reward += self.reward_config['free_path_multiplier'] * linear_speed
+            
+            # 2. Reward turning toward the more open side
+            if abs(angular_velocity) > 0.1:  # Robot is turning
+                openness_difference = right_openness - left_openness
+                
+                # If turning toward more open side, reward it
+                if angular_velocity > 0 and openness_difference > 0.1:  # Turning right toward more open right side
+                    reward += self.reward_config['brightness_gradient_bonus'] * openness_difference * abs(angular_velocity)
+                elif angular_velocity < 0 and openness_difference < -0.1:  # Turning left toward more open left side
+                    reward += self.reward_config['brightness_gradient_bonus'] * abs(openness_difference) * abs(angular_velocity)
+            
+            # 3. Bonus for having open peripheral space (safer navigation)
+            peripheral_openness = (left_openness + right_openness) / 2.0
+            if peripheral_openness > 0.5 and linear_speed > 0.03:
+                reward += self.reward_config['peripheral_open_bonus'] * peripheral_openness * linear_speed
+            
+            # 4. Gradient following: reward moving toward brightness gradients
+            # This encourages the robot to follow the "edge" between open and closed space
+            if linear_speed > 0.05:
+                # Calculate horizontal brightness gradient (how much openness changes left-to-right)
+                if abs(right_openness - left_openness) > 0.2:
+                    gradient_strength = abs(right_openness - left_openness)
+                    reward += self.reward_config['brightness_gradient_bonus'] * 0.5 * gradient_strength * linear_speed
+                    
+            # 5. Penalize moving toward very closed/dark areas
+            if linear_speed > 0.05 and center_openness < 0.2:  # Moving toward closed space
+                reward -= 2.0 * linear_speed  # Penalty proportional to speed
+                
         except Exception as e:
             # Don't let depth processing errors crash the reward calculation
             pass
