@@ -46,6 +46,7 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('npu_inference_rate', 5.0)
         self.declare_parameter('stacked_frames', 1)
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
+        self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -59,6 +60,7 @@ class NPUExplorationDepthNode(Node):
         self.inference_rate = self.get_parameter('npu_inference_rate').value
         self.stacked_frames = self.get_parameter('stacked_frames').value
         self.operation_mode = self.get_parameter('operation_mode').value
+        self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -205,7 +207,7 @@ class NPUExplorationDepthNode(Node):
         
         # Train neural network if available
         if self.use_npu and self.trainer and self.step_count > 10:
-            if self.operation_mode != 'inference':
+            if self.operation_mode != 'inference' and (self.step_count % self.train_every_n_frames == 0):
                 self.train_from_experience()
         
         # status now handled by status timer
