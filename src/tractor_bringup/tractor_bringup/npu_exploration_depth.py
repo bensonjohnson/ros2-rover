@@ -588,7 +588,9 @@ class NPUExplorationDepthNode(Node):
                     action=self.last_action,
                     reward=reward,
                     next_depth_image=self.latest_depth_image.astype(np.float32),
-                    done=False
+                    done=False,
+                    collision=self.collision_detected,
+                    in_recovery=self.recovery_active
                 )
             if len(self.trainer.experience_buffer) >= max(32, self.trainer.batch_size):
                 training_stats = self.trainer.train_step()
