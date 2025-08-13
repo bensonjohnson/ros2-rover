@@ -87,6 +87,13 @@ class DepthImageExplorationNet(nn.Module):
         
         return output
 
+# NEW: lightweight proxy so external len(trainer.experience_buffer) keeps working
+class _BufferLenProxy:
+    def __init__(self, trainer):
+        self._trainer = trainer
+    def __len__(self):
+        return self._trainer.buffer_size
+
 class RKNNTrainerDepth:
     """
     Handles model training, data collection, and RKNN conversion for depth images
@@ -109,9 +116,27 @@ class RKNNTrainerDepth:
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
         
-        # Experience replay buffer
-        self.buffer_size = 10000
-        self.experience_buffer = deque(maxlen=self.buffer_size)
+        # Experience replay (replaced deque with ring buffer + priorities for prioritized replay)
+        self.buffer_capacity = 10000
+        self.buffer_size = 0
+        self.insert_ptr = 0
+        self.proprio_dim = 3 + self.extra_proprio
+        self.depth_store = np.zeros((self.buffer_capacity, self.stacked_frames, self.target_h, self.target_w), dtype=np.float32)
+        self.proprio_store = np.zeros((self.buffer_capacity, self.proprio_dim), dtype=np.float32)
+        self.action_store = np.zeros((self.buffer_capacity, 2), dtype=np.float32)  # linear, angular
+        self.reward_store = np.zeros((self.buffer_capacity,), dtype=np.float32)
+        self.done_store = np.zeros((self.buffer_capacity,), dtype=np.uint8)
+        # We do not currently use next_depth_image in training -> omit to save memory
+        # Prioritized replay parameters
+        self.priorities = np.zeros((self.buffer_capacity,), dtype=np.float32)
+        self.pr_alpha = 0.6
+        self.pr_beta = 0.4
+        self.pr_beta_inc = (1.0 - 0.4) / 50000.0  # anneal over ~50k steps
+        self.priority_epsilon = 0.01
+        self.collision_priority_bonus = 5.0
+        self.recovery_priority_bonus = 2.0
+        # Backwards compatibility proxy (external code only uses len())
+        self.experience_buffer = _BufferLenProxy(self)
         self.batch_size = 32
         # Adaptive batch sizing (warmup with larger batches for vectorization)
         self.max_warmup_batch = 128  # can increase if memory allows
@@ -159,16 +184,16 @@ class RKNNTrainerDepth:
                       action: np.ndarray,
                       reward: float,
                       next_depth_image: np.ndarray = None,
-                      done: bool = False):
-        """Add experience to replay buffer"""
-
-        # Preprocess depth images into (C,H,W)
+                      done: bool = False,
+                      collision: bool = False,
+                      in_recovery: bool = False):
+        """Add experience to prioritized replay buffer.
+        Optional flags 'collision' and 'in_recovery' increase sampling priority.
+        """
+        # Preprocess depth image to (C,H,W)
         processed = depth_image if depth_image.ndim == 3 else self.preprocess_depth_for_storage(depth_image)
-        processed_next = None
-        if next_depth_image is not None:
-            processed_next = next_depth_image if next_depth_image.ndim == 3 else self.preprocess_depth_for_storage(next_depth_image)
         # Defensive padding/truncation for proprioceptive data
-        expected = 3 + self.extra_proprio
+        expected = self.proprio_dim
         if proprioceptive.shape[0] < expected:
             if self.enable_debug:
                 print(f"[AddExp] Padding proprio {proprioceptive.shape[0]} -> {expected}")
@@ -177,18 +202,32 @@ class RKNNTrainerDepth:
             if self.enable_debug:
                 print(f"[AddExp] Truncating proprio {proprioceptive.shape[0]} -> {expected}")
             proprioceptive = proprioceptive[:expected]
-        experience = {
-            'depth_image': processed.copy(),
-            'proprioceptive': proprioceptive.copy(),
-            'action': action.copy(),
-            'reward': reward,
-            'next_depth_image': processed_next.copy() if processed_next is not None else None,
-            'done': done
-        }
-        
-        self.experience_buffer.append(experience)
+        # Ring buffer insert
+        i = self.insert_ptr
+        self.depth_store[i] = processed.astype(np.float32)
+        self.proprio_store[i] = proprioceptive.astype(np.float32)
+        # Action expected length 2 (linear, angular); trim/pad if needed
+        if action.shape[0] < 2:
+            act = np.zeros(2, dtype=np.float32)
+            act[:action.shape[0]] = action
+        else:
+            act = action[:2]
+        self.action_store[i] = act.astype(np.float32)
+        self.reward_store[i] = float(reward)
+        self.done_store[i] = 1 if done else 0
+        # Priority calculation
+        p = abs(reward) + self.priority_epsilon
+        if collision:
+            p += self.collision_priority_bonus
+        if in_recovery:
+            p += self.recovery_priority_bonus
+        self.priorities[i] = p
+        # Advance pointer / size
+        self.insert_ptr = (i + 1) % self.buffer_capacity
+        if self.buffer_size < self.buffer_capacity:
+            self.buffer_size += 1
         self.reward_history.append(reward)
-        
+
     def calculate_reward(self, 
                         action: np.ndarray,
                         collision: bool,
@@ -258,90 +297,78 @@ class RKNNTrainerDepth:
         return reward
         
     def train_step(self) -> Dict[str, float]:
-        """Perform one training step if enough data available"""
-        # Adaptive batch size adjustment BEFORE sampling
+        """Perform one prioritized replay training step if enough data available"""
+        # Adaptive batch size update
         if self.training_step < self.warmup_batch_steps:
             target_batch = self.max_warmup_batch
         else:
             target_batch = self.post_warmup_batch
-        # Ensure buffer large enough before switching to large batch
-        if len(self.experience_buffer) < self.min_buffer_for_max_batch:
-            target_batch = min(target_batch, 64)  # intermediate ramp
-        # Only update if different
+        if self.buffer_size < self.min_buffer_for_max_batch:
+            target_batch = min(target_batch, 64)
         if target_batch != self.batch_size:
             self.batch_size = target_batch
             if self.enable_debug:
-                print(f"[BatchAdapt] batch_size -> {self.batch_size} (step={self.training_step} buffer={len(self.experience_buffer)})")
-        if len(self.experience_buffer) < self.batch_size:
-            return {"loss": 0.0, "samples": len(self.experience_buffer)}
-            
-        # Sample random batch
-        indices = np.random.choice(len(self.experience_buffer), self.batch_size, replace=False)
-        batch = [self.experience_buffer[i] for i in indices]
-        
-        # Detect legacy shape and purge if necessary
-        if any(exp['depth_image'].ndim != 3 for exp in batch):
-            self.experience_buffer.clear()
-            return {"loss": 0.0, "samples": 0}
-        
-        # Prepare batch data
-        depth_batch = torch.FloatTensor(np.array([exp['depth_image'] for exp in batch]))  # (B,C,H,W)
-        sensor_list = []
-        expected = 3 + self.extra_proprio
-        legacy_count = 0
-        for exp in batch:
-            p = exp['proprioceptive']
-            if p.shape[0] < expected:
-                legacy_count += 1
-                pad = np.zeros(expected - p.shape[0], dtype=p.dtype)
-                p = np.concatenate([p, pad], axis=0)
-            elif p.shape[0] > expected:
-                p = p[:expected]
-            sensor_list.append(p)
-        if legacy_count and self.enable_debug:
-            print(f"[Train] Padded {legacy_count} legacy proprio samples to length {expected}")
-        sensor_batch = torch.FloatTensor(np.array(sensor_list))
-        action_batch = torch.FloatTensor(np.array([exp['action'] for exp in batch]))
-        reward_batch = torch.FloatTensor(np.array([exp['reward'] for exp in batch])).unsqueeze(1)
-        depth_batch = depth_batch.to(self.device)
-        sensor_batch = sensor_batch.to(self.device)
-        action_batch = action_batch.to(self.device)
-        reward_batch = reward_batch.to(self.device)
-        
-        # Forward pass
+                print(f"[BatchAdapt] batch_size -> {self.batch_size} (step={self.training_step} buffer={self.buffer_size})")
+        if self.buffer_size < self.batch_size:
+            return {"loss": 0.0, "samples": self.buffer_size}
+        # Prioritized sampling
+        valid = self.buffer_size
+        raw = self.priorities[:valid]
+        if not np.any(raw):
+            probs = np.full(valid, 1.0 / valid, dtype=np.float32)
+        else:
+            probs = raw ** self.pr_alpha
+            probs /= probs.sum()
+        try:
+            indices = np.random.choice(valid, self.batch_size, replace=False, p=probs)
+        except ValueError:
+            # Fallback uniform
+            indices = np.random.choice(valid, self.batch_size, replace=False)
+            probs = np.full(valid, 1.0 / valid, dtype=np.float32)
+        # Importance sampling weights
+        sample_probs = probs[indices]
+        weights = (valid * sample_probs) ** (-self.pr_beta)
+        weights /= weights.max()
+        self.pr_beta = min(1.0, self.pr_beta + self.pr_beta_inc)
+        # Assemble batch tensors
+        depth_batch = torch.from_numpy(self.depth_store[indices]).float().to(self.device)
+        sensor_batch = torch.from_numpy(self.proprio_store[indices]).float().to(self.device)
+        action_batch = torch.from_numpy(self.action_store[indices]).float().to(self.device)
+        reward_batch = torch.from_numpy(self.reward_store[indices]).float().unsqueeze(1).to(self.device)
+        weights_t = torch.from_numpy(weights).float().to(self.device)
+        # Forward
         predicted_actions = self.model(depth_batch, sensor_batch)
-        
-        # Calculate target actions with reward weighting
         target_actions = action_batch.clone()
-        confidence_weight = torch.sigmoid(reward_batch)  # (B,1) keeps broadcast simple
-        target_actions = target_actions * confidence_weight  # broadcasts (B,1) -> (B,2)
-        
-        # Loss calculation
-        action_loss = self.criterion(predicted_actions[:, :2], target_actions)
-        confidence_loss = self.criterion(predicted_actions[:, 2], torch.sigmoid(reward_batch).squeeze(1))
-        total_loss = action_loss + 0.1 * confidence_loss
-        
-        # Backward pass
+        confidence_weight = torch.sigmoid(reward_batch)
+        target_actions = target_actions * confidence_weight  # (B,2)
+        # Per-sample losses
+        action_diff = predicted_actions[:, :2] - target_actions
+        per_sample_action_loss = (action_diff ** 2).mean(dim=1)
+        conf_target = torch.sigmoid(reward_batch).squeeze(1)
+        conf_diff = predicted_actions[:, 2] - conf_target
+        per_sample_conf_loss = conf_diff.pow(2)
+        per_sample_loss = per_sample_action_loss + 0.1 * per_sample_conf_loss
+        loss = (weights_t * per_sample_loss).mean()
+        # Backprop
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
-        # Track loss history
-        self.loss_history.append(float(total_loss.item()))
-        
+        # Update priorities (blend for stability)
+        new_p = per_sample_loss.detach().cpu().numpy() + self.priority_epsilon
+        old_p = self.priorities[indices]
+        self.priorities[indices] = 0.9 * old_p + 0.1 * new_p
+        # Tracking
+        self.loss_history.append(float(loss.item()))
         self.training_step += 1
-        
-        # NEW: Step-based periodic saving (fallback for early training before metrics improve)
+        # Checkpoint logic (unchanged except for buffer reference)
         if self.step_save_interval > 0 and (self.training_step % self.step_save_interval == 0):
             self.save_model()
-            self.last_save_time = time.time()  # Sync last_save_time to avoid immediate time-based save
-        
-        # Periodic saving (time-based)
+            self.last_save_time = time.time()
         current_time = time.time()
         if current_time - self.last_save_time > self.save_interval:
             self.save_model()
             self.last_save_time = current_time
-        # Metric-gated RKNN conversion
         force_due_interval = (current_time - self.last_rknn_conversion) > self.rknn_conversion_interval
         can_check_improvement = (current_time - self.last_rknn_conversion) > self.rknn_min_interval
         median_loss = float(np.median(self.loss_history)) if self.loss_history else None
@@ -363,10 +390,10 @@ class RKNNTrainerDepth:
             except Exception as e:
                 print(f"RKNN export attempt failed: {e}")
         return {
-            "loss": total_loss.item(),
-            "action_loss": action_loss.item(),
-            "confidence_loss": confidence_loss.item(),
-            "samples": len(self.experience_buffer),
+            "loss": loss.item(),
+            "action_loss": float(per_sample_action_loss.mean().item()),
+            "confidence_loss": float(per_sample_conf_loss.mean().item()),
+            "samples": self.buffer_size,
             "training_steps": self.training_step,
             "avg_reward": avg_reward,
             "median_loss": median_loss if median_loss is not None else 0.0
@@ -521,7 +548,7 @@ class RKNNTrainerDepth:
                 'model_state_dict': self.model.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'training_step': self.training_step,
-                'buffer_size': len(self.experience_buffer)
+                'buffer_size': self.buffer_size
             }, model_path)
             
             # Save latest symlink
@@ -735,9 +762,9 @@ class RKNNTrainerDepth:
         
         return {
             "training_steps": self.training_step,
-            "buffer_size": len(self.experience_buffer),
+            "buffer_size": self.buffer_size,
             "avg_reward": np.mean(self.reward_history) if self.reward_history else 0.0,
-            "buffer_full": len(self.experience_buffer) / self.buffer_size
+            "buffer_full": self.buffer_size / self.buffer_capacity
         }
     
     def safe_save(self):
