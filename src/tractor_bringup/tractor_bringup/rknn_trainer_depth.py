@@ -113,6 +113,11 @@ class RKNNTrainerDepth:
         self.buffer_size = 10000
         self.experience_buffer = deque(maxlen=self.buffer_size)
         self.batch_size = 32
+        # Adaptive batch sizing (warmup with larger batches for vectorization)
+        self.max_warmup_batch = 128  # can increase if memory allows
+        self.post_warmup_batch = 32
+        self.warmup_batch_steps = 2500  # steps to keep large batch
+        self.min_buffer_for_max_batch = 2000  # need enough samples before using max batch
         
         # Training state
         self.training_step = 0
@@ -254,7 +259,19 @@ class RKNNTrainerDepth:
         
     def train_step(self) -> Dict[str, float]:
         """Perform one training step if enough data available"""
-        
+        # Adaptive batch size adjustment BEFORE sampling
+        if self.training_step < self.warmup_batch_steps:
+            target_batch = self.max_warmup_batch
+        else:
+            target_batch = self.post_warmup_batch
+        # Ensure buffer large enough before switching to large batch
+        if len(self.experience_buffer) < self.min_buffer_for_max_batch:
+            target_batch = min(target_batch, 64)  # intermediate ramp
+        # Only update if different
+        if target_batch != self.batch_size:
+            self.batch_size = target_batch
+            if self.enable_debug:
+                print(f"[BatchAdapt] batch_size -> {self.batch_size} (step={self.training_step} buffer={len(self.experience_buffer)})")
         if len(self.experience_buffer) < self.batch_size:
             return {"loss": 0.0, "samples": len(self.experience_buffer)}
             
