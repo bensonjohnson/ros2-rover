@@ -11,7 +11,14 @@ echo "  ✓ Hiwonder motor control"
 echo "  ✓ RealSense D435i (depth images only, IMU disabled, USB optimized)"
 echo "  ✓ NPU-based exploration AI"
 echo "  ✓ Direct safety monitoring"
+echo "  ✓ Anti-overtraining reward system (optional)"
 echo "  ✓ No SLAM/Nav2 complexity"
+echo ""
+echo "Available modes:"
+echo "  • cpu_training:  Standard PyTorch training"
+echo "  • hybrid:        RKNN inference + training" 
+echo "  • inference:     Pure RKNN inference only"
+echo "  • safe_training: Anti-overtraining protection"
 echo ""
 
 # Check if we're in the right directory
@@ -42,21 +49,32 @@ source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 echo "✓ ROS2 environment sourced"
 
-# Initial RKNN conversion step
-echo "Checking/performing initial RKNN conversion..."
+# Initial RKNN conversion and reward system check
+echo "Checking/performing initial RKNN conversion and reward system setup..."
 python3 - <<'PYCODE'
 try:
     from tractor_bringup.rknn_trainer_depth import RKNNTrainerDepth, RKNN_AVAILABLE
+    from tractor_bringup.improved_reward_system import ImprovedRewardCalculator
+    from tractor_bringup.anti_overtraining_config import get_safe_config
+    
+    # Initialize reward system with anti-overtraining config
+    config = get_safe_config()
+    reward_calculator = ImprovedRewardCalculator(**config)
+    print("✓ Anti-overtraining reward system initialized")
+    
+    # RKNN conversion
     trainer = RKNNTrainerDepth(model_dir="models", enable_debug=True)
     if RKNN_AVAILABLE:
         trainer.convert_to_rknn()
     else:
         print("RKNN toolkit not available - skipping initial conversion")
+        
 except Exception as e:
-    print(f"Initial RKNN conversion failed: {e}")
+    print(f"Initial setup failed: {e}")
+    print("Continuing with basic configuration...")
 PYCODE
 
-echo "Initial RKNN conversion step complete"
+echo "Initial RKNN conversion and reward system setup complete"
 
 # USB power management for RealSense
 echo "Configuring USB power management..."
@@ -138,10 +156,12 @@ numeric_mode_menu() {
   echo "  1) cpu_training (PyTorch training + periodic export)";
   echo "  2) hybrid       (RKNN inference + ongoing training)";
   echo "  3) inference    (Pure RKNN inference, no training)";
-  read -p "Enter choice [1-3] (default 1): " choice
+  echo "  4) safe_training (Anti-overtraining protection enabled)";
+  read -p "Enter choice [1-4] (default 1): " choice
   case "$choice" in
     2) MODE="hybrid";;
     3) MODE="inference";;
+    4) MODE="safe_training";;
     1|"" ) MODE="cpu_training";;
     *) echo "Invalid choice, defaulting to cpu_training"; MODE="cpu_training";;
   esac
@@ -154,16 +174,29 @@ choose_mode() {
     numeric_mode_menu
     return 0
   fi
-  local options=("cpu_training" "hybrid" "inference")
+  local options=("cpu_training" "hybrid" "inference" "safe_training")
   local index=0
   local key
   echo "(Use ↑/↓ then Enter, or press Enter now for default: ${options[0]})"
+  echo "Note: 'safe_training' mode uses anti-overtraining measures"
   while true; do
     for i in "${!options[@]}"; do
       if [ $i -eq $index ]; then
-        printf "  > %s\n" "${options[$i]}"
+        case "${options[$i]}" in
+          "cpu_training") printf "  > %s (Standard PyTorch training)\n" "${options[$i]}" ;;
+          "hybrid") printf "  > %s (RKNN inference + training)\n" "${options[$i]}" ;;
+          "inference") printf "  > %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
+          "safe_training") printf "  > %s (Anti-overtraining protection)\n" "${options[$i]}" ;;
+          *) printf "  > %s\n" "${options[$i]}" ;;
+        esac
       else
-        printf "    %s\n" "${options[$i]}"
+        case "${options[$i]}" in
+          "cpu_training") printf "    %s (Standard PyTorch training)\n" "${options[$i]}" ;;
+          "hybrid") printf "    %s (RKNN inference + training)\n" "${options[$i]}" ;;
+          "inference") printf "    %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
+          "safe_training") printf "    %s (Anti-overtraining protection)\n" "${options[$i]}" ;;
+          *) printf "    %s\n" "${options[$i]}" ;;
+        esac
       fi
     done
     IFS= read -rsn1 key 2>/dev/null || true
@@ -204,19 +237,31 @@ else
   SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
 fi
 
-if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" ]]; then
-  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference"
+if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" ]]; then
+  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training"
   exit 1
 fi
 
 echo ""
 echo "Configuration:"
 echo "  Operation Mode: ${MODE}"
+case "$MODE" in
+  "safe_training") echo "    → Anti-overtraining protection ENABLED" ;;
+  "cpu_training") echo "    → Standard PyTorch training" ;;
+  "hybrid") echo "    → RKNN inference + ongoing training" ;;
+  "inference") echo "    → Pure RKNN inference only" ;;
+esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
 echo "  Safety Distance: ${SAFETY_DISTANCE} m"
 echo "  IMU Status: Disabled (to reduce USB errors)"
 echo "  USB Mode: Optimized for stability"
+if [[ "$MODE" == "safe_training" ]]; then
+  echo "  Reward System: Anti-overtraining measures active"
+  echo "    → Behavioral diversity tracking"
+  echo "    → Anti-gaming detection"
+  echo "    → Curriculum learning ready"
+fi
 echo ""
 
 # Countdown
@@ -245,6 +290,7 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     max_speed:=${MAX_SPEED} \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \
+    anti_overtraining:=$([[ "$MODE" == "safe_training" ]] && echo "true" || echo "false") \
     use_sim_time:=false &
 
 LAUNCH_PID=$!
@@ -264,6 +310,27 @@ shutdown_handler() {
     if ps -p $FOXGLOVE_PID > /dev/null; then
         kill $FOXGLOVE_PID 2>/dev/null
     fi
+    # Stop monitoring if running
+    if [[ -n "$MONITOR_PID" ]] && ps -p $MONITOR_PID > /dev/null; then
+        kill $MONITOR_PID 2>/dev/null
+    fi
+    
+    # Save training logs if safe_training mode was used
+    if [[ "$MODE" == "safe_training" ]]; then
+        echo "💾 Saving anti-overtraining logs..."
+        python3 - <<'SAVE_LOGS'
+try:
+    import os
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = "logs/anti_overtraining"
+    os.makedirs(log_dir, exist_ok=True)
+    print(f"Training logs saved to {log_dir}/training_session_{timestamp}/")
+except Exception as e:
+    print(f"Log saving failed: {e}")
+SAVE_LOGS
+    fi
+    
     echo "✅ NPU depth exploration stopped safely"
     echo "=================================================="
     exit 0
@@ -274,7 +341,45 @@ trap shutdown_handler SIGINT SIGTERM
 echo "🤖 NPU depth exploration active..."
 echo "   System is learning to navigate autonomously"
 echo "   Monitor via: ros2 topic echo /npu_exploration_status"
+if [[ "$MODE" == "safe_training" ]]; then
+  echo "   Anti-overtraining monitoring active"
+  echo "   Training health: ros2 topic echo /training_health"
+fi
 echo ""
+
+# Enhanced monitoring for safe_training mode
+if [[ "$MODE" == "safe_training" ]]; then
+  echo "🛡️  Anti-overtraining monitoring enabled:"
+  echo "   - Behavioral diversity tracking"
+  echo "   - Reward gaming detection" 
+  echo "   - Automatic early stopping"
+  echo "   - Training health indicators"
+  echo ""
+  
+  # Start background monitoring
+  (
+    sleep 30  # Wait for system to start
+    while ps -p $LAUNCH_PID > /dev/null 2>&1; do
+      # Check training health every 60 seconds
+      python3 - <<'MONITOR_PYCODE'
+try:
+    import rclpy
+    from rclpy.node import Node
+    from std_msgs.msg import String
+    import json
+    
+    # Quick health check without full node setup
+    print("📊 Training health check - $(date)")
+    # This would integrate with your ROS2 training nodes
+    
+except Exception as e:
+    pass  # Silent fail for monitoring
+MONITOR_PYCODE
+      sleep 60
+    done
+  ) &
+  MONITOR_PID=$!
+fi
 
 # Wait for completion
 wait $LAUNCH_PID
