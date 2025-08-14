@@ -1,6 +1,7 @@
 package.xml
 setup.cfg
 setup.py
+config/anti_overtraining_params.yaml
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
 config/pointcloud_to_laserscan.yaml
@@ -20,7 +21,9 @@ maps/yard_map.pgm
 maps/yard_map.yaml
 resource/tractor_bringup
 tractor_bringup/__init__.py
+tractor_bringup/anti_overtraining_config.py
 tractor_bringup/autonomous_mapping.py
+tractor_bringup/example_usage.py
 tractor_bringup/frontier_explorer.py
 tractor_bringup/improved_reward_system.py
 tractor_bringup/npu_exploration.py
@@ -30,6 +33,8 @@ tractor_bringup/rknn_trainer_depth.py
 tractor_bringup/safety_monitor.py
 tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_depth.py
+tractor_bringup/training_monitor.py
+tractor_bringup/training_monitor_node.py
 tractor_bringup.egg-info/PKG-INFO
 tractor_bringup.egg-info/SOURCES.txt
 tractor_bringup.egg-info/dependency_links.txt
