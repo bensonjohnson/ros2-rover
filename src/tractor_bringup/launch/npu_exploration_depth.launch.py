@@ -7,7 +7,8 @@ Clean architecture: Motor control + RealSense + NPU AI only
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration, TextSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -21,6 +22,8 @@ def generate_launch_description():
     min_battery_percentage = LaunchConfiguration("min_battery_percentage")
     safety_distance = LaunchConfiguration("safety_distance")
     operation_mode = LaunchConfiguration("operation_mode")
+    anti_overtraining = LaunchConfiguration("anti_overtraining")
+    exploration_time = LaunchConfiguration("exploration_time")
 
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
@@ -43,7 +46,19 @@ def generate_launch_description():
     declare_operation_mode_cmd = DeclareLaunchArgument(
         "operation_mode",
         default_value="cpu_training",
-        description="Operation mode: cpu_training | hybrid | inference",
+        description="Operation mode: cpu_training | hybrid | inference | safe_training",
+    )
+
+    declare_anti_overtraining_cmd = DeclareLaunchArgument(
+        "anti_overtraining",
+        default_value="false",
+        description="Enable anti-overtraining measures (true/false)",
+    )
+
+    declare_exploration_time_cmd = DeclareLaunchArgument(
+        "exploration_time",
+        default_value="300",
+        description="Maximum exploration time in seconds",
     )
 
     # 1. Robot Description (TF only)
@@ -99,6 +114,8 @@ def generate_launch_description():
                 "safety_distance": LaunchConfiguration("safety_distance"),
                 "npu_inference_rate": 5.0,
                 "operation_mode": LaunchConfiguration("operation_mode"),
+                "anti_overtraining": LaunchConfiguration("anti_overtraining"),
+                "exploration_time": LaunchConfiguration("exploration_time"),
             }
         ],
         remappings=[
@@ -106,6 +123,24 @@ def generate_launch_description():
             ("depth_image", "/camera/camera/depth/image_rect_raw"),
             ("odom", "/odom"),
         ]
+    )
+
+    # 4.1. Training Monitor Node (only when anti-overtraining is enabled)
+    training_monitor_node = Node(
+        package="tractor_bringup",
+        executable="training_monitor_node.py",
+        name="training_monitor",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "anti_overtraining_params.yaml"),
+            {
+                "monitor_frequency": 1.0,  # Check every second
+                "diversity_window": 20,
+                "alert_threshold": 0.7,
+                "enable_plotting": False,  # Disable plotting on robot
+            }
+        ],
+        condition=IfCondition(LaunchConfiguration("anti_overtraining"))
     )
 
     # 5. Simple Safety Monitor (Emergency stop only)
@@ -135,6 +170,8 @@ def generate_launch_description():
     ld.add_action(declare_min_battery_cmd)
     ld.add_action(declare_safety_distance_cmd)
     ld.add_action(declare_operation_mode_cmd)
+    ld.add_action(declare_anti_overtraining_cmd)
+    ld.add_action(declare_exploration_time_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)
@@ -146,5 +183,8 @@ def generate_launch_description():
     # NPU system - start after camera is ready
     ld.add_action(TimerAction(period=8.0, actions=[npu_exploration_node]))
     ld.add_action(TimerAction(period=10.0, actions=[safety_monitor_node]))
+    
+    # Training monitor - start after NPU system (only if anti-overtraining enabled)
+    ld.add_action(TimerAction(period=12.0, actions=[training_monitor_node]))
 
     return ld
