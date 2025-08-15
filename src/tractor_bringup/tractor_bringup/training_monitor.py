@@ -76,8 +76,9 @@ class TrainingMonitor:
         
         # Alert 3: Reward plateau with poor diversity
         if len(self.metrics_history['rewards']) > 200:
-            recent_rewards = list(self.metrics_history['rewards'])[-100:]
-            earlier_rewards = list(self.metrics_history['rewards'])[-200:-100]
+            rewards_list = list(self.metrics_history['rewards'])
+            recent_rewards = rewards_list[-100:]
+            earlier_rewards = rewards_list[-200:-100]
             
             improvement = np.mean(recent_rewards) - np.mean(earlier_rewards)
             if improvement < 0.5 and diversity < 0.3:
@@ -161,8 +162,9 @@ class TrainingMonitor:
             recommendations.append("Consider early stopping or curriculum reset")
         
         if len(self.metrics_history['rewards']) > 500:
-            recent_mean = np.mean(list(self.metrics_history['rewards'])[-100:])
-            earlier_mean = np.mean(list(self.metrics_history['rewards'])[-200:-100])
+            rewards_list = list(self.metrics_history['rewards'])
+            recent_mean = np.mean(rewards_list[-100:])
+            earlier_mean = np.mean(rewards_list[-200:-100])
             
             if recent_mean - earlier_mean < 1.0:
                 recommendations.append("Performance plateau detected - consider curriculum progression")
@@ -262,7 +264,8 @@ class TrainingMonitor:
             return True
         
         # Check overtraining risk trend
-        recent_risk = list(self.metrics_history['overtraining_risk'])[-50:]
+        risk_list = list(self.metrics_history['overtraining_risk'])
+        recent_risk = risk_list[-50:]
         if len(recent_risk) >= 50 and np.mean(recent_risk) > 0.8:
             return True
         

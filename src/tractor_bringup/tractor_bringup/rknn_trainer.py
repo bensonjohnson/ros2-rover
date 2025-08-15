@@ -178,6 +178,7 @@ class RKNNTrainer:
             
         # Sample random batch
         indices = np.random.choice(len(self.experience_buffer), self.batch_size, replace=False)
+        indices = np.asarray(indices, dtype=np.int32)  # Ensure proper integer indexing
         batch = [self.experience_buffer[i] for i in indices]
         
         # Prepare batch data

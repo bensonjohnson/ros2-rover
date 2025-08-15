@@ -209,7 +209,8 @@ class ImprovedRewardCalculator:
         
         if len(self.behavior_patterns) >= 10:
             # Calculate diversity in recent behaviors
-            unique_behaviors = len(set(self.behavior_patterns[-10:]))
+            recent_patterns = list(self.behavior_patterns)[-10:]
+            unique_behaviors = len(set(recent_patterns))
             diversity_ratio = unique_behaviors / 10.0
             
             # Reward behavioral diversity

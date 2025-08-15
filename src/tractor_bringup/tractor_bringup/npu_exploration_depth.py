@@ -592,7 +592,7 @@ class NPUExplorationDepthNode(Node):
                     collision=self.collision_detected,
                     in_recovery=self.recovery_active
                 )
-            if len(self.trainer.experience_buffer) >= max(32, self.trainer.batch_size):
+            if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
                 training_stats = self.trainer.train_step()
                 if self.step_count % 50 == 0 and 'loss' in training_stats:
                     self.get_logger().info(f"Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
@@ -600,6 +600,8 @@ class NPUExplorationDepthNode(Node):
             self.prev_depth_image = self.latest_depth_image.copy()
         except Exception as e:
             self.get_logger().warn(f"Training step failed: {e}")
+            import traceback
+            self.get_logger().error(f"Full traceback: {traceback.format_exc()}")
         
     def quaternion_to_yaw(self, q):
         """Convert quaternion to yaw angle"""
