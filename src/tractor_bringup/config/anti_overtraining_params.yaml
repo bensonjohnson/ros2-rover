@@ -1,54 +1,57 @@
 # Anti-Overtraining Configuration for NPU Exploration
 # This file contains parameters for the anti-overtraining reward system
 
-# Core reward parameters (simplified and balanced)
-reward_system:
-  base_movement_reward: 5.0
-  forward_progress_bonus: 8.0
-  exploration_bonus: 10.0
-  collision_penalty: -20.0
-  near_collision_penalty: -5.0
-  unsafe_behavior_penalty: -3.0
-  smooth_movement_bonus: 1.0
-  goal_oriented_bonus: 5.0
-  stagnation_penalty: -2.0
-
-# Anti-overtraining measures
-anti_overtraining:
-  reward_noise_std: 0.1
-  reward_clip_range: [-30.0, 30.0]
-  reward_smoothing_alpha: 0.1
-  max_area_revisit_bonus: 3
-  spinning_threshold: 0.5
-  behavior_diversity_window: 20
-
-# Feature toggles
-features:
-  enable_reward_smoothing: true
-  enable_anti_gaming: true
-  enable_diversity_tracking: true
-
-# Training monitor parameters
+# Parameters for the training_monitor node
 training_monitor:
-  monitor_frequency: 1.0
-  diversity_window: 20
-  alert_threshold: 0.7
-  enable_plotting: false
-  log_frequency: 100
-  validation_frequency: 500
-  checkpoint_frequency: 1000
+  ros__parameters:
+    # Core reward parameters (simplified and balanced)
+    reward_system:
+      base_movement_reward: 5.0
+      forward_progress_bonus: 8.0
+      exploration_bonus: 10.0
+      collision_penalty: -20.0
+      near_collision_penalty: -5.0
+      unsafe_behavior_penalty: -3.0
+      smooth_movement_bonus: 1.0
+      goal_oriented_bonus: 5.0
+      stagnation_penalty: -2.0
 
-# Overtraining detection thresholds
-overtraining_detection:
-  behavioral_diversity_min: 0.3
-  reward_improvement_plateau: 1.0
-  max_area_revisits: 10
-  training_test_gap_max: 5.0
-  risk_score_max: 0.7
+    # Anti-overtraining measures
+    anti_overtraining:
+      reward_noise_std: 0.1
+      reward_clip_range: [-30.0, 30.0]
+      reward_smoothing_alpha: 0.1
+      max_area_revisit_bonus: 3
+      spinning_threshold: 0.5
+      behavior_diversity_window: 20
 
-# Early stopping configuration
-early_stopping:
-  patience: 100
-  min_improvement: 1.0
-  validation_frequency: 50
-  save_best_model: true
+    # Feature toggles
+    features:
+      enable_reward_smoothing: true
+      enable_anti_gaming: true
+      enable_diversity_tracking: true
+
+    # Training monitor parameters
+    training_monitor:
+      monitor_frequency: 1.0
+      diversity_window: 20
+      alert_threshold: 0.7
+      enable_plotting: false
+      log_frequency: 100
+      validation_frequency: 500
+      checkpoint_frequency: 1000
+
+    # Overtraining detection thresholds
+    overtraining_detection:
+      behavioral_diversity_min: 0.3
+      reward_improvement_plateau: 1.0
+      max_area_revisits: 10
+      training_test_gap_max: 5.0
+      risk_score_max: 0.7
+
+    # Early stopping configuration
+    early_stopping:
+      patience: 100
+      min_improvement: 1.0
+      validation_frequency: 50
+      save_best_model: true

@@ -1,1 +1,87 @@
-/home/ubuntu/ros2-rover/build/tractor_bringup/config/slam_toolbox_params.yaml
+slam_toolbox:
+  ros__parameters:
+
+    # Plugin params
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ROS Parameters
+    # Consistent frame configuration across SLAM and Nav2
+    odom_frame: odom
+    map_frame: map  # Correct frame for SLAM
+    base_frame: base_footprint
+    scan_topic: /scan # From pointcloud_to_laserscan conversion
+    mode: mapping  # Enable mapping mode to create the map frame
+
+    # If you want to use the lifecycle interface for slam toolbox, 
+    # set this to true
+    use_lifecycle_manager: true
+    debug_logging: true
+
+    # General Parameters
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_time_interval: 0.15 # Process scans at up to 6.67Hz for better responsiveness
+    transform_publish_period: 0.05 # Increased from 0.02 to 0.05 for better stability
+    map_update_interval: 2.0 # Increased from 1.5 to 2.0 for better stability
+
+    # Multi-threading optimization for Orange Pi 5 Plus
+    number_of_threads: 4  # Use 4 cores available
+
+    # Performance tuning
+    max_laser_range: 4.0  # Reduced for better near-field accuracy
+    minimum_travel_distance: 0.2  # Increased from 0.15 for better stability
+    minimum_travel_heading: 0.2   # Increased from 0.15 for better stability
+    resolution: 0.05 # Must match costmap resolution
+    laser_min_range: 0.25 # Match pointcloud_to_laserscan min range
+    tf_buffer_duration: 60.0 # Increased from 30.0 to 60.0 for better transform availability
+    stack_size_to_use: 40000000 # Default 40000000
+    enable_interactive_mode: true
+
+    # General Parameters for mapping
+    map_file_name: /home/ubuntu/ros2-rover/maps/yard_slam_map
+    map_start_at_dock: true
+    map_start_pose: [0.0, 0.0, 0.0]  # Start robot at map center
+
+    # Outdoor mapping optimized parameters
+    # Larger search window for outdoor environments
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 10.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # Correlation Parameters - Tuned for outdoor use
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # Correlation Parameters - Loop Closure Parameters
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # Scan Matcher Parameters
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
+
+    # Indoor mapping parameters - no GPS
+    enable_gps_global_localization: false # No GPS for indoor robot
+    map_with_known_poses: false
+    use_pose_extrapolator: true

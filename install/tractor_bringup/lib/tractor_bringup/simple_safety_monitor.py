@@ -1,10 +1,10 @@
 #!/usr/bin/python3
-# EASY-INSTALL-ENTRY-SCRIPT: 'tractor-bringup','console_scripts','simple_safety_monitor.py'
+# EASY-INSTALL-ENTRY-SCRIPT: 'tractor-bringup==0.0.0','console_scripts','simple_safety_monitor.py'
 import re
 import sys
 
 # for compatibility with easy_install; see #2198
-__requires__ = 'tractor-bringup'
+__requires__ = 'tractor-bringup==0.0.0'
 
 try:
     from importlib.metadata import distribution
@@ -30,4 +30,4 @@ globals().setdefault('load_entry_point', importlib_load_entry_point)
 
 if __name__ == '__main__':
     sys.argv[0] = re.sub(r'(-script\.pyw?|\.exe)?$', '', sys.argv[0])
-    sys.exit(load_entry_point('tractor-bringup', 'console_scripts', 'simple_safety_monitor.py')())
+    sys.exit(load_entry_point('tractor-bringup==0.0.0', 'console_scripts', 'simple_safety_monitor.py')())

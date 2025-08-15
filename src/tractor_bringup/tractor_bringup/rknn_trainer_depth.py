@@ -331,6 +331,8 @@ class RKNNTrainerDepth:
         weights /= weights.max()
         self.pr_beta = min(1.0, self.pr_beta + self.pr_beta_inc)
         # Assemble batch tensors
+        # Ensure indices is a proper numpy array of integers
+        indices = np.asarray(indices, dtype=np.int32)
         depth_batch = torch.from_numpy(self.depth_store[indices]).float().to(self.device)
         sensor_batch = torch.from_numpy(self.proprio_store[indices]).float().to(self.device)
         action_batch = torch.from_numpy(self.action_store[indices]).float().to(self.device)
