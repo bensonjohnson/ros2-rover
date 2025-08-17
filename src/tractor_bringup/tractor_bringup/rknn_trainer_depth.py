@@ -112,8 +112,9 @@ class RKNNTrainerDepth:
         self.extra_proprio = 13  # updated to match 16-element proprio vector (3 base + 13 extras)
         
         # Training parameters to encourage forward movement and reduce spinning
-        self.forward_movement_weight = 1.5  # Increase weight for forward movement actions
-        self.angular_movement_penalty = 0.7  # Reduce weight for angular movement actions
+        self.forward_movement_weight = 2.0  # Increase weight for forward movement actions (increased from 1.5)
+        self.angular_movement_penalty = 0.5  # Reduce weight for angular movement actions (decreased from 0.7)
+        self.backward_movement_penalty = 0.2  # Strongly penalize backward movement actions
         # Neural network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)

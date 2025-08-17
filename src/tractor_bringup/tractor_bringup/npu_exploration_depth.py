@@ -139,8 +139,9 @@ class NPUExplorationDepthNode(Node):
         self.forward_free_bonus_scale = 1.5
         
         # Action post-processing parameters to encourage forward movement
-        self.forward_bias_factor = 1.2  # Increase forward movement
-        self.angular_dampening = 0.7   # Reduce angular velocity
+        self.forward_bias_factor = 1.8  # Increase forward movement (increased from 1.2)
+        self.angular_dampening = 0.6   # Reduce angular velocity (increased dampening from 0.7)
+        self.backward_penalty_factor = 0.3  # Strongly discourage backward movement
         
         # Recovery features
         self.recovery_active = False
@@ -154,6 +155,9 @@ class NPUExplorationDepthNode(Node):
         self.recovery_no_progress_ticks = 0
         self.recovery_last_min_d = None
         self.recovery_clear_ticks = 0
+        # Adjusted recovery parameters to prevent excessive backward movement
+        self.recovery_reverse_speed = -0.3  # Reduced from -0.5
+        self.recovery_max_duration = 80     # Reduced from 120
 
     def init_inference_engine(self):
         self.use_npu = False
@@ -482,7 +486,7 @@ class NPUExplorationDepthNode(Node):
         """
         # Safety immediate reverse if extremely close
         if min_d < 0.10:
-            return np.array([-0.6, 0.0], dtype=np.float32)
+            return np.array([self.recovery_reverse_speed, 0.0], dtype=np.float32)
         # Track distance improvement
         improved = False
         if self.recovery_last_min_d is not None and min_d > self.recovery_last_min_d + 0.015:
@@ -490,7 +494,7 @@ class NPUExplorationDepthNode(Node):
         # Phase logic
         if self.recovery_phase == 0:
             # Reverse phase
-            action = np.array([-0.5, 0.0], dtype=np.float32)
+            action = np.array([self.recovery_reverse_speed, 0.0], dtype=np.float32)
             if self.recovery_phase_ticks >= self.recovery_phase_target or improved:
                 self.recovery_phase = 1
                 self.recovery_phase_ticks = 0
@@ -530,7 +534,7 @@ class NPUExplorationDepthNode(Node):
             self.recovery_no_progress_ticks = 0
         self.recovery_last_min_d = min_d
         # Abort recovery if taking too long
-        if self.recovery_total_ticks > 120:
+        if self.recovery_total_ticks > self.recovery_max_duration:
             self.reset_recovery_state()
         return action
 
@@ -702,6 +706,9 @@ class NPUExplorationDepthNode(Node):
         # Apply forward bias factor to encourage forward movement
         if processed_action[0] > 0:
             processed_action[0] = np.clip(processed_action[0] * self.forward_bias_factor, 0, 1.0)
+        # Apply backward penalty to discourage backward movement
+        elif processed_action[0] < 0:
+            processed_action[0] = np.clip(processed_action[0] * self.backward_penalty_factor, -1.0, 0)
         
         # Apply angular dampening to reduce spinning
         processed_action[1] = processed_action[1] * self.angular_dampening

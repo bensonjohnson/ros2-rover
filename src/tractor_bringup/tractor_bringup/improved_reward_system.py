@@ -36,24 +36,25 @@ class ImprovedRewardCalculator:
         # Enhanced reward scaling factors to encourage forward movement and penalize spinning
         self.reward_config = {
             # Core movement rewards (enhanced to encourage forward movement)
-            'base_movement_reward': 8.0,  # Increased to encourage any movement
-            'forward_progress_bonus': 12.0,  # Increased to reward forward progress
+            'base_movement_reward': 10.0,  # Increased to encourage any movement
+            'forward_progress_bonus': 15.0,  # Increased to reward forward progress
             'exploration_bonus': 10.0,  # Combined exploration reward
             
             # Anti-spinning rewards and penalties
-            'straight_line_bonus': 10.0,  # Reward for moving straight
-            'spinning_penalty': -8.0,  # Penalty for excessive spinning
-            'forward_bias_bonus': 6.0,  # Bonus for forward movement over turning
+            'straight_line_bonus': 12.0,  # Reward for moving straight
+            'spinning_penalty': -10.0,  # Penalty for excessive spinning
+            'forward_bias_bonus': 8.0,  # Bonus for forward movement over turning
+            'backward_penalty': -15.0,  # Strong penalty for backward movement
             
             # Safety (kept simple and clear)
-            'collision_penalty': -20.0,
-            'near_collision_penalty': -5.0,
-            'unsafe_behavior_penalty': -3.0,
+            'collision_penalty': -25.0,
+            'near_collision_penalty': -8.0,
+            'unsafe_behavior_penalty': -5.0,
             
             # Behavioral shaping (enhanced to prevent spinning)
-            'smooth_movement_bonus': 1.0,
-            'goal_oriented_bonus': 8.0,  # Increased reward for consistent direction
-            'stagnation_penalty': -3.0,  # Increased penalty for not moving
+            'smooth_movement_bonus': 2.0,
+            'goal_oriented_bonus': 10.0,  # Increased reward for consistent direction
+            'stagnation_penalty': -5.0,  # Increased penalty for not moving
         }
         
         # Reward noise and clipping (anti-overtraining measures)
