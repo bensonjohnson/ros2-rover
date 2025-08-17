@@ -163,6 +163,11 @@ class RKNNTrainerDepth:
         self.reward_history = deque(maxlen=1000)
         self.action_history = deque(maxlen=100)
         
+        # Dataset collection for RKNN quantization
+        self.dataset_samples_collected = 0
+        self.target_dataset_samples = 100  # Number of samples to collect for quantization
+        self.dataset_collection_interval = 50  # Collect every N training steps
+        
         # Initialize improved reward calculator if available
         if IMPROVED_REWARDS:
             self.reward_calculator = ImprovedRewardCalculator()
@@ -170,6 +175,9 @@ class RKNNTrainerDepth:
         else:
             self.reward_calculator = None
             print("Using basic reward system")
+        
+        # Initialize dataset.txt for quantization
+        self.init_dataset_file()
         
         # Load existing model if available
         self.load_latest_model()
@@ -227,6 +235,11 @@ class RKNNTrainerDepth:
         if self.buffer_size < self.buffer_capacity:
             self.buffer_size += 1
         self.reward_history.append(reward)
+        
+        # Collect samples for RKNN quantization dataset
+        if (self.dataset_samples_collected < self.target_dataset_samples and 
+            self.training_step % self.dataset_collection_interval == 0):
+            self.save_quantization_sample(depth_image, proprioceptive)
 
     def calculate_reward(self, 
                         action: np.ndarray,
@@ -769,6 +782,65 @@ class RKNNTrainerDepth:
             "buffer_full": self.buffer_size / self.buffer_capacity
         }
     
+    def init_dataset_file(self):
+        """Initialize dataset.txt file for RKNN quantization"""
+        try:
+            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
+            dataset_path = os.path.abspath(dataset_path)
+            
+            # Create empty dataset.txt file (clear any existing content)
+            with open(dataset_path, 'w') as f:
+                f.write("# RKNN Quantization Dataset\n")
+                f.write("# Format: depth_sample_file sensor_sample_file\n")
+            
+            if self.enable_debug:
+                print(f"[Dataset] Initialized dataset file: {dataset_path}")
+                
+        except Exception as e:
+            if self.enable_debug:
+                print(f"Failed to initialize dataset file: {e}")
+
+    def save_quantization_sample(self, depth_image: np.ndarray, proprioceptive: np.ndarray):
+        """Save a sample to dataset.txt for RKNN quantization"""
+        try:
+            # Get the dataset path (same as used in convert_to_rknn)
+            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
+            dataset_path = os.path.abspath(dataset_path)
+            
+            # Preprocess the sample to match inference format
+            processed_depth = self.preprocess_depth_for_model(depth_image)  # (C,H,W)
+            depth_input = processed_depth[np.newaxis, ...].astype(np.float32)  # (1,C,H,W)
+            
+            # Pad/truncate proprioceptive data to match expected size
+            expected = self._proprio_feature_size()
+            if proprioceptive.shape[0] < expected:
+                padded_proprio = np.concatenate([proprioceptive, np.zeros(expected - proprioceptive.shape[0], dtype=proprioceptive.dtype)])
+            elif proprioceptive.shape[0] > expected:
+                padded_proprio = proprioceptive[:expected]
+            else:
+                padded_proprio = proprioceptive
+            sensor_input = padded_proprio.astype(np.float32)[np.newaxis, ...]  # (1,features)
+            
+            # Save numpy arrays to temporary files
+            temp_depth_file = f"/tmp/depth_sample_{self.dataset_samples_collected}.npy"
+            temp_sensor_file = f"/tmp/sensor_sample_{self.dataset_samples_collected}.npy"
+            
+            np.save(temp_depth_file, depth_input)
+            np.save(temp_sensor_file, sensor_input)
+            
+            # Append to dataset.txt in RKNN expected format
+            with open(dataset_path, 'a') as f:
+                f.write(f"{temp_depth_file} {temp_sensor_file}\n")
+            
+            self.dataset_samples_collected += 1
+            
+            if self.enable_debug and self.dataset_samples_collected % 10 == 0:
+                print(f"[Dataset] Collected {self.dataset_samples_collected}/{self.target_dataset_samples} quantization samples")
+                
+        except Exception as e:
+            if self.enable_debug:
+                print(f"Failed to save quantization sample: {e}")
+
     def safe_save(self):
         try:
             self.save_model()
