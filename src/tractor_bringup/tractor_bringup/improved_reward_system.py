@@ -33,22 +33,27 @@ class ImprovedRewardCalculator:
         self.wheel_velocity_history = deque(maxlen=20)  # Track L/R wheel velocities
         self.track_efficiency_history = deque(maxlen=50)  # Track turning efficiency
         
-        # Simplified reward scaling factors (reduced complexity to prevent overtraining)
+        # Enhanced reward scaling factors to encourage forward movement and penalize spinning
         self.reward_config = {
-            # Core movement rewards (simplified)
-            'base_movement_reward': 5.0,  # Reduced and simplified
-            'forward_progress_bonus': 8.0,  # Reduced from 40.0 to prevent dominance
+            # Core movement rewards (enhanced to encourage forward movement)
+            'base_movement_reward': 8.0,  # Increased to encourage any movement
+            'forward_progress_bonus': 12.0,  # Increased to reward forward progress
             'exploration_bonus': 10.0,  # Combined exploration reward
+            
+            # Anti-spinning rewards and penalties
+            'straight_line_bonus': 10.0,  # Reward for moving straight
+            'spinning_penalty': -8.0,  # Penalty for excessive spinning
+            'forward_bias_bonus': 6.0,  # Bonus for forward movement over turning
             
             # Safety (kept simple and clear)
             'collision_penalty': -20.0,
             'near_collision_penalty': -5.0,
             'unsafe_behavior_penalty': -3.0,
             
-            # Behavioral shaping (minimal set)
+            # Behavioral shaping (enhanced to prevent spinning)
             'smooth_movement_bonus': 1.0,
-            'goal_oriented_bonus': 5.0,  # Reward for consistent direction
-            'stagnation_penalty': -2.0,
+            'goal_oriented_bonus': 8.0,  # Increased reward for consistent direction
+            'stagnation_penalty': -3.0,  # Increased penalty for not moving
         }
         
         # Reward noise and clipping (anti-overtraining measures)
@@ -128,11 +133,11 @@ class ImprovedRewardCalculator:
         return total_reward, reward_breakdown
     
     def _calculate_core_movement_reward(self, action: np.ndarray, progress: float) -> float:
-        """Simplified movement reward that's harder to game"""
+        """Enhanced movement reward that specifically encourages forward movement and penalizes spinning"""
         reward = 0.0
         
-        linear_speed = abs(action[0])
-        angular_speed = abs(action[1])
+        linear_speed = action[0]  # Forward/backward speed (positive = forward)
+        angular_speed = abs(action[1])  # Turning speed (absolute value)
         
         # Basic movement reward (encourage any forward movement)
         if linear_speed > 0.02:
@@ -142,11 +147,23 @@ class ImprovedRewardCalculator:
         if progress > 0:
             reward += self.reward_config['forward_progress_bonus'] * min(progress, 0.5)  # Cap progress reward
         
+        # Forward bias bonus (reward forward movement over backward movement)
+        if linear_speed > 0:
+            reward += self.reward_config['forward_bias_bonus'] * linear_speed
+        
+        # Straight line bonus (reward moving straight over turning)
+        if linear_speed > 0.05 and angular_speed < 0.2:  # Moving forward with minimal turning
+            reward += self.reward_config['straight_line_bonus'] * linear_speed * (1.0 - angular_speed/0.2)
+        
         # Penalize excessive spinning without forward movement
         if angular_speed > self.spinning_detection_threshold and linear_speed < 0.02:
+            reward += self.reward_config['spinning_penalty']
+        
+        # Stagnation penalty (penalize not moving)
+        if abs(linear_speed) < 0.02 and angular_speed < 0.1:
             reward += self.reward_config['stagnation_penalty']
         
-        # Small bonus for smooth, goal-oriented movement
+        # Goal-oriented bonus (reward consistent directional movement)
         if linear_speed > 0.05 and angular_speed < 0.3:  # Moving forward with minimal turning
             reward += self.reward_config['goal_oriented_bonus'] * linear_speed
         

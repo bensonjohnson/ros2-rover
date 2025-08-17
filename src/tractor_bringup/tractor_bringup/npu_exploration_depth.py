@@ -134,9 +134,13 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  Inference target rate: {self.inference_rate} Hz")
         self.get_logger().info(f"  Operation Mode: {self.operation_mode}")
         
-        self.angular_scale = 1.0  # reduced from 2.0 to lessen spin dominance
+        self.angular_scale = 0.8  # reduced from 2.0 to lessen spin dominance
         self.spin_penalty = 3.0
         self.forward_free_bonus_scale = 1.5
+        
+        # Action post-processing parameters to encourage forward movement
+        self.forward_bias_factor = 1.2  # Increase forward movement
+        self.angular_dampening = 0.7   # Reduce angular velocity
         
         # Recovery features
         self.recovery_active = False
@@ -363,13 +367,17 @@ class NPUExplorationDepthNode(Node):
         else:
             if self.use_npu and self.trainer and self.all_sensors_ready():
                 action, confidence = self.npu_inference(emergency_stop, min_d, left_free, right_free, center_free)
-                cmd.linear.x = float(action[0]) * self.max_speed
-                cmd.angular.z = float(action[1]) * self.angular_scale
+                
+                # Post-process action to encourage forward movement and reduce spinning
+                processed_action = self.post_process_action(action)
+                
+                cmd.linear.x = float(processed_action[0]) * self.max_speed
+                cmd.angular.z = float(processed_action[1]) * self.angular_scale
                 if self.recovery_active and min_d and min_d > 0.25:
                     self.reset_recovery_state()
                 self.exploration_mode = f"NPU_DRIVING (conf: {confidence:.2f})"
                 self.collision_detected = False
-                self.last_action = np.array([float(action[0]), float(action[1])])
+                self.last_action = np.array([float(processed_action[0]), float(processed_action[1])])
             else:
                 # Fallback: stop and wait for NPU
                 cmd.linear.x = 0.0
@@ -639,6 +647,31 @@ class NPUExplorationDepthNode(Node):
             
         self.status_pub.publish(status_msg)
     
+    def post_process_action(self, action):
+        """Post-process action to encourage forward movement and reduce spinning"""
+        processed_action = action.copy()
+        
+        # Apply forward bias factor to encourage forward movement
+        if processed_action[0] > 0:
+            processed_action[0] = np.clip(processed_action[0] * self.forward_bias_factor, 0, 1.0)
+        
+        # Apply angular dampening to reduce spinning
+        processed_action[1] = processed_action[1] * self.angular_dampening
+        
+        # Additional anti-spinning logic
+        linear_speed = abs(processed_action[0])
+        angular_speed = abs(processed_action[1])
+        
+        # If spinning without forward movement, reduce angular velocity further
+        if angular_speed > 0.3 and linear_speed < 0.1:
+            processed_action[1] = processed_action[1] * 0.5
+            
+        # If mostly spinning, add a small forward component
+        if angular_speed > 0.5 and linear_speed < 0.2:
+            processed_action[0] = max(processed_action[0], 0.1)
+        
+        return processed_action
+
     def all_sensors_ready(self):
         """Check minimal sensor readiness for depth-based inference.
         Requirements:

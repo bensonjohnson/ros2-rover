@@ -110,6 +110,10 @@ class RKNNTrainerDepth:
         self.frame_stack: deque = deque(maxlen=stacked_frames)
         # Extended proprio feature count now: base(3) + extras(10) = 13 total features
         self.extra_proprio = 10  # updated from 9 to match 13-element proprio vector
+        
+        # Training parameters to encourage forward movement and reduce spinning
+        self.forward_movement_weight = 1.5  # Increase weight for forward movement actions
+        self.angular_movement_penalty = 0.7  # Reduce weight for angular movement actions
         # Neural network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -356,6 +360,17 @@ class RKNNTrainerDepth:
         target_actions = action_batch.clone()
         confidence_weight = torch.sigmoid(reward_batch)
         target_actions = target_actions * confidence_weight  # (B,2)
+        
+        # Apply action weighting to encourage forward movement and reduce spinning
+        # Increase weight for forward movement actions
+        forward_weight = torch.ones_like(target_actions[:, 0]) * self.forward_movement_weight
+        # Reduce weight for angular movement actions
+        angular_weight = torch.ones_like(target_actions[:, 1]) * self.angular_movement_penalty
+        
+        # Apply weights to target actions
+        target_actions[:, 0] = target_actions[:, 0] * forward_weight
+        target_actions[:, 1] = target_actions[:, 1] * angular_weight
+        
         # Per-sample losses
         action_diff = predicted_actions[:, :2] - target_actions
         per_sample_action_loss = (action_diff ** 2).mean(dim=1)
