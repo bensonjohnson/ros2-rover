@@ -805,8 +805,7 @@ class RKNNTrainerDepth:
             
             # Create empty dataset.txt file (clear any existing content)
             with open(dataset_path, 'w') as f:
-                f.write("# RKNN Quantization Dataset\n")
-                f.write("# Format: depth_sample_file sensor_sample_file\n")
+                pass  # Create empty file, no header needed for RKNN toolkit
             
             if self.enable_debug:
                 print(f"[Dataset] Initialized dataset file: {dataset_path}")
@@ -836,16 +835,15 @@ class RKNNTrainerDepth:
                 padded_proprio = proprioceptive
             sensor_input = padded_proprio.astype(np.float32)[np.newaxis, ...]  # (1,features)
             
-            # Save numpy arrays to temporary files
-            temp_depth_file = f"/tmp/depth_sample_{self.dataset_samples_collected}.npy"
-            temp_sensor_file = f"/tmp/sensor_sample_{self.dataset_samples_collected}.npy"
+            # For RKNN quantization, we need to save the data in a format that can be loaded
+            # Create a single file with both inputs for quantization
+            quantization_data = np.concatenate([depth_input.flatten(), sensor_input.flatten()])
+            temp_file = f"/tmp/quantization_sample_{self.dataset_samples_collected}.npy"
+            np.save(temp_file, quantization_data)
             
-            np.save(temp_depth_file, depth_input)
-            np.save(temp_sensor_file, sensor_input)
-            
-            # Append to dataset.txt in RKNN expected format
+            # Append to dataset.txt - RKNN expects a list of files, one per sample
             with open(dataset_path, 'a') as f:
-                f.write(f"{temp_depth_file} {temp_sensor_file}\n")
+                f.write(f"{temp_file}\n")
             
             self.dataset_samples_collected += 1
             
