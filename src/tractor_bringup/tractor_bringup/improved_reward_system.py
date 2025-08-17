@@ -155,6 +155,22 @@ class ImprovedRewardCalculator:
         if linear_speed > 0.05 and angular_speed < 0.2:  # Moving forward with minimal turning
             reward += self.reward_config['straight_line_bonus'] * linear_speed * (1.0 - angular_speed/0.2)
         
+        # Smooth turning bonus (reward small, gradual turns over sharp turns)
+        if linear_speed > 0.02:  # Only when moving forward
+            if angular_speed < 0.1:
+                # Very smooth turning - bonus
+                reward += 3.0
+            elif angular_speed < 0.3:
+                # Moderate turning - small bonus
+                reward += 1.0
+            else:
+                # Sharp turning - penalty
+                reward -= 2.0
+        
+        # Proactive avoidance bonus (reward small corrective turns before getting too close)
+        if linear_speed > 0.05 and 0.1 < angular_speed < 0.4:
+            reward += 2.0  # Encourage gentle course corrections
+        
         # Penalize excessive spinning without forward movement
         if angular_speed > self.spinning_detection_threshold and linear_speed < 0.02:
             reward += self.reward_config['spinning_penalty']

@@ -108,8 +108,8 @@ class RKNNTrainerDepth:
         self.clip_max_distance = 4.0
         self.stacked_frames = stacked_frames
         self.frame_stack: deque = deque(maxlen=stacked_frames)
-        # Extended proprio feature count now: base(3) + extras(10) = 13 total features
-        self.extra_proprio = 10  # updated from 9 to match 13-element proprio vector
+        # Extended proprio feature count now: base(3) + extras(13) = 16 total features
+        self.extra_proprio = 13  # updated to match 16-element proprio vector (3 base + 13 extras)
         
         # Training parameters to encourage forward movement and reduce spinning
         self.forward_movement_weight = 1.5  # Increase weight for forward movement actions

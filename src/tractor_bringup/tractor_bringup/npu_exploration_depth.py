@@ -425,6 +425,10 @@ class NPUExplorationDepthNode(Node):
             near_collision_flag = 1.0 if (valid.size and np.percentile(valid,5) < 0.25) else 0.0
             wheel_diff = self.wheel_velocities[0] - self.wheel_velocities[1]
             emergency_numeric = 1.0 if emergency_flag else 0.0
+            
+            # Enhanced obstacle awareness - calculate gradient of free space
+            depth_gradient = self._calculate_depth_gradient(depth_input)
+            
             proprioceptive = np.array([
                 self.current_velocity[0],
                 self.current_velocity[1],
@@ -438,9 +442,16 @@ class NPUExplorationDepthNode(Node):
                 emergency_numeric,
                 left_free,
                 right_free,
-                center_free
+                center_free,
+                depth_gradient[0],  # left gradient
+                depth_gradient[1],  # center gradient
+                depth_gradient[2]   # right gradient
             ], dtype=np.float32)
             action, confidence = self.trainer.inference(depth_input, proprioceptive)
+            
+            # Post-process action for smoother, more proactive behavior
+            action = self.post_process_action(action)
+            
             # Exploration warmup adjustments (unchanged):
             if self.step_count < self.exploration_warmup_steps and not emergency_flag:
                 if np.random.rand() < self.random_action_prob:
@@ -522,6 +533,43 @@ class NPUExplorationDepthNode(Node):
         if self.recovery_total_ticks > 120:
             self.reset_recovery_state()
         return action
+
+    def _calculate_depth_gradient(self, depth_image):
+        """Calculate gradient of free space in left, center, and right regions"""
+        if depth_image is None or depth_image.size == 0:
+            return [0.0, 0.0, 0.0]
+        
+        try:
+            h, w = depth_image.shape
+            
+            # Define regions
+            left_region = depth_image[int(h*0.3):int(h*0.7), int(w*0.1):int(w*0.3)]
+            center_region = depth_image[int(h*0.3):int(h*0.7), int(w*0.4):int(w*0.6)]
+            right_region = depth_image[int(h*0.3):int(h*0.7), int(w*0.7):int(w*0.9)]
+            
+            # Calculate gradients (difference between near and far pixels)
+            def calculate_region_gradient(region):
+                valid_pixels = region[(region > 0.1) & (region < 4.0)]
+                if valid_pixels.size < 10:  # Not enough valid pixels
+                    return 0.0
+                
+                # Sort pixels by distance and calculate gradient
+                sorted_pixels = np.sort(valid_pixels)
+                near_pixels = sorted_pixels[:len(sorted_pixels)//3]
+                far_pixels = sorted_pixels[-len(sorted_pixels)//3:]
+                
+                if len(near_pixels) > 0 and len(far_pixels) > 0:
+                    gradient = np.mean(far_pixels) - np.mean(near_pixels)
+                    return float(gradient)
+                return 0.0
+            
+            left_gradient = calculate_region_gradient(left_region)
+            center_gradient = calculate_region_gradient(center_region)
+            right_gradient = calculate_region_gradient(right_region)
+            
+            return [left_gradient, center_gradient, right_gradient]
+        except Exception:
+            return [0.0, 0.0, 0.0]
 
     def reset_recovery_state(self):
         self.recovery_active = False
