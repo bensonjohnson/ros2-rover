@@ -835,16 +835,19 @@ class RKNNTrainerDepth:
                 padded_proprio = proprioceptive
             sensor_input = padded_proprio.astype(np.float32)[np.newaxis, ...]  # (1,features)
             
-            # For RKNN quantization, we need to save the inputs in the correct format
-            # Each line should contain the input values for one sample, separated by spaces
-            # For multiple inputs, we put them on the same line separated by space
+            # For RKNN quantization, we need to save each input separately for multi-input models
+            # Create separate files for each input in /tmp directory
+            import tempfile
+            temp_depth_file = tempfile.mktemp(suffix='.npy')
+            temp_sensor_file = tempfile.mktemp(suffix='.npy')
+            
+            # Save inputs to temporary files
+            np.save(temp_depth_file, depth_input)
+            np.save(temp_sensor_file, sensor_input)
+            
+            # Write paths to dataset.txt (one line per sample with paths to input files)
             with open(dataset_path, 'a') as f:
-                # Flatten the depth input and sensor input and write them to the file
-                depth_flat = depth_input.flatten()
-                sensor_flat = sensor_input.flatten()
-                # Write depth values followed by sensor values
-                values = np.concatenate([depth_flat, sensor_flat])
-                f.write(' '.join(map(str, values)) + '\n')
+                f.write(f"{temp_depth_file} {temp_sensor_file}\n")
             
             self.dataset_samples_collected += 1
             
