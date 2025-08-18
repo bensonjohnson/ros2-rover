@@ -51,12 +51,22 @@ class EvolutionaryStrategyTrainer:
         # Evolutionary Strategy parameters
         self.population_size = population_size
         self.sigma = sigma  # Standard deviation of parameter perturbations
+        self.initial_sigma = sigma  # Store initial sigma for reference
         self.learning_rate = learning_rate
         self.generation = 0
         self.population = []
         self.fitness_history = deque(maxlen=1000)
         self.best_fitness = -float('inf')
         self.best_model_state = None
+        
+        # Adaptive sigma parameters
+        self.fitness_improvement_window = 10  # Look at last N generations for improvement
+        self.sigma_decay_rate = 0.99  # How fast to decay sigma when improving
+        self.sigma_increase_rate = 1.05  # How fast to increase sigma when stagnating
+        self.min_sigma = sigma * 0.1  # Minimum sigma to maintain exploration
+        self.max_sigma = sigma * 3.0  # Maximum sigma to prevent chaos
+        self.fitness_improvement_threshold = 0.01  # Minimum improvement to consider progress
+        self.stagnation_counter = 0  # Track generations without improvement
         
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -313,6 +323,41 @@ class EvolutionaryStrategyTrainer:
         
         return avg_fitness
 
+    def _adapt_sigma(self, current_best_fitness: float):
+        """Adapt sigma based on fitness improvement"""
+        # Check if we have enough history to assess improvement
+        if len(self.fitness_history) < self.fitness_improvement_window:
+            return
+        
+        # Calculate average fitness over the improvement window
+        recent_fitness = list(self.fitness_history)[-self.fitness_improvement_window:]
+        avg_recent_fitness = np.mean(recent_fitness)
+        
+        # Compare with earlier fitness
+        if len(self.fitness_history) >= 2 * self.fitness_improvement_window:
+            earlier_fitness = list(self.fitness_history)[-2 * self.fitness_improvement_window:-self.fitness_improvement_window]
+            avg_earlier_fitness = np.mean(earlier_fitness)
+            
+            fitness_improvement = avg_recent_fitness - avg_earlier_fitness
+            
+            if fitness_improvement >= self.fitness_improvement_threshold:
+                # Good improvement - reduce sigma to exploit current region
+                self.sigma *= self.sigma_decay_rate
+                self.stagnation_counter = 0
+                if self.enable_debug:
+                    print(f"[ES] Fitness improving ({fitness_improvement:.4f}), reducing sigma to {self.sigma:.6f}")
+            else:
+                # Stagnation - increase sigma to explore more
+                self.stagnation_counter += 1
+                if self.stagnation_counter >= 3:  # Only increase after multiple stagnant generations
+                    self.sigma *= self.sigma_increase_rate
+                    self.stagnation_counter = 0
+                    if self.enable_debug:
+                        print(f"[ES] Fitness stagnating, increasing sigma to {self.sigma:.6f}")
+        
+        # Clamp sigma to reasonable bounds
+        self.sigma = np.clip(self.sigma, self.min_sigma, self.max_sigma)
+    
     def evolve_population(self) -> Dict[str, float]:
         """Perform one generation of evolution"""
         # Evaluate fitness for each individual
@@ -332,12 +377,16 @@ class EvolutionaryStrategyTrainer:
         
         # Update best model if needed
         best_idx = np.argmax(fitness_scores)
+        current_best_fitness = fitness_scores[best_idx]
         best_model_updated = False
-        if fitness_scores[best_idx] > self.best_fitness:
-            self.best_fitness = fitness_scores[best_idx]
+        if current_best_fitness > self.best_fitness:
+            self.best_fitness = current_best_fitness
             self.best_model_state = self._get_flat_params() + self.population[best_idx]
             best_model_updated = True
             print(f"[ES] New best fitness: {self.best_fitness:.4f}")
+        
+        # Adapt sigma based on fitness progress
+        self._adapt_sigma(current_best_fitness)
         
         # Natural evolution strategies update
         # Standardize fitness scores
@@ -368,7 +417,7 @@ class EvolutionaryStrategyTrainer:
                 if self.enable_debug:
                     print(f"[ES] Applied best model parameters (fitness: {self.best_fitness:.4f})")
         
-        # Generate new population based on current model parameters
+        # Generate new population based on current model parameters (using adapted sigma)
         self._initialize_population()
         
         # Update generation counter
@@ -393,7 +442,9 @@ class EvolutionaryStrategyTrainer:
             "avg_fitness": avg_fitness,
             "best_fitness": float(self.best_fitness),
             "fitness_std": float(fitness_std),
-            "samples": self.buffer_size
+            "samples": self.buffer_size,
+            "sigma": float(self.sigma),
+            "stagnation_counter": self.stagnation_counter
         }
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
