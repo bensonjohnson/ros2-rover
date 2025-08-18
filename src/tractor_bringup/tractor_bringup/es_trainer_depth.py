@@ -74,6 +74,14 @@ class EvolutionaryStrategyTrainer:
         self.elite_individuals = []  # Store elite (perturbation, fitness) pairs
         self.elite_fitness_scores = []
         
+        # Momentum-based parameter updates (Adam-like)
+        self.momentum_decay = 0.9  # Momentum decay rate
+        self.velocity_decay = 0.999  # Second moment decay rate
+        self.epsilon = 1e-8  # Small constant for numerical stability
+        self.momentum = None  # First moment estimate
+        self.velocity = None  # Second moment estimate
+        self.update_step = 0  # Track number of parameter updates for bias correction
+        
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -455,9 +463,35 @@ class EvolutionaryStrategyTrainer:
             top_3_weights = weights[top_3_indices]
             print(f"[ES] Top 3 individuals - Fitness: {fitness_scores[top_3_indices]}, Weights: {top_3_weights}")
         
+        # Apply momentum-based parameter update (Adam-like optimizer)
+        self.update_step += 1
+        
+        # Initialize momentum and velocity if first update
+        if self.momentum is None:
+            self.momentum = np.zeros_like(grad_estimate)
+            self.velocity = np.zeros_like(grad_estimate)
+        
+        # Update momentum (first moment)
+        self.momentum = self.momentum_decay * self.momentum + (1 - self.momentum_decay) * grad_estimate
+        
+        # Update velocity (second moment)
+        self.velocity = self.velocity_decay * self.velocity + (1 - self.velocity_decay) * (grad_estimate ** 2)
+        
+        # Bias correction
+        momentum_corrected = self.momentum / (1 - self.momentum_decay ** self.update_step)
+        velocity_corrected = self.velocity / (1 - self.velocity_decay ** self.update_step)
+        
+        # Adaptive learning rate update
+        adaptive_update = self.learning_rate * momentum_corrected / (np.sqrt(velocity_corrected) + self.epsilon)
+        
         # Update parameters
-        new_params = original_params + self.learning_rate * grad_estimate
+        new_params = original_params + adaptive_update
         self._set_flat_params(new_params)
+        
+        if self.enable_debug:
+            grad_norm = np.linalg.norm(grad_estimate)
+            update_norm = np.linalg.norm(adaptive_update)
+            print(f"[ES] Gradient norm: {grad_norm:.6f}, Update norm: {update_norm:.6f}")
         
         # Update elite preservation
         self._update_elites(fitness_scores)
@@ -661,7 +695,10 @@ class EvolutionaryStrategyTrainer:
                 'elite_individuals': self.elite_individuals,
                 'elite_fitness_scores': self.elite_fitness_scores,
                 'sigma': self.sigma,
-                'stagnation_counter': self.stagnation_counter
+                'stagnation_counter': self.stagnation_counter,
+                'momentum': self.momentum,
+                'velocity': self.velocity,
+                'update_step': self.update_step
             }, model_path)
             
             # Save latest symlink
@@ -715,6 +752,14 @@ class EvolutionaryStrategyTrainer:
                 self.sigma = checkpoint['sigma']
             if 'stagnation_counter' in checkpoint:
                 self.stagnation_counter = checkpoint['stagnation_counter']
+            
+            # Load momentum parameters if available
+            if 'momentum' in checkpoint and checkpoint['momentum'] is not None:
+                self.momentum = checkpoint['momentum']
+            if 'velocity' in checkpoint and checkpoint['velocity'] is not None:
+                self.velocity = checkpoint['velocity']
+            if 'update_step' in checkpoint:
+                self.update_step = checkpoint['update_step']
             
             print(f"Loaded ES model from {actual_model_path}")
             print(f"Generation: {self.generation}, Best Fitness: {self.best_fitness}, Sigma: {self.sigma:.6f}")
