@@ -7,15 +7,28 @@ import numpy as np
 import sys
 import os
 
-# Add the tractor_bringup package to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src', 'tractor_bringup', 'tractor_bringup'))
-
+# Try to import the ES trainer - handle both local and ROS2 package contexts
 try:
-    from es_trainer_depth import EvolutionaryStrategyTrainer
-    print("✓ Successfully imported ES trainer")
-except ImportError as e:
-    print(f"✗ Failed to import ES trainer: {e}")
-    sys.exit(1)
+    # First try direct import (for ROS2 environment)
+    from tractor_bringup.es_trainer_depth import EvolutionaryStrategyTrainer
+    print("✓ Successfully imported ES trainer (ROS2 package context)")
+except ImportError as e1:
+    try:
+        # Try relative import (for local testing)
+        from src.tractor_bringup.tractor_bringup.es_trainer_depth import EvolutionaryStrategyTrainer
+        print("✓ Successfully imported ES trainer (local context)")
+    except ImportError as e2:
+        try:
+            # Add the tractor_bringup package to the path and try direct import
+            sys.path.append(os.path.join(os.path.dirname(__file__), 'src', 'tractor_bringup', 'tractor_bringup'))
+            from es_trainer_depth import EvolutionaryStrategyTrainer
+            print("✓ Successfully imported ES trainer (path context)")
+        except ImportError as e3:
+            print(f"✗ Failed to import ES trainer:")
+            print(f"  Direct import error: {e1}")
+            print(f"  Relative import error: {e2}")
+            print(f"  Path import error: {e3}")
+            sys.exit(1)
 
 def demonstrate_es_concept():
     """Demonstrate how Evolutionary Strategies work"""
