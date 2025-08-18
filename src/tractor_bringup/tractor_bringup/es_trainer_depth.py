@@ -426,21 +426,34 @@ class EvolutionaryStrategyTrainer:
         # Adapt sigma based on fitness progress
         self._adapt_sigma(current_best_fitness)
         
-        # Natural evolution strategies update
-        # Standardize fitness scores
-        fitness_std = np.std(fitness_scores)
-        if fitness_std == 0:
-            fitness_std = 1e-8  # Avoid division by zero
-        standardized_fitness = (fitness_scores - np.mean(fitness_scores)) / fitness_std
+        # Rank-based fitness selection (more robust than standardization)
+        fitness_ranks = np.argsort(np.argsort(-fitness_scores))  # Higher rank = better fitness
         
-        # Update parameters using natural gradient
+        # Calculate rank-based weights (log-normal distribution)
+        weights = np.maximum(0, np.log(self.population_size/2 + 1) - np.log(fitness_ranks + 1))
+        
+        # Normalize weights and center them
+        if np.sum(weights) > 0:
+            weights = weights / np.sum(weights)
+            weights = weights - 1.0 / self.population_size
+        else:
+            # Fallback to uniform weights if all weights are zero
+            weights = np.zeros(self.population_size)
+            weights[best_idx] = 1.0 / self.population_size
+        
+        # Update parameters using rank-weighted gradient
         original_params = self._get_flat_params()
         
-        # Calculate gradient estimate
+        # Calculate gradient estimate using rank-based weights
         grad_estimate = np.zeros_like(original_params)
         for i in range(self.population_size):
-            grad_estimate += standardized_fitness[i] * self.population[i]
-        grad_estimate /= (self.population_size * self.sigma)
+            grad_estimate += weights[i] * self.population[i]
+        grad_estimate /= self.sigma
+        
+        if self.enable_debug:
+            top_3_indices = np.argsort(-fitness_scores)[:3]
+            top_3_weights = weights[top_3_indices]
+            print(f"[ES] Top 3 individuals - Fitness: {fitness_scores[top_3_indices]}, Weights: {top_3_weights}")
         
         # Update parameters
         new_params = original_params + self.learning_rate * grad_estimate
@@ -476,18 +489,20 @@ class EvolutionaryStrategyTrainer:
                 print(f"RKNN conversion failed: {e}")
         
         avg_fitness = float(np.mean(fitness_scores))
-        print(f"[ES] Generation {self.generation} completed - Avg Fitness: {avg_fitness:.4f}, Best: {self.best_fitness:.4f}")
+        fitness_std = float(np.std(fitness_scores))
+        print(f"[ES] Generation {self.generation} completed - Avg Fitness: {avg_fitness:.4f}, Best: {self.best_fitness:.4f}, Std: {fitness_std:.4f}")
         
         return {
             "generation": self.generation,
             "avg_fitness": avg_fitness,
             "best_fitness": float(self.best_fitness),
-            "fitness_std": float(fitness_std),
+            "fitness_std": fitness_std,
             "samples": self.buffer_size,
             "sigma": float(self.sigma),
             "stagnation_counter": self.stagnation_counter,
             "n_elites": len(self.elite_individuals),
-            "elite_avg_fitness": float(np.mean(self.elite_fitness_scores)) if self.elite_fitness_scores else 0.0
+            "elite_avg_fitness": float(np.mean(self.elite_fitness_scores)) if self.elite_fitness_scores else 0.0,
+            "grad_norm": float(np.linalg.norm(grad_estimate))
         }
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
