@@ -122,7 +122,7 @@ class RKNNTrainerDepth:
         self.criterion = nn.MSELoss()
         
         # Experience replay (replaced deque with ring buffer + priorities for prioritized replay)
-        self.buffer_capacity = 10000
+        self.buffer_capacity = 50000  # Increased for RK3588's abundant RAM
         self.buffer_size = 0
         self.insert_ptr = 0
         self.proprio_dim = 3 + self.extra_proprio

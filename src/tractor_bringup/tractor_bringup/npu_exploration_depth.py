@@ -45,7 +45,7 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('max_speed', 0.15)
         self.declare_parameter('min_battery_percentage', 30.0)
         self.declare_parameter('safety_distance', 0.2)
-        self.declare_parameter('npu_inference_rate', 5.0)
+        self.declare_parameter('npu_inference_rate', 30.0)  # Match 30Hz camera rate for maximum data collection
         self.declare_parameter('stacked_frames', 1)
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
@@ -751,7 +751,7 @@ class NPUExplorationDepthNode(Node):
                     f"Battery: {self.current_battery_percentage:.1f}% | "
                     f"Steps: {self.step_count} | "
                     f"Generation: {training_stats.get('generation', 0)} | "
-                    f"Buffer: {training_stats['buffer_size']}/10000 | "
+                    f"Buffer: {training_stats['buffer_size']}/{training_stats.get('buffer_capacity', 50000)} | "
                     f"Best Fitness: {training_stats.get('best_fitness', 0):.2f} | "
                     f"Freq: {training_stats.get('evolution_frequency', 50)} | "
                     f"Sigma: {training_stats.get('sigma', 0.1):.4f}"
@@ -763,7 +763,7 @@ class NPUExplorationDepthNode(Node):
                     f"Battery: {self.current_battery_percentage:.1f}% | "
                     f"Steps: {self.step_count} | "
                     f"Training: {training_stats['training_steps']} | "
-                    f"Buffer: {training_stats['buffer_size']}/10000 | "
+                    f"Buffer: {training_stats['buffer_size']}/{training_stats.get('buffer_capacity', 50000)} | "
                     f"Avg Reward: {training_stats['avg_reward']:.2f}"
                 )
         else:

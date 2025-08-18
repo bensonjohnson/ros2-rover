@@ -109,8 +109,8 @@ class EvolutionaryStrategyTrainer:
         # Initialize population
         self._initialize_population()
         
-        # Experience replay (simplified for ES)
-        self.buffer_capacity = 10000
+        # Experience replay (simplified for ES) - increased for RK3588's abundant RAM
+        self.buffer_capacity = 50000  # 5x larger buffer for more diverse ES training data
         self.buffer_size = 0
         self.insert_ptr = 0
         self.proprio_dim = 3 + self.extra_proprio
@@ -358,8 +358,15 @@ class EvolutionaryStrategyTrainer:
         avg_reward = total_reward / max(valid_samples, 1)
         avg_similarity = total_similarity / max(valid_samples, 1)
         
-        # Combined fitness: reward + similarity bonus
-        avg_fitness = avg_reward + avg_similarity * 5.0  # Weight similarity more heavily
+        # Combined fitness: reward + moderate similarity bonus + exploration bonus
+        exploration_bonus = 0.0
+        if valid_samples > 0:
+            # Bonus for diverse actions (encourage exploration)
+            action_magnitudes = [np.linalg.norm(self.action_store[idx]) for idx in indices]
+            avg_action_magnitude = np.mean(action_magnitudes)
+            exploration_bonus = min(avg_action_magnitude * 2.0, 1.0)  # Cap exploration bonus
+        
+        avg_fitness = avg_reward + avg_similarity * 1.0 + exploration_bonus  # Reduced similarity weight, added exploration
         
         # Restore original parameters
         self._set_flat_params(original_params)
@@ -1060,9 +1067,12 @@ class EvolutionaryStrategyTrainer:
         return {
             "generation": self.generation,
             "buffer_size": self.buffer_size,
+            "buffer_capacity": self.buffer_capacity,
             "avg_fitness": np.mean(self.fitness_history) if self.fitness_history else 0.0,
-            "best_fitness": self.best_fitness,
-            "buffer_full": self.buffer_size / self.buffer_capacity
+            "best_fitness": self.best_fitness if self.best_fitness != -float('inf') else -999.99,
+            "buffer_full": self.buffer_size / self.buffer_capacity,
+            "evolution_frequency": self.current_evolution_frequency,
+            "sigma": self.sigma
         }
     
     def init_dataset_file(self):

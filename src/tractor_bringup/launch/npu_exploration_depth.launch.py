@@ -94,7 +94,7 @@ def generate_launch_description():
             "enable_depth": "true",
             "enable_sync": "true",
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x15",  # Good balance of resolution and performance
+            "depth_module.depth_profile": "424x240x30",  # Higher FPS for better data collection
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
@@ -112,7 +112,7 @@ def generate_launch_description():
                 "max_speed": LaunchConfiguration("max_speed"),
                 "min_battery_percentage": LaunchConfiguration("min_battery_percentage"),
                 "safety_distance": LaunchConfiguration("safety_distance"),
-                "npu_inference_rate": 5.0,
+                "npu_inference_rate": 30.0,
                 "operation_mode": LaunchConfiguration("operation_mode"),
                 "anti_overtraining": LaunchConfiguration("anti_overtraining"),
                 "exploration_time": LaunchConfiguration("exploration_time"),
