@@ -15,10 +15,14 @@ echo "  ✓ Anti-overtraining reward system (optional)"
 echo "  ✓ No SLAM/Nav2 complexity"
 echo ""
 echo "Available modes:"
-echo "  • cpu_training:  Standard PyTorch training"
-echo "  • hybrid:        RKNN inference + training" 
+echo "  • cpu_training:  Standard PyTorch training (Reinforcement Learning)"
+echo "  • hybrid:        RKNN inference + RL training" 
 echo "  • inference:     Pure RKNN inference only"
-echo "  • safe_training: Anti-overtraining protection"
+echo "  • safe_training: Anti-overtraining RL protection"
+echo "  • es_training:   Evolutionary Strategy training"
+echo "  • es_hybrid:     RKNN inference + ES training"
+echo "  • es_inference:  Pure RKNN inference with ES model"
+echo "  • safe_es_training: Anti-overtraining ES protection"
 echo ""
 
 # Check if we're in the right directory
@@ -153,15 +157,23 @@ supports_arrows() {
 
 numeric_mode_menu() {
   echo "Select Operation Mode:";
-  echo "  1) cpu_training (PyTorch training + periodic export)";
-  echo "  2) hybrid       (RKNN inference + ongoing training)";
+  echo "  1) cpu_training (PyTorch RL training + periodic export)";
+  echo "  2) hybrid       (RKNN inference + RL training)";
   echo "  3) inference    (Pure RKNN inference, no training)";
-  echo "  4) safe_training (Anti-overtraining protection enabled)";
-  read -p "Enter choice [1-4] (default 1): " choice
+  echo "  4) safe_training (Anti-overtraining RL protection)";
+  echo "  5) es_training  (Evolutionary Strategy training)";
+  echo "  6) es_hybrid    (RKNN inference + ES training)";
+  echo "  7) es_inference (Pure RKNN inference with ES model)";
+  echo "  8) safe_es_training (Anti-overtraining ES protection)";
+  read -p "Enter choice [1-8] (default 1): " choice
   case "$choice" in
     2) MODE="hybrid";;
     3) MODE="inference";;
     4) MODE="safe_training";;
+    5) MODE="es_training";;
+    6) MODE="es_hybrid";;
+    7) MODE="es_inference";;
+    8) MODE="safe_es_training";;
     1|"" ) MODE="cpu_training";;
     *) echo "Invalid choice, defaulting to cpu_training"; MODE="cpu_training";;
   esac
@@ -174,27 +186,35 @@ choose_mode() {
     numeric_mode_menu
     return 0
   fi
-  local options=("cpu_training" "hybrid" "inference" "safe_training")
+  local options=("cpu_training" "hybrid" "inference" "safe_training" "es_training" "es_hybrid" "es_inference" "safe_es_training")
   local index=0
   local key
   echo "(Use ↑/↓ then Enter, or press Enter now for default: ${options[0]})"
-  echo "Note: 'safe_training' mode uses anti-overtraining measures"
+  echo "Note: 'safe_training' and 'safe_es_training' modes use anti-overtraining measures"
   while true; do
     for i in "${!options[@]}"; do
       if [ $i -eq $index ]; then
         case "${options[$i]}" in
-          "cpu_training") printf "  > %s (Standard PyTorch training)\n" "${options[$i]}" ;;
-          "hybrid") printf "  > %s (RKNN inference + training)\n" "${options[$i]}" ;;
+          "cpu_training") printf "  > %s (Standard PyTorch RL training)\n" "${options[$i]}" ;;
+          "hybrid") printf "  > %s (RKNN inference + RL training)\n" "${options[$i]}" ;;
           "inference") printf "  > %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
-          "safe_training") printf "  > %s (Anti-overtraining protection)\n" "${options[$i]}" ;;
+          "safe_training") printf "  > %s (Anti-overtraining RL protection)\n" "${options[$i]}" ;;
+          "es_training") printf "  > %s (Evolutionary Strategy training)\n" "${options[$i]}" ;;
+          "es_hybrid") printf "  > %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
+          "es_inference") printf "  > %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
+          "safe_es_training") printf "  > %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
           *) printf "  > %s\n" "${options[$i]}" ;;
         esac
       else
         case "${options[$i]}" in
-          "cpu_training") printf "    %s (Standard PyTorch training)\n" "${options[$i]}" ;;
-          "hybrid") printf "    %s (RKNN inference + training)\n" "${options[$i]}" ;;
+          "cpu_training") printf "    %s (Standard PyTorch RL training)\n" "${options[$i]}" ;;
+          "hybrid") printf "    %s (RKNN inference + RL training)\n" "${options[$i]}" ;;
           "inference") printf "    %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
-          "safe_training") printf "    %s (Anti-overtraining protection)\n" "${options[$i]}" ;;
+          "safe_training") printf "    %s (Anti-overtraining RL protection)\n" "${options[$i]}" ;;
+          "es_training") printf "    %s (Evolutionary Strategy training)\n" "${options[$i]}" ;;
+          "es_hybrid") printf "    %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
+          "es_inference") printf "    %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
+          "safe_es_training") printf "    %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
           *) printf "    %s\n" "${options[$i]}" ;;
         esac
       fi
@@ -237,8 +257,8 @@ else
   SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
 fi
 
-if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" ]]; then
-  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training"
+if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" && "$MODE" != "es_training" && "$MODE" != "es_hybrid" && "$MODE" != "es_inference" && "$MODE" != "safe_es_training" ]]; then
+  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training"
   exit 1
 fi
 
@@ -246,10 +266,15 @@ echo ""
 echo "Configuration:"
 echo "  Operation Mode: ${MODE}"
 case "$MODE" in
-  "safe_training") echo "    → Anti-overtraining protection ENABLED" ;;
-  "cpu_training") echo "    → Standard PyTorch training" ;;
-  "hybrid") echo "    → RKNN inference + ongoing training" ;;
+  "safe_training") echo "    → Anti-overtraining RL protection ENABLED" ;;
+  "cpu_training") echo "    → Standard PyTorch RL training" ;;
+  "hybrid") echo "    → RKNN inference + RL training" ;;
   "inference") echo "    → Pure RKNN inference only" ;;
+  "es_training") echo "    → Evolutionary Strategy training" ;;
+  "es_hybrid") echo "    → RKNN inference + ES training" ;;
+  "es_inference") echo "    → Pure RKNN inference with ES model" ;;
+  "safe_es_training") echo "    → Anti-overtraining ES protection ENABLED" ;;
+  *) echo "    → Custom mode selected" ;;
 esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
@@ -290,7 +315,7 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     max_speed:=${MAX_SPEED} \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \
-    anti_overtraining:=$([[ "$MODE" == "safe_training" ]] && echo "true" || echo "false") \
+    anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     use_sim_time:=false &
 
 LAUNCH_PID=$!
@@ -316,7 +341,7 @@ shutdown_handler() {
     fi
     
     # Save training logs if safe_training mode was used
-    if [[ "$MODE" == "safe_training" ]]; then
+    if [[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]]; then
         echo "💾 Saving anti-overtraining logs..."
         python3 - <<'SAVE_LOGS'
 try:
@@ -347,8 +372,8 @@ if [[ "$MODE" == "safe_training" ]]; then
 fi
 echo ""
 
-# Enhanced monitoring for safe_training mode
-if [[ "$MODE" == "safe_training" ]]; then
+# Enhanced monitoring for safe modes
+if [[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]]; then
   echo "🛡️  Anti-overtraining monitoring enabled:"
   echo "   - Behavioral diversity tracking"
   echo "   - Reward gaming detection" 

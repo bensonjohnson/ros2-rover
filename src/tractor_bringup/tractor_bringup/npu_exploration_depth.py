@@ -26,14 +26,16 @@ except ImportError as e:
 
 try:
     from .rknn_trainer_depth import RKNNTrainerDepth
+    from .es_trainer_depth import EvolutionaryStrategyTrainer
     TRAINER_AVAILABLE = True
     print("RKNN Trainer successfully imported")
+    print("ES Trainer successfully imported")
 except ImportError as e:
     TRAINER_AVAILABLE = False
-    print(f"RKNN Trainer not available - using simple reactive navigation. Error: {e}")
+    print(f"RKNN/ES Trainer not available - using simple reactive navigation. Error: {e}")
 except Exception as e:
     TRAINER_AVAILABLE = False
-    print(f"RKNN Trainer initialization failed - using simple reactive navigation. Error: {e}")
+    print(f"RKNN/ES Trainer initialization failed - using simple reactive navigation. Error: {e}")
 
 class NPUExplorationDepthNode(Node):
     def __init__(self):
@@ -166,8 +168,24 @@ class NPUExplorationDepthNode(Node):
         if TRAINER_AVAILABLE:
             try:
                 enable_debug = (self.get_parameter('operation_mode').value != 'inference')
-                self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)
                 mode = self.get_parameter('operation_mode').value
+                
+                # Initialize appropriate trainer based on mode
+                if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
+                    # Use Evolutionary Strategy trainer
+                    self.trainer = EvolutionaryStrategyTrainer(
+                        stacked_frames=self.stacked_frames, 
+                        enable_debug=enable_debug,
+                        population_size=10,
+                        sigma=0.1,
+                        learning_rate=0.01
+                    )
+                    self.get_logger().info("ES Trainer initialized")
+                else:
+                    # Use Reinforcement Learning trainer
+                    self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)
+                    self.get_logger().info("RKNN Trainer initialized")
+                
                 if mode == 'cpu_training':
                     # Training on CPU only; no RKNN runtime inference
                     self.use_npu = True  # still use trainer inference (PyTorch)
@@ -185,17 +203,45 @@ class NPUExplorationDepthNode(Node):
                     if self.trainer.enable_rknn_inference():
                         self.use_npu = True
                         # Disable optimizer to avoid accidental training
-                        self.trainer.optimizer = None
+                        if hasattr(self.trainer, 'optimizer'):
+                            self.trainer.optimizer = None
                         self.get_logger().info("Mode: Pure RKNN inference (no training)")
                     else:
                         self.use_npu = True
                         self.get_logger().warn("Pure inference mode requested but RKNN file/runtime not available - falling back to PyTorch")
+                elif mode == 'safe_training':
+                    # Safe training with anti-overtraining measures
+                    self.use_npu = True
+                    self.get_logger().info("Mode: Safe training (anti-overtraining protection)")
+                elif mode == 'es_training':
+                    # Evolutionary Strategy training on CPU
+                    self.use_npu = True
+                    self.get_logger().info("Mode: ES training (Evolutionary Strategy on CPU)")
+                elif mode == 'es_hybrid':
+                    # ES training with RKNN inference
+                    if self.trainer.enable_rknn_inference():
+                        self.use_npu = True
+                        self.get_logger().info("Mode: ES Hybrid (RKNN runtime inference + ES training)")
+                    else:
+                        self.use_npu = True
+                        self.get_logger().warn("ES Hybrid mode requested but RKNN runtime not available - using PyTorch")
+                elif mode == 'es_inference':
+                    # Pure ES inference: load RKNN and disable training logic
+                    if self.trainer.enable_rknn_inference():
+                        self.use_npu = True
+                        self.get_logger().info("Mode: ES Pure RKNN inference (no training)")
+                    else:
+                        self.use_npu = True
+                        self.get_logger().warn("ES Pure inference mode requested but RKNN file/runtime not available - falling back to PyTorch")
+                elif mode == 'safe_es_training':
+                    # Safe ES training with anti-overtraining measures
+                    self.use_npu = True
+                    self.get_logger().info("Mode: Safe ES training (anti-overtraining protection with ES)")
                 else:
                     self.use_npu = True
                     self.get_logger().warn(f"Unknown operation_mode '{mode}' - defaulting to cpu_training")
-                self.get_logger().info("RKNN Trainer initialized")
             except Exception as e:
-                self.get_logger().warn(f"RKNN Trainer init failed: {e}")
+                self.get_logger().warn(f"Trainer init failed: {e}")
         else:
             self.get_logger().info("Trainer not available")
             
@@ -586,7 +632,7 @@ class NPUExplorationDepthNode(Node):
         self.exploration_mode = "NPU_DRIVING"
 
     def train_from_experience(self):
-        if self.operation_mode == 'inference':
+        if self.operation_mode == 'inference' or self.operation_mode == 'es_inference':
             return
         if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
             return
@@ -652,10 +698,20 @@ class NPUExplorationDepthNode(Node):
                     collision=self.collision_detected,
                     in_recovery=self.recovery_active
                 )
-            if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
-                training_stats = self.trainer.train_step()
-                if self.step_count % 50 == 0 and 'loss' in training_stats:
-                    self.get_logger().info(f"Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
+            
+            # Train based on mode
+            if self.operation_mode in ['es_training', 'es_hybrid', 'safe_es_training']:
+                # For ES, we evolve every N generations (based on buffer size)
+                if self.trainer.buffer_size >= 50 and self.step_count % 100 == 0:
+                    training_stats = self.trainer.evolve_population()
+                    if self.step_count % 500 == 0:
+                        self.get_logger().info(f"ES Training: Gen={training_stats.get('generation',0)} AvgFit={training_stats.get('avg_fitness',0):.4f} BestFit={training_stats.get('best_fitness',0):.4f} Samples={training_stats.get('samples',0)}")
+            else:
+                # For RL, we train every step
+                if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
+                    training_stats = self.trainer.train_step()
+                    if self.step_count % 50 == 0 and 'loss' in training_stats:
+                        self.get_logger().info(f"RL Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
             self.prev_position = self.position.copy()
             self.prev_depth_image = self.latest_depth_image.copy()
         except Exception as e:
@@ -686,14 +742,27 @@ class NPUExplorationDepthNode(Node):
         
         if self.use_npu and self.trainer:
             training_stats = self.trainer.get_training_stats()
-            status_msg.data = (
-                f"NPU Learning | Mode: {self.exploration_mode} | "
-                f"Battery: {self.current_battery_percentage:.1f}% | "
-                f"Steps: {self.step_count} | "
-                f"Training: {training_stats['training_steps']} | "
-                f"Buffer: {training_stats['buffer_size']}/10000 | "
-                f"Avg Reward: {training_stats['avg_reward']:.2f}"
-            )
+            # Check if this is ES or RL training
+            if self.operation_mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
+                # ES training stats
+                status_msg.data = (
+                    f"NPU Learning | Mode: {self.exploration_mode} | "
+                    f"Battery: {self.current_battery_percentage:.1f}% | "
+                    f"Steps: {self.step_count} | "
+                    f"Generation: {training_stats.get('generation', 0)} | "
+                    f"Buffer: {training_stats['buffer_size']}/10000 | "
+                    f"Best Fitness: {training_stats.get('best_fitness', 0):.2f}"
+                )
+            else:
+                # RL training stats
+                status_msg.data = (
+                    f"NPU Learning | Mode: {self.exploration_mode} | "
+                    f"Battery: {self.current_battery_percentage:.1f}% | "
+                    f"Steps: {self.step_count} | "
+                    f"Training: {training_stats['training_steps']} | "
+                    f"Buffer: {training_stats['buffer_size']}/10000 | "
+                    f"Avg Reward: {training_stats['avg_reward']:.2f}"
+                )
         else:
             status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Battery: {self.current_battery_percentage:.1f}% | Steps: {self.step_count}"
             
