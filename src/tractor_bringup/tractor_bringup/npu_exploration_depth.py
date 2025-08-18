@@ -174,6 +174,7 @@ class NPUExplorationDepthNode(Node):
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
                     # Use Evolutionary Strategy trainer
                     self.trainer = EvolutionaryStrategyTrainer(
+                        model_dir="models",  # Explicitly set model directory
                         stacked_frames=self.stacked_frames, 
                         enable_debug=enable_debug,
                         population_size=10,

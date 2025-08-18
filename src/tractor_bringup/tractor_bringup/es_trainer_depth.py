@@ -625,8 +625,9 @@ class EvolutionaryStrategyTrainer:
         # Update generation counter
         self.generation += 1
         
-        # Save model periodically
-        if self.generation % 50 == 0:
+        # Save model periodically (more frequent during early training)
+        save_frequency = 10 if self.generation < 100 else 50  # Save every 10 gens for first 100, then every 50
+        if self.generation % save_frequency == 0 or self.generation == 1:  # Always save first generation
             self.save_model()
         
         # Convert to RKNN periodically
