@@ -98,6 +98,12 @@ class EvolutionaryStrategyTrainer:
         
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Optimize CPU threading for ES population evaluation on RK3588
+        # Use more threads in hybrid mode since NPU handles inference
+        torch.set_num_threads(8)  # RK3588 has 8 cores total
+        torch.set_num_interop_threads(4)  # Parallel operations
+        
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
         
         # Initialize population
