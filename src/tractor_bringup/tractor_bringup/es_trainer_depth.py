@@ -269,6 +269,7 @@ class EvolutionaryStrategyTrainer:
         indices = np.random.choice(self.buffer_size, batch_size, replace=False)
         
         total_reward = 0.0
+        total_similarity = 0.0
         valid_samples = 0
         
         # Evaluate on batch
@@ -285,17 +286,30 @@ class EvolutionaryStrategyTrainer:
                 predicted_output = self.model(depth_tensor, proprio_tensor)
                 predicted_action = torch.tanh(predicted_output[0, :2]).cpu().numpy()
             
-            # Calculate how close prediction is to actual action weighted by reward
-            action_similarity = 1.0 - np.linalg.norm(predicted_action - actual_action)
-            fitness = actual_reward * max(0, action_similarity)  # Only positive similarity contributes
+            # Calculate how close prediction is to actual action
+            action_distance = np.linalg.norm(predicted_action - actual_action)
+            action_similarity = np.exp(-action_distance)  # Convert distance to similarity (0-1)
             
-            total_reward += fitness
+            # Fitness is weighted by reward and similarity
+            # Higher rewards and better similarity lead to higher fitness
+            fitness = actual_reward * action_similarity
+            
+            total_reward += actual_reward
+            total_similarity += action_similarity
             valid_samples += 1
         
-        avg_fitness = total_reward / max(valid_samples, 1)
+        # Calculate average fitness with bonus for good similarity
+        avg_reward = total_reward / max(valid_samples, 1)
+        avg_similarity = total_similarity / max(valid_samples, 1)
+        
+        # Combined fitness: reward + similarity bonus
+        avg_fitness = avg_reward + avg_similarity * 5.0  # Weight similarity more heavily
         
         # Restore original parameters
         self._set_flat_params(original_params)
+        
+        if self.enable_debug:
+            print(f"[ES] Evaluated fitness: {avg_fitness:.4f} (reward: {avg_reward:.4f}, similarity: {avg_similarity:.4f})")
         
         return avg_fitness
 
@@ -322,6 +336,12 @@ class EvolutionaryStrategyTrainer:
             self.best_fitness = fitness_scores[best_idx]
             self.best_model_state = self._get_flat_params() + self.population[best_idx]
             print(f"[ES] New best fitness: {self.best_fitness:.4f}")
+        
+        # Always apply the best model state to ensure we're using the best parameters
+        if self.best_model_state is not None:
+            self._set_flat_params(self.best_model_state)
+            if self.enable_debug:
+                print(f"[ES] Applied best model parameters (fitness: {self.best_fitness:.4f})")
         
         # Natural evolution strategies update
         # Standardize fitness scores
@@ -360,9 +380,12 @@ class EvolutionaryStrategyTrainer:
             except Exception as e:
                 print(f"RKNN conversion failed: {e}")
         
+        avg_fitness = float(np.mean(fitness_scores))
+        print(f"[ES] Generation {self.generation} completed - Avg Fitness: {avg_fitness:.4f}, Best: {self.best_fitness:.4f}")
+        
         return {
             "generation": self.generation,
-            "avg_fitness": float(np.mean(fitness_scores)),
+            "avg_fitness": avg_fitness,
             "best_fitness": float(self.best_fitness),
             "fitness_std": float(fitness_std),
             "samples": self.buffer_size
