@@ -82,6 +82,11 @@ class EvolutionaryStrategyTrainer:
         self.velocity = None  # Second moment estimate
         self.update_step = 0  # Track number of parameter updates for bias correction
         
+        # Population diversity monitoring
+        self.min_diversity_threshold = 0.001  # Minimum diversity to maintain
+        self.diversity_history = deque(maxlen=20)  # Track diversity over generations
+        self.diversity_injection_ratio = 0.25  # Fraction of population to replace when diversity is low
+        
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -404,6 +409,45 @@ class EvolutionaryStrategyTrainer:
             print(f"[ES] Updated elites: {len(self.elite_individuals)} individuals, "
                   f"fitness range [{min(elite_fitnesses):.4f}, {max(elite_fitnesses):.4f}]")
     
+    def _calculate_population_diversity(self) -> float:
+        """Calculate the average pairwise distance between individuals in the population"""
+        if len(self.population) < 2:
+            return 0.0
+        
+        total_distance = 0.0
+        num_pairs = 0
+        
+        for i in range(len(self.population)):
+            for j in range(i + 1, len(self.population)):
+                distance = np.linalg.norm(self.population[i] - self.population[j])
+                total_distance += distance
+                num_pairs += 1
+        
+        return total_distance / num_pairs if num_pairs > 0 else 0.0
+    
+    def _maintain_diversity(self):
+        """Inject random individuals if population diversity is too low"""
+        current_diversity = self._calculate_population_diversity()
+        self.diversity_history.append(current_diversity)
+        
+        if current_diversity < self.min_diversity_threshold:
+            # Replace worst individuals with random ones
+            n_replace = max(1, int(self.population_size * self.diversity_injection_ratio))
+            
+            # Find indices of worst individuals (note: we don't have fitness here, so replace random ones)
+            replace_indices = np.random.choice(self.population_size, n_replace, replace=False)
+            
+            for idx in replace_indices:
+                # Create new random perturbation
+                self.population[idx] = np.random.randn(*self.param_shape) * self.sigma
+            
+            if self.enable_debug:
+                print(f"[ES] Diversity too low ({current_diversity:.6f}), injected {n_replace} random individuals")
+        
+        elif self.enable_debug:
+            avg_diversity = np.mean(self.diversity_history) if self.diversity_history else 0.0
+            print(f"[ES] Population diversity: {current_diversity:.6f} (avg: {avg_diversity:.6f})")
+    
     def evolve_population(self) -> Dict[str, float]:
         """Perform one generation of evolution"""
         # Evaluate fitness for each individual
@@ -505,6 +549,9 @@ class EvolutionaryStrategyTrainer:
                 if self.enable_debug:
                     print(f"[ES] Applied best model parameters (fitness: {self.best_fitness:.4f})")
         
+        # Maintain population diversity before generating new population
+        self._maintain_diversity()
+        
         # Generate new population based on current model parameters (using adapted sigma)
         self._initialize_population()
         
@@ -526,6 +573,9 @@ class EvolutionaryStrategyTrainer:
         fitness_std = float(np.std(fitness_scores))
         print(f"[ES] Generation {self.generation} completed - Avg Fitness: {avg_fitness:.4f}, Best: {self.best_fitness:.4f}, Std: {fitness_std:.4f}")
         
+        # Calculate current population diversity
+        current_diversity = self._calculate_population_diversity()
+        
         return {
             "generation": self.generation,
             "avg_fitness": avg_fitness,
@@ -536,7 +586,9 @@ class EvolutionaryStrategyTrainer:
             "stagnation_counter": self.stagnation_counter,
             "n_elites": len(self.elite_individuals),
             "elite_avg_fitness": float(np.mean(self.elite_fitness_scores)) if self.elite_fitness_scores else 0.0,
-            "grad_norm": float(np.linalg.norm(grad_estimate))
+            "grad_norm": float(np.linalg.norm(grad_estimate)),
+            "population_diversity": float(current_diversity),
+            "avg_diversity": float(np.mean(self.diversity_history)) if self.diversity_history else 0.0
         }
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
@@ -698,7 +750,8 @@ class EvolutionaryStrategyTrainer:
                 'stagnation_counter': self.stagnation_counter,
                 'momentum': self.momentum,
                 'velocity': self.velocity,
-                'update_step': self.update_step
+                'update_step': self.update_step,
+                'diversity_history': list(self.diversity_history)
             }, model_path)
             
             # Save latest symlink
@@ -760,6 +813,10 @@ class EvolutionaryStrategyTrainer:
                 self.velocity = checkpoint['velocity']
             if 'update_step' in checkpoint:
                 self.update_step = checkpoint['update_step']
+            
+            # Load diversity history if available
+            if 'diversity_history' in checkpoint:
+                self.diversity_history = deque(checkpoint['diversity_history'], maxlen=20)
             
             print(f"Loaded ES model from {actual_model_path}")
             print(f"Generation: {self.generation}, Best Fitness: {self.best_fitness}, Sigma: {self.sigma:.6f}")
