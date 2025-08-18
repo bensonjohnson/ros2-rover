@@ -132,7 +132,7 @@ class EvolutionaryStrategyTrainer:
             param_shape = param.data.shape
             param_size = param.data.numel()
             param_values = params[idx:idx+param_size].reshape(param_shape)
-            param.data = torch.from_numpy(param_values).to(self.device)
+            param.data = torch.from_numpy(param_values).float().to(self.device)
             idx += param_size
 
     def add_experience(self,
@@ -498,8 +498,8 @@ class EvolutionaryStrategyTrainer:
         self.model.eval()
         with torch.no_grad():
             processed = self.preprocess_depth_for_model(depth_image)
-            depth_tensor = torch.from_numpy(processed).unsqueeze(0).to(self.device)
-            sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
+            depth_tensor = torch.from_numpy(processed).unsqueeze(0).float().to(self.device)
+            sensor_tensor = torch.from_numpy(proprioceptive).float().unsqueeze(0).to(self.device)
             output = self.model(depth_tensor, sensor_tensor)
             action = torch.tanh(output[0, :2]).cpu().numpy()
             confidence = torch.sigmoid(output[0, 2]).item()

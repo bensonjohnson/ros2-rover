@@ -702,9 +702,9 @@ class NPUExplorationDepthNode(Node):
             # Train based on mode
             if self.operation_mode in ['es_training', 'es_hybrid', 'safe_es_training']:
                 # For ES, we evolve every N generations (based on buffer size)
-                if self.trainer.buffer_size >= 50 and self.step_count % 100 == 0:
+                if self.trainer.buffer_size >= 50 and self.step_count % 50 == 0:
                     training_stats = self.trainer.evolve_population()
-                    if self.step_count % 500 == 0:
+                    if self.step_count % 250 == 0:
                         self.get_logger().info(f"ES Training: Gen={training_stats.get('generation',0)} AvgFit={training_stats.get('avg_fitness',0):.4f} BestFit={training_stats.get('best_fitness',0):.4f} Samples={training_stats.get('samples',0)}")
             else:
                 # For RL, we train every step
