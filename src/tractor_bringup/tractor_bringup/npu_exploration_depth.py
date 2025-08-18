@@ -751,7 +751,9 @@ class NPUExplorationDepthNode(Node):
                     f"Steps: {self.step_count} | "
                     f"Generation: {training_stats.get('generation', 0)} | "
                     f"Buffer: {training_stats['buffer_size']}/10000 | "
-                    f"Best Fitness: {training_stats.get('best_fitness', 0):.2f}"
+                    f"Best Fitness: {training_stats.get('best_fitness', 0):.2f} | "
+                    f"Freq: {training_stats.get('evolution_frequency', 50)} | "
+                    f"Sigma: {training_stats.get('sigma', 0.1):.4f}"
                 )
             else:
                 # RL training stats

@@ -87,6 +87,15 @@ class EvolutionaryStrategyTrainer:
         self.diversity_history = deque(maxlen=20)  # Track diversity over generations
         self.diversity_injection_ratio = 0.25  # Fraction of population to replace when diversity is low
         
+        # Adaptive evolution frequency
+        self.base_evolution_frequency = 50  # Base frequency (every N steps)
+        self.min_evolution_frequency = 25   # Minimum frequency (most frequent)
+        self.max_evolution_frequency = 100  # Maximum frequency (least frequent)
+        self.current_evolution_frequency = self.base_evolution_frequency
+        self.data_quality_window = 10  # Window to assess data quality
+        self.recent_rewards = deque(maxlen=self.data_quality_window)
+        self.last_evolution_step = 0
+        
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -215,6 +224,7 @@ class EvolutionaryStrategyTrainer:
         if self.buffer_size < self.buffer_capacity:
             self.buffer_size += 1
         self.reward_history.append(reward)
+        self.recent_rewards.append(reward)
         
         # Collect samples for RKNN quantization dataset
         if (self.dataset_samples_collected < self.target_dataset_samples and 
@@ -448,6 +458,63 @@ class EvolutionaryStrategyTrainer:
             avg_diversity = np.mean(self.diversity_history) if self.diversity_history else 0.0
             print(f"[ES] Population diversity: {current_diversity:.6f} (avg: {avg_diversity:.6f})")
     
+    def should_evolve(self, current_step: int) -> bool:
+        """Determine if evolution should occur based on adaptive frequency"""
+        # Always check minimum buffer requirement
+        if self.buffer_size < 50:
+            return False
+        
+        # Check if enough steps have passed since last evolution
+        steps_since_evolution = current_step - self.last_evolution_step
+        if steps_since_evolution < self.current_evolution_frequency:
+            return False
+        
+        # Adapt evolution frequency based on data quality and learning progress
+        self._adapt_evolution_frequency()
+        
+        # Update last evolution step
+        self.last_evolution_step = current_step
+        return True
+    
+    def _adapt_evolution_frequency(self):
+        """Adapt evolution frequency based on data quality and learning progress"""
+        if len(self.recent_rewards) < self.data_quality_window:
+            return
+        
+        # Assess data quality based on reward variance and progress
+        reward_variance = np.var(self.recent_rewards)
+        reward_trend = np.mean(list(self.recent_rewards)[5:]) - np.mean(list(self.recent_rewards)[:5]) if len(self.recent_rewards) >= 10 else 0
+        
+        # High variance or positive trend = evolve more frequently (good learning signal)
+        # Low variance or negative trend = evolve less frequently (poor learning signal)
+        
+        if reward_variance > 5.0 or reward_trend > 1.0:
+            # Good learning signal - evolve more frequently
+            self.current_evolution_frequency = max(
+                self.min_evolution_frequency,
+                int(self.current_evolution_frequency * 0.9)
+            )
+            if self.enable_debug:
+                print(f"[ES] Increasing evolution frequency to {self.current_evolution_frequency} (good signal)")
+        elif reward_variance < 1.0 and reward_trend < -0.5:
+            # Poor learning signal - evolve less frequently
+            self.current_evolution_frequency = min(
+                self.max_evolution_frequency,
+                int(self.current_evolution_frequency * 1.1)
+            )
+            if self.enable_debug:
+                print(f"[ES] Decreasing evolution frequency to {self.current_evolution_frequency} (poor signal)")
+        
+        # Also consider stagnation
+        if self.stagnation_counter >= 3:
+            # Stagnating - try evolving more frequently
+            self.current_evolution_frequency = max(
+                self.min_evolution_frequency,
+                int(self.current_evolution_frequency * 0.8)
+            )
+            if self.enable_debug:
+                print(f"[ES] Stagnation detected, increasing evolution frequency to {self.current_evolution_frequency}")
+    
     def evolve_population(self) -> Dict[str, float]:
         """Perform one generation of evolution"""
         # Evaluate fitness for each individual
@@ -588,7 +655,9 @@ class EvolutionaryStrategyTrainer:
             "elite_avg_fitness": float(np.mean(self.elite_fitness_scores)) if self.elite_fitness_scores else 0.0,
             "grad_norm": float(np.linalg.norm(grad_estimate)),
             "population_diversity": float(current_diversity),
-            "avg_diversity": float(np.mean(self.diversity_history)) if self.diversity_history else 0.0
+            "avg_diversity": float(np.mean(self.diversity_history)) if self.diversity_history else 0.0,
+            "evolution_frequency": self.current_evolution_frequency,
+            "reward_variance": float(np.var(self.recent_rewards)) if self.recent_rewards else 0.0
         }
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
