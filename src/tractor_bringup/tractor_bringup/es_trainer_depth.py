@@ -332,16 +332,12 @@ class EvolutionaryStrategyTrainer:
         
         # Update best model if needed
         best_idx = np.argmax(fitness_scores)
+        best_model_updated = False
         if fitness_scores[best_idx] > self.best_fitness:
             self.best_fitness = fitness_scores[best_idx]
             self.best_model_state = self._get_flat_params() + self.population[best_idx]
+            best_model_updated = True
             print(f"[ES] New best fitness: {self.best_fitness:.4f}")
-        
-        # Always apply the best model state to ensure we're using the best parameters
-        if self.best_model_state is not None:
-            self._set_flat_params(self.best_model_state)
-            if self.enable_debug:
-                print(f"[ES] Applied best model parameters (fitness: {self.best_fitness:.4f})")
         
         # Natural evolution strategies update
         # Standardize fitness scores
@@ -363,7 +359,16 @@ class EvolutionaryStrategyTrainer:
         new_params = original_params + self.learning_rate * grad_estimate
         self._set_flat_params(new_params)
         
-        # Generate new population
+        # Only apply best model if it was updated and it's better than current
+        if best_model_updated and self.best_model_state is not None:
+            # Compare current model fitness with best model fitness
+            current_fitness = self.evaluate_individual(np.zeros_like(new_params))
+            if self.best_fitness > current_fitness:
+                self._set_flat_params(self.best_model_state)
+                if self.enable_debug:
+                    print(f"[ES] Applied best model parameters (fitness: {self.best_fitness:.4f})")
+        
+        # Generate new population based on current model parameters
         self._initialize_population()
         
         # Update generation counter
