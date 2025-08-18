@@ -68,6 +68,12 @@ class EvolutionaryStrategyTrainer:
         self.fitness_improvement_threshold = 0.01  # Minimum improvement to consider progress
         self.stagnation_counter = 0  # Track generations without improvement
         
+        # Elite preservation parameters
+        self.elite_ratio = 0.2  # Preserve top 20% of population
+        self.n_elites = max(1, int(self.population_size * self.elite_ratio))
+        self.elite_individuals = []  # Store elite (perturbation, fitness) pairs
+        self.elite_fitness_scores = []
+        
         # Neural network (same architecture as RL version)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
@@ -121,12 +127,23 @@ class EvolutionaryStrategyTrainer:
         
         # Initialize population with random perturbations
         self.population = []
-        for i in range(self.population_size):
+        
+        # First, add elite individuals from previous generation if available
+        n_elites_added = 0
+        if self.elite_individuals:
+            for elite_perturbation, elite_fitness in self.elite_individuals:
+                if n_elites_added < self.n_elites and n_elites_added < self.population_size:
+                    self.population.append(elite_perturbation.copy())
+                    n_elites_added += 1
+        
+        # Fill remaining slots with random perturbations
+        for i in range(n_elites_added, self.population_size):
             # Random perturbation
             perturbation = np.random.randn(*self.param_shape) * self.sigma
             self.population.append(perturbation)
         
-        print(f"[ES] Initialized population with {self.population_size} individuals")
+        if self.enable_debug:
+            print(f"[ES] Initialized population with {self.population_size} individuals ({n_elites_added} elites preserved)")
 
     def _get_flat_params(self) -> np.ndarray:
         """Get model parameters as a flat numpy array"""
@@ -358,6 +375,27 @@ class EvolutionaryStrategyTrainer:
         # Clamp sigma to reasonable bounds
         self.sigma = np.clip(self.sigma, self.min_sigma, self.max_sigma)
     
+    def _update_elites(self, fitness_scores: np.ndarray):
+        """Update elite individuals based on current generation fitness"""
+        # Combine current population with their fitness scores
+        population_fitness_pairs = list(zip(self.population, fitness_scores))
+        
+        # Add previous elites to the mix (they compete with current generation)
+        if self.elite_individuals:
+            population_fitness_pairs.extend(self.elite_individuals)
+        
+        # Sort by fitness (descending)
+        population_fitness_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select top performers as new elites
+        self.elite_individuals = population_fitness_pairs[:self.n_elites]
+        self.elite_fitness_scores = [fitness for _, fitness in self.elite_individuals]
+        
+        if self.enable_debug and self.elite_individuals:
+            elite_fitnesses = [f for _, f in self.elite_individuals]
+            print(f"[ES] Updated elites: {len(self.elite_individuals)} individuals, "
+                  f"fitness range [{min(elite_fitnesses):.4f}, {max(elite_fitnesses):.4f}]")
+    
     def evolve_population(self) -> Dict[str, float]:
         """Perform one generation of evolution"""
         # Evaluate fitness for each individual
@@ -408,6 +446,9 @@ class EvolutionaryStrategyTrainer:
         new_params = original_params + self.learning_rate * grad_estimate
         self._set_flat_params(new_params)
         
+        # Update elite preservation
+        self._update_elites(fitness_scores)
+        
         # Only apply best model if it was updated and it's better than current
         if best_model_updated and self.best_model_state is not None:
             # Compare current model fitness with best model fitness
@@ -444,7 +485,9 @@ class EvolutionaryStrategyTrainer:
             "fitness_std": float(fitness_std),
             "samples": self.buffer_size,
             "sigma": float(self.sigma),
-            "stagnation_counter": self.stagnation_counter
+            "stagnation_counter": self.stagnation_counter,
+            "n_elites": len(self.elite_individuals),
+            "elite_avg_fitness": float(np.mean(self.elite_fitness_scores)) if self.elite_fitness_scores else 0.0
         }
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
@@ -599,7 +642,11 @@ class EvolutionaryStrategyTrainer:
                 'model_state_dict': self.model.state_dict(),
                 'generation': self.generation,
                 'best_fitness': self.best_fitness,
-                'fitness_history': list(self.fitness_history)
+                'fitness_history': list(self.fitness_history),
+                'elite_individuals': self.elite_individuals,
+                'elite_fitness_scores': self.elite_fitness_scores,
+                'sigma': self.sigma,
+                'stagnation_counter': self.stagnation_counter
             }, model_path)
             
             # Save latest symlink
@@ -641,8 +688,21 @@ class EvolutionaryStrategyTrainer:
             self.best_fitness = checkpoint.get('best_fitness', -float('inf'))
             if 'fitness_history' in checkpoint:
                 self.fitness_history = deque(checkpoint['fitness_history'], maxlen=1000)
+            
+            # Load elite preservation data if available
+            if 'elite_individuals' in checkpoint and 'elite_fitness_scores' in checkpoint:
+                self.elite_individuals = checkpoint['elite_individuals']
+                self.elite_fitness_scores = checkpoint['elite_fitness_scores']
+                print(f"Loaded {len(self.elite_individuals)} elite individuals")
+            
+            # Load adaptive sigma parameters if available
+            if 'sigma' in checkpoint:
+                self.sigma = checkpoint['sigma']
+            if 'stagnation_counter' in checkpoint:
+                self.stagnation_counter = checkpoint['stagnation_counter']
+            
             print(f"Loaded ES model from {actual_model_path}")
-            print(f"Generation: {self.generation}, Best Fitness: {self.best_fitness}")
+            print(f"Generation: {self.generation}, Best Fitness: {self.best_fitness}, Sigma: {self.sigma:.6f}")
         except Exception as e:
             print(f"Failed to load model: {e}")
             print("Starting with fresh model")
