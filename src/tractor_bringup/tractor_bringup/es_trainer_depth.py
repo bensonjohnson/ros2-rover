@@ -636,10 +636,12 @@ class EvolutionaryStrategyTrainer:
         if self.generation % save_frequency == 0 or self.generation == 1:  # Always save first generation
             self.save_model()
         
-        # Convert to RKNN periodically
-        if self.generation % 100 == 0:
+        # Convert to RKNN with adaptive frequency - more frequent early training
+        rknn_conversion_frequency = self._get_rknn_conversion_frequency()
+        if self.generation % rknn_conversion_frequency == 0:
             try:
                 self.convert_to_rknn()
+                print(f"[ES] RKNN model updated at generation {self.generation}")
             except Exception as e:
                 print(f"RKNN conversion failed: {e}")
         
@@ -805,6 +807,18 @@ class EvolutionaryStrategyTrainer:
         self.model.train()
         return action, float(confidence)
         
+    def _get_rknn_conversion_frequency(self) -> int:
+        """Determine RKNN conversion frequency based on training progress.
+        More frequent updates early when model might be poor."""
+        if self.generation <= 20:
+            return 5   # Very frequent early updates (every 5 generations)
+        elif self.generation <= 50:
+            return 10  # Frequent updates in early training
+        elif self.generation <= 100:
+            return 25  # Moderate frequency 
+        else:
+            return 100  # Standard frequency for mature training
+    
     def save_model(self):
         """Save PyTorch model and training state"""
         try:
