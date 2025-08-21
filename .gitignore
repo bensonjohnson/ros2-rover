@@ -37,3 +37,14 @@ __pycache__/
 # ROS2 specific
 *.bag
 *.bag.active
+
+# Model files
+models/
+*.onnx
+*.rknn
+*.pth
+*.pt
+*.h5
+*.pkl
+*.model
+*.bin
