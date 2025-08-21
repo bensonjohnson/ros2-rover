@@ -90,7 +90,7 @@ class EvolutionaryStrategyTrainer:
         # Adaptive evolution frequency
         self.base_evolution_frequency = 50  # Base frequency (every N steps)
         self.min_evolution_frequency = 25   # Minimum frequency (most frequent)
-        self.max_evolution_frequency = 100  # Maximum frequency (least frequent)
+        self.max_evolution_frequency = 300  # Maximum frequency (least frequent, mature model)
         self.current_evolution_frequency = self.base_evolution_frequency
         self.data_quality_window = 10  # Window to assess data quality
         self.recent_rewards = deque(maxlen=self.data_quality_window)
@@ -100,9 +100,9 @@ class EvolutionaryStrategyTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Optimize CPU threading for ES population evaluation on RK3588
-        # Use more threads in hybrid mode since NPU handles inference
-        torch.set_num_threads(8)  # RK3588 has 8 cores total
-        torch.set_num_interop_threads(4)  # Parallel operations
+        # Use fewer threads to leave cores available for real-time control
+        torch.set_num_threads(4)  # Use 4 cores, leave 4 for system/control
+        torch.set_num_interop_threads(2)  # Parallel operations
         
         self.model = DepthImageExplorationNet(stacked_frames=stacked_frames, extra_proprio=self.extra_proprio).to(self.device)
         
@@ -508,28 +508,28 @@ class EvolutionaryStrategyTrainer:
         # Low variance or negative trend = evolve less frequently (poor learning signal)
         
         if reward_variance > 5.0 or reward_trend > 1.0:
-            # Good learning signal - evolve more frequently
-            self.current_evolution_frequency = max(
-                self.min_evolution_frequency,
-                int(self.current_evolution_frequency * 0.9)
-            )
-            if self.enable_debug:
-                print(f"[ES] Increasing evolution frequency to {self.current_evolution_frequency} (good signal)")
-        elif reward_variance < 1.0 and reward_trend < -0.5:
-            # Poor learning signal - evolve less frequently
+            # Good learning signal - evolve less frequently (model is learning well, let it collect more experience)
             self.current_evolution_frequency = min(
                 self.max_evolution_frequency,
-                int(self.current_evolution_frequency * 1.1)
+                int(self.current_evolution_frequency * 1.2)
             )
             if self.enable_debug:
-                print(f"[ES] Decreasing evolution frequency to {self.current_evolution_frequency} (poor signal)")
-        
-        # Also consider stagnation
-        if self.stagnation_counter >= 3:
-            # Stagnating - try evolving more frequently
+                print(f"[ES] Decreasing evolution frequency to {self.current_evolution_frequency} (good signal, collecting more experience)")
+        elif reward_variance < 1.0 and reward_trend < -0.5:
+            # Poor learning signal - evolve more frequently (model needs more exploration)
             self.current_evolution_frequency = max(
                 self.min_evolution_frequency,
                 int(self.current_evolution_frequency * 0.8)
+            )
+            if self.enable_debug:
+                print(f"[ES] Increasing evolution frequency to {self.current_evolution_frequency} (poor signal, needs more exploration)")
+        
+        # Also consider stagnation
+        if self.stagnation_counter >= 3:
+            # Stagnating - try evolving more frequently to break out of local optimum
+            self.current_evolution_frequency = max(
+                self.min_evolution_frequency,
+                int(self.current_evolution_frequency * 0.7)
             )
             if self.enable_debug:
                 print(f"[ES] Stagnation detected, increasing evolution frequency to {self.current_evolution_frequency}")
