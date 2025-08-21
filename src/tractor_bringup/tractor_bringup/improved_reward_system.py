@@ -39,6 +39,7 @@ class ImprovedRewardCalculator:
             'base_movement_reward': 10.0,  # Increased to encourage any movement
             'forward_progress_bonus': 15.0,  # Increased to reward forward progress
             'exploration_bonus': 10.0,  # Combined exploration reward
+            'speed_magnitude_bonus': 20.0,  # NEW: Reward higher speeds to prevent tiny movements
             
             # Anti-spinning rewards and penalties
             'straight_line_bonus': 12.0,  # Reward for moving straight
@@ -183,6 +184,14 @@ class ImprovedRewardCalculator:
         # Goal-oriented bonus (reward consistent directional movement)
         if linear_speed > 0.05 and angular_speed < 0.3:  # Moving forward with minimal turning
             reward += self.reward_config['goal_oriented_bonus'] * linear_speed
+        
+        # Speed magnitude bonus (reward higher speeds to prevent tiny movements)
+        # Scale bonus based on linear speed with diminishing returns
+        if linear_speed > 0.03:  # Only for meaningful forward movement
+            # Quadratic reward for higher speeds, capped to prevent extreme values
+            speed_factor = min(linear_speed, 0.25)  # Cap at 0.25 m/s for reward calculation
+            speed_bonus = self.reward_config['speed_magnitude_bonus'] * (speed_factor ** 1.5)
+            reward += speed_bonus
         
         return reward
     

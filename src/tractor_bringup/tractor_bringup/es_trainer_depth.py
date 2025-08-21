@@ -295,12 +295,18 @@ class EvolutionaryStrategyTrainer:
             action_smoothness = -np.linalg.norm(action - last_action) * 2.0
             reward += action_smoothness
             
-        # Speed efficiency (not too slow, not too fast)
+        # Speed efficiency and magnitude bonus (encourage meaningful movement)
         speed = abs(action[0])
         if 0.05 < speed < 0.3:
             reward += 2.0
         elif speed < 0.02:
             reward -= 5.0  # Penalize being too slow
+            
+        # Speed magnitude bonus (reward higher speeds to prevent tiny movements)
+        if speed > 0.03:  # Only for meaningful movement
+            speed_factor = min(speed, 0.25)  # Cap at 0.25 m/s
+            speed_bonus = 15.0 * (speed_factor ** 1.5)  # Similar to improved reward system
+            reward += speed_bonus
             
         self.action_history.append(action)
         return reward
