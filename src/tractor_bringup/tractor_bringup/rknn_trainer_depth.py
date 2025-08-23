@@ -28,6 +28,13 @@ except ImportError:
     IMPROVED_REWARDS = False
     print("Improved reward system not available - using basic rewards")
 
+try:
+    from .bayesian_es_optimizer import BayesianTrainingOptimizer, TrainingHyperparameters
+    BAYESIAN_TRAINING_AVAILABLE = True
+except ImportError:
+    BAYESIAN_TRAINING_AVAILABLE = False
+    print("Bayesian training optimization not available - using fixed parameters")
+
 class DepthImageExplorationNet(nn.Module):
     """
     Neural network for depth image-based rover exploration
@@ -99,7 +106,8 @@ class RKNNTrainerDepth:
     Handles model training, data collection, and RKNN conversion for depth images
     """
     
-    def __init__(self, model_dir="models", stacked_frames: int = 1, enable_debug: bool = False):
+    def __init__(self, model_dir="models", stacked_frames: int = 1, enable_debug: bool = False, 
+                 enable_bayesian_training_optimization: bool = True):
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -110,6 +118,9 @@ class RKNNTrainerDepth:
         self.frame_stack: deque = deque(maxlen=stacked_frames)
         # Extended proprio feature count now: base(3) + extras(13) = 16 total features
         self.extra_proprio = 13  # updated to match 16-element proprio vector (3 base + 13 extras)
+        
+        # Bayesian training optimization setup
+        self.enable_bayesian_training_optimization = enable_bayesian_training_optimization and BAYESIAN_TRAINING_AVAILABLE
         
         # Training parameters to encourage forward movement and reduce spinning
         self.forward_movement_weight = 2.0  # Increase weight for forward movement actions (increased from 1.5)
@@ -180,6 +191,38 @@ class RKNNTrainerDepth:
         else:
             self.reward_calculator = None
             print("Using basic reward system")
+        
+        # Initialize Bayesian training optimization if available
+        if self.enable_bayesian_training_optimization:
+            # Extract current training parameters
+            current_training_params = TrainingHyperparameters(
+                learning_rate=0.001,  # Current Adam LR
+                batch_size=self.batch_size,
+                prioritized_replay_alpha=self.pr_alpha,
+                prioritized_replay_beta=self.pr_beta,
+                reward_clip_min=-30.0,  # Current reward clipping
+                reward_clip_max=30.0,
+                dropout_rate=0.3,  # Current dropout in network
+                weight_decay=1e-5,  # Current weight decay 
+                gradient_clip_norm=1.0  # Current gradient clipping
+            )
+            
+            self.bayesian_training_optimizer = BayesianTrainingOptimizer(
+                initial_params=current_training_params,
+                optimization_steps=20,
+                enable_debug=self.enable_debug
+            )
+            
+            # Training optimization state
+            self.training_optimization_interval = 250  # Optimize every N training steps
+            self.last_training_optimization_step = 0
+            self.current_training_params = current_training_params
+            self.training_fitness_history = deque(maxlen=50)  # Track recent performance
+            
+            print("✓ Bayesian training optimization enabled")
+        else:
+            self.bayesian_training_optimizer = None
+            print("✗ Bayesian training optimization disabled")
         
         # Initialize dataset.txt for quantization
         self.init_dataset_file()
@@ -420,6 +463,34 @@ class RKNNTrainerDepth:
                     print(f"RKNN export triggered (improved={improved}, force={force_due_interval}) median_loss={median_loss:.4f} avg_reward={avg_reward:.2f}")
             except Exception as e:
                 print(f"RKNN export attempt failed: {e}")
+        
+        # Bayesian training optimization
+        if self.bayesian_training_optimizer is not None:
+            # Calculate fitness score for current training parameters
+            fitness_score = self._calculate_training_fitness(loss.item(), avg_reward, median_loss)
+            self.training_fitness_history.append(fitness_score)
+            
+            # Check if it's time to optimize training parameters
+            if (self.training_step - self.last_training_optimization_step >= self.training_optimization_interval and 
+                len(self.training_fitness_history) >= 10):
+                
+                # Update Bayesian optimizer with recent performance
+                recent_fitness = np.mean(list(self.training_fitness_history)[-10:])
+                self.bayesian_training_optimizer.update_fitness(self.current_training_params, recent_fitness)
+                
+                # Get new training parameter suggestions
+                new_training_params = self.bayesian_training_optimizer.suggest_next_params()
+                self._apply_training_params(new_training_params)
+                
+                self.current_training_params = new_training_params
+                self.last_training_optimization_step = self.training_step
+                
+                if self.enable_debug:
+                    print(f"[BayesianTraining] Applied new training parameters at step {self.training_step}")
+                    print(f"[BayesianTraining] LR: {new_training_params.learning_rate:.6f}, "
+                          f"Batch: {new_training_params.batch_size}, "
+                          f"Dropout: {new_training_params.dropout_rate:.3f}")
+        
         return {
             "loss": loss.item(),
             "action_loss": float(per_sample_action_loss.mean().item()),
@@ -858,6 +929,84 @@ class RKNNTrainerDepth:
         except Exception as e:
             if self.enable_debug:
                 print(f"Failed to save quantization sample: {e}")
+
+    def _calculate_training_fitness(self, loss: float, avg_reward: float, median_loss: Optional[float]) -> float:
+        """Calculate a fitness score for the current training parameters based on performance metrics"""
+        
+        # Normalize components to similar scales
+        # Lower loss is better (invert)
+        loss_component = 1.0 / (1.0 + loss)  # Range: [0, 1], higher is better
+        
+        # Higher average reward is better  
+        reward_component = max(0.0, avg_reward / 50.0)  # Normalize assuming max reward ~50
+        
+        # Lower median loss is better (if available)
+        if median_loss is not None:
+            median_loss_component = 1.0 / (1.0 + median_loss)
+        else:
+            median_loss_component = loss_component
+        
+        # Weighted combination
+        fitness = (0.4 * loss_component + 
+                  0.4 * reward_component + 
+                  0.2 * median_loss_component)
+        
+        return fitness
+
+    def _apply_training_params(self, params: TrainingHyperparameters):
+        """Apply optimized training parameters to the model and training process"""
+        
+        try:
+            # Update optimizer learning rate
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = params.learning_rate
+                param_group['weight_decay'] = params.weight_decay
+            
+            # Update batch size (will take effect on next training call)
+            if params.batch_size != self.batch_size:
+                self.batch_size = params.batch_size
+                if self.enable_debug:
+                    print(f"[BayesianTraining] Updated batch size to {self.batch_size}")
+            
+            # Update prioritized replay parameters
+            self.pr_alpha = params.prioritized_replay_alpha
+            self.pr_beta = params.prioritized_replay_beta
+            
+            # Update reward clipping (will affect future reward calculations)
+            # Note: This would require integration with the reward system
+            
+            # Update neural network dropout rate (requires model modification)
+            # This would need to be applied when creating a new model or during forward pass
+            
+            if self.enable_debug:
+                print(f"[BayesianTraining] Applied training parameters:")
+                print(f"  Learning rate: {params.learning_rate:.6f}")
+                print(f"  Batch size: {params.batch_size}")  
+                print(f"  PR alpha: {params.prioritized_replay_alpha:.3f}")
+                print(f"  PR beta: {params.prioritized_replay_beta:.3f}")
+                print(f"  Weight decay: {params.weight_decay:.6f}")
+                
+        except Exception as e:
+            if self.enable_debug:
+                print(f"[BayesianTraining] Failed to apply training parameters: {e}")
+
+    def get_training_optimization_stats(self) -> Dict[str, float]:
+        """Get statistics about the Bayesian training optimization process"""
+        
+        if self.bayesian_training_optimizer is None:
+            return {"bayesian_training_optimization": "disabled"}
+        
+        stats = self.bayesian_training_optimizer.get_optimization_stats()
+        best_params, best_fitness = self.bayesian_training_optimizer.get_best_params()
+        
+        return {
+            **stats,
+            "best_learning_rate": best_params.learning_rate,
+            "best_batch_size": float(best_params.batch_size),
+            "best_dropout_rate": best_params.dropout_rate,
+            "steps_since_optimization": self.training_step - self.last_training_optimization_step,
+            "current_fitness": self.training_fitness_history[-1] if self.training_fitness_history else 0.0
+        }
 
     def safe_save(self):
         try:

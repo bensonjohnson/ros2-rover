@@ -24,6 +24,12 @@ echo "  • es_hybrid:     RKNN inference + ES training"
 echo "  • es_inference:  Pure RKNN inference with ES model"
 echo "  • safe_es_training: Anti-overtraining ES protection"
 echo ""
+echo "Optimization levels:"
+echo "  • basic:     Core performance and safety optimization"
+echo "  • standard:  Balanced multi-objective optimization (default)"
+echo "  • full:      Advanced optimization with efficiency metrics"
+echo "  • research:  Experimental features and maximum optimization"
+echo ""
 
 # Check if we're in the right directory
 if [ ! -f "install/setup.bash" ]; then
@@ -317,6 +323,11 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     safety_distance:=${SAFETY_DISTANCE} \
     anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     enable_bayesian_optimization:=$([[ "$MODE" == "es_training" || "$MODE" == "es_hybrid" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
+    optimization_level:=standard \
+    enable_training_optimization:=true \
+    enable_reward_optimization:=false \
+    enable_multi_metric_evaluation:=true \
+    enable_optimization_monitoring:=true \
     use_sim_time:=false &
 
 LAUNCH_PID=$!

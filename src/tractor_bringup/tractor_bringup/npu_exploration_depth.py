@@ -27,15 +27,22 @@ except ImportError as e:
 try:
     from .rknn_trainer_depth import RKNNTrainerDepth
     from .es_trainer_depth import EvolutionaryStrategyTrainer
+    from .multi_metric_evaluator import MultiMetricEvaluator, ObjectiveWeights
+    from .optimization_monitor import OptimizationMonitor
+    from .bayesian_reward_optimizer import AdaptiveBayesianRewardWrapper
     TRAINER_AVAILABLE = True
+    OPTIMIZATION_AVAILABLE = True
     print("RKNN Trainer successfully imported")
     print("ES Trainer successfully imported")
+    print("Optimization components successfully imported")
 except ImportError as e:
     TRAINER_AVAILABLE = False
-    print(f"RKNN/ES Trainer not available - using simple reactive navigation. Error: {e}")
+    OPTIMIZATION_AVAILABLE = False
+    print(f"RKNN/ES/Optimization components not available - using simple reactive navigation. Error: {e}")
 except Exception as e:
     TRAINER_AVAILABLE = False
-    print(f"RKNN/ES Trainer initialization failed - using simple reactive navigation. Error: {e}")
+    OPTIMIZATION_AVAILABLE = False
+    print(f"RKNN/ES/Optimization initialization failed - using simple reactive navigation. Error: {e}")
 
 class NPUExplorationDepthNode(Node):
     def __init__(self):
@@ -50,6 +57,11 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
         self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
+        self.declare_parameter('optimization_level', 'standard')  # basic | standard | full | research
+        self.declare_parameter('enable_training_optimization', True)  # Enable training parameter optimization
+        self.declare_parameter('enable_reward_optimization', False)  # Enable reward parameter optimization
+        self.declare_parameter('enable_multi_metric_evaluation', True)  # Enable multi-metric fitness evaluation
+        self.declare_parameter('enable_optimization_monitoring', True)  # Enable comprehensive monitoring
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -65,6 +77,11 @@ class NPUExplorationDepthNode(Node):
         self.operation_mode = self.get_parameter('operation_mode').value
         self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
         self.enable_bayesian_optimization = self.get_parameter('enable_bayesian_optimization').value
+        self.optimization_level = self.get_parameter('optimization_level').value
+        self.enable_training_optimization = self.get_parameter('enable_training_optimization').value
+        self.enable_reward_optimization = self.get_parameter('enable_reward_optimization').value
+        self.enable_multi_metric_evaluation = self.get_parameter('enable_multi_metric_evaluation').value
+        self.enable_optimization_monitoring = self.get_parameter('enable_optimization_monitoring').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -99,6 +116,9 @@ class NPUExplorationDepthNode(Node):
         
         # Initialize NPU or fallback
         self.init_inference_engine()
+        
+        # Initialize optimization components
+        self.init_optimization_components()
         
         # ROS2 interfaces
         self.depth_sub = self.create_subscription(
@@ -137,6 +157,11 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  NPU Available: {RKNN_AVAILABLE}")
         self.get_logger().info(f"  Inference target rate: {self.inference_rate} Hz")
         self.get_logger().info(f"  Operation Mode: {self.operation_mode}")
+        self.get_logger().info(f"  Optimization Level: {self.optimization_level}")
+        self.get_logger().info(f"  Training Opt: {self.enable_training_optimization}")
+        self.get_logger().info(f"  Reward Opt: {self.enable_reward_optimization}")
+        self.get_logger().info(f"  Multi-Metric: {self.enable_multi_metric_evaluation}")
+        self.get_logger().info(f"  Monitoring: {self.enable_optimization_monitoring}")
         
         self.angular_scale = 0.8  # reduced from 2.0 to lessen spin dominance
         self.spin_penalty = 3.0
@@ -187,9 +212,14 @@ class NPUExplorationDepthNode(Node):
                     bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
                     self.get_logger().info(f"ES Trainer initialized {bayesian_status}")
                 else:
-                    # Use Reinforcement Learning trainer
-                    self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)
-                    self.get_logger().info("RKNN Trainer initialized")
+                    # Use Reinforcement Learning trainer with Bayesian training optimization
+                    self.trainer = RKNNTrainerDepth(
+                        stacked_frames=self.stacked_frames, 
+                        enable_debug=enable_debug,
+                        enable_bayesian_training_optimization=self.enable_training_optimization
+                    )
+                    training_opt_status = "with Bayesian training optimization" if self.enable_training_optimization else "with fixed training parameters"
+                    self.get_logger().info(f"RKNN Trainer initialized {training_opt_status}")
                 
                 if mode == 'cpu_training':
                     # Training on CPU only; no RKNN runtime inference
@@ -249,6 +279,73 @@ class NPUExplorationDepthNode(Node):
                 self.get_logger().warn(f"Trainer init failed: {e}")
         else:
             self.get_logger().info("Trainer not available")
+            
+    def init_optimization_components(self):
+        """Initialize advanced optimization components based on configuration level"""
+        
+        # Initialize optimization components based on availability and settings
+        self.multi_metric_evaluator = None
+        self.optimization_monitor = None
+        self.bayesian_reward_wrapper = None
+        
+        if not OPTIMIZATION_AVAILABLE:
+            self.get_logger().info("Optimization components not available")
+            return
+            
+        try:
+            # Initialize multi-metric evaluator
+            if self.enable_multi_metric_evaluation:
+                # Set objective weights based on optimization level
+                if self.optimization_level == 'basic':
+                    weights = ObjectiveWeights(performance=0.6, safety=0.4, efficiency=0.0, robustness=0.0)
+                elif self.optimization_level == 'standard':
+                    weights = ObjectiveWeights(performance=0.4, safety=0.3, efficiency=0.2, robustness=0.1)
+                elif self.optimization_level == 'full':
+                    weights = ObjectiveWeights(performance=0.3, safety=0.3, efficiency=0.25, robustness=0.15)
+                elif self.optimization_level == 'research':
+                    weights = ObjectiveWeights(performance=0.25, safety=0.25, efficiency=0.25, robustness=0.25)
+                else:
+                    weights = ObjectiveWeights()  # Default
+                
+                self.multi_metric_evaluator = MultiMetricEvaluator(
+                    evaluation_window=200,
+                    enable_debug=False,  # Disable debug to reduce log noise
+                    objective_weights=weights
+                )
+                self.get_logger().info(f"Multi-metric evaluator initialized with {self.optimization_level} level weights")
+            
+            # Initialize optimization monitoring
+            if self.enable_optimization_monitoring:
+                self.optimization_monitor = OptimizationMonitor(
+                    log_dir="logs/optimization",
+                    enable_visualization=False,  # Disable visualization on robot
+                    enable_debug=False
+                )
+                self.get_logger().info("Optimization monitoring initialized")
+            
+            # Initialize reward parameter optimization wrapper
+            if self.enable_reward_optimization and hasattr(self.trainer, 'reward_calculator') and self.trainer.reward_calculator is not None:
+                self.bayesian_reward_wrapper = AdaptiveBayesianRewardWrapper(
+                    reward_calculator=self.trainer.reward_calculator,
+                    optimization_interval=500,  # Every 500 training steps
+                    min_observations=5,
+                    enable_debug=False
+                )
+                self.get_logger().info("Bayesian reward optimization wrapper initialized")
+            
+            # Configure trainer with Bayesian training optimization if available
+            if self.enable_training_optimization and hasattr(self.trainer, 'enable_bayesian_training_optimization'):
+                # This was already set in trainer initialization
+                self.get_logger().info("Bayesian training optimization enabled in trainer")
+            
+            self.get_logger().info(f"Optimization components initialized for {self.optimization_level} level")
+            
+        except Exception as e:
+            self.get_logger().warn(f"Optimization component initialization failed: {e}")
+            # Disable optimization components to prevent crashes
+            self.multi_metric_evaluator = None
+            self.optimization_monitor = None
+            self.bayesian_reward_wrapper = None
             
     def depth_callback(self, msg):
         """Process depth image and update internal state"""
@@ -439,6 +536,61 @@ class NPUExplorationDepthNode(Node):
                 cmd.angular.z = 0.0
                 self.exploration_mode = "WAITING_FOR_NPU"
                 self.last_action = np.array([0.0, 0.0])
+        
+        # Update multi-metric evaluation
+        if self.multi_metric_evaluator and self.step_count % 10 == 0:  # Every 10 steps
+            try:
+                # Calculate current reward (simplified)
+                current_reward = 0.0
+                if hasattr(self, 'last_action') and len(self.last_action) > 0:
+                    # Simple reward: forward movement good, collision bad
+                    current_reward = self.last_action[0] * 5.0  # Forward motion bonus
+                    if self.collision_detected:
+                        current_reward -= 20.0  # Collision penalty
+                
+                # Update multi-metric evaluator
+                self.multi_metric_evaluator.update_metrics(
+                    reward=current_reward,
+                    position=self.position,
+                    action=self.last_action if hasattr(self, 'last_action') else np.array([0.0, 0.0]),
+                    collision=self.collision_detected,
+                    near_collision=emergency_stop and not self.collision_detected,
+                    safety_margin=min_d if 'min_d' in locals() else 1.0,
+                    energy_used=abs(self.last_action[0]) + abs(self.last_action[1]) if hasattr(self, 'last_action') else 0.0,
+                    training_loss=None  # Would be filled in during training
+                )
+                
+                # Calculate comprehensive fitness every 100 steps
+                if self.step_count % 100 == 0:
+                    overall_fitness, metrics, objective_scores = self.multi_metric_evaluator.calculate_comprehensive_fitness()
+                    
+                    # Log multi-metric evaluation
+                    if self.optimization_monitor:
+                        detailed_metrics = {
+                            'avg_reward': metrics.avg_reward,
+                            'exploration_coverage': metrics.exploration_coverage,
+                            'collision_rate': metrics.collision_rate,
+                            'behavioral_diversity': metrics.behavioral_diversity,
+                            'movement_efficiency': metrics.movement_efficiency
+                        }
+                        self.optimization_monitor.log_multi_metric_evaluation(
+                            step=self.step_count,
+                            overall_fitness=overall_fitness,
+                            objective_scores=objective_scores,
+                            detailed_metrics=detailed_metrics
+                        )
+                    
+                    # Optional: Log summary periodically
+                    if self.step_count % 500 == 0:
+                        self.get_logger().info(f"Multi-Metric Fitness: {overall_fitness:.3f} "
+                                             f"(P:{objective_scores.get('performance', 0):.2f} "
+                                             f"S:{objective_scores.get('safety', 0):.2f} "
+                                             f"E:{objective_scores.get('efficiency', 0):.2f} "
+                                             f"R:{objective_scores.get('robustness', 0):.2f})")
+                        
+            except Exception as e:
+                self.get_logger().warn(f"Multi-metric evaluation failed: {e}")
+        
         return cmd
         
     def check_emergency_collision(self):
@@ -711,12 +863,48 @@ class NPUExplorationDepthNode(Node):
                     training_stats = self.trainer.evolve_population()
                     if self.step_count % 250 == 0:
                         self.get_logger().info(f"ES Training: Gen={training_stats.get('generation',0)} AvgFit={training_stats.get('avg_fitness',0):.4f} BestFit={training_stats.get('best_fitness',0):.4f} Samples={training_stats.get('samples',0)}")
+                    
+                    # Update optimization monitoring for ES
+                    if self.optimization_monitor:
+                        self.optimization_monitor.log_es_optimization(
+                            generation=training_stats.get('generation', 0),
+                            fitness_score=training_stats.get('best_fitness', 0),
+                            best_params=training_stats.get('best_params', {}),
+                            population_stats=training_stats
+                        )
             else:
                 # For RL, we train every step
                 if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
                     training_stats = self.trainer.train_step()
                     if self.step_count % 50 == 0 and 'loss' in training_stats:
                         self.get_logger().info(f"RL Training: Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
+                        
+                        # Update optimization monitoring for training parameters
+                        if self.optimization_monitor and hasattr(self.trainer, 'get_training_optimization_stats'):
+                            train_opt_stats = self.trainer.get_training_optimization_stats()
+                            if train_opt_stats.get('bayesian_training_optimization') != 'disabled':
+                                self.optimization_monitor.log_training_optimization(
+                                    step=self.step_count,
+                                    fitness_score=train_opt_stats.get('current_fitness', 0),
+                                    best_params={
+                                        'learning_rate': train_opt_stats.get('best_learning_rate', 0),
+                                        'batch_size': train_opt_stats.get('best_batch_size', 0),
+                                        'dropout_rate': train_opt_stats.get('best_dropout_rate', 0)
+                                    },
+                                    training_stats=training_stats
+                                )
+                        
+                        # Update reward parameter optimization
+                        if self.bayesian_reward_wrapper:
+                            performance_metrics = {
+                                'avg_reward': training_stats.get('avg_reward', 0),
+                                'behavioral_diversity': 0.5,  # Would need to calculate this
+                                'collision_rate': 0.1 if self.collision_detected else 0.0,
+                                'exploration_progress': min(1.0, self.step_count / 1000.0)
+                            }
+                            self.bayesian_reward_wrapper.apply_bayesian_optimization(
+                                self.step_count, performance_metrics
+                            )
             self.prev_position = self.position.copy()
             self.prev_depth_image = self.latest_depth_image.copy()
         except Exception as e:
@@ -739,6 +927,21 @@ class NPUExplorationDepthNode(Node):
         self.cmd_pub.publish(cmd)
         if self.trainer:
             self.trainer.safe_save()
+        
+        # Cleanup optimization components
+        if self.optimization_monitor:
+            try:
+                final_report = self.optimization_monitor.cleanup()
+                self.get_logger().info(f"Optimization monitoring final report: {final_report}")
+            except Exception as e:
+                self.get_logger().warn(f"Optimization monitor cleanup failed: {e}")
+        
+        if self.multi_metric_evaluator and self.step_count > 100:
+            try:
+                final_metrics = self.multi_metric_evaluator.get_current_metrics_summary()
+                self.get_logger().info(f"Final multi-metric summary: {final_metrics}")
+            except Exception as e:
+                self.get_logger().warn(f"Multi-metric final summary failed: {e}")
         
     def publish_status(self):
         """Publish exploration status"""
