@@ -49,6 +49,7 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('stacked_frames', 1)
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
+        self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -63,6 +64,7 @@ class NPUExplorationDepthNode(Node):
         self.stacked_frames = self.get_parameter('stacked_frames').value
         self.operation_mode = self.get_parameter('operation_mode').value
         self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
+        self.enable_bayesian_optimization = self.get_parameter('enable_bayesian_optimization').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -172,16 +174,18 @@ class NPUExplorationDepthNode(Node):
                 
                 # Initialize appropriate trainer based on mode
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
-                    # Use Evolutionary Strategy trainer
+                    # Use Evolutionary Strategy trainer with Bayesian optimization
                     self.trainer = EvolutionaryStrategyTrainer(
                         model_dir="models",  # Explicitly set model directory
                         stacked_frames=self.stacked_frames, 
                         enable_debug=enable_debug,
                         population_size=10,
                         sigma=0.1,
-                        learning_rate=0.01
+                        learning_rate=0.01,
+                        enable_bayesian_optimization=self.enable_bayesian_optimization
                     )
-                    self.get_logger().info("ES Trainer initialized")
+                    bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
+                    self.get_logger().info(f"ES Trainer initialized {bayesian_status}")
                 else:
                     # Use Reinforcement Learning trainer
                     self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)

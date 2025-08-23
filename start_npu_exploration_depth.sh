@@ -270,10 +270,10 @@ case "$MODE" in
   "cpu_training") echo "    → Standard PyTorch RL training" ;;
   "hybrid") echo "    → RKNN inference + RL training" ;;
   "inference") echo "    → Pure RKNN inference only" ;;
-  "es_training") echo "    → Evolutionary Strategy training" ;;
-  "es_hybrid") echo "    → RKNN inference + ES training" ;;
+  "es_training") echo "    → Evolutionary Strategy training with Bayesian optimization" ;;
+  "es_hybrid") echo "    → RKNN inference + ES training with Bayesian optimization" ;;
   "es_inference") echo "    → Pure RKNN inference with ES model" ;;
-  "safe_es_training") echo "    → Anti-overtraining ES protection ENABLED" ;;
+  "safe_es_training") echo "    → Anti-overtraining ES protection + Bayesian optimization ENABLED" ;;
   *) echo "    → Custom mode selected" ;;
 esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
@@ -316,6 +316,7 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \
     anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
+    enable_bayesian_optimization:=$([[ "$MODE" == "es_training" || "$MODE" == "es_hybrid" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     use_sim_time:=false &
 
 LAUNCH_PID=$!

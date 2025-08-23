@@ -24,6 +24,7 @@ def generate_launch_description():
     operation_mode = LaunchConfiguration("operation_mode")
     anti_overtraining = LaunchConfiguration("anti_overtraining")
     exploration_time = LaunchConfiguration("exploration_time")
+    enable_bayesian_optimization = LaunchConfiguration("enable_bayesian_optimization")
 
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
@@ -59,6 +60,12 @@ def generate_launch_description():
         "exploration_time",
         default_value="300",
         description="Maximum exploration time in seconds",
+    )
+
+    declare_bayesian_optimization_cmd = DeclareLaunchArgument(
+        "enable_bayesian_optimization",
+        default_value="true",
+        description="Enable Bayesian optimization for ES hyperparameters (true/false)",
     )
 
     # 1. Robot Description (TF only)
@@ -116,6 +123,7 @@ def generate_launch_description():
                 "operation_mode": LaunchConfiguration("operation_mode"),
                 "anti_overtraining": LaunchConfiguration("anti_overtraining"),
                 "exploration_time": LaunchConfiguration("exploration_time"),
+                "enable_bayesian_optimization": LaunchConfiguration("enable_bayesian_optimization"),
             }
         ],
         remappings=[
@@ -172,6 +180,7 @@ def generate_launch_description():
     ld.add_action(declare_operation_mode_cmd)
     ld.add_action(declare_anti_overtraining_cmd)
     ld.add_action(declare_exploration_time_cmd)
+    ld.add_action(declare_bayesian_optimization_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)

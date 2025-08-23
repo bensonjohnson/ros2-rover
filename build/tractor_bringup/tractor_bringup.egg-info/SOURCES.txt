@@ -23,6 +23,7 @@ resource/tractor_bringup
 tractor_bringup/__init__.py
 tractor_bringup/anti_overtraining_config.py
 tractor_bringup/autonomous_mapping.py
+tractor_bringup/bayesian_es_optimizer.py
 tractor_bringup/es_trainer_depth.py
 tractor_bringup/example_usage.py
 tractor_bringup/frontier_explorer.py
