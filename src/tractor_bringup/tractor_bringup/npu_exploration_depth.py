@@ -27,9 +27,11 @@ except ImportError as e:
 try:
     from .rknn_trainer_depth import RKNNTrainerDepth
     from .es_trainer_depth import EvolutionaryStrategyTrainer
+    from .enhanced_es_trainer import MultiObjectiveESTrainer
     TRAINER_AVAILABLE = True
     print("RKNN Trainer successfully imported")
-    print("ES Trainer successfully imported")
+    print("ES Trainer successfully imported") 
+    print("Enhanced ES Trainer successfully imported")
 except ImportError as e:
     TRAINER_AVAILABLE = False
     print(f"RKNN/ES Trainer not available - using simple reactive navigation. Error: {e}")
@@ -50,6 +52,8 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
         self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
+        self.declare_parameter('use_enhanced_es', True)  # Use enhanced multi-objective ES trainer
+        self.declare_parameter('performance_mode', 'balanced')  # Network performance mode
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -65,6 +69,8 @@ class NPUExplorationDepthNode(Node):
         self.operation_mode = self.get_parameter('operation_mode').value
         self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
         self.enable_bayesian_optimization = self.get_parameter('enable_bayesian_optimization').value
+        self.use_enhanced_es = self.get_parameter('use_enhanced_es').value
+        self.performance_mode = self.get_parameter('performance_mode').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -174,18 +180,33 @@ class NPUExplorationDepthNode(Node):
                 
                 # Initialize appropriate trainer based on mode
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
-                    # Use Evolutionary Strategy trainer with Bayesian optimization
-                    self.trainer = EvolutionaryStrategyTrainer(
-                        model_dir="models",  # Explicitly set model directory
-                        stacked_frames=self.stacked_frames, 
-                        enable_debug=enable_debug,
-                        population_size=10,
-                        sigma=0.1,
-                        learning_rate=0.01,
-                        enable_bayesian_optimization=self.enable_bayesian_optimization
-                    )
-                    bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
-                    self.get_logger().info(f"ES Trainer initialized {bayesian_status}")
+                    # Choose between enhanced and standard ES trainer
+                    if self.use_enhanced_es:
+                        # Use Enhanced Multi-Objective ES trainer
+                        self.trainer = MultiObjectiveESTrainer(
+                            model_dir="models",
+                            stacked_frames=self.stacked_frames,
+                            enable_debug=enable_debug,
+                            population_size=15,  # Larger for better performance
+                            sigma=0.08,          # Slightly reduced for stability
+                            learning_rate=0.015,  # Slightly increased
+                            enable_bayesian_optimization=self.enable_bayesian_optimization,
+                            performance_mode=self.performance_mode
+                        )
+                        self.get_logger().info(f"Enhanced Multi-Objective ES Trainer initialized (performance_mode: {self.performance_mode})")
+                    else:
+                        # Use Standard ES trainer
+                        self.trainer = EvolutionaryStrategyTrainer(
+                            model_dir="models",
+                            stacked_frames=self.stacked_frames, 
+                            enable_debug=enable_debug,
+                            population_size=10,
+                            sigma=0.1,
+                            learning_rate=0.01,
+                            enable_bayesian_optimization=self.enable_bayesian_optimization
+                        )
+                        bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
+                        self.get_logger().info(f"Standard ES Trainer initialized {bayesian_status}")
                 else:
                     # Use Reinforcement Learning trainer
                     self.trainer = RKNNTrainerDepth(stacked_frames=self.stacked_frames, enable_debug=enable_debug)
