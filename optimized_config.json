@@ -1,0 +1,36 @@
+{
+  "network_mode": "balanced",
+  "width_multiplier": 1.0,
+  "enable_temporal": false,
+  "stacked_frames": 1,
+  "population_size": 18,
+  "sigma": 0.1,
+  "learning_rate": 0.015,
+  "evolution_frequency": 50,
+  "elite_ratio": 0.25,
+  "exploration_weight": 0.45,
+  "efficiency_weight": 0.25,
+  "safety_weight": 0.2,
+  "smoothness_weight": 0.1,
+  "reward_mode": "exploration",
+  "enable_curiosity": true,
+  "enable_adaptive_scaling": true,
+  "curriculum_learning": true,
+  "target_fps": 30.0,
+  "max_inference_latency": 33.0,
+  "enable_dynamic_inference": true,
+  "cpu_threads": 6,
+  "npu_optimization": true,
+  "quantization_enabled": true,
+  "optimization_metadata": {
+    "optimization_date": "2025-08-23 05:05:20",
+    "hardware_info": {
+      "cpu_cores": 4,
+      "has_npu": false,
+      "memory_gb": 15.620681762695312,
+      "platform": "rk3588"
+    },
+    "performance_score": 7.047253901003406,
+    "optimization_iterations": 0
+  }
+}
