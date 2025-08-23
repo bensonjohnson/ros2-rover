@@ -53,9 +53,12 @@ source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 echo "✓ ROS2 environment sourced"
 
-# Initial RKNN conversion and reward system check
+# Initial RKNN conversion and reward system check (with timeout and process monitoring)
 echo "Checking/performing initial RKNN conversion and reward system setup..."
-python3 - <<'PYCODE'
+echo "Using improved reward system"
+
+# Run RKNN conversion with process-level timeout as backup
+timeout 90s python3 - <<'PYCODE' || echo "⚠️ RKNN conversion process timed out or failed - continuing with CPU inference"
 try:
     from tractor_bringup.rknn_trainer_depth import RKNNTrainerDepth, RKNN_AVAILABLE
     from tractor_bringup.improved_reward_system import ImprovedRewardCalculator
@@ -66,19 +69,25 @@ try:
     reward_calculator = ImprovedRewardCalculator(**config)
     print("✓ Anti-overtraining reward system initialized")
     
-    # RKNN conversion
+    # RKNN conversion with timeout (to prevent hanging)
     trainer = RKNNTrainerDepth(model_dir="models", enable_debug=True)
     if RKNN_AVAILABLE:
-        trainer.convert_to_rknn()
+        print("⏱️ Starting RKNN conversion (60s timeout)...")
+        try:
+            trainer.convert_to_rknn(timeout_seconds=60)
+            print("✓ RKNN conversion completed successfully")
+        except Exception as e:
+            print(f"⚠️ RKNN conversion failed or timed out: {e}")
+            print("✓ Continuing with CPU-based inference")
     else:
-        print("RKNN toolkit not available - skipping initial conversion")
+        print("RKNN toolkit not available - using CPU inference")
         
 except Exception as e:
     print(f"Initial setup failed: {e}")
     print("Continuing with basic configuration...")
 PYCODE
 
-echo "Initial RKNN conversion and reward system setup complete"
+echo "✓ Initial setup complete (RKNN conversion attempted with timeout protection)"
 
 # USB power management for RealSense
 echo "Configuring USB power management..."

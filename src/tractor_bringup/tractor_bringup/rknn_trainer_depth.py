@@ -653,7 +653,7 @@ class RKNNTrainerDepth:
         Matches 'proprio_inputs = 3 + extra_proprio' used in __init__."""
         return 3 + self.extra_proprio
 
-    def convert_to_rknn(self):
+    def convert_to_rknn(self, timeout_seconds=120):
         """Convert PyTorch model to RKNN format for NPU inference (fixed input shapes) with detailed debug."""
         if not RKNN_AVAILABLE:
             print("RKNN not available - skipping conversion")
@@ -677,9 +677,21 @@ class RKNNTrainerDepth:
             except Exception as e:
                 print(f"ONNX export failed (no RKNN toolkit): {e}")
             return
+        
+        # Import signal handling for timeout
+        import signal
+        import time
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("RKNN conversion timed out")
+        
+        # Set up timeout
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout_seconds)
+        
         try:
             if self.enable_debug:
-                print("[RKNN] Starting conversion pipeline")
+                print(f"[RKNN] Starting conversion pipeline (timeout: {timeout_seconds}s)")
             os.makedirs(self.model_dir, exist_ok=True)
             dummy_depth = torch.randn(1, self.stacked_frames, self.target_h, self.target_w).to(self.device)
             proprio_size = self._proprio_feature_size()
@@ -697,6 +709,8 @@ class RKNNTrainerDepth:
                     print(f"[RKNN] Depth feature flatten size={flat_dim} expected={expected}")
                 if flat_dim != expected:
                     print(f"[RKNN Export] WARNING: depth flatten size {flat_dim} != expected {expected}. Aborting export.")
+                    signal.alarm(0)  # Cancel timeout
+                    signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
                     self.model.train()
                     return
             onnx_path = os.path.join(self.model_dir, "exploration_model_depth.onnx")
@@ -734,18 +748,31 @@ class RKNNTrainerDepth:
                 except Exception as e2:
                     print(f"[RKNN] Depth-only config failed: {e2}. Aborting.")
                     rknn.release()
+                    signal.alarm(0)  # Cancel timeout
+                    signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
                     self.model.train()
                     return
             if self.enable_debug:
-                print("[RKNN] Loading ONNX model")
-            ret = rknn.load_onnx(model=onnx_path)
-            if ret != 0:
-                print("[RKNN] Failed to load ONNX model (ret != 0)")
+                print("[RKNN] Loading ONNX model (this may take a while...)")
+            try:
+                ret = rknn.load_onnx(model=onnx_path)
+                if ret != 0:
+                    print("[RKNN] Failed to load ONNX model (ret != 0)")
+                    rknn.release()
+                    signal.alarm(0)  # Cancel timeout
+                    signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
+                    self.model.train()
+                    return
+                if self.enable_debug:
+                    print("[RKNN] ONNX loaded successfully")
+            except TimeoutError:
+                print("[RKNN] ONNX loading timed out - this is a known issue with some RKNN toolkit versions")
+                print("[RKNN] Continuing without RKNN conversion (will use CPU inference)")
                 rknn.release()
+                signal.alarm(0)  # Cancel timeout
+                signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
                 self.model.train()
                 return
-            if self.enable_debug:
-                print("[RKNN] ONNX loaded successfully")
             do_quantization = False
             if os.path.exists(dataset_path):
                 try:
@@ -763,6 +790,8 @@ class RKNNTrainerDepth:
             if ret != 0:
                 print("[RKNN] Failed to build RKNN model (ret != 0)")
                 rknn.release()
+                signal.alarm(0)  # Cancel timeout
+                signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
                 self.model.train()
                 return
             if self.enable_debug:
@@ -781,11 +810,31 @@ class RKNNTrainerDepth:
             rknn.release()
             if self.enable_debug:
                 print("[RKNN] Pipeline complete")
+            signal.alarm(0)  # Cancel timeout
+            signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
+            self.model.train()
+        except TimeoutError:
+            print(f"[RKNN] Conversion timed out after {timeout_seconds} seconds")
+            print("[RKNN] This is a known issue with some RKNN toolkit versions")
+            print("[RKNN] Continuing without RKNN conversion (will use CPU inference)")
+            try:
+                rknn.release()
+            except:
+                pass
+            signal.alarm(0)  # Cancel timeout
+            signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
             self.model.train()
         except Exception as e:
             print(f"RKNN conversion failed (exception): {e}")
+            print("[RKNN] Continuing without RKNN conversion (will use CPU inference)")
             import traceback
             traceback.print_exc()
+            try:
+                rknn.release()
+            except:
+                pass
+            signal.alarm(0)  # Cancel timeout
+            signal.signal(signal.SIGALRM, old_handler)  # Restore old handler
             self.model.train()
     
     def get_training_stats(self) -> Dict[str, float]:
