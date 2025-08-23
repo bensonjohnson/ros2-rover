@@ -25,7 +25,22 @@ try:
     IMPROVED_REWARDS = True
 except ImportError:
     IMPROVED_REWARDS = False
-    print("Improved reward system not available - using basic rewards")
+
+try:
+    from .adaptive_reward_system import CuriosityDrivenRewardCalculator, create_adaptive_reward_calculator
+    ADAPTIVE_REWARDS = True
+    print("✓ Enhanced adaptive reward system available")
+except ImportError:
+    ADAPTIVE_REWARDS = False
+    print("⚠ Adaptive reward system not available - using basic rewards")
+
+try:
+    from .enhanced_es_trainer import MultiObjectiveESTrainer
+    ENHANCED_ES_AVAILABLE = True
+    print("✓ Enhanced ES trainer available")
+except ImportError:
+    ENHANCED_ES_AVAILABLE = False
+    print("⚠ Enhanced ES trainer not available - using standard ES")
 
 try:
     from .bayesian_es_optimizer import AdaptiveBayesianESWrapper
@@ -137,13 +152,21 @@ class EvolutionaryStrategyTrainer:
         self.target_dataset_samples = 100  # Number of samples to collect for quantization
         self.dataset_collection_interval = 50  # Collect every N training steps
         
-        # Initialize improved reward calculator if available
-        if IMPROVED_REWARDS:
+        # Initialize reward calculator with priority: adaptive > improved > basic
+        if ADAPTIVE_REWARDS:
+            self.reward_calculator = create_adaptive_reward_calculator(
+                mode="balanced", 
+                enable_curiosity=True,
+                enable_adaptive_scaling=True,
+                enable_diversity_rewards=True
+            )
+            print("✓ Using adaptive curiosity-driven reward system")
+        elif IMPROVED_REWARDS:
             self.reward_calculator = ImprovedRewardCalculator()
-            print("Using improved reward system")
+            print("✓ Using improved reward system")
         else:
             self.reward_calculator = None
-            print("Using basic reward system")
+            print("⚠ Using basic reward system")
         
         # Initialize Bayesian optimization for ES hyperparameters
         self.bayesian_es_wrapper = None
