@@ -1,0 +1,24 @@
+# Requirements for local development and testing of simulation system
+# Note: For actual training, use the Docker container which has all dependencies
+
+# Core dependencies
+pybullet>=3.2.5
+numpy>=1.21.0
+opencv-python>=4.5.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+
+# For testing and development
+pytest>=6.2.0
+jupyter>=1.0.0
+notebook>=6.4.0
+
+# Web dashboard
+flask>=2.0.0
+requests>=2.25.0
+
+# Progress tracking
+tqdm>=4.62.0
+
+# For documentation
+sphinx>=4.0.0

@@ -1,0 +1,110 @@
+# ROCm-enabled PyTorch Dockerfile for ES Training Simulation
+# Based on ROCm 6.4.1 with PyTorch and PyBullet support
+
+FROM rocm/pytorch:latest
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies and ROS2 repository
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    pkg-config \
+    libx11-dev \
+    libxext-dev \
+    libxmu-dev \
+    libxi-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    libglu1-mesa-dev \
+    libglx-mesa0 \
+    libglew-dev \
+    libosmesa6-dev \
+    libbullet-dev \
+    libeigen3-dev \
+    libopencv-dev \
+    python3-opencv \
+    python3-pip \
+    python3-dev \
+    git \
+    wget \
+    curl \
+    sudo \
+    xvfb \
+    x11vnc \
+    fluxbox \
+    net-tools \
+    x11-xserver-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add ROS2 repository
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository universe \
+    && apt update && apt install -y curl \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null \
+    && apt-get update
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    pybullet \
+    opencv-python \
+    "numpy<2.0.0" \
+    scipy \
+    matplotlib \
+    pandas \
+    scikit-learn \
+    tqdm \
+    tensorboard \
+    gymnasium \
+    pygame
+
+# Install ROS2 dependencies
+RUN apt-get update && apt-get install -y \
+    ros-jazzy-ros-base \
+    ros-jazzy-rclpy \
+    ros-jazzy-std-msgs \
+    ros-jazzy-sensor-msgs \
+    ros-jazzy-geometry-msgs \
+    ros-jazzy-nav-msgs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up ROCm permissions
+RUN mkdir -p /etc/udev/rules.d && \
+    echo 'SUBSYSTEM=="kfd", KERNEL=="kfd", TAG+="uaccess"' > /etc/udev/rules.d/70-kfd.rules && \
+    echo 'SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"' > /etc/udev/rules.d/70-drm.rules
+
+# Create non-root user
+RUN useradd -m -s /bin/bash developer && \
+    echo "developer ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy simulation code
+COPY src/tractor_simulation /workspace/src/tractor_simulation
+COPY src/tractor_bringup /workspace/src/tractor_bringup
+
+# Install build tools
+RUN apt-get update && apt-get install -y \
+    python3-colcon-common-extensions \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build ROS2 packages
+RUN /bin/bash -c "source /opt/ros/jazzy/setup.bash && \
+    colcon build --packages-select tractor_bringup tractor_simulation"
+
+# Create models directory with proper permissions
+RUN mkdir -p /workspace/models/simulation && \
+    chown -R developer:developer /workspace/models
+
+# Switch to non-root user
+USER developer
+
+# Source ROS2 environment and workspace
+ENV ROS_DISTRO=jazzy
+RUN echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
+RUN echo "source /workspace/install/setup.bash" >> ~/.bashrc

@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # Main simulation service with PyBullet and visualization
+  simulation:
+    build:
+      context: .
+      dockerfile: Dockerfile.pytorch-rocm
+    container_name: tractor-simulation
+    runtime: rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    environment:
+      - DISPLAY=${DISPLAY}
+      - LIBGL_ALWAYS_INDIRECT=0
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - ROC_ENABLE_PRE_VEGA=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./models:/workspace/models
+      - ./logs:/workspace/logs
+      - ./sim_data:/workspace/sim_data
+    ports:
+      - "6006:6006"  # TensorBoard
+      - "8888:8888"  # Jupyter Notebook (if needed)
+    networks:
+      - simulation-net
+    stdin_open: true
+    tty: true
+    privileged: true
+    command: >
+      bash -c "
+        export DISPLAY=$$DISPLAY &&
+        cd /workspace &&
+        python src/tractor_simulation/tractor_simulation/bullet_simulation.py
+      "
+
+  # Headless training service (if needed for separate training)
+  training:
+    build:
+      context: .
+      dockerfile: Dockerfile.pytorch-rocm
+    container_name: tractor-training
+    runtime: rocm
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    environment:
+      - ROC_ENABLE_PRE_VEGA=1
+    volumes:
+      - ./models:/workspace/models
+      - ./logs:/workspace/logs
+      - ./sim_data:/workspace/sim_data
+    networks:
+      - simulation-net
+    stdin_open: true
+    tty: true
+    command: >
+      bash -c "
+        cd /workspace &&
+        echo 'Training service ready. Run ES training scripts here.'
+      "
+
+  # Web-based visualization dashboard
+  dashboard:
+    image: node:18-alpine
+    container_name: tractor-dashboard
+    volumes:
+      - ./dashboard:/app
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    networks:
+      - simulation-net
+    command: >
+      sh -c "
+        npm install -g http-server &&
+        http-server -p 3000
+      "
+
+networks:
+  simulation-net:
+    driver: bridge

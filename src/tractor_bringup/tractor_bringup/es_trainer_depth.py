@@ -994,8 +994,7 @@ class EvolutionaryStrategyTrainer:
             )
             if self.enable_debug:
                 print("[RKNN] ONNX export complete")
-            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
-            dataset_path = os.path.abspath(dataset_path)
+            dataset_path = os.path.join(self.model_dir, 'dataset.txt')
             if self.enable_debug:
                 print(f"[RKNN] Dataset path: {dataset_path}")
             rknn = RKNN(verbose=self.enable_debug)
@@ -1084,8 +1083,8 @@ class EvolutionaryStrategyTrainer:
     def init_dataset_file(self):
         """Initialize dataset.txt file for RKNN quantization"""
         try:
-            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
-            dataset_path = os.path.abspath(dataset_path)
+            # Use the model directory which is writable
+            dataset_path = os.path.join(self.model_dir, 'dataset.txt')
             
             # Create empty dataset.txt file (clear any existing content)
             with open(dataset_path, 'w') as f:
@@ -1101,9 +1100,8 @@ class EvolutionaryStrategyTrainer:
     def save_quantization_sample(self, depth_image: np.ndarray, proprioceptive: np.ndarray):
         """Save a sample to dataset.txt for RKNN quantization"""
         try:
-            # Get the dataset path (same as used in convert_to_rknn)
-            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
-            dataset_path = os.path.abspath(dataset_path)
+            # Use the model directory which is writable
+            dataset_path = os.path.join(self.model_dir, 'dataset.txt')
             
             # Preprocess the sample to match inference format
             processed_depth = self.preprocess_depth_for_model(depth_image)  # (C,H,W)
