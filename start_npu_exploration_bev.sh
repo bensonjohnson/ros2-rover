@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Minimal NPU Bird's Eye View Exploration Script
+# NPU Bird's Eye View Exploration Script
 # Clean architecture: Hardware + AI only, no SLAM/Nav2 complexity
 
 echo "=================================================="
@@ -8,8 +8,8 @@ echo "ROS2 Tractor - NPU Bird's Eye View Exploration"
 echo "=================================================="
 echo "This minimal system uses:"
 echo "  ✓ Hiwonder motor control"
-echo "  ✓ RealSense D435i (point cloud only, IMU disabled, USB optimized)"
-echo "  ✓ NPU-based exploration AI with BEV maps"
+echo "  ✓ RealSense D435i (point cloud output)"
+echo "  ✓ NPU-based exploration AI with BEV processing"
 echo "  ✓ Direct safety monitoring"
 echo "  ✓ Anti-overtraining reward system (optional)"
 echo "  ✓ No SLAM/Nav2 complexity"
@@ -31,10 +31,10 @@ echo "  • full:      Advanced optimization with efficiency metrics"
 echo "  • research:  Experimental features and maximum optimization"
 echo ""
 echo "BEV Configuration:"
-echo "  • Size:        200x200 pixels"
-echo "  • Range:       10m x 10m"
-echo "  • Channels:    Height slices + max height + density"
-echo "  • Ground Removal: Enabled with RANSAC"
+echo "  • Size:        200x200 pixels (default)"
+echo "  • Range:       10x10 meters (default)"
+echo "  • Channels:    Multi-height + density (default)"
+echo "  • Ground Removal: Enabled (default)"
 echo ""
 
 # Check if we're in the right directory
@@ -79,7 +79,7 @@ try:
     print("✓ Anti-overtraining reward system initialized")
     
     # RKNN conversion
-    trainer = RKNNTrainerBEV(model_dir="models", enable_debug=True)
+    trainer = RKNNTrainerBEV(bev_channels=4, enable_debug=True)
     if RKNN_AVAILABLE:
         trainer.convert_to_rknn()
     else:
@@ -343,9 +343,7 @@ ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     bev_size:="[200, 200]" \
     bev_range:="[10.0, 10.0]" \
     bev_height_channels:="[0.2, 1.0]" \
-    enable_ground_removal:=true \
-    ground_ransac_iterations:=100 \
-    ground_ransac_threshold:=0.05 &
+    enable_ground_removal:=true &
 
 LAUNCH_PID=$!
 

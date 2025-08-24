@@ -154,18 +154,6 @@ def generate_launch_description():
         description="Enable ground plane removal (true/false)",
     )
 
-    declare_ground_ransac_iterations_cmd = DeclareLaunchArgument(
-        "ground_ransac_iterations",
-        default_value="100",
-        description="RANSAC iterations for ground plane removal",
-    )
-
-    declare_ground_ransac_threshold_cmd = DeclareLaunchArgument(
-        "ground_ransac_threshold",
-        default_value="0.05",
-        description="Distance threshold for ground plane points",
-    )
-
     # 1. Robot Description (TF only)
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -206,7 +194,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    # 4. NPU Exploration Node (Main AI controller using BEV)
+    # 4. NPU Exploration Node (Main AI controller)
     npu_exploration_node = Node(
         package="tractor_bringup",
         executable="npu_exploration_bev.py",
@@ -238,8 +226,6 @@ def generate_launch_description():
                 "bev_range": LaunchConfiguration("bev_range"),
                 "bev_height_channels": LaunchConfiguration("bev_height_channels"),
                 "enable_ground_removal": LaunchConfiguration("enable_ground_removal"),
-                "ground_ransac_iterations": LaunchConfiguration("ground_ransac_iterations"),
-                "ground_ransac_threshold": LaunchConfiguration("ground_ransac_threshold"),
             }
         ],
         remappings=[
@@ -282,7 +268,7 @@ def generate_launch_description():
         remappings=[
             ("cmd_vel_in", "cmd_vel_raw"),
             ("cmd_vel_out", "cmd_vel_safe"),
-            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic for safety
+            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic
         ]
     )
 
@@ -315,8 +301,6 @@ def generate_launch_description():
     ld.add_action(declare_bev_range_cmd)
     ld.add_action(declare_bev_height_channels_cmd)
     ld.add_action(declare_enable_ground_removal_cmd)
-    ld.add_action(declare_ground_ransac_iterations_cmd)
-    ld.add_action(declare_ground_ransac_threshold_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)
