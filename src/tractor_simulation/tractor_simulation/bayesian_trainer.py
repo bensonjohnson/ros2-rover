@@ -15,9 +15,11 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import Interval
 from botorch.utils.transforms import normalize, unnormalize
+import logging
+import time
 
 class BayesianOptimizationTrainer:
-    def __init__(self, model_dim=100, bounds=None, batch_size=3, n_init=10):
+    def __init__(self, model_dim=100, bounds=None, batch_size=8, n_init=15):
         """
         Args:
             model_dim: Number of neural network parameters to optimize
@@ -45,6 +47,14 @@ class BayesianOptimizationTrainer:
         self.train_X = None
         self.train_Y = None
         self.model = None
+        self.logger = logging.getLogger(__name__)
+        
+        # Performance tracking
+        self.evaluation_times = []
+        self.convergence_threshold = 1e-3
+        self.patience = 5  # Early stopping patience
+        self.best_seen = -float('inf')
+        self.no_improvement_count = 0
         
     def initialize_random_points(self):
         """Generate initial random points"""
@@ -134,24 +144,55 @@ class BayesianOptimizationTrainer:
         
         print(f"Initial best: {Y_init.max().item():.4f}")
         
-        # BO loop
+        # BO loop with early stopping
         for iteration in range(n_iterations):
+            start_time = time.time()
+            
             # Fit GP model
             self.fit_model()
             
             # Propose next candidates
             candidates = self.propose_next_candidates()
             if candidates is None:
+                self.logger.warning(f"Failed to propose candidates at iteration {iteration}")
                 continue
                 
             # Evaluate candidates 
+            eval_start = time.time()
             Y_new = torch.tensor([objective_fn(x) for x in candidates], dtype=self.dtype).unsqueeze(-1)
+            eval_time = time.time() - eval_start
+            self.evaluation_times.append(eval_time)
             
             # Add to training set
             self.add_observations(candidates, Y_new)
             
-            # Print progress
+            # Check for improvement and early stopping
             current_best = self.train_Y.max().item()
-            print(f"Iteration {iteration+1:2d}: Best so far = {current_best:.4f}")
+            improvement = current_best - self.best_seen
             
+            if improvement > self.convergence_threshold:
+                self.best_seen = current_best
+                self.no_improvement_count = 0
+            else:
+                self.no_improvement_count += 1
+                
+            iteration_time = time.time() - start_time
+            
+            # Print progress
+            print(f"Iteration {iteration+1:2d}: Best = {current_best:.4f} "
+                  f"(+{improvement:.4f}), Time = {iteration_time:.1f}s")
+                  
+            # Early stopping
+            if self.no_improvement_count >= self.patience:
+                print(f"Early stopping: no improvement for {self.patience} iterations")
+                break
+            
+        # Final statistics
+        total_evals = len(self.train_Y)
+        avg_eval_time = np.mean(self.evaluation_times) if self.evaluation_times else 0
+        print(f"\nOptimization complete:")
+        print(f"  Total evaluations: {total_evals}")
+        print(f"  Best fitness: {self.train_Y.max().item():.4f}")
+        print(f"  Avg evaluation time: {avg_eval_time:.3f}s")
+        
         return self.get_best_parameters()

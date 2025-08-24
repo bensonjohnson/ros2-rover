@@ -10,10 +10,10 @@ echo "=================================="
 
 # Default parameters
 DEVICE="cuda"
-BATCH_SIZE=64
-MODEL_PARAMS=500
-METHOD="bayesian"
-ITERATIONS=30
+BATCH_SIZE=32
+MODEL_PARAMS=3866115
+METHOD="es"
+ITERATIONS=50
 BENCHMARK=false
 
 # Parse command line arguments
@@ -83,7 +83,7 @@ if [[ "$DEVICE" == "cuda" ]]; then
         echo "⚠️  CUDA requested but no GPU runtime found"
         echo "   Falling back to CPU"
         DEVICE="cpu"
-        BATCH_SIZE=32  # Reduce batch size for CPU
+        BATCH_SIZE=16  # Further reduce batch size for CPU
     fi
 fi
 
@@ -156,6 +156,19 @@ if [[ "$BENCHMARK" != true ]]; then
     echo "   Ultra-Fast:  ~0.001-0.01 seconds per individual (vectorized)"
     echo "   Speedup:     100-1000x faster! 🚀"
     echo ""
+    echo "💾 Trained models saved in models/ultra_fast/"
+    echo "📈 Training plots saved in models/ultra_fast/"
+    echo "📋 Logs saved in models/ultra_fast/logs/"
+    echo ""
     echo "💡 To run with different settings:"
-    echo "   ./run_ultra_fast.sh --method both --iterations 50 --batch-size 128"
+    echo "   ./run_ultra_fast.sh --method both --iterations 50 --batch-size 64"
+    echo ""
+    echo "🔧 To load and test a trained model:"
+    echo "   cd src/tractor_simulation/tractor_simulation"
+    echo "   python model_utils.py --load ../../../models/ultra_fast/bayesian_best_model.pth"
+    echo ""
+    echo "🚀 To deploy model to rover for ES hybrid training:"
+    echo "   cd src/tractor_simulation/tractor_simulation"
+    echo "   python rover_model_transfer.py --deploy ../../../models/ultra_fast/bayesian_best_model.pth"
+    echo "   # Then copy deployment to rover and run ./deploy_to_rover.sh"
 fi

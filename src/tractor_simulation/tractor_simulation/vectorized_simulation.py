@@ -5,9 +5,11 @@ Replaces PyBullet with vectorized physics for 100x+ speedup
 """
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 from typing import Tuple, List
 import time
+import logging
 
 class VectorizedTractorSimulation:
     def __init__(self, batch_size=32, device="cuda", dtype=torch.float32):
@@ -25,7 +27,7 @@ class VectorizedTractorSimulation:
         
         # Environment parameters
         self.dt = 0.02  # 50 Hz simulation
-        self.max_steps = 200  # Reduced episode length
+        self.max_steps = 100  # Further reduced for speed
         
         # Robot parameters
         self.max_linear_vel = 0.25  # m/s
@@ -157,7 +159,7 @@ class VectorizedTractorSimulation:
         # Movement reward - encourage forward progress
         displacement = self.positions - self.prev_positions
         distance_moved = torch.norm(displacement, dim=1)
-        rewards += distance_moved * 10.0
+        rewards += distance_moved * 20.0  # Increased movement reward
         
         # Exploration reward - visiting new cells
         cell_x = ((self.positions[:, 0] + self.room_size/2) / self.room_size * 20).long().clamp(0, 19)
@@ -171,14 +173,25 @@ class VectorizedTractorSimulation:
         self.visited_cells[batch_indices, cell_x, cell_y] = True
         
         # Reward for new cells
-        rewards += is_new_cell.float() * 5.0
+        rewards += is_new_cell.float() * 10.0  # Increased exploration reward
         
-        # Collision penalty
-        collision_penalty = self.collision_flags.float() * -20.0
+        # Survival bonus - reward for staying alive
+        rewards += (~self.collision_flags).float() * 2.0
+        
+        # Collision penalty - only when actually colliding
+        collision_penalty = self.collision_flags.float() * -50.0  # Strong penalty
         rewards += collision_penalty
         
         # Small time penalty to encourage efficiency
-        rewards -= 0.1
+        rewards -= 0.05  # Reduced time penalty
+        
+        # Debug: Log rewards occasionally for first robot
+        if torch.rand(1).item() < 0.01:  # 1% chance
+            logger = logging.getLogger(__name__)
+            logger.info(f"Sample rewards - Move: {distance_moved[0]*20:.2f}, "
+                       f"Explore: {is_new_cell[0]*10:.2f}, "
+                       f"Collision: {collision_penalty[0]:.2f}, "
+                       f"Total: {rewards[0]:.2f}")
         
         return rewards
         
@@ -258,6 +271,27 @@ class BatchSimulationTrainer:
         self.device = device
         self.sim = VectorizedTractorSimulation(batch_size=batch_size, device=device)
         
+        # Pre-compute parameter mapping for efficiency
+        self.param_mapping = self._compute_parameter_mapping()
+        self.logger = logging.getLogger(__name__)
+        
+    def _compute_parameter_mapping(self):
+        """Pre-compute how to map flat parameters to model layers"""
+        param_info = []
+        total_params = 0
+        
+        for name, param in self.model.named_parameters():
+            param_info.append({
+                'name': name,
+                'shape': param.shape,
+                'size': param.numel(),
+                'start_idx': total_params,
+                'end_idx': total_params + param.numel()
+            })
+            total_params += param.numel()
+            
+        return param_info, total_params
+        
     def evaluate_parameters_batch(self, parameter_batch: torch.Tensor) -> torch.Tensor:
         """
         Evaluate multiple parameter sets in parallel
@@ -271,9 +305,11 @@ class BatchSimulationTrainer:
         num_params = parameter_batch.shape[0]
         all_fitness = []
         
-        # Process in batches
-        for i in range(0, num_params, self.batch_size):
-            end_idx = min(i + self.batch_size, num_params)
+        # Process in smaller batches for better memory management
+        eval_batch_size = min(self.batch_size, 16)  # Reduced for parameter injection overhead
+        
+        for i in range(0, num_params, eval_batch_size):
+            end_idx = min(i + eval_batch_size, num_params)
             current_batch_size = end_idx - i
             
             # Set up simulation for this batch size
@@ -285,7 +321,9 @@ class BatchSimulationTrainer:
             
             batch_fitness = torch.zeros(current_batch_size, device=self.device)
             
-            # Run episodes
+            # Run episodes with early stopping
+            consecutive_low_rewards = torch.zeros(current_batch_size, device=self.device)
+            
             for step in range(self.sim.max_steps):
                 # Get observations
                 depth_images = self.sim.generate_depth_images()  # [batch_size, 64]
@@ -293,7 +331,6 @@ class BatchSimulationTrainer:
                 
                 # Get actions from models (this is where parameters matter)
                 with torch.no_grad():
-                    # Apply parameters to model (simplified)
                     actions = self.model_forward_batch(
                         parameter_batch[i:end_idx], 
                         depth_images, 
@@ -306,33 +343,91 @@ class BatchSimulationTrainer:
                 # Accumulate fitness
                 batch_fitness += rewards
                 
-                # Early termination if all episodes are done
-                if done_flags.all():
+                # Early stopping for poor performers
+                consecutive_low_rewards = torch.where(
+                    rewards < -5.0,  # Poor reward threshold
+                    consecutive_low_rewards + 1,
+                    torch.zeros_like(consecutive_low_rewards)
+                )
+                
+                early_stop = (consecutive_low_rewards > 10) | done_flags
+                
+                # Early termination if all episodes are done or performing poorly
+                if early_stop.all():
                     break
                     
             all_fitness.append(batch_fitness)
             
         return torch.cat(all_fitness)
         
+    def apply_parameters_to_model(self, parameters: torch.Tensor):
+        """Apply flat parameter vector to model weights"""
+        param_info, total_expected = self.param_mapping
+        
+        if len(parameters) < total_expected:
+            # Pad parameters if too short
+            padded = torch.zeros(total_expected, device=parameters.device, dtype=parameters.dtype)
+            padded[:len(parameters)] = parameters
+            parameters = padded
+        elif len(parameters) > total_expected:
+            # Truncate if too long
+            parameters = parameters[:total_expected]
+            
+        # Apply parameters to model
+        with torch.no_grad():
+            for info in param_info:
+                start_idx, end_idx = info['start_idx'], info['end_idx']
+                param_slice = parameters[start_idx:end_idx].reshape(info['shape'])
+                
+                # Find the corresponding model parameter
+                for name, param in self.model.named_parameters():
+                    if name == info['name']:
+                        param.copy_(param_slice)
+                        break
+                        
     def model_forward_batch(self, parameters: torch.Tensor, depth: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with different parameters for each batch item
         
-        This is a simplified version - in practice you'd need to handle
-        parameter injection more carefully
+        For efficiency, we'll evaluate one parameter set at a time
+        and use the model directly rather than parameter injection
         """
         batch_size = depth.shape[0]
         actions = torch.zeros(batch_size, 2, device=self.device)
         
-        # For now, use simple parameter-based actions
-        # In real implementation, you'd load parameters into model
-        for i in range(batch_size):
-            # Simplified: use first few parameters as action coefficients
-            depth_response = torch.sum(depth[i] * parameters[i][:64]) if len(parameters[i]) >= 64 else 0
-            proprio_response = torch.sum(proprio[i] * parameters[i][64:72]) if len(parameters[i]) >= 72 else 0
+        try:
+            # Store original model state
+            original_state = {name: param.clone() for name, param in self.model.named_parameters()}
             
-            # Generate actions
-            actions[i, 0] = torch.tanh(depth_response * 0.1)  # linear velocity
-            actions[i, 1] = torch.tanh(proprio_response * 0.1)  # angular velocity
-            
+            for i in range(batch_size):
+                # Apply parameters for this batch item
+                self.apply_parameters_to_model(parameters[i])
+                
+                # Forward pass for single item
+                with torch.no_grad():
+                    single_depth = depth[i:i+1]  # Keep batch dimension
+                    single_proprio = proprio[i:i+1]
+                    action, _ = self.model(single_depth, single_proprio)
+                    actions[i] = action.squeeze(0)
+                    
+            # Restore original model state
+            with torch.no_grad():
+                for name, param in self.model.named_parameters():
+                    param.copy_(original_state[name])
+                    
+        except Exception as e:
+            self.logger.error(f"Model forward pass failed: {e}")
+            # Fallback to simple parameter-based actions
+            for i in range(batch_size):
+                # Use first few parameters as coefficients
+                depth_coeff = parameters[i][:64] if len(parameters[i]) >= 64 else torch.zeros(64, device=self.device)
+                proprio_coeff = parameters[i][64:72] if len(parameters[i]) >= 72 else torch.zeros(8, device=self.device)
+                
+                # Simple linear combination
+                depth_response = torch.sum(depth[i] * depth_coeff[:depth.shape[1]])
+                proprio_response = torch.sum(proprio[i] * proprio_coeff[:proprio.shape[1]])
+                
+                actions[i, 0] = torch.tanh(depth_response * 0.1)  # linear velocity
+                actions[i, 1] = torch.tanh(proprio_response * 0.1)  # angular velocity
+                
         return actions

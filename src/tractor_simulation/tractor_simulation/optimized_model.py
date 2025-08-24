@@ -274,24 +274,34 @@ class UltraFastTrainer:
         return samples_per_second
 
 
-def create_optimized_model(device="cuda") -> Tuple[OptimizedDepthModel, UltraFastTrainer]:
+def create_optimized_model(device="cuda", smaller_model=False) -> Tuple[OptimizedDepthModel, UltraFastTrainer]:
     """Factory function to create optimized model and trainer"""
+    
+    # Adjust model size based on requirements
+    if smaller_model:
+        hidden_dim = 64  # Smaller for faster parameter optimization
+        use_quantization = False  # Skip for smaller models
+        use_sparsity = False
+    else:
+        hidden_dim = 128
+        use_quantization = True
+        use_sparsity = True
     
     # Create model with optimizations
     model = OptimizedDepthModel(
         depth_dim=64,
         proprio_dim=8,
-        hidden_dim=128,
+        hidden_dim=hidden_dim,
         action_dim=2,
-        use_quantization=True,
-        use_sparsity=True
+        use_quantization=use_quantization,
+        use_sparsity=use_sparsity
     )
     
     # Create optimized trainer
     trainer = UltraFastTrainer(
         model=model,
         device=device,
-        use_compile=True,
+        use_compile=not smaller_model,  # Skip compilation for smaller models
         use_mixed_precision=True
     )
     
