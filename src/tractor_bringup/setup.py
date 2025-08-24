@@ -1,4 +1,4 @@
-from setuptools import find_packages, setup
+bfrom setuptools import find_packages, setup
 import os
 from glob import glob
 
@@ -31,6 +31,7 @@ setup(
             "frontier_explorer.py = tractor_bringup.frontier_explorer:main",
             "npu_exploration.py = tractor_bringup.npu_exploration:main",
             "npu_exploration_depth.py = tractor_bringup.npu_exploration_depth:main",
+            "npu_exploration_bev.py = tractor_bringup.npu_exploration_bev:main",
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
             "simple_safety_monitor_depth.py = tractor_bringup.simple_safety_monitor_depth:main",
             "training_monitor_node.py = tractor_bringup.training_monitor_node:main",

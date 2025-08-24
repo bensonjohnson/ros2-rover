@@ -13,6 +13,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Float32
 import numpy as np
 import time
+import struct
 from cv_bridge import CvBridge
 import cv2
 
