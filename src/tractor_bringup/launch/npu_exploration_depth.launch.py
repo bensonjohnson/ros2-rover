@@ -24,6 +24,7 @@ def generate_launch_description():
     operation_mode = LaunchConfiguration("operation_mode")
     anti_overtraining = LaunchConfiguration("anti_overtraining")
     exploration_time = LaunchConfiguration("exploration_time")
+    enable_bayesian_optimization = LaunchConfiguration("enable_bayesian_optimization")
 
     declare_max_speed_cmd = DeclareLaunchArgument(
         "max_speed",
@@ -59,6 +60,42 @@ def generate_launch_description():
         "exploration_time",
         default_value="300",
         description="Maximum exploration time in seconds",
+    )
+
+    declare_bayesian_optimization_cmd = DeclareLaunchArgument(
+        "enable_bayesian_optimization",
+        default_value="true",
+        description="Enable Bayesian optimization for ES hyperparameters (true/false)",
+    )
+
+    declare_optimization_level_cmd = DeclareLaunchArgument(
+        "optimization_level",
+        default_value="standard",
+        description="Optimization level: basic | standard | full | research",
+    )
+
+    declare_enable_training_optimization_cmd = DeclareLaunchArgument(
+        "enable_training_optimization", 
+        default_value="true",
+        description="Enable Bayesian optimization for training hyperparameters (true/false)",
+    )
+
+    declare_enable_reward_optimization_cmd = DeclareLaunchArgument(
+        "enable_reward_optimization",
+        default_value="false", 
+        description="Enable Bayesian optimization for reward parameters (true/false)",
+    )
+
+    declare_enable_multi_metric_cmd = DeclareLaunchArgument(
+        "enable_multi_metric_evaluation",
+        default_value="true",
+        description="Enable multi-objective fitness evaluation (true/false)",
+    )
+
+    declare_enable_optimization_monitoring_cmd = DeclareLaunchArgument(
+        "enable_optimization_monitoring",
+        default_value="true",
+        description="Enable comprehensive optimization monitoring and logging (true/false)",
     )
 
     # 1. Robot Description (TF only)
@@ -116,6 +153,12 @@ def generate_launch_description():
                 "operation_mode": LaunchConfiguration("operation_mode"),
                 "anti_overtraining": LaunchConfiguration("anti_overtraining"),
                 "exploration_time": LaunchConfiguration("exploration_time"),
+                "enable_bayesian_optimization": LaunchConfiguration("enable_bayesian_optimization"),
+                "optimization_level": LaunchConfiguration("optimization_level"),
+                "enable_training_optimization": LaunchConfiguration("enable_training_optimization"),
+                "enable_reward_optimization": LaunchConfiguration("enable_reward_optimization"),
+                "enable_multi_metric_evaluation": LaunchConfiguration("enable_multi_metric_evaluation"),
+                "enable_optimization_monitoring": LaunchConfiguration("enable_optimization_monitoring"),
             }
         ],
         remappings=[
@@ -172,6 +215,12 @@ def generate_launch_description():
     ld.add_action(declare_operation_mode_cmd)
     ld.add_action(declare_anti_overtraining_cmd)
     ld.add_action(declare_exploration_time_cmd)
+    ld.add_action(declare_bayesian_optimization_cmd)
+    ld.add_action(declare_optimization_level_cmd)
+    ld.add_action(declare_enable_training_optimization_cmd)
+    ld.add_action(declare_enable_reward_optimization_cmd)
+    ld.add_action(declare_enable_multi_metric_cmd)
+    ld.add_action(declare_enable_optimization_monitoring_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)

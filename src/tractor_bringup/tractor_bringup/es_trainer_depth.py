@@ -27,6 +27,13 @@ except ImportError:
     IMPROVED_REWARDS = False
     print("Improved reward system not available - using basic rewards")
 
+try:
+    from .bayesian_es_optimizer import AdaptiveBayesianESWrapper
+    BAYESIAN_OPTIMIZATION = True
+except ImportError:
+    BAYESIAN_OPTIMIZATION = False
+    print("Bayesian ES optimization not available - using standard ES")
+
 from .rknn_trainer_depth import DepthImageExplorationNet
 
 class EvolutionaryStrategyTrainer:
@@ -35,7 +42,8 @@ class EvolutionaryStrategyTrainer:
     """
     
     def __init__(self, model_dir="models", stacked_frames: int = 1, enable_debug: bool = False, 
-                 population_size: int = 10, sigma: float = 0.1, learning_rate: float = 0.01):
+                 population_size: int = 10, sigma: float = 0.1, learning_rate: float = 0.01,
+                 enable_bayesian_optimization: bool = True):
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -136,6 +144,25 @@ class EvolutionaryStrategyTrainer:
         else:
             self.reward_calculator = None
             print("Using basic reward system")
+        
+        # Initialize Bayesian optimization for ES hyperparameters
+        self.bayesian_es_wrapper = None
+        if enable_bayesian_optimization and BAYESIAN_OPTIMIZATION:
+            try:
+                self.bayesian_es_wrapper = AdaptiveBayesianESWrapper(
+                    es_trainer=self,
+                    optimization_interval=5,  # Optimize every 5 generations
+                    min_observations=3,       # Need at least 3 data points
+                    enable_debug=enable_debug
+                )
+                print("Using Bayesian optimization for ES hyperparameters")
+            except Exception as e:
+                print(f"Failed to initialize Bayesian optimization: {e}")
+                self.bayesian_es_wrapper = None
+        elif enable_bayesian_optimization and not BAYESIAN_OPTIMIZATION:
+            print("Bayesian optimization requested but BoTorch not available")
+        else:
+            print("Using standard ES hyperparameter adaptation")
         
         # Initialize dataset.txt for quantization
         self.init_dataset_file()
@@ -644,6 +671,10 @@ class EvolutionaryStrategyTrainer:
         # Update generation counter
         self.generation += 1
         
+        # Apply Bayesian optimization for hyperparameters
+        if self.bayesian_es_wrapper is not None:
+            self.bayesian_es_wrapper.apply_bayesian_optimization(self.generation, current_best_fitness)
+        
         # Save model periodically (more frequent during early training)
         save_frequency = 10 if self.generation < 100 else 50  # Save every 10 gens for first 100, then every 50
         if self.generation % save_frequency == 0 or self.generation == 1:  # Always save first generation
@@ -665,7 +696,8 @@ class EvolutionaryStrategyTrainer:
         # Calculate current population diversity
         current_diversity = self._calculate_population_diversity()
         
-        return {
+        # Prepare return statistics
+        stats = {
             "generation": self.generation,
             "avg_fitness": avg_fitness,
             "best_fitness": float(self.best_fitness),
@@ -681,6 +713,13 @@ class EvolutionaryStrategyTrainer:
             "evolution_frequency": self.current_evolution_frequency,
             "reward_variance": float(np.var(self.recent_rewards)) if self.recent_rewards else 0.0
         }
+        
+        # Add Bayesian optimization statistics if available
+        if self.bayesian_es_wrapper is not None:
+            bayesian_stats = self.bayesian_es_wrapper.get_optimization_summary()
+            stats.update({f"bayesian_{k}": v for k, v in bayesian_stats.items()})
+        
+        return stats
 
     def preprocess_depth_for_model(self, depth_image: np.ndarray) -> np.ndarray:
         """Normalize, resize, clip and optionally stack frames.

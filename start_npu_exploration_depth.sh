@@ -24,6 +24,12 @@ echo "  • es_hybrid:     RKNN inference + ES training"
 echo "  • es_inference:  Pure RKNN inference with ES model"
 echo "  • safe_es_training: Anti-overtraining ES protection"
 echo ""
+echo "Optimization levels:"
+echo "  • basic:     Core performance and safety optimization"
+echo "  • standard:  Balanced multi-objective optimization (default)"
+echo "  • full:      Advanced optimization with efficiency metrics"
+echo "  • research:  Experimental features and maximum optimization"
+echo ""
 
 # Check if we're in the right directory
 if [ ! -f "install/setup.bash" ]; then
@@ -270,10 +276,10 @@ case "$MODE" in
   "cpu_training") echo "    → Standard PyTorch RL training" ;;
   "hybrid") echo "    → RKNN inference + RL training" ;;
   "inference") echo "    → Pure RKNN inference only" ;;
-  "es_training") echo "    → Evolutionary Strategy training" ;;
-  "es_hybrid") echo "    → RKNN inference + ES training" ;;
+  "es_training") echo "    → Evolutionary Strategy training with Bayesian optimization" ;;
+  "es_hybrid") echo "    → RKNN inference + ES training with Bayesian optimization" ;;
   "es_inference") echo "    → Pure RKNN inference with ES model" ;;
-  "safe_es_training") echo "    → Anti-overtraining ES protection ENABLED" ;;
+  "safe_es_training") echo "    → Anti-overtraining ES protection + Bayesian optimization ENABLED" ;;
   *) echo "    → Custom mode selected" ;;
 esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
@@ -316,6 +322,12 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \
     anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
+    enable_bayesian_optimization:=$([[ "$MODE" == "es_training" || "$MODE" == "es_hybrid" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
+    optimization_level:=standard \
+    enable_training_optimization:=true \
+    enable_reward_optimization:=false \
+    enable_multi_metric_evaluation:=true \
+    enable_optimization_monitoring:=true \
     use_sim_time:=false &
 
 LAUNCH_PID=$!
