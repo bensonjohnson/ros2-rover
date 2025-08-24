@@ -328,6 +328,11 @@ ros2 launch tractor_bringup npu_exploration_depth.launch.py \
     enable_reward_optimization:=false \
     enable_multi_metric_evaluation:=true \
     enable_optimization_monitoring:=true \
+    enable_multi_objective_optimization:=false \
+    enable_safety_constraints:=true \
+    enable_architecture_optimization:=false \
+    enable_progressive_architecture:=false \
+    enable_sensor_fusion_optimization:=false \
     use_sim_time:=false &
 
 LAUNCH_PID=$!

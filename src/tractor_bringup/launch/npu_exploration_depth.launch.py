@@ -98,6 +98,37 @@ def generate_launch_description():
         description="Enable comprehensive optimization monitoring and logging (true/false)",
     )
 
+    # Phase 2 launch arguments - Multi-objective and Architecture Optimization
+    declare_enable_multi_objective_optimization_cmd = DeclareLaunchArgument(
+        "enable_multi_objective_optimization",
+        default_value="false",
+        description="Enable multi-objective Bayesian optimization with Pareto frontier (true/false)",
+    )
+
+    declare_enable_safety_constraints_cmd = DeclareLaunchArgument(
+        "enable_safety_constraints",
+        default_value="true", 
+        description="Enable safety constraint handling in optimization (true/false)",
+    )
+
+    declare_enable_architecture_optimization_cmd = DeclareLaunchArgument(
+        "enable_architecture_optimization",
+        default_value="false",
+        description="Enable Bayesian neural architecture search (research level only) (true/false)",
+    )
+
+    declare_enable_progressive_architecture_cmd = DeclareLaunchArgument(
+        "enable_progressive_architecture",
+        default_value="false",
+        description="Enable progressive architecture refinement (true/false)",
+    )
+
+    declare_enable_sensor_fusion_optimization_cmd = DeclareLaunchArgument(
+        "enable_sensor_fusion_optimization",
+        default_value="false",
+        description="Enable sensor fusion parameter optimization (full/research level only) (true/false)",
+    )
+
     # 1. Robot Description (TF only)
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -159,6 +190,12 @@ def generate_launch_description():
                 "enable_reward_optimization": LaunchConfiguration("enable_reward_optimization"),
                 "enable_multi_metric_evaluation": LaunchConfiguration("enable_multi_metric_evaluation"),
                 "enable_optimization_monitoring": LaunchConfiguration("enable_optimization_monitoring"),
+                # Phase 2 parameters
+                "enable_multi_objective_optimization": LaunchConfiguration("enable_multi_objective_optimization"),
+                "enable_safety_constraints": LaunchConfiguration("enable_safety_constraints"),
+                "enable_architecture_optimization": LaunchConfiguration("enable_architecture_optimization"),
+                "enable_progressive_architecture": LaunchConfiguration("enable_progressive_architecture"),
+                "enable_sensor_fusion_optimization": LaunchConfiguration("enable_sensor_fusion_optimization"),
             }
         ],
         remappings=[
@@ -221,6 +258,13 @@ def generate_launch_description():
     ld.add_action(declare_enable_reward_optimization_cmd)
     ld.add_action(declare_enable_multi_metric_cmd)
     ld.add_action(declare_enable_optimization_monitoring_cmd)
+    
+    # Add Phase 2 launch arguments
+    ld.add_action(declare_enable_multi_objective_optimization_cmd)
+    ld.add_action(declare_enable_safety_constraints_cmd)
+    ld.add_action(declare_enable_architecture_optimization_cmd)
+    ld.add_action(declare_enable_progressive_architecture_cmd)
+    ld.add_action(declare_enable_sensor_fusion_optimization_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)

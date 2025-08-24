@@ -30,18 +30,28 @@ try:
     from .multi_metric_evaluator import MultiMetricEvaluator, ObjectiveWeights
     from .optimization_monitor import OptimizationMonitor
     from .bayesian_reward_optimizer import AdaptiveBayesianRewardWrapper
+    # Phase 2 imports - Multi-objective and Architecture Optimization
+    from .multi_objective_optimizer import MultiObjectiveBayesianOptimizer, MultiObjectivePoint
+    from .safety_constraint_optimizer import SafetyConstraintHandler
+    from .bayesian_nas import BayesianArchitectureOptimizer, NetworkArchitecture
+    from .progressive_architecture_refinement import ProgressiveArchitectureRefinement, ProgressionConfig
+    from .bayesian_sensor_fusion_optimizer import BayesianSensorFusionOptimizer, SensorFusionConfig
     TRAINER_AVAILABLE = True
     OPTIMIZATION_AVAILABLE = True
+    PHASE2_AVAILABLE = True
     print("RKNN Trainer successfully imported")
-    print("ES Trainer successfully imported")
+    print("ES Trainer successfully imported") 
     print("Optimization components successfully imported")
+    print("Phase 2 multi-objective and architecture optimization components imported")
 except ImportError as e:
     TRAINER_AVAILABLE = False
     OPTIMIZATION_AVAILABLE = False
+    PHASE2_AVAILABLE = False
     print(f"RKNN/ES/Optimization components not available - using simple reactive navigation. Error: {e}")
 except Exception as e:
     TRAINER_AVAILABLE = False
     OPTIMIZATION_AVAILABLE = False
+    PHASE2_AVAILABLE = False
     print(f"RKNN/ES/Optimization initialization failed - using simple reactive navigation. Error: {e}")
 
 class NPUExplorationDepthNode(Node):
@@ -62,6 +72,13 @@ class NPUExplorationDepthNode(Node):
         self.declare_parameter('enable_reward_optimization', False)  # Enable reward parameter optimization
         self.declare_parameter('enable_multi_metric_evaluation', True)  # Enable multi-metric fitness evaluation
         self.declare_parameter('enable_optimization_monitoring', True)  # Enable comprehensive monitoring
+        
+        # Phase 2 parameters - Multi-objective and Architecture Optimization
+        self.declare_parameter('enable_multi_objective_optimization', False)  # Enable Pareto frontier optimization
+        self.declare_parameter('enable_safety_constraints', True)  # Enable safety constraint handling  
+        self.declare_parameter('enable_architecture_optimization', False)  # Enable neural architecture search
+        self.declare_parameter('enable_progressive_architecture', False)  # Enable progressive architecture refinement
+        self.declare_parameter('enable_sensor_fusion_optimization', False)  # Enable sensor fusion optimization
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
         self.exploration_warmup_steps = 300  # steps of forced exploration
@@ -82,6 +99,13 @@ class NPUExplorationDepthNode(Node):
         self.enable_reward_optimization = self.get_parameter('enable_reward_optimization').value
         self.enable_multi_metric_evaluation = self.get_parameter('enable_multi_metric_evaluation').value
         self.enable_optimization_monitoring = self.get_parameter('enable_optimization_monitoring').value
+        
+        # Phase 2 parameter values
+        self.enable_multi_objective_optimization = self.get_parameter('enable_multi_objective_optimization').value
+        self.enable_safety_constraints = self.get_parameter('enable_safety_constraints').value
+        self.enable_architecture_optimization = self.get_parameter('enable_architecture_optimization').value
+        self.enable_progressive_architecture = self.get_parameter('enable_progressive_architecture').value
+        self.enable_sensor_fusion_optimization = self.get_parameter('enable_sensor_fusion_optimization').value
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -162,6 +186,11 @@ class NPUExplorationDepthNode(Node):
         self.get_logger().info(f"  Reward Opt: {self.enable_reward_optimization}")
         self.get_logger().info(f"  Multi-Metric: {self.enable_multi_metric_evaluation}")
         self.get_logger().info(f"  Monitoring: {self.enable_optimization_monitoring}")
+        self.get_logger().info(f"  Multi-Objective: {self.enable_multi_objective_optimization}")
+        self.get_logger().info(f"  Safety Constraints: {self.enable_safety_constraints}")
+        self.get_logger().info(f"  Architecture Opt: {self.enable_architecture_optimization}")
+        self.get_logger().info(f"  Progressive Arch: {self.enable_progressive_architecture}")
+        self.get_logger().info(f"  Sensor Fusion Opt: {self.enable_sensor_fusion_optimization}")
         
         self.angular_scale = 0.8  # reduced from 2.0 to lessen spin dominance
         self.spin_penalty = 3.0
@@ -288,6 +317,13 @@ class NPUExplorationDepthNode(Node):
         self.optimization_monitor = None
         self.bayesian_reward_wrapper = None
         
+        # Phase 2 components
+        self.multi_objective_optimizer = None
+        self.safety_constraint_handler = None
+        self.architecture_optimizer = None
+        self.progressive_architecture = None
+        self.sensor_fusion_optimizer = None
+        
         if not OPTIMIZATION_AVAILABLE:
             self.get_logger().info("Optimization components not available")
             return
@@ -337,6 +373,9 @@ class NPUExplorationDepthNode(Node):
             if self.enable_training_optimization and hasattr(self.trainer, 'enable_bayesian_training_optimization'):
                 # This was already set in trainer initialization
                 self.get_logger().info("Bayesian training optimization enabled in trainer")
+                
+            # Initialize Phase 2 components
+            self._initialize_phase2_components()
             
             self.get_logger().info(f"Optimization components initialized for {self.optimization_level} level")
             
@@ -346,6 +385,146 @@ class NPUExplorationDepthNode(Node):
             self.multi_metric_evaluator = None
             self.optimization_monitor = None
             self.bayesian_reward_wrapper = None
+            
+    def _initialize_phase2_components(self):
+        """Initialize Phase 2 multi-objective and architecture optimization components"""
+        
+        if not PHASE2_AVAILABLE:
+            self.get_logger().info("Phase 2 optimization components not available")
+            return
+            
+        try:
+            # Initialize safety constraint handler
+            if self.enable_safety_constraints:
+                self.safety_constraint_handler = SafetyConstraintHandler(
+                    enable_debug=False  # Disable debug to reduce log noise
+                )
+                self.get_logger().info("Safety constraint handler initialized")
+            
+            # Initialize multi-objective optimizer
+            if self.enable_multi_objective_optimization:
+                # Define parameter bounds for multi-objective optimization
+                parameter_bounds = {
+                    'max_speed': (0.05, 0.5),
+                    'safety_distance': (0.1, 0.5),
+                    'exploration_bonus': (0.0, 5.0),
+                    'collision_penalty': (5.0, 50.0),
+                    'learning_rate': (1e-6, 0.1),
+                    'batch_size': (8, 256)
+                }
+                
+                # Set objective names and reference point based on optimization level
+                if self.optimization_level == 'research':
+                    objective_names = ['performance', 'safety', 'efficiency', 'robustness']
+                    reference_point = [0.0, 0.0, 0.0, 0.0]
+                else:
+                    objective_names = ['performance', 'safety']
+                    reference_point = [0.0, 0.0]
+                
+                self.multi_objective_optimizer = MultiObjectiveBayesianOptimizer(
+                    parameter_bounds=parameter_bounds,
+                    objective_names=objective_names,
+                    reference_point=reference_point,
+                    enable_debug=False
+                )
+                self.get_logger().info(f"Multi-objective optimizer initialized with {len(objective_names)} objectives")
+            
+            # Initialize architecture optimizer
+            if self.enable_architecture_optimization:
+                # Only enable for research level due to computational cost
+                if self.optimization_level == 'research':
+                    self.architecture_optimizer = BayesianArchitectureOptimizer(
+                        input_shape=(1, 160, 288),  # Depth image shape
+                        sensor_input_size=16,  # Proprioceptive input size
+                        output_size=3,  # [forward, angular, confidence]
+                        max_parameters=1000000,  # 1M parameter budget
+                        enable_debug=False
+                    )
+                    self.get_logger().info("Bayesian architecture optimizer initialized")
+                else:
+                    self.get_logger().info("Architecture optimization requires research level - skipping")
+            
+            # Initialize progressive architecture refinement
+            if self.enable_progressive_architecture and self.architecture_optimizer:
+                # Create a basic initial architecture
+                from .bayesian_nas import ConvLayerConfig, FusionLayerConfig, NetworkArchitecture, ActivationType
+                
+                initial_conv_layers = [
+                    ConvLayerConfig(out_channels=32, kernel_size=5, stride=2),
+                    ConvLayerConfig(out_channels=64, kernel_size=3, stride=2),
+                    ConvLayerConfig(out_channels=128, kernel_size=3, stride=1)
+                ]
+                
+                initial_fusion_config = FusionLayerConfig(
+                    hidden_sizes=[256, 128],
+                    activation=ActivationType.RELU,
+                    dropout_rate=0.3
+                )
+                
+                initial_architecture = NetworkArchitecture(
+                    depth_conv_layers=initial_conv_layers,
+                    depth_fc_size=512,
+                    sensor_fc_layers=[64, 32],
+                    sensor_activation=ActivationType.RELU,
+                    fusion_config=initial_fusion_config,
+                    output_size=3
+                )
+                
+                progression_config = ProgressionConfig(
+                    min_stage_duration=200,  # Shorter for robot training
+                    max_stage_duration=1000,
+                    convergence_patience=100
+                )
+                
+                self.progressive_architecture = ProgressiveArchitectureRefinement(
+                    initial_architecture=initial_architecture,
+                    progression_config=progression_config,
+                    enable_debug=False
+                )
+                self.get_logger().info("Progressive architecture refinement initialized")
+            
+            # Initialize sensor fusion optimizer
+            if self.enable_sensor_fusion_optimization:
+                # Enable for full and research optimization levels
+                if self.optimization_level in ['full', 'research']:
+                    self.sensor_fusion_optimizer = BayesianSensorFusionOptimizer(
+                        depth_image_shape=(240, 424),  # Processed depth image shape
+                        max_frame_stack=4,  # Conservative for real-time performance
+                        enable_debug=False
+                    )
+                    
+                    # Suggest initial configuration and apply it
+                    initial_config = self.sensor_fusion_optimizer.suggest_configuration()
+                    self._current_sensor_fusion_config = initial_config
+                    
+                    self.get_logger().info("Bayesian sensor fusion optimizer initialized")
+                    self.get_logger().info(f"Initial sensor fusion config: "
+                                         f"preprocessing={initial_config.preprocessing_method.value}, "
+                                         f"frame_stack={initial_config.frame_stack_size}")
+                else:
+                    self.get_logger().info("Sensor fusion optimization requires full/research level - skipping")
+            
+            phase2_components_count = sum([
+                1 if self.safety_constraint_handler else 0,
+                1 if self.multi_objective_optimizer else 0,
+                1 if self.architecture_optimizer else 0,
+                1 if self.progressive_architecture else 0,
+                1 if self.sensor_fusion_optimizer else 0
+            ])
+            
+            if phase2_components_count > 0:
+                self.get_logger().info(f"Phase 2: Initialized {phase2_components_count} advanced optimization components")
+            else:
+                self.get_logger().info("Phase 2: No advanced optimization components enabled")
+                
+        except Exception as e:
+            self.get_logger().warn(f"Phase 2 component initialization failed: {e}")
+            # Reset Phase 2 components on failure
+            self.multi_objective_optimizer = None
+            self.safety_constraint_handler = None
+            self.architecture_optimizer = None
+            self.progressive_architecture = None
+            self.sensor_fusion_optimizer = None
             
     def depth_callback(self, msg):
         """Process depth image and update internal state"""

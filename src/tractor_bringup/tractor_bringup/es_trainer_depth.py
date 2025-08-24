@@ -841,7 +841,7 @@ class EvolutionaryStrategyTrainer:
                 raw = out[0]
                 # Apply same post-processing as PyTorch path
                 action = np.tanh(raw[:2])
-                confidence = 1.0 / (1.0 + np.exp(-raw[2]))  # sigmoid
+                confidence = self._stable_sigmoid(raw[2])
                 return action.astype(np.float32), float(confidence)
             except Exception as e:
                 if self.enable_debug:
@@ -858,6 +858,16 @@ class EvolutionaryStrategyTrainer:
             confidence = torch.sigmoid(output[0, 2]).item()
         self.model.train()
         return action, float(confidence)
+        
+    def _stable_sigmoid(self, x):
+        """Numerically stable sigmoid function to avoid overflow warnings"""
+        x = np.float64(x)  # Use higher precision
+        if x >= 0:
+            exp_neg_x = np.exp(-x)
+            return 1.0 / (1.0 + exp_neg_x)
+        else:
+            exp_x = np.exp(x)
+            return exp_x / (1.0 + exp_x)
         
     def _get_rknn_conversion_frequency(self) -> int:
         """Determine RKNN conversion frequency based on training progress.
