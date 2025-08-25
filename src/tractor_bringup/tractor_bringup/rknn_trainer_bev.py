@@ -394,6 +394,11 @@ class RKNNTrainerBEV:
         # Ensure indices is a proper numpy array of integers
         indices = np.asarray(indices, dtype=np.int32)
         bev_batch = torch.from_numpy(self.bev_store[indices]).float().to(self.device)
+        # Debug: check batch tensor shape
+        if bev_batch.ndim != 4:
+            print(f"DEBUG: Unexpected bev_batch shape: {bev_batch.shape}, indices shape: {indices.shape}")
+            # Reshape if needed
+            bev_batch = bev_batch.view(-1, self.bev_channels, self.bev_height, self.bev_width)
         sensor_batch = torch.from_numpy(self.proprio_store[indices]).float().to(self.device)
         action_batch = torch.from_numpy(self.action_store[indices]).float().to(self.device)
         reward_batch = torch.from_numpy(self.reward_store[indices]).float().unsqueeze(1).to(self.device)
@@ -637,7 +642,15 @@ class RKNNTrainerBEV:
         self.model.eval()
         with torch.no_grad():
             processed = self.preprocess_bev_for_model(bev_image)
+            # Debug: print tensor shapes
+            if processed.ndim != 3:
+                print(f"DEBUG: Unexpected processed shape: {processed.shape}")
+                processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
             bev_tensor = torch.from_numpy(processed).unsqueeze(0).to(self.device)
+            # Ensure tensor has correct 4D shape [N, C, H, W]
+            if bev_tensor.ndim != 4:
+                print(f"DEBUG: Unexpected tensor shape: {bev_tensor.shape}")
+                bev_tensor = bev_tensor.view(1, self.bev_channels, self.bev_height, self.bev_width)
             sensor_tensor = torch.FloatTensor(proprioceptive).unsqueeze(0).to(self.device)
             output = self.model(bev_tensor, sensor_tensor)
             action = torch.tanh(output[0, :2]).cpu().numpy()

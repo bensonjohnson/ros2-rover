@@ -181,9 +181,9 @@ def generate_launch_description():
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "pointcloud.enable": "true",  # Enable pointcloud for BEV
-            "align_depth.enable": "false",  # Not needed for pointcloud
-            "enable_color": "false",  # Disable color for bandwidth
+            "enable_pointcloud": "true",  # Enable pointcloud for BEV
+            "align_depth": "true",  # Align depth for better accuracy
+            "enable_color": "true",  # Enable color for point cloud
             "enable_depth": "true",
             "enable_sync": "true",
             "device_type": "435i",
@@ -191,6 +191,7 @@ def generate_launch_description():
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
+            "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
         }.items(),
     )
 
@@ -230,7 +231,7 @@ def generate_launch_description():
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_raw"),
-            ("point_cloud", "/camera/depth/color/points"),  # Point cloud topic
+            ("point_cloud", "/camera/camera/depth/color/points"),  # Point cloud topic
             ("odom", "/odom"),
         ]
     )

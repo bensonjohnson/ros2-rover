@@ -1075,7 +1075,7 @@ class NPUExplorationBEVNode(Node):
                 progress=progress,
                 exploration_bonus=0.0,
                 position=self.position,
-                bev_data=bev_image,
+                depth_data=bev_image,
                 wheel_velocities=self.wheel_velocities
             )
             # Recovery shaping
