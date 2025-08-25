@@ -140,7 +140,7 @@ local_costmap:
         observation_sources: pointcloud
         pointcloud:
           data_type: PointCloud2
-          topic: /camera/camera/depth/color/points
+          topic: /camera/depth/color/points
           marking: true
           clearing: true
           obstacle_range: 2.5  # Reduced for better near-field obstacle detection

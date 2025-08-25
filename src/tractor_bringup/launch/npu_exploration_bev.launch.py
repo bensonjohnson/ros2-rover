@@ -230,7 +230,7 @@ def generate_launch_description():
         ],
         remappings=[
             ("cmd_vel", "cmd_vel_raw"),
-            ("point_cloud", "/camera/camera/depth/color/points"),  # Point cloud topic
+            ("point_cloud", "/camera/depth/color/points"),  # Point cloud topic
             ("odom", "/odom"),
         ]
     )

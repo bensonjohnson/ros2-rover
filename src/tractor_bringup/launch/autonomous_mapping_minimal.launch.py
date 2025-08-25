@@ -115,7 +115,7 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time}
         ],
         remappings=[
-            ("cloud_in", "/camera/camera/depth/color/points"),
+            ("cloud_in", "/camera/depth/color/points"),
             ("scan", "/scan"),  # For SLAM only
         ],
     )

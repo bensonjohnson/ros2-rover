@@ -100,7 +100,7 @@ class SimpleAutonomousMapper(Node):
         )
 
         self.pointcloud_sub = self.create_subscription(
-            PointCloud2, '/camera/camera/depth/color/points', self.pointcloud_callback, 10,
+            PointCloud2, '/camera/depth/color/points', self.pointcloud_callback, 10,
             callback_group=callback_group
         )
 
