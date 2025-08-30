@@ -231,7 +231,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "emergency_stop_distance": 0.1,  # 10cm emergency stop
+                "emergency_stop_distance": LaunchConfiguration("safety_distance"),  # Use the passed safety distance
                 "max_speed_limit": LaunchConfiguration("max_speed"),
             }
         ],

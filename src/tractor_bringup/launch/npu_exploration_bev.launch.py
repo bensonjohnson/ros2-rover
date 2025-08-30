@@ -257,19 +257,19 @@ def generate_launch_description():
     # 5. Simple Safety Monitor (Emergency stop only)
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor_depth.py",
+        executable="simple_safety_monitor.py",
         name="simple_safety_monitor",
         output="screen",
         parameters=[
             {
-                "emergency_stop_distance": 0.1,  # 10cm emergency stop
+                "emergency_stop_distance": LaunchConfiguration("safety_distance"),  # Use the passed safety distance
                 "max_speed_limit": LaunchConfiguration("max_speed"),
             }
         ],
         remappings=[
             ("cmd_vel_in", "cmd_vel_raw"),
             ("cmd_vel_out", "cmd_vel_safe"),
-            ("depth_image", "/camera/camera/depth/image_rect_raw"),  # Depth image topic
+            ("point_cloud", "/camera/camera/depth/color/points"),  # Point cloud topic
         ]
     )
 
