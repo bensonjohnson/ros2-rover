@@ -269,27 +269,19 @@ class NPUExplorationBEVNode(Node):
                 bev_channels = len(self.bev_height_channels) + 2
                 
                 # Initialize appropriate trainer based on mode
+                # For now, always use BEV trainer since we're working with BEV images
+                # TODO: Create ES trainer that supports BEV images
+                self.trainer = RKNNTrainerBEV(
+                    bev_channels=bev_channels,
+                    enable_debug=enable_debug,
+                    enable_bayesian_training_optimization=self.enable_training_optimization
+                )
+                
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
-                    # Use Evolutionary Strategy trainer with Bayesian optimization
-                    # For ES, we'll still use the depth trainer but with modified inputs
-                    self.trainer = EvolutionaryStrategyTrainer(
-                        model_dir="models",  # Explicitly set model directory
-                        stacked_frames=1,  # Not used for BEV
-                        enable_debug=enable_debug,
-                        population_size=10,
-                        sigma=0.1,
-                        learning_rate=0.01,
-                        enable_bayesian_optimization=self.enable_bayesian_optimization
-                    )
+                    # Note: Using BEV trainer for ES modes until BEV-compatible ES trainer is available
                     bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
-                    self.get_logger().info(f"ES Trainer initialized {bayesian_status}")
+                    self.get_logger().warn(f"ES modes currently using BEV trainer {bayesian_status} - ES-specific BEV trainer not yet implemented")
                 else:
-                    # Use BEV-specific Reinforcement Learning trainer with Bayesian training optimization
-                    self.trainer = RKNNTrainerBEV(
-                        bev_channels=bev_channels,
-                        enable_debug=enable_debug,
-                        enable_bayesian_training_optimization=self.enable_training_optimization
-                    )
                     training_opt_status = "with Bayesian training optimization" if self.enable_training_optimization else "with fixed training parameters"
                     self.get_logger().info(f"RKNN BEV Trainer initialized {training_opt_status}")
                 
@@ -1075,7 +1067,7 @@ class NPUExplorationBEVNode(Node):
                 progress=progress,
                 exploration_bonus=0.0,
                 position=self.position,
-                depth_data=bev_image,
+                bev_data=bev_image,
                 wheel_velocities=self.wheel_velocities
             )
             # Recovery shaping
@@ -1121,21 +1113,21 @@ class NPUExplorationBEVNode(Node):
                     in_recovery=self.recovery_active
                 )
             
-            # Train based on mode
+            # Train based on mode (currently using RL training for all modes since ES trainer is depth-based)
             if self.operation_mode in ['es_training', 'es_hybrid', 'safe_es_training']:
-                # For ES, we evolve every N generations (based on buffer size)
-                if self.trainer.buffer_size >= 50 and self.step_count % 50 == 0:
-                    training_stats = self.trainer.evolve_population()
-                    if self.step_count % 250 == 0:
-                        self.get_logger().info(f"ES Training: Gen={training_stats.get('generation',0)} AvgFit={training_stats.get('avg_fitness',0):.4f} BestFit={training_stats.get('best_fitness',0):.4f} Samples={training_stats.get('samples',0)}")
-                    
-                    # Update optimization monitoring for ES
+                # Note: Currently using RL training for ES modes until BEV-compatible ES trainer is available
+                if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
+                    training_stats = self.trainer.train_step()
+                    if self.step_count % 50 == 0 and 'loss' in training_stats:
+                        self.get_logger().info(f"ES Mode (using RL): Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
+                        
+                    # Update optimization monitoring for ES (using RL stats)
                     if self.optimization_monitor:
-                        self.optimization_monitor.log_es_optimization(
-                            generation=training_stats.get('generation', 0),
-                            fitness_score=training_stats.get('best_fitness', 0),
-                            best_params=training_stats.get('best_params', {}),
-                            population_stats=training_stats
+                        self.optimization_monitor.log_training_optimization(
+                            learning_rate=training_stats.get('learning_rate', 0.001),
+                            batch_size=training_stats.get('batch_size', 32),
+                            loss=training_stats.get('loss', 0),
+                            performance_metrics=training_stats
                         )
             else:
                 # For RL, we train every step

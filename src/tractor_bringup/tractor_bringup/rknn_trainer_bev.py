@@ -244,7 +244,8 @@ class RKNNTrainerBEV:
         Optional flags 'collision' and 'in_recovery' increase sampling priority.
         """
         # Preprocess BEV image to (C,H,W)
-        processed = bev_image if bev_image.ndim == 3 else self.preprocess_bev_for_storage(bev_image)
+        # Always preprocess to ensure correct (C,H,W) format
+        processed = self.preprocess_bev_for_storage(bev_image)
         # Defensive padding/truncation for proprioceptive data
         expected = self.proprio_dim
         if proprioceptive.shape[0] < expected:
