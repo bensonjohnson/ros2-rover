@@ -1,6 +1,13 @@
 package.xml
 setup.cfg
 setup.py
+../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
+../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/entry_points.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/anti_overtraining_params.yaml
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
@@ -11,6 +18,7 @@ config/realsense_low_bandwidth.yaml
 config/realsense_no_imu.yaml
 config/realsense_npu_minimal.yaml
 config/realsense_usb_stable.yaml
+config/robot_localization.yaml
 config/slam_toolbox_params.yaml
 launch/autonomous_mapping_minimal.launch.py
 launch/autonomous_slam_mapping.launch.py
@@ -18,9 +26,13 @@ launch/npu_exploration.launch.py
 launch/npu_exploration_bev.launch.py
 launch/npu_exploration_depth.launch.py
 launch/robot_description.launch.py
+launch/robot_localization.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
 resource/tractor_bringup
+test/test_copyright.py
+test/test_flake8.py
+test/test_pep257.py
 tractor_bringup/__init__.py
 tractor_bringup/anti_overtraining_config.py
 tractor_bringup/autonomous_mapping.py
@@ -49,11 +61,4 @@ tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_depth.py
 tractor_bringup/training_monitor.py
 tractor_bringup/training_monitor_node.py
-tractor_bringup.egg-info/PKG-INFO
-tractor_bringup.egg-info/SOURCES.txt
-tractor_bringup.egg-info/dependency_links.txt
-tractor_bringup.egg-info/entry_points.txt
-tractor_bringup.egg-info/requires.txt
-tractor_bringup.egg-info/top_level.txt
-tractor_bringup.egg-info/zip-safe
 urdf/tractor.urdf.xacro

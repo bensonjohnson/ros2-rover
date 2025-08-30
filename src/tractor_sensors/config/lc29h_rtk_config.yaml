@@ -1,0 +1,34 @@
+lc29h_rtk_gps_publisher:
+  ros__parameters:
+    # Serial Configuration
+    gps_port: '/dev/ttyS6'             # LC29H via GPIO UART6 (same as HGLRC)
+    gps_baudrate: 460800               # High speed for RTK data throughput
+    gps_frame_id: 'gps_link'
+    
+    # RTK Operation Mode
+    # Options: "rover", "base", "disabled"
+    rtk_mode: 'rover'
+    
+    # NTRIP Configuration (for rover mode)
+    ntrip_host: '10.0.0.46'            # Your local NTRIP base station
+    ntrip_port: 2101                   # Standard NTRIP port
+    ntrip_mountpoint: '1512rtk'        # Your mountpoint name
+    ntrip_username: 'rover'            # Your NTRIP username
+    ntrip_password: 'rover'            # Your NTRIP password
+    rtcm_timeout: 10.0                 # RTCM correction timeout (seconds)
+    
+    # Base Station Configuration (for base mode)
+    # If all zeros, will use auto-survey mode
+    base_latitude: 0.0                 # Known base position (decimal degrees)
+    base_longitude: 0.0                # Known base position (decimal degrees)  
+    base_altitude: 0.0                 # Known base position (meters MSL)
+    base_accuracy_limit: 3.0           # Auto-survey accuracy requirement (meters)
+    base_observation_time: 300         # Auto-survey observation time (seconds)
+    
+    # LC29H RTK Performance Specifications:
+    # - Dual frequency L1+L5 GNSS receiver
+    # - GPS, GLONASS, Galileo, BeiDou support
+    # - RTK accuracy: Horizontal ±1cm + 1ppm, Vertical ±2cm + 1ppm
+    # - Convergence time: <10 seconds (typical)
+    # - Max baseline: 20km
+    # - Update rate: Up to 10Hz positioning

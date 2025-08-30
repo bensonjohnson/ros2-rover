@@ -1,0 +1,183 @@
+### EKF Configuration for Tractor Robot Localization
+### This provides sensor fusion of GPS, IMU, and wheel odometry
+
+# Local EKF - fuses wheel odometry and IMU for continuous localization
+ekf_filter_node:
+  ros__parameters:
+    # General parameters
+    frequency: 30.0          # Filter update frequency (Hz)
+    sensor_timeout: 0.1      # Timeout for sensor data (seconds)
+    two_d_mode: true         # Operate in 2D mode (no z, roll, pitch estimation)
+    
+    # Transform parameters
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom        # For local EKF, world_frame should be odom
+    
+    # Process noise covariance (15x15 matrix)
+    # Order: x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az
+    process_noise_covariance: [
+      1e-3,  0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     1e-3, 0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    1e6,  0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,    # High z noise (2D mode)
+      0,     0,    0,    1e6,  0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,    # High roll noise (2D mode)
+      0,     0,    0,    0,    1e6,  0,    0,     0,     0,    0,    0,    0,    0,    0,    0,    # High pitch noise (2D mode)
+      0,     0,    0,    0,    0,    1e-3, 0,     0,     0,    0,    0,    0,    0,    0,    0,    # Yaw
+      0,     0,    0,    0,    0,    0,    1e-3,  0,     0,    0,    0,    0,    0,    0,    0,    # Linear velocities
+      0,     0,    0,    0,    0,    0,    0,     1e-3,  0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     1e6,  0,    0,    0,    0,    0,    0,    # High vz noise (2D mode)
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    1e6,  0,    0,    0,    0,    0,    # High angular vel noise
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    1e6,  0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    1e-3, 0,    0,    0,    # Yaw velocity
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    1e-3, 0,    0,    # Linear accelerations
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    1e-3, 0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    1e6     # High az noise (2D mode)
+    ]
+    
+    # Initial state covariance (15x15 matrix) - large values for unknown initial state
+    initial_estimate_covariance: [
+      1.0,   0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     1.0,  0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    1e6,  0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    1e6,  0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    1e6,  0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    1.0,  0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    1.0,   0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     1.0,   0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     1e6,  0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    1e6,  0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    1e6,  0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    1.0,  0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    1.0,  0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    1.0,  0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    1e6
+    ]
+    
+    # Sensor configurations
+    # Wheel odometry from motor encoders
+    odom0: wheel_odom
+    odom0_config: [false, false, false,  # x, y, z position
+                   false, false, false,  # roll, pitch, yaw orientation
+                   true,  true,  false,  # x, y, z linear velocity
+                   false, false, true,   # roll, pitch, yaw angular velocity
+                   false, false, false] # x, y, z linear acceleration
+    odom0_queue_size: 10
+    odom0_nodelay: false
+    odom0_differential: false
+    odom0_relative: false
+    
+    # IMU from BNO055 (orientation and angular velocity)
+    imu0: imu/data
+    imu0_config: [false, false, false,  # x, y, z position
+                  false, false, true,   # roll, pitch, yaw orientation
+                  false, false, false, # x, y, z linear velocity
+                  false, false, true,  # roll, pitch, yaw angular velocity
+                  false, false, false] # x, y, z linear acceleration
+    imu0_queue_size: 10
+    imu0_nodelay: false
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+    
+    # Control settings
+    use_control: false
+    print_diagnostics: true
+    
+    # Advanced parameters
+    alpha: 0.001
+    kappa: 0.0
+    beta: 2.0
+    
+---
+
+# Global EKF - fuses GPS with local EKF output for global localization  
+ekf_filter_node_map:
+  ros__parameters:
+    # General parameters
+    frequency: 10.0          # Lower frequency for GPS-based global localization
+    sensor_timeout: 0.2      # Longer timeout for GPS
+    two_d_mode: true         # Operate in 2D mode
+    
+    # Transform parameters  
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: map         # For global EKF, world_frame should be map
+    
+    # Process noise covariance - similar to local EKF but adjusted for GPS
+    process_noise_covariance: [
+      1e-2,  0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     1e-2, 0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    1e6,  0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    1e6,  0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    1e6,  0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    1e-2, 0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    1e-2,  0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     1e-2,  0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     1e6,  0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    1e6,  0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    1e6,  0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    1e-2, 0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    1e-2, 0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    1e-2, 0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    1e6
+    ]
+    
+    # Initial state covariance
+    initial_estimate_covariance: [
+      1e2,   0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     1e2,  0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    1e6,  0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    1e6,  0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    1e6,  0,    0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    1e2,  0,     0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    1e2,   0,     0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     1e2,   0,    0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     1e6,  0,    0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    1e6,  0,    0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    1e6,  0,    0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    1e2,  0,    0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    1e2,  0,    0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    1e2,  0,
+      0,     0,    0,    0,    0,    0,    0,     0,     0,    0,    0,    0,    0,    0,    1e6
+    ]
+    
+    # Local EKF odometry input
+    odom0: odometry/filtered
+    odom0_config: [true,  true,  false, # x, y, z position
+                   false, false, true,  # roll, pitch, yaw orientation
+                   true,  true,  false, # x, y, z linear velocity
+                   false, false, true,  # roll, pitch, yaw angular velocity
+                   false, false, false] # x, y, z linear acceleration
+    odom0_queue_size: 10
+    odom0_nodelay: false
+    odom0_differential: false
+    odom0_relative: false
+    
+    # Control settings
+    use_control: false
+    print_diagnostics: true
+    
+---
+
+# NavSat Transform Node - converts GPS to odometry
+navsat_transform_node:
+  ros__parameters:
+    # Transform parameters
+    magnetic_declination_radians: 0.0    # Local magnetic declination
+    yaw_offset: 0.0                      # IMU yaw offset
+    zero_altitude: false                 # Don't zero out altitude
+    broadcast_utm_transform: false       # Don't broadcast UTM transform
+    publish_filtered_gps: true          # Publish filtered GPS
+    use_odometry_yaw: false             # Use GPS/IMU for yaw, not odometry
+    use_manual_datum: false             # Auto-set datum from first GPS fix
+    wait_for_datum: false               # Don't wait for manual datum
+    
+    # Frame IDs
+    frame_id: map
+    child_frame_id: base_link
+    
+    # Topic remapping handled in launch file
+    # Subscribes to: /gps/fix, /imu/data, /odometry/filtered
+    # Publishes: /odometry/gps, /gps/filtered

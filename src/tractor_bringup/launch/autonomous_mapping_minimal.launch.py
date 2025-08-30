@@ -69,25 +69,31 @@ def generate_launch_description():
         ]
     )
 
-    # 3. GPS/Compass DISABLED - causes timing issues and noise
-    # gps_compass_node = Node(
-    #     package="tractor_sensors",
-    #     executable="hglrc_m100_5883",
-    #     name="hglrc_m100_5883",
-    #     output="screen",
-    #     parameters=[
-    #         {
-    #             "use_sim_time": use_sim_time,
-    #             "gps_port": "/dev/ttyS6",
-    #             "gps_baudrate": 115200,
-    #             "i2c_bus": 5,
-    #             "qmc5883_address": 0x0D,
-    #             "compass_update_rate": 50.0,
-    #         }
-    #     ],
-    # )
+    # 3. New LC29H RTK GPS and BNO055 IMU Sensors
+    lc29h_gps_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lc29h_rtk.launch.py")
+        ),
+        launch_arguments={"use_sim_time": use_sim_time}.items(),
+    )
 
-    # 4. Odometry will be published by motor driver - no static transform needed
+    lsm9ds1_imu_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
+        ),
+        launch_arguments={"use_sim_time": use_sim_time}.items(),
+    )
+
+    # 4. Robot Localization - EKF sensor fusion
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_tractor_bringup, "launch", "robot_localization.launch.py")
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim_time,
+            "use_gps": "true"
+        }.items(),
+    )
 
     # 5. RealSense Camera (minimal but functional config)
     realsense_launch = IncludeLaunchDescription(
@@ -306,7 +312,11 @@ def generate_launch_description():
     # Core system (immediate start)
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
-    # ld.add_action(gps_compass_node)  # DISABLED
+
+    # Sensor system (early start for calibration time)
+    ld.add_action(TimerAction(period=1.0, actions=[lc29h_gps_launch]))
+    ld.add_action(TimerAction(period=1.5, actions=[lsm9ds1_imu_launch]))
+    ld.add_action(TimerAction(period=2.0, actions=[robot_localization_launch]))
 
     # Camera system (delayed for stability)
     ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))

@@ -1,0 +1,37 @@
+bno055_imu_publisher:
+  ros__parameters:
+    # I2C Configuration
+    i2c_bus: 1                         # I2C bus number
+    i2c_address: 0x28                  # BNO055 I2C address (0x28 or 0x29)
+    frame_id: 'imu_link'
+    
+    # Sensor Configuration
+    operation_mode: 'NDOF'             # Sensor fusion mode
+    # Available modes:
+    # - NDOF: 9DOF sensor fusion with magnetometer
+    # - IMUPLUS: 6DOF sensor fusion without magnetometer (recommended for vehicles)
+    # - AMG: All sensors raw data
+    # - COMPASS: Tilt-compensated compass
+    # - M4G: Magnetometer + gyro + accelerometer
+    
+    update_rate: 100.0                 # Publishing rate in Hz (max ~100Hz)
+    auto_calibrate: true               # Enable automatic calibration
+    temperature_compensation: true     # Enable temperature compensation
+    
+    # BNO055 Sensor Fusion Features:
+    # - Hardware-accelerated sensor fusion
+    # - Built-in calibration algorithms
+    # - Temperature compensation
+    # - Quaternion output (no gimbal lock)
+    # - Linear acceleration (gravity-compensated)
+    # - Euler angles and raw sensor data
+    # - Magnetometer interference detection
+    # - Self-test capabilities
+    
+    # Accuracy Specifications:
+    # - Orientation: ±1° (fully calibrated)
+    # - Angular rate: ±3°/s
+    # - Acceleration: ±1% (0-4g range)
+    # - Magnetometer: ±2.5° heading accuracy
+    # - Update rate: Up to 100Hz
+    # - Power consumption: 12.3mA @ 3.3V

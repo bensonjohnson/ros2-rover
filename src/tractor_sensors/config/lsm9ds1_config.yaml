@@ -1,0 +1,32 @@
+lsm9ds1_imu_publisher:
+  ros__parameters:
+    # I2C Configuration
+    i2c_bus: 5                         # I2C bus number (matches your detection)
+    accel_gyro_addr: 0x6B              # LSM9DS1 accelerometer/gyroscope address
+    mag_addr: 0x1E                     # LSM9DS1 magnetometer address
+    frame_id: 'imu_link'
+    
+    # Sensor Configuration
+    update_rate: 50.0                  # Publishing rate in Hz
+    accel_range: 2                     # Accelerometer range: 2, 4, 8, 16 (±g)
+    gyro_range: 245                    # Gyroscope range: 245, 500, 2000 (±dps)
+    mag_range: 4                       # Magnetometer range: 4, 8, 12, 16 (±gauss)
+    
+    # Mounting Orientation (sensor mounted upside down)
+    invert_x: true                     # X-axis: invert (positive when tilting forward)
+    invert_y: false                    # Y-axis: don't invert (positive when tilting right)
+    invert_z: true                     # Z-axis: flip for upside-down mount
+    
+    # LSM9DS1 Features:
+    # - 3D accelerometer, gyroscope, and magnetometer
+    # - Raw sensor data output (no hardware sensor fusion)
+    # - Requires software sensor fusion via robot_localization
+    # - Good for basic orientation estimation when combined with EKF
+    # - Temperature compensation available
+    
+    # Accuracy Specifications:
+    # - Accelerometer: ±0.061 mg/LSB (2g scale)
+    # - Gyroscope: ±8.75 mdps/LSB (245 dps scale) 
+    # - Magnetometer: ±0.14 mgauss/LSB (4 gauss scale)
+    # - Temperature: ±1°C accuracy
+    # - Update rate: Up to 119Hz accelerometer, 952Hz gyro

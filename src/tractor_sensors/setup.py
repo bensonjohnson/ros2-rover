@@ -30,6 +30,9 @@ setup(
     entry_points={
         "console_scripts": [
             "hglrc_m100_5883 = tractor_sensors.hglrc_m100_5883:main",
+            "lc29h_rtk_gps = tractor_sensors.lc29h_rtk_gps:main",
+            "bno055_imu = tractor_sensors.bno055_imu:main",
+            "lsm9ds1_imu = tractor_sensors.lsm9ds1_imu:main",
         ],
     },
 )
