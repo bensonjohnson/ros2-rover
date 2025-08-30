@@ -47,7 +47,7 @@ def generate_launch_description():
     declare_operation_mode_cmd = DeclareLaunchArgument(
         "operation_mode",
         default_value="cpu_training",
-        description="Operation mode: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training",
+        description="Operation mode: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training | es_rl_hybrid",
     )
 
     declare_anti_overtraining_cmd = DeclareLaunchArgument(

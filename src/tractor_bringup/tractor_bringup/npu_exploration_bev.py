@@ -28,6 +28,7 @@ except ImportError as e:
 try:
     from .rknn_trainer_bev import RKNNTrainerBEV
     from .es_trainer_depth import EvolutionaryStrategyTrainer
+    from .pbt_es_rl_trainer import PBT_ES_RL_Trainer
     from .multi_metric_evaluator import MultiMetricEvaluator, ObjectiveWeights
     from .optimization_monitor import OptimizationMonitor
     from .bayesian_reward_optimizer import AdaptiveBayesianRewardWrapper
@@ -336,6 +337,15 @@ class NPUExplorationBEVNode(Node):
                     # Safe ES training with anti-overtraining measures
                     self.use_npu = True
                     self.get_logger().info("Mode: Safe ES training (anti-overtraining protection with ES)")
+                elif mode == 'es_rl_hybrid':
+                    # PBT ES-RL Hybrid training
+                    self.use_npu = True
+                    self.trainer = PBT_ES_RL_Trainer(
+                        population_size=4,
+                        bev_channels=bev_channels,
+                        enable_debug=enable_debug
+                    )
+                    self.get_logger().info("Mode: PBT ES-RL Hybrid training")
                 else:
                     self.use_npu = True
                     self.get_logger().warn(f"Unknown operation_mode '{mode}' - defaulting to cpu_training")
@@ -600,6 +610,11 @@ class NPUExplorationBEVNode(Node):
         self.latest_pointcloud = self.preprocess_pointcloud(msg)
         self.step_count += 1
         
+        # For PBT, select an active agent periodically
+        if self.operation_mode == 'es_rl_hybrid' and self.step_count % 200 == 0: # Every 200 steps, switch agent
+            self.trainer.select_active_agent()
+            self.get_logger().info(f"Switched to PBT agent {self.trainer.active_agent_idx}")
+
         # Train neural network if available
         if self.use_npu and self.trainer and self.step_count > 10:
             if self.operation_mode != 'inference' and (self.step_count % self.train_every_n_frames == 0):
@@ -1222,6 +1237,16 @@ class NPUExplorationBEVNode(Node):
                     f"Best Fitness: {training_stats.get('best_fitness', 0):.2f} | "
                     f"Freq: {training_stats.get('evolution_frequency', 50)} | "
                     f"Sigma: {training_stats.get('sigma', 0.1):.4f}"
+                )
+            elif self.operation_mode == 'es_rl_hybrid':
+                # PBT training stats
+                status_msg.data = (
+                    f"PBT ES-RL | Agent: {training_stats.get('active_agent', 0)}/{training_stats.get('population_size', 0)} | "
+                    f"Battery: {self.current_battery_percentage:.1f}% | "
+                    f"Steps: {self.step_count} | "
+                    f"Buffer: {training_stats['buffer_size']}/{training_stats.get('buffer_capacity', 50000)} | "
+                    f"Avg Pop Fitness: {training_stats.get('avg_population_fitness', 0):.2f} | "
+                    f"Max Pop Fitness: {training_stats.get('max_population_fitness', 0):.2f}"
                 )
             else:
                 # RL training stats

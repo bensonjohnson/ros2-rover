@@ -113,6 +113,9 @@ class HiwonderMotorDriver(Node):
         self.cmd_vel_timeout_secs = self.get_parameter("cmd_vel_timeout_secs").value
         self.watchdog_check_hz = self.get_parameter("watchdog_check_hz").value
 
+        # State tracking
+        self.encoder_lock = Lock()
+
         # Battery monitoring history
         # List of (timestamp, voltage, percentage) tuples
         self.voltage_history = []

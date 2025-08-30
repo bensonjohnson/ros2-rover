@@ -1,13 +1,6 @@
 package.xml
 setup.cfg
 setup.py
-../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
-../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/entry_points.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
-../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/anti_overtraining_params.yaml
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
@@ -30,9 +23,6 @@ launch/robot_localization.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
 resource/tractor_bringup
-test/test_copyright.py
-test/test_flake8.py
-test/test_pep257.py
 tractor_bringup/__init__.py
 tractor_bringup/anti_overtraining_config.py
 tractor_bringup/autonomous_mapping.py
@@ -41,6 +31,7 @@ tractor_bringup/bayesian_nas.py
 tractor_bringup/bayesian_reward_optimizer.py
 tractor_bringup/bayesian_sensor_fusion_optimizer.py
 tractor_bringup/bev_generator.py
+tractor_bringup/es_trainer_bev.py
 tractor_bringup/es_trainer_depth.py
 tractor_bringup/example_usage.py
 tractor_bringup/frontier_explorer.py
@@ -51,6 +42,7 @@ tractor_bringup/npu_exploration.py
 tractor_bringup/npu_exploration_bev.py
 tractor_bringup/npu_exploration_depth.py
 tractor_bringup/optimization_monitor.py
+tractor_bringup/pbt_es_rl_trainer.py
 tractor_bringup/progressive_architecture_refinement.py
 tractor_bringup/rknn_trainer.py
 tractor_bringup/rknn_trainer_bev.py
@@ -61,4 +53,11 @@ tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_depth.py
 tractor_bringup/training_monitor.py
 tractor_bringup/training_monitor_node.py
+tractor_bringup.egg-info/PKG-INFO
+tractor_bringup.egg-info/SOURCES.txt
+tractor_bringup.egg-info/dependency_links.txt
+tractor_bringup.egg-info/entry_points.txt
+tractor_bringup.egg-info/requires.txt
+tractor_bringup.egg-info/top_level.txt
+tractor_bringup.egg-info/zip-safe
 urdf/tractor.urdf.xacro

@@ -23,6 +23,7 @@ echo "  • es_training:   Evolutionary Strategy training"
 echo "  • es_hybrid:     RKNN inference + ES training"
 echo "  • es_inference:  Pure RKNN inference with ES model"
 echo "  • safe_es_training: Anti-overtraining ES protection"
+echo "  • es_rl_hybrid:  Combined ES and RL training"
 echo ""
 echo "Optimization levels:"
 echo "  • basic:     Core performance and safety optimization"
@@ -177,7 +178,8 @@ numeric_mode_menu() {
   echo "  6) es_hybrid    (RKNN inference + ES training)";
   echo "  7) es_inference (Pure RKNN inference with ES model)";
   echo "  8) safe_es_training (Anti-overtraining ES protection)";
-  read -p "Enter choice [1-8] (default 1): " choice
+  echo "  9) es_rl_hybrid (Combined ES and RL training)";
+  read -p "Enter choice [1-9] (default 1): " choice
   case "$choice" in
     2) MODE="hybrid";;
     3) MODE="inference";;
@@ -186,6 +188,7 @@ numeric_mode_menu() {
     6) MODE="es_hybrid";;
     7) MODE="es_inference";;
     8) MODE="safe_es_training";;
+    9) MODE="es_rl_hybrid";;
     1|"" ) MODE="cpu_training";;
     *) echo "Invalid choice, defaulting to cpu_training"; MODE="cpu_training";;
   esac
@@ -198,7 +201,7 @@ choose_mode() {
     numeric_mode_menu
     return 0
   fi
-  local options=("cpu_training" "hybrid" "inference" "safe_training" "es_training" "es_hybrid" "es_inference" "safe_es_training")
+  local options=("cpu_training" "hybrid" "inference" "safe_training" "es_training" "es_hybrid" "es_inference" "safe_es_training" "es_rl_hybrid")
   local index=0
   local key
   echo "(Use ↑/↓ then Enter, or press Enter now for default: ${options[0]})"
@@ -215,6 +218,7 @@ choose_mode() {
           "es_hybrid") printf "  > %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
           "es_inference") printf "  > %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
           "safe_es_training") printf "  > %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
+          "es_rl_hybrid") printf "  > %s (Combined ES and RL training)\n" "${options[$i]}" ;;
           *) printf "  > %s\n" "${options[$i]}" ;;
         esac
       else
@@ -227,6 +231,7 @@ choose_mode() {
           "es_hybrid") printf "    %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
           "es_inference") printf "    %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
           "safe_es_training") printf "    %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
+          "es_rl_hybrid") printf "    %s (Combined ES and RL training)\n" "${options[$i]}" ;;
           *) printf "    %s\n" "${options[$i]}" ;;
         esac
       fi
@@ -269,8 +274,8 @@ else
   SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
 fi
 
-if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" && "$MODE" != "es_training" && "$MODE" != "es_hybrid" && "$MODE" != "es_inference" && "$MODE" != "safe_es_training" ]]; then
-  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training"
+if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" && "$MODE" != "es_training" && "$MODE" != "es_hybrid" && "$MODE" != "es_inference" && "$MODE" != "safe_es_training" && "$MODE" != "es_rl_hybrid" ]]; then
+  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training | es_rl_hybrid"
   exit 1
 fi
 
@@ -286,6 +291,7 @@ case "$MODE" in
   "es_hybrid") echo "    → RKNN inference + ES training with Bayesian optimization" ;;
   "es_inference") echo "    → Pure RKNN inference with ES model" ;;
   "safe_es_training") echo "    → Anti-overtraining ES protection + Bayesian optimization ENABLED" ;;
+  "es_rl_hybrid") echo "    → Combined ES and RL training with PBT" ;;
   *) echo "    → Custom mode selected" ;;
 esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
