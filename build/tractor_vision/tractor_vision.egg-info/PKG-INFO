@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: tractor-vision
-Version: 0.0.0
-Summary: Vision processing package for tractor robot with Intel RealSense 435i integration
-Maintainer: benson
-Maintainer-email: benson@todo.todo
-License: MIT

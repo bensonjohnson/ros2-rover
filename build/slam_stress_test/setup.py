@@ -1,1 +1,0 @@
-/home/ubuntu/ros2-rover/src/slam_stress_test/setup.py

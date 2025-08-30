@@ -24,14 +24,12 @@ setup(
     zip_safe=True,
     maintainer="benson",
     maintainer_email="benson@todo.todo",
-    description="Sensor interfaces for tractor robot including rotary encoders, GPS, and compass",
+    description="Sensor interfaces for tractor robot including LC29H RTK GPS and LSM9DS1 IMU",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "hglrc_m100_5883 = tractor_sensors.hglrc_m100_5883:main",
             "lc29h_rtk_gps = tractor_sensors.lc29h_rtk_gps:main",
-            "bno055_imu = tractor_sensors.bno055_imu:main",
             "lsm9ds1_imu = tractor_sensors.lsm9ds1_imu:main",
         ],
     },

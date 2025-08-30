@@ -1,2 +1,0 @@
-[console_scripts]
-obstacle_detector = tractor_vision.obstacle_detector:main

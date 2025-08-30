@@ -1,7 +1,7 @@
 Metadata-Version: 2.1
 Name: tractor-sensors
 Version: 0.0.0
-Summary: Sensor interfaces for tractor robot including rotary encoders, GPS, and compass
+Summary: Sensor interfaces for tractor robot including LC29H RTK GPS and LSM9DS1 IMU
 Maintainer: benson
 Maintainer-email: benson@todo.todo
 License: MIT

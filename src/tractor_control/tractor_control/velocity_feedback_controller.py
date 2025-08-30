@@ -98,9 +98,9 @@ class VelocityFeedbackController(Node):
             Bool, "emergency_stop", self.emergency_stop_callback, 10
         )
 
-        # Subscribe to compass heading for drift correction
+        # Subscribe to filtered odometry for heading (from robot_localization EKF)
         self.compass_sub = self.create_subscription(
-            QuaternionStamped, "/hglrc_gps/heading", self.compass_callback, 10
+            Odometry, "/odometry/filtered", self.odometry_callback, 10
         )
 
         # Publishers
@@ -217,11 +217,11 @@ class VelocityFeedbackController(Node):
                 "Emergency stop activated - clearing velocity commands"
             )
 
-    def compass_callback(self, msg):
-        """Receive compass heading data"""
-        # Convert quaternion to yaw angle (radians)
-        q = msg.quaternion
-        # Extract yaw from quaternion (assuming pitch and roll are minimal)
+    def odometry_callback(self, msg):
+        """Receive filtered odometry data for heading"""
+        # Extract quaternion from odometry pose
+        q = msg.pose.pose.orientation
+        # Extract yaw from quaternion
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 
                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
         
@@ -229,7 +229,7 @@ class VelocityFeedbackController(Node):
             self.current_heading = yaw
             if not self.heading_set:
                 self.heading_set = True
-                self.get_logger().info(f"Compass initialized: heading={math.degrees(yaw):.1f}°")
+                self.get_logger().info(f"EKF heading initialized: {math.degrees(yaw):.1f}°")
 
     def control_loop(self):
         """Simple drift correction - slow down faster track"""

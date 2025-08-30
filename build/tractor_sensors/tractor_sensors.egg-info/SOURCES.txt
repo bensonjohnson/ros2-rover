@@ -8,12 +8,8 @@ setup.py
 ../../build/tractor_sensors/tractor_sensors.egg-info/requires.txt
 ../../build/tractor_sensors/tractor_sensors.egg-info/top_level.txt
 ../../build/tractor_sensors/tractor_sensors.egg-info/zip-safe
-config/bno055_config.yaml
-config/hglrc_m100_5883_config.yaml
 config/lc29h_rtk_config.yaml
 config/lsm9ds1_config.yaml
-launch/bno055_imu.launch.py
-launch/hglrc_m100_5883.launch.py
 launch/lc29h_rtk.launch.py
 launch/lsm9ds1_imu.launch.py
 resource/tractor_sensors
@@ -21,7 +17,5 @@ test/test_copyright.py
 test/test_flake8.py
 test/test_pep257.py
 tractor_sensors/__init__.py
-tractor_sensors/bno055_imu.py
-tractor_sensors/hglrc_m100_5883.py
 tractor_sensors/lc29h_rtk_gps.py
 tractor_sensors/lsm9ds1_imu.py

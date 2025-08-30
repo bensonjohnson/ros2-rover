@@ -1,1 +1,0 @@
-/home/ubuntu/ros2-rover/build/tractor_coverage/launch/coverage_system.launch.py

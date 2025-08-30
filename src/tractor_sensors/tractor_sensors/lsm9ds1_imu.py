@@ -225,6 +225,71 @@ class LSM9DS1Publisher(Node):
             corrected[2] = -corrected[2]
         return corrected
 
+    def compute_orientation(self, accel: list, mag: list) -> list:
+        """Compute orientation quaternion from accelerometer and magnetometer
+        Returns [x, y, z, w] quaternion"""
+        try:
+            # Normalize accelerometer vector
+            ax, ay, az = accel
+            accel_norm = math.sqrt(ax*ax + ay*ay + az*az)
+            if accel_norm < 0.1:  # Avoid division by zero
+                return [0.0, 0.0, 0.0, 1.0]
+            
+            ax /= accel_norm
+            ay /= accel_norm  
+            az /= accel_norm
+            
+            # Normalize magnetometer vector
+            mx, my, mz = mag
+            mag_norm = math.sqrt(mx*mx + my*my + mz*mz)
+            if mag_norm < 0.1:  # Avoid division by zero
+                return [0.0, 0.0, 0.0, 1.0]
+            
+            mx /= mag_norm
+            my /= mag_norm
+            mz /= mag_norm
+            
+            # Tilt compensation: remove gravity component from magnetometer
+            # Dot product of magnetometer and gravity (down is -accel direction)
+            h_x = mx - ax * (mx * ax + my * ay + mz * az)  
+            h_y = my - ay * (mx * ax + my * ay + mz * az)
+            h_z = mz - az * (mx * ax + my * ay + mz * az)
+            
+            # Normalize horizontal magnetic field
+            h_norm = math.sqrt(h_x*h_x + h_y*h_y + h_z*h_z)
+            if h_norm < 0.1:
+                return [0.0, 0.0, 0.0, 1.0]
+                
+            h_x /= h_norm
+            h_y /= h_norm
+            h_z /= h_norm
+            
+            # Compute roll and pitch from accelerometer
+            roll = math.atan2(ay, az)
+            pitch = math.atan2(-ax, math.sqrt(ay*ay + az*az))
+            
+            # Compute tilt-compensated yaw from horizontal magnetic field
+            yaw = math.atan2(h_y, h_x)
+            
+            # Convert to quaternion (ZYX Euler order)
+            cr = math.cos(roll * 0.5)
+            sr = math.sin(roll * 0.5)
+            cp = math.cos(pitch * 0.5)
+            sp = math.sin(pitch * 0.5)  
+            cy = math.cos(yaw * 0.5)
+            sy = math.sin(yaw * 0.5)
+            
+            qw = cr * cp * cy + sr * sp * sy
+            qx = sr * cp * cy - cr * sp * sy
+            qy = cr * sp * cy + sr * cp * sy
+            qz = cr * cp * sy - sr * sp * cy
+            
+            return [qx, qy, qz, qw]
+            
+        except:
+            # Return identity quaternion on error
+            return [0.0, 0.0, 0.0, 1.0]
+
     def read_byte(self, addr: int, register: int) -> int:
         """Read single byte from register"""
         return self.i2c.read_byte_data(addr, register)
@@ -343,13 +408,17 @@ class LSM9DS1Publisher(Node):
         with self.data_lock:
             data = self.sensor_data.copy()
 
-        # IMU message (no orientation since we don't have sensor fusion)
+        # IMU message with computed orientation from magnetometer + accelerometer
         imu_msg = Imu()
         imu_msg.header.stamp = current_time.to_msg()
         imu_msg.header.frame_id = self.frame_id
 
-        # No orientation data (LSM9DS1 doesn't provide fused orientation)
-        imu_msg.orientation_covariance[0] = -1  # Mark as unavailable
+        # Compute tilt-compensated orientation from accel + magnetometer
+        orientation_quat = self.compute_orientation(data['accel'], data['mag'])
+        imu_msg.orientation.x = orientation_quat[0]
+        imu_msg.orientation.y = orientation_quat[1] 
+        imu_msg.orientation.z = orientation_quat[2]
+        imu_msg.orientation.w = orientation_quat[3]
 
         # Angular velocity
         imu_msg.angular_velocity.x = data['gyro'][0]
@@ -362,6 +431,12 @@ class LSM9DS1Publisher(Node):
         imu_msg.linear_acceleration.z = data['accel'][2]
 
         # Set covariances (LSM9DS1 typical noise characteristics)
+        # Orientation covariance (tilt-compensated compass)
+        ori_var = (0.1) ** 2  # ~6° uncertainty in orientation
+        imu_msg.orientation_covariance[0] = ori_var  # roll
+        imu_msg.orientation_covariance[4] = ori_var  # pitch  
+        imu_msg.orientation_covariance[8] = ori_var * 4  # yaw (worse due to magnetometer)
+
         # Angular velocity covariance
         gyro_var = (0.01) ** 2  # 0.01 rad/s noise
         imu_msg.angular_velocity_covariance[0] = gyro_var

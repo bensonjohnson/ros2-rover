@@ -77,9 +77,9 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
 
-    bno055_imu_launch = IncludeLaunchDescription(
+    lsm9ds1_imu_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "bno055_imu.launch.py")
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
         ),
         launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
@@ -315,7 +315,7 @@ def generate_launch_description():
 
     # Sensor system (early start for calibration time)
     ld.add_action(TimerAction(period=1.0, actions=[lc29h_gps_launch]))
-    ld.add_action(TimerAction(period=1.5, actions=[bno055_imu_launch]))
+    ld.add_action(TimerAction(period=1.5, actions=[lsm9ds1_imu_launch]))
     ld.add_action(TimerAction(period=2.0, actions=[robot_localization_launch]))
 
     # Camera system (delayed for stability)
