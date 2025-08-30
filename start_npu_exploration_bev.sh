@@ -317,7 +317,7 @@ echo ""
 
 # Launch Foxglove bridge for visualization
 echo "Launching Foxglove bridge..."
-ros2 launch foxglove_bridge foxglove_bridge_launch.py &
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml &
 FOXGLOVE_PID=$!
 echo "✓ Foxglove bridge launched with PID: $FOXGLOVE_PID"
 echo ""

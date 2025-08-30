@@ -1124,10 +1124,13 @@ class NPUExplorationBEVNode(Node):
                     # Update optimization monitoring for ES (using RL stats)
                     if self.optimization_monitor:
                         self.optimization_monitor.log_training_optimization(
-                            learning_rate=training_stats.get('learning_rate', 0.001),
-                            batch_size=training_stats.get('batch_size', 32),
-                            loss=training_stats.get('loss', 0),
-                            performance_metrics=training_stats
+                            step=self.step_count,
+                            fitness_score=-training_stats.get('loss', 0),  # Using negative loss as fitness
+                            best_params={
+                                'learning_rate': training_stats.get('learning_rate', 0.001),
+                                'batch_size': training_stats.get('batch_size', 32)
+                            },
+                            training_stats=training_stats
                         )
             else:
                 # For RL, we train every step
