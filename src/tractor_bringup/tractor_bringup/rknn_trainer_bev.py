@@ -106,7 +106,8 @@ class RKNNTrainerBEV:
     """
     
     def __init__(self, model_dir="models", bev_channels: int = 4, enable_debug: bool = False, 
-                 enable_bayesian_training_optimization: bool = True):  # Optimized: more buffer over channels
+                 enable_bayesian_training_optimization: bool = True,
+                 buffer_capacity: int = 50000):  # Optimized: more buffer over channels
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -134,7 +135,7 @@ class RKNNTrainerBEV:
         self.criterion = nn.MSELoss()
         
         # Experience replay (replaced deque with ring buffer + priorities for prioritized replay)
-        self.buffer_capacity = 50000   # Optimized for learning quality: large buffer with 4 channels
+        self.buffer_capacity = int(buffer_capacity)   # Optimized for learning quality: large buffer with 4 channels
         # Memory usage: ~15GB for experience buffer (50k x 4 x 200 x 200 x 4 bytes)
         self.buffer_size = 0
         self.insert_ptr = 0
@@ -164,8 +165,8 @@ class RKNNTrainerBEV:
         self.frame_stack_size = 4
         self.frame_stack_buffer = deque(maxlen=self.frame_stack_size)
         
-        # High-resolution BEV with memory abundance
-        self.enable_high_res_mode = True  # Can use 256x256 or even 300x300 BEV
+        # High-resolution BEV optional (kept disabled by default for consistency)
+        # self.enable_high_res_mode = True  # Can use 256x256 or even 300x300 BEV
         
         # Parallel processing capabilities
         self.enable_multiprocessing = True  # Use multiple CPU cores for BEV generation
@@ -250,6 +251,14 @@ class RKNNTrainerBEV:
         self.torch = torch  # Expose torch module for PBT weight perturbation
         
         print(f"[TrainerInit] Using trainer file: {__file__} expected_proprio={3 + self.extra_proprio}")
+
+    def reset_optimizer_state(self):
+        """Reset optimizer moment estimates (useful after weight copy)."""
+        try:
+            if hasattr(self, 'optimizer') and self.optimizer is not None:
+                self.optimizer.state = {}
+        except Exception:
+            pass
 
     def add_experience(self,
                       bev_image: np.ndarray,
@@ -1083,6 +1092,8 @@ class RKNNTrainerBEV:
             if hasattr(source_trainer, 'model') and hasattr(source_trainer.model, 'state_dict'):
                 # Copy model weights
                 self.model.load_state_dict(source_trainer.model.state_dict())
+                # Reset optimizer state to avoid stale moments
+                self.reset_optimizer_state()
                 
                 if self.enable_debug:
                     print(f"[PBT] Copied weights from source trainer")

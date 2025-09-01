@@ -98,6 +98,28 @@ def generate_launch_description():
         description="Enable comprehensive optimization monitoring and logging (true/false)",
     )
 
+    # PBT (ES-RL hybrid) launch arguments
+    declare_pbt_population_size_cmd = DeclareLaunchArgument(
+        "pbt_population_size",
+        default_value="4",
+        description="Population size for PBT ES-RL hybrid",
+    )
+    declare_pbt_update_interval_cmd = DeclareLaunchArgument(
+        "pbt_update_interval",
+        default_value="1000",
+        description="Update interval (steps) for PBT exploit/explore and agent switching",
+    )
+    declare_pbt_perturb_prob_cmd = DeclareLaunchArgument(
+        "pbt_perturb_prob",
+        default_value="0.25",
+        description="Probability to perturb hyperparameters/weights during PBT explore",
+    )
+    declare_pbt_resample_prob_cmd = DeclareLaunchArgument(
+        "pbt_resample_prob",
+        default_value="0.25",
+        description="Probability to resample (reinitialize) an agent during PBT explore",
+    )
+
     # Phase 2 launch arguments - Multi-objective and Architecture Optimization
     declare_enable_multi_objective_optimization_cmd = DeclareLaunchArgument(
         "enable_multi_objective_optimization",
@@ -216,6 +238,11 @@ def generate_launch_description():
                 "enable_reward_optimization": LaunchConfiguration("enable_reward_optimization"),
                 "enable_multi_metric_evaluation": LaunchConfiguration("enable_multi_metric_evaluation"),
                 "enable_optimization_monitoring": LaunchConfiguration("enable_optimization_monitoring"),
+                # PBT parameters (used in es_rl_hybrid mode)
+                "pbt_population_size": LaunchConfiguration("pbt_population_size"),
+                "pbt_update_interval": LaunchConfiguration("pbt_update_interval"),
+                "pbt_perturb_prob": LaunchConfiguration("pbt_perturb_prob"),
+                "pbt_resample_prob": LaunchConfiguration("pbt_resample_prob"),
                 # Phase 2 parameters
                 "enable_multi_objective_optimization": LaunchConfiguration("enable_multi_objective_optimization"),
                 "enable_safety_constraints": LaunchConfiguration("enable_safety_constraints"),
@@ -289,6 +316,11 @@ def generate_launch_description():
     ld.add_action(declare_enable_reward_optimization_cmd)
     ld.add_action(declare_enable_multi_metric_cmd)
     ld.add_action(declare_enable_optimization_monitoring_cmd)
+    # Add PBT arguments
+    ld.add_action(declare_pbt_population_size_cmd)
+    ld.add_action(declare_pbt_update_interval_cmd)
+    ld.add_action(declare_pbt_perturb_prob_cmd)
+    ld.add_action(declare_pbt_resample_prob_cmd)
     
     # Add Phase 2 launch arguments
     ld.add_action(declare_enable_multi_objective_optimization_cmd)

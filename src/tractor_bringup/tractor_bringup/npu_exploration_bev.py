@@ -11,6 +11,7 @@ from sensor_msgs.msg import PointCloud2, Imu, JointState
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Float32
+from std_srvs.srv import Trigger
 import numpy as np
 import time
 import struct
@@ -34,6 +35,7 @@ except ImportError as e:
 
 try:
     from .rknn_trainer_bev import RKNNTrainerBEV
+    from .es_trainer_bev import EvolutionaryStrategyTrainerBEV
     from .es_trainer_depth import EvolutionaryStrategyTrainer
     from .pbt_es_rl_trainer import PBT_ES_RL_Trainer
     from .multi_metric_evaluator import MultiMetricEvaluator, ObjectiveWeights
@@ -82,6 +84,11 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('enable_reward_optimization', False)  # Enable reward parameter optimization
         self.declare_parameter('enable_multi_metric_evaluation', True)  # Enable multi-metric fitness evaluation
         self.declare_parameter('enable_optimization_monitoring', True)  # Enable comprehensive monitoring
+        # PBT parameters (for ES-RL hybrid)
+        self.declare_parameter('pbt_population_size', 4)
+        self.declare_parameter('pbt_update_interval', 1000)
+        self.declare_parameter('pbt_perturb_prob', 0.25)
+        self.declare_parameter('pbt_resample_prob', 0.25)
         
         # Phase 2 parameters - Multi-objective and Architecture Optimization
         self.declare_parameter('enable_multi_objective_optimization', False)  # Enable Pareto frontier optimization
@@ -124,6 +131,10 @@ class NPUExplorationBEVNode(Node):
         self.enable_architecture_optimization = self.get_parameter('enable_architecture_optimization').value
         self.enable_progressive_architecture = self.get_parameter('enable_progressive_architecture').value
         self.enable_sensor_fusion_optimization = self.get_parameter('enable_sensor_fusion_optimization').value
+
+        # Adjust training cadence for PBT mode to reduce CPU load
+        if self.operation_mode == 'es_rl_hybrid':
+            self.train_every_n_frames = max(self.train_every_n_frames, 5)
         
         # BEV parameter values
         bev_size_param = self.get_parameter('bev_size').value
@@ -217,6 +228,8 @@ class NPUExplorationBEVNode(Node):
         
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/npu_exploration_status', 10)
+        # Expose a service to trigger model saves on shutdown
+        self.save_srv = self.create_service(Trigger, '/save_models', self.handle_save_models)
         
         # Control timer
         self.control_timer = self.create_timer(0.1, self.control_loop)  # 10Hz control
@@ -268,6 +281,17 @@ class NPUExplorationBEVNode(Node):
         self.recovery_reverse_speed = -0.3  # Reduced from -0.5
         self.recovery_max_duration = 80     # Reduced from 120
 
+    def handle_save_models(self, request, response):
+        try:
+            if self.trainer:
+                self.trainer.safe_save()
+            response.success = True
+            response.message = "Models saved"
+        except Exception as e:
+            response.success = False
+            response.message = f"Save failed: {e}"
+        return response
+
     def init_inference_engine(self):
         self.use_npu = False
         self.trainer = None
@@ -290,9 +314,13 @@ class NPUExplorationBEVNode(Node):
                 )
                 
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
-                    # Note: Using BEV trainer for ES modes until BEV-compatible ES trainer is available
-                    bayesian_status = "with Bayesian optimization" if self.enable_bayesian_optimization else "with standard parameter adaptation"
-                    self.get_logger().warn(f"ES modes currently using BEV trainer {bayesian_status} - ES-specific BEV trainer not yet implemented")
+                    # Switch to BEV ES trainer for ES modes
+                    self.trainer = EvolutionaryStrategyTrainerBEV(
+                        bev_channels=bev_channels,
+                        enable_debug=enable_debug,
+                        enable_bayesian_optimization=self.enable_bayesian_optimization
+                    )
+                    self.get_logger().info("ES BEV Trainer initialized")
                 else:
                     training_opt_status = "with Bayesian training optimization" if self.enable_training_optimization else "with fixed training parameters"
                     self.get_logger().info(f"RKNN BEV Trainer initialized {training_opt_status}")
@@ -330,7 +358,7 @@ class NPUExplorationBEVNode(Node):
                     self.get_logger().info("Mode: ES training (Evolutionary Strategy on CPU)")
                 elif mode == 'es_hybrid':
                     # ES training with RKNN inference
-                    if self.trainer.enable_rknn_inference():
+                    if hasattr(self.trainer, 'enable_rknn_inference') and self.trainer.enable_rknn_inference():
                         self.use_npu = True
                         self.get_logger().info("Mode: ES Hybrid (RKNN runtime inference + ES training)")
                     else:
@@ -338,7 +366,7 @@ class NPUExplorationBEVNode(Node):
                         self.get_logger().warn("ES Hybrid mode requested but RKNN runtime not available - using PyTorch")
                 elif mode == 'es_inference':
                     # Pure ES inference: load RKNN and disable training logic
-                    if self.trainer.enable_rknn_inference():
+                    if hasattr(self.trainer, 'enable_rknn_inference') and self.trainer.enable_rknn_inference():
                         self.use_npu = True
                         self.get_logger().info("Mode: ES Pure RKNN inference (no training)")
                     else:
@@ -351,11 +379,21 @@ class NPUExplorationBEVNode(Node):
                 elif mode == 'es_rl_hybrid':
                     # PBT ES-RL Hybrid training
                     self.use_npu = True
+                    # Read PBT params
+                    pbt_pop = int(self.get_parameter('pbt_population_size').value)
+                    pbt_interval = int(self.get_parameter('pbt_update_interval').value)
+                    pbt_perturb = float(self.get_parameter('pbt_perturb_prob').value)
+                    pbt_resample = float(self.get_parameter('pbt_resample_prob').value)
                     self.trainer = PBT_ES_RL_Trainer(
-                        population_size=4,
+                        population_size=pbt_pop,
                         bev_channels=bev_channels,
+                        pbt_interval=pbt_interval,
+                        perturb_prob=pbt_perturb,
+                        resample_prob=pbt_resample,
                         enable_debug=enable_debug
                     )
+                    # Use the same interval for agent switching in this node
+                    self.pbt_update_interval = pbt_interval
                     self.get_logger().info("Mode: PBT ES-RL Hybrid training")
                 else:
                     self.use_npu = True
@@ -621,10 +659,12 @@ class NPUExplorationBEVNode(Node):
         self.latest_pointcloud = self.preprocess_pointcloud(msg)
         self.step_count += 1
         
-        # For PBT, select an active agent periodically (increased interval for better learning)
-        if self.operation_mode == 'es_rl_hybrid' and self.step_count % 1000 == 0: # Every 1000 steps, switch agent
-            self.trainer.select_active_agent()
-            self.get_logger().info(f"Switched to PBT agent {self.trainer.active_agent_idx}")
+        # For PBT, select an active agent periodically (configurable interval)
+        if self.operation_mode == 'es_rl_hybrid':
+            interval = getattr(self, 'pbt_update_interval', 1000)
+            if interval > 0 and self.step_count % interval == 0:
+                self.trainer.select_active_agent()
+                self.get_logger().info(f"Switched to PBT agent {self.trainer.active_agent_idx}")
 
         # Train neural network if available
         if self.use_npu and self.trainer and self.step_count > 10:
@@ -1139,25 +1179,39 @@ class NPUExplorationBEVNode(Node):
                     in_recovery=self.recovery_active
                 )
             
-            # Train based on mode (currently using RL training for all modes since ES trainer is depth-based)
+            # Train based on mode
             if self.operation_mode in ['es_training', 'es_hybrid', 'safe_es_training']:
-                # Note: Currently using RL training for ES modes until BEV-compatible ES trainer is available
-                if self.trainer.buffer_size >= max(32, self.trainer.batch_size):
-                    training_stats = self.trainer.train_step()
-                    if self.step_count % 50 == 0 and 'loss' in training_stats:
-                        self.get_logger().info(f"ES Mode (using RL): Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}")
-                        
-                    # Update optimization monitoring for ES (using RL stats)
-                    if self.optimization_monitor:
-                        self.optimization_monitor.log_training_optimization(
-                            step=self.step_count,
-                            fitness_score=-training_stats.get('loss', 0),  # Using negative loss as fitness
-                            best_params={
-                                'learning_rate': training_stats.get('learning_rate', 0.001),
-                                'batch_size': training_stats.get('batch_size', 32)
-                            },
-                            training_stats=training_stats
-                        )
+                # Use ES trainer when available
+                if hasattr(self.trainer, 'should_evolve') and hasattr(self.trainer, 'evolve_population'):
+                    if self.trainer.should_evolve(self.step_count):
+                        training_stats = self.trainer.evolve_population()
+                        if self.step_count % 50 == 0:
+                            self.get_logger().info(
+                                f"ES: Gen={training_stats.get('generation',0)} AvgFit={training_stats.get('avg_fitness',0):.3f} "
+                                f"Best={training_stats.get('best_fitness',0):.3f} Samples={training_stats.get('samples',0)}"
+                            )
+                        if self.optimization_monitor:
+                            self.optimization_monitor.log_training_optimization(
+                                step=self.step_count,
+                                fitness_score=training_stats.get('avg_fitness', 0.0),
+                                loss=None,
+                                details=training_stats
+                            )
+                else:
+                    # Fallback to RL training if ES trainer not available
+                    if self.trainer.buffer_size >= max(32, getattr(self.trainer, 'batch_size', 32)):
+                        training_stats = self.trainer.train_step()
+                        if self.step_count % 50 == 0 and 'loss' in training_stats:
+                            self.get_logger().info(
+                                f"ES Mode (RL fallback): Loss={training_stats['loss']:.4f} AvgR={training_stats.get('avg_reward',0):.2f} Samples={training_stats.get('samples',0)}"
+                            )
+                        if self.optimization_monitor:
+                            self.optimization_monitor.log_training_optimization(
+                                step=self.step_count,
+                                fitness_score=-training_stats.get('loss', 0),
+                                loss=training_stats.get('loss', None),
+                                details=training_stats
+                            )
             else:
                 # For RL, we train every step
                 if self.trainer.buffer_size >= max(32, self.trainer.batch_size):

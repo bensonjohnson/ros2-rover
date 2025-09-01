@@ -393,12 +393,23 @@ echo "Launching NPU BEV exploration system..."
 echo "Press Ctrl+C to stop safely"
 echo ""
 
-# Launch Foxglove bridge for visualization
-echo "Launching Foxglove bridge..."
-ros2 launch foxglove_bridge foxglove_bridge_launch.xml &
-FOXGLOVE_PID=$!
-echo "✓ Foxglove bridge launched with PID: $FOXGLOVE_PID"
-echo ""
+FOXGLOVE_PID=""
+# Launch Foxglove bridge only for (es_)inference or (es_)hybrid, unless disabled
+if [[ "${ENABLE_FOXGLOVE:-1}" == "1" ]] && [[ "$MODE" == "inference" || "$MODE" == "hybrid" || "$MODE" == "es_inference" || "$MODE" == "es_hybrid" ]]; then
+  echo "Launching Foxglove bridge..."
+  ros2 launch foxglove_bridge foxglove_bridge_launch.xml &
+  FOXGLOVE_PID=$!
+  echo "✓ Foxglove bridge launched with PID: $FOXGLOVE_PID"
+  echo ""
+else
+  echo "Skipping Foxglove bridge (training-focused mode or disabled)"
+fi
+
+# Adjust BEV size for PBT to reduce memory footprint when population is large
+BEV_SIZE_PARAM="[200, 200]"
+if [[ "$MODE" == "es_rl_hybrid" ]] && [[ ${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} -ge 3 ]]; then
+  BEV_SIZE_PARAM="[160, 160]"
+fi
 
 ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     operation_mode:=${MODE} \
@@ -422,7 +433,7 @@ ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     enable_progressive_architecture:=false \
     enable_sensor_fusion_optimization:=false \
     use_sim_time:=false \
-    bev_size:="[200, 200]" \
+    bev_size:="$BEV_SIZE_PARAM" \
     bev_range:="[10.0, 10.0]" \
     bev_height_channels:="[0.2, 1.0]" \
     enable_ground_removal:=true &
@@ -441,7 +452,9 @@ shutdown_handler() {
             kill -9 $LAUNCH_PID 2>/dev/null
         fi
     fi
-    if ps -p $FOXGLOVE_PID > /dev/null; then
+    # Trigger a best-effort model save
+    timeout 5s ros2 service call /save_models std_srvs/srv/Trigger "{}" >/dev/null 2>&1 || true
+    if [[ -n "$FOXGLOVE_PID" ]] && ps -p $FOXGLOVE_PID > /dev/null; then
         kill $FOXGLOVE_PID 2>/dev/null
     fi
     # Stop monitoring if running

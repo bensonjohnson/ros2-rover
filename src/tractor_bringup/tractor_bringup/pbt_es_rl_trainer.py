@@ -11,18 +11,27 @@ from collections import deque
 from .rknn_trainer_bev import RKNNTrainerBEV
 
 class PBT_ES_RL_Trainer:
-    def __init__(self, population_size=4, bev_channels=4, **kwargs):
+    def __init__(self, population_size=4, bev_channels=4, pbt_interval=None,
+                 perturb_prob=None, resample_prob=None, **kwargs):
         self.population_size = population_size
         self.bev_channels = bev_channels
         self.kwargs = kwargs
+        
+        # Per-agent buffer scaling to constrain total memory usage
+        try:
+            default_capacity = 50000
+            # Aim to cap total buffer near default_capacity by dividing across agents
+            self.buffer_capacity_per_agent = max(4000, default_capacity // max(1, self.population_size))
+        except Exception:
+            self.buffer_capacity_per_agent = 10000
         
         self.population = [self._create_agent() for _ in range(self.population_size)]
         self.active_agent_idx = 0
         
         # PBT parameters
-        self.pbt_interval = 1000  # steps before considering a PBT update (increased for stability)
-        self.perturb_prob = 0.8
-        self.resample_prob = 0.2
+        self.pbt_interval = int(pbt_interval) if pbt_interval is not None else 1000  # steps before PBT update
+        self.perturb_prob = float(perturb_prob) if perturb_prob is not None else 0.8
+        self.resample_prob = float(resample_prob) if resample_prob is not None else 0.2
         
         # Hyperparameter perturbation factors
         self.hyperparam_perturbations = {
@@ -35,7 +44,11 @@ class PBT_ES_RL_Trainer:
 
     def _create_agent(self):
         """Creates a new agent (trainer instance)"""
-        agent = RKNNTrainerBEV(bev_channels=self.bev_channels, **self.kwargs)
+        agent = RKNNTrainerBEV(
+            bev_channels=self.bev_channels,
+            buffer_capacity=self.buffer_capacity_per_agent,
+            **self.kwargs
+        )
         # You can randomize initial hyperparameters here if you want
         return {
             'trainer': agent,
@@ -106,10 +119,37 @@ class PBT_ES_RL_Trainer:
             print(f"PBT Update for Agent {agent_idx}: Fitness {agent_data['fitness']:.2f} < Best Contender {best_contender['fitness']:.2f}")
             # Exploit: copy weights from the better agent
             agent_data['trainer'].copy_weights_from(best_contender['trainer'])
+            # Reset optimizer state after weight copy (avoid stale moments)
+            if hasattr(agent_data['trainer'], 'reset_optimizer_state'):
+                agent_data['trainer'].reset_optimizer_state()
             
             # Explore: perturb hyperparameters and/or weights
-            self._perturb_hyperparameters(agent_data['trainer'])
-            self._perturb_weights(agent_data['trainer'])
+            r = random.random()
+            if r < self.resample_prob:
+                # Resample: reinitialize this agent to diversify population
+                self._resample_agent(agent_idx)
+                print(f"  - Resampled agent {agent_idx}")
+            else:
+                if random.random() < self.perturb_prob:
+                    self._perturb_hyperparameters(agent_data['trainer'])
+                    self._perturb_weights(agent_data['trainer'])
+                else:
+                    print("  - Skipped perturbation this cycle")
+
+    def _resample_agent(self, agent_idx: int):
+        """Reinitialize the model for an agent to increase diversity."""
+        try:
+            new_trainer = RKNNTrainerBEV(
+                bev_channels=self.bev_channels,
+                buffer_capacity=self.buffer_capacity_per_agent,
+                **self.kwargs
+            )
+            self.population[agent_idx]['trainer'] = new_trainer
+            self.population[agent_idx]['fitness'] = 0.0
+            self.population[agent_idx]['steps'] = 0
+            self.population[agent_idx]['history'].clear()
+        except Exception as e:
+            print(f"  - Resample failed for agent {agent_idx}: {e}")
 
     def _perturb_hyperparameters(self, trainer):
         """Perturb the hyperparameters of a trainer instance"""
