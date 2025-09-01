@@ -15,15 +15,8 @@ echo "  ✓ Anti-overtraining reward system (optional)"
 echo "  ✓ No SLAM/Nav2 complexity"
 echo ""
 echo "Available modes:"
-echo "  • cpu_training:  Standard PyTorch training (Reinforcement Learning)"
-echo "  • hybrid:        RKNN inference + RL training" 
-echo "  • inference:     Pure RKNN inference only"
-echo "  • safe_training: Anti-overtraining RL protection"
-echo "  • es_training:   Evolutionary Strategy training"
-echo "  • es_hybrid:     RKNN inference + ES training"
-echo "  • es_inference:  Pure RKNN inference with ES model"
-echo "  • safe_es_training: Anti-overtraining ES protection"
-echo "  • es_rl_hybrid:  Combined ES and RL training"
+echo "  • train:   RL-ES (PBT) training"
+echo "  • infer:   Inference on trained model"
 echo ""
 echo "Optimization levels:"
 echo "  • basic:     Core performance and safety optimization"
@@ -146,12 +139,9 @@ else
     echo "⚠ rs-enumerate-devices command not found - skipping RealSense check"
 fi
 
-# Configuration (interactive if no args supplied)
-# Existing positional usage still works:
-#   ./start_npu_exploration_bev.sh <mode> <max_speed> <exploration_time> <safety_distance>
-# If no args -> interactive menu with arrow keys.
-
-DEFAULT_MODE="cpu_training"
+# Configuration
+# Usage: ./start_npu_exploration_bev.sh <train|infer> <max_speed> <exploration_time> <safety_distance>
+DEFAULT_MODE="train"
 DEFAULT_MAX_SPEED="0.15"
 DEFAULT_EXPLORATION_TIME="300"
 DEFAULT_SAFETY_DISTANCE="0.2"
@@ -162,146 +152,31 @@ DEFAULT_PBT_UPDATE_INTERVAL="1000"  # Increased from 200 for stability
 DEFAULT_PBT_PERTURB_PROB="0.25"
 DEFAULT_PBT_RESAMPLE_PROB="0.25"
 
-# Fallback-friendly interactive helpers
-supports_arrows() {
-  # Disable with env var or if terminal looks incompatible
-  if [[ -n "$DISABLE_INTERACTIVE_ARROWS" ]]; then return 1; fi
-  if [[ ! -t 0 ]]; then return 1; fi
-  if [[ "$TERM" == "dumb" || "$TERM" == "" ]]; then return 1; fi
-  command -v tput >/dev/null 2>&1 || return 1
-  # Ensure cursor up works
-  tput cuu 0 >/dev/null 2>&1 || return 1
-  return 0
-}
+MODE_INPUT=${1:-$DEFAULT_MODE}
+shift || true
+MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
+EXPLORATION_TIME=${2:-$DEFAULT_EXPLORATION_TIME}
+SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
 
-numeric_mode_menu() {
-  echo "Select Operation Mode:";
-  echo "  1) cpu_training (PyTorch RL training + periodic export)";
-  echo "  2) hybrid       (RKNN inference + RL training)";
-  echo "  3) inference    (Pure RKNN inference, no training)";
-  echo "  4) safe_training (Anti-overtraining RL protection)";
-  echo "  5) es_training  (Evolutionary Strategy training)";
-  echo "  6) es_hybrid    (RKNN inference + ES training)";
-  echo "  7) es_inference (Pure RKNN inference with ES model)";
-  echo "  8) safe_es_training (Anti-overtraining ES protection)";
-  echo "  9) es_rl_hybrid (Combined ES and RL training)";
-  read -p "Enter choice [1-9] (default 1): " choice
-  case "$choice" in
-    2) MODE="hybrid";;
-    3) MODE="inference";;
-    4) MODE="safe_training";;
-    5) MODE="es_training";;
-    6) MODE="es_hybrid";;
-    7) MODE="es_inference";;
-    8) MODE="safe_es_training";;
-    9) MODE="es_rl_hybrid";;
-    1|"" ) MODE="cpu_training";;
-    *) echo "Invalid choice, defaulting to cpu_training"; MODE="cpu_training";;
-  esac
-  echo "Selected: $MODE"
-}
+# Map simple modes to internal operation modes
+case "$MODE_INPUT" in
+  train|TRAIN)
+    MODE="es_rl_hybrid";;
+  infer|INFER|inference)
+    MODE="es_inference";;
+  *)
+    echo "Unknown mode '$MODE_INPUT', defaulting to 'train' (es_rl_hybrid)"
+    MODE="es_rl_hybrid";;
+esac
 
-choose_mode() {
-  # If arrows unsupported, fall back immediately
-  if ! supports_arrows; then
-    numeric_mode_menu
-    return 0
-  fi
-  local options=("cpu_training" "hybrid" "inference" "safe_training" "es_training" "es_hybrid" "es_inference" "safe_es_training" "es_rl_hybrid")
-  local index=0
-  local key
-  echo "(Use ↑/↓ then Enter, or press Enter now for default: ${options[0]})"
-  echo "Note: 'safe_training' and 'safe_es_training' modes use anti-overtraining measures"
-  while true; do
-    for i in "${!options[@]}"; do
-      if [ $i -eq $index ]; then
-        case "${options[$i]}" in
-          "cpu_training") printf "  > %s (Standard PyTorch RL training)\n" "${options[$i]}" ;;
-          "hybrid") printf "  > %s (RKNN inference + RL training)\n" "${options[$i]}" ;;
-          "inference") printf "  > %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
-          "safe_training") printf "  > %s (Anti-overtraining RL protection)\n" "${options[$i]}" ;;
-          "es_training") printf "  > %s (Evolutionary Strategy training)\n" "${options[$i]}" ;;
-          "es_hybrid") printf "  > %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
-          "es_inference") printf "  > %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
-          "safe_es_training") printf "  > %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
-          "es_rl_hybrid") printf "  > %s (Combined ES and RL training)\n" "${options[$i]}" ;;
-          *) printf "  > %s\n" "${options[$i]}" ;;
-        esac
-      else
-        case "${options[$i]}" in
-          "cpu_training") printf "    %s (Standard PyTorch RL training)\n" "${options[$i]}" ;;
-          "hybrid") printf "    %s (RKNN inference + RL training)\n" "${options[$i]}" ;;
-          "inference") printf "    %s (Pure RKNN inference only)\n" "${options[$i]}" ;;
-          "safe_training") printf "    %s (Anti-overtraining RL protection)\n" "${options[$i]}" ;;
-          "es_training") printf "    %s (Evolutionary Strategy training)\n" "${options[$i]}" ;;
-          "es_hybrid") printf "    %s (RKNN inference + ES training)\n" "${options[$i]}" ;;
-          "es_inference") printf "    %s (Pure RKNN inference with ES model)\n" "${options[$i]}" ;;
-          "safe_es_training") printf "    %s (Anti-overtraining ES protection)\n" "${options[$i]}" ;;
-          "es_rl_hybrid") printf "    %s (Combined ES and RL training)\n" "${options[$i]}" ;;
-          *) printf "    %s\n" "${options[$i]}" ;;
-        esac
-      fi
-    done
-    IFS= read -rsn1 key 2>/dev/null || true
-    # Empty input (user just pressed Enter but read may have timed out)
-    if [[ -z "$key" ]]; then
-      MODE="${options[$index]}"; echo "Selected: $MODE"; return 0
-    fi
-    if [[ $key == $'\n' || $key == $'\r' ]]; then
-      MODE="${options[$index]}"; echo "Selected: $MODE"; return 0
-    elif [[ $key == $'\x1b' ]]; then
-      read -rsn2 -t 0.002 key_rest || true
-      key+="$key_rest"
-      case "$key" in
-        $'\x1b[A') ((index--)); (( index < 0 )) && index=$(( ${#options[@]} - 1 )) ;;
-        $'\x1b[B') ((index++)); (( index >= ${#options[@]} )) && index=0 ;;
-      esac
-    fi
-    # Redraw: move cursor up number of option lines
-    local lines=${#options[@]}
-    tput cuu $lines 2>/dev/null || clear
-  done
-}
+# PBT defaults
+PBT_POPULATION_SIZE=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
+PBT_UPDATE_INTERVAL=${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
+PBT_PERTURB_PROB=${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
+PBT_RESAMPLE_PROB=${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
 
-if [ $# -eq 0 ] && [ -t 0 ]; then
-  echo "No arguments supplied - entering interactive setup..."
-  choose_mode
-  read -p "Maximum Speed [${DEFAULT_MAX_SPEED}]: " INPUT_MAX_SPEED
-  read -p "Exploration Time seconds [${DEFAULT_EXPLORATION_TIME}]: " INPUT_EXPLORATION_TIME
-  read -p "Safety Distance meters [${DEFAULT_SAFETY_DISTANCE}]: " INPUT_SAFETY_DISTANCE
-  
-  # PBT-specific configuration for es_rl_hybrid mode
-  if [[ "$MODE" == "es_rl_hybrid" ]]; then
-    echo ""
-    echo "PBT (Population-Based Training) Configuration:"
-    read -p "Population Size [${DEFAULT_PBT_POPULATION_SIZE}]: " INPUT_PBT_POPULATION_SIZE
-    read -p "Update Interval steps [${DEFAULT_PBT_UPDATE_INTERVAL}]: " INPUT_PBT_UPDATE_INTERVAL
-    read -p "Perturbation Probability [${DEFAULT_PBT_PERTURB_PROB}]: " INPUT_PBT_PERTURB_PROB
-    read -p "Resample Probability [${DEFAULT_PBT_RESAMPLE_PROB}]: " INPUT_PBT_RESAMPLE_PROB
-    PBT_POPULATION_SIZE=${INPUT_PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
-    PBT_UPDATE_INTERVAL=${INPUT_PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
-    PBT_PERTURB_PROB=${INPUT_PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
-    PBT_RESAMPLE_PROB=${INPUT_PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
-  fi
-  
-  MAX_SPEED=${INPUT_MAX_SPEED:-$DEFAULT_MAX_SPEED}
-  EXPLORATION_TIME=${INPUT_EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
-  SAFETY_DISTANCE=${INPUT_SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
-else
-  MODE=${1:-$DEFAULT_MODE}
-  shift || true
-  MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
-  EXPLORATION_TIME=${2:-$DEFAULT_EXPLORATION_TIME}
-  SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
-  # Set PBT defaults for non-interactive mode
-  PBT_POPULATION_SIZE=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
-  PBT_UPDATE_INTERVAL=${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
-  PBT_PERTURB_PROB=${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
-  PBT_RESAMPLE_PROB=${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
-fi
-
-if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" && "$MODE" != "es_training" && "$MODE" != "es_hybrid" && "$MODE" != "es_inference" && "$MODE" != "safe_es_training" && "$MODE" != "es_rl_hybrid" ]]; then
-  echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training | es_rl_hybrid"
+if [[ "$MODE" != "es_inference" && "$MODE" != "es_rl_hybrid" ]]; then
+  echo "Invalid mode '$MODE'. Valid: es_rl_hybrid | es_inference"
   exit 1
 fi
 
@@ -349,16 +224,8 @@ echo ""
 echo "Configuration:"
 echo "  Operation Mode: ${MODE}"
 case "$MODE" in
-  "safe_training") echo "    → Anti-overtraining RL protection ENABLED" ;;
-  "cpu_training") echo "    → Standard PyTorch RL training" ;;
-  "hybrid") echo "    → RKNN inference + RL training" ;;
-  "inference") echo "    → Pure RKNN inference only" ;;
-  "es_training") echo "    → Evolutionary Strategy training with Bayesian optimization" ;;
-  "es_hybrid") echo "    → RKNN inference + ES training with Bayesian optimization" ;;
-  "es_inference") echo "    → Pure RKNN inference with ES model" ;;
-  "safe_es_training") echo "    → Anti-overtraining ES protection + Bayesian optimization ENABLED" ;;
-  "es_rl_hybrid") echo "    → Combined ES and RL training with PBT" ;;
-  *) echo "    → Custom mode selected" ;;
+  "es_inference") echo "    → Inference on trained ES/RL model" ;;
+  "es_rl_hybrid") echo "    → Combined RL+ES training (PBT)" ;;
 esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"

@@ -183,7 +183,7 @@ def generate_launch_description():
         ),
     )
 
-    # 2. Hiwonder Motor Control (REUSE EXISTING - has encoders and odometry)
+    # 2. Hiwonder Motor Control (encoders and odometry)
     hiwonder_motor_node = Node(
         package="tractor_control",
         executable="hiwonder_motor_driver",
@@ -191,9 +191,6 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml")
-        ],
-        remappings=[
-            ("cmd_vel", "cmd_vel_safe")  # Will receive commands from NPU node
         ]
     )
 
@@ -257,48 +254,12 @@ def generate_launch_description():
             }
         ],
         remappings=[
-            ("cmd_vel", "cmd_vel_raw"),
             ("point_cloud", "/camera/camera/depth/color/points"),  # Point cloud topic
             ("odom", "/odom"),
         ]
     )
 
-    # 4.1. Training Monitor Node (only when anti-overtraining is enabled)
-    training_monitor_node = Node(
-        package="tractor_bringup",
-        executable="training_monitor_node.py",
-        name="training_monitor",
-        output="screen",
-        parameters=[
-            os.path.join(pkg_tractor_bringup, "config", "anti_overtraining_params.yaml"),
-            {
-                "monitor_frequency": 1.0,  # Check every second
-                "diversity_window": 20,
-                "alert_threshold": 0.7,
-                "enable_plotting": False,  # Disable plotting on robot
-            }
-        ],
-        condition=IfCondition(LaunchConfiguration("anti_overtraining"))
-    )
-
-    # 5. Simple Safety Monitor (Emergency stop only)
-    safety_monitor_node = Node(
-        package="tractor_bringup",
-        executable="simple_safety_monitor.py",
-        name="simple_safety_monitor",
-        output="screen",
-        parameters=[
-            {
-                "emergency_stop_distance": LaunchConfiguration("safety_distance"),  # Use the passed safety distance
-                "max_speed_limit": LaunchConfiguration("max_speed"),
-            }
-        ],
-        remappings=[
-            ("cmd_vel_in", "cmd_vel_raw"),
-            ("cmd_vel_out", "cmd_vel_safe"),
-            ("point_cloud", "/camera/camera/depth/color/points"),  # Point cloud topic
-        ]
-    )
+    # Removed training monitor and safety monitor for simplified setup
 
     # Build launch description
     ld = LaunchDescription()
@@ -344,9 +305,5 @@ def generate_launch_description():
 
     # NPU system - start after camera is ready
     ld.add_action(TimerAction(period=8.0, actions=[npu_exploration_node]))
-    ld.add_action(TimerAction(period=10.0, actions=[safety_monitor_node]))
-    
-    # Training monitor - start after NPU system (only if anti-overtraining enabled)
-    ld.add_action(TimerAction(period=12.0, actions=[training_monitor_node]))
 
     return ld
