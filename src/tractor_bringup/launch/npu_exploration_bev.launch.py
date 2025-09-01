@@ -194,6 +194,13 @@ def generate_launch_description():
         ]
     )
 
+    # 2.1 LSM9DS1 IMU (external IMU)
+    lsm9ds1_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
+        )
+    )
+
     # 3. RealSense Camera (optimized for point cloud)
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -302,6 +309,8 @@ def generate_launch_description():
 
     # Camera - start with delay for stability
     ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))
+    # IMU - start shortly after
+    ld.add_action(TimerAction(period=4.0, actions=[lsm9ds1_launch]))
 
     # NPU system - start after camera is ready
     ld.add_action(TimerAction(period=8.0, actions=[npu_exploration_node]))

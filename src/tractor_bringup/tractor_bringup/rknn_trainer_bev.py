@@ -107,7 +107,8 @@ class RKNNTrainerBEV:
     
     def __init__(self, model_dir="models", bev_channels: int = 4, enable_debug: bool = False, 
                  enable_bayesian_training_optimization: bool = True,
-                 buffer_capacity: int = 50000):  # Optimized: more buffer over channels
+                 buffer_capacity: int = 50000,
+                 extra_proprio: int = 13):  # Optimized: more buffer over channels
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -118,8 +119,8 @@ class RKNNTrainerBEV:
         # Conservative resolution for stable operation - 5cm per pixel precision  
         self.bev_height = 256 if self.enable_high_res_mode else 200  
         self.bev_width = 256 if self.enable_high_res_mode else 200
-        # Extended proprio feature count now: base(3) + extras(13) = 16 total features
-        self.extra_proprio = 13  # updated to match 16-element proprio vector (3 base + 13 extras)
+        # Extended proprio feature count now: base(3) + extras
+        self.extra_proprio = int(extra_proprio)
         
         # Bayesian training optimization setup
         self.enable_bayesian_training_optimization = enable_bayesian_training_optimization and BAYESIAN_TRAINING_AVAILABLE

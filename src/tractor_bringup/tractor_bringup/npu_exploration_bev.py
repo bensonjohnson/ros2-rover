@@ -61,6 +61,10 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('enable_reward_optimization', False)  # Enable reward parameter optimization
         self.declare_parameter('enable_multi_metric_evaluation', True)  # Enable multi-metric fitness evaluation
         self.declare_parameter('enable_optimization_monitoring', True)  # Enable comprehensive monitoring
+        # IMU integration (LSM9DS1) parameters
+        self.declare_parameter('enable_lsm_imu_proprio', False)
+        self.declare_parameter('lsm_imu_topic', '/lsm9ds1_imu_publisher/imu/data')
+        self.declare_parameter('imu_lpf_alpha', 0.2)  # low-pass filter smoothing factor
         # PBT parameters (for ES-RL hybrid)
         self.declare_parameter('pbt_population_size', 4)
         self.declare_parameter('pbt_update_interval', 1000)
@@ -101,6 +105,10 @@ class NPUExplorationBEVNode(Node):
         self.enable_reward_optimization = self.get_parameter('enable_reward_optimization').value
         self.enable_multi_metric_evaluation = self.get_parameter('enable_multi_metric_evaluation').value
         self.enable_optimization_monitoring = self.get_parameter('enable_optimization_monitoring').value
+        # IMU integration values
+        self.enable_lsm_imu_proprio = bool(self.get_parameter('enable_lsm_imu_proprio').value)
+        self.lsm_imu_topic = str(self.get_parameter('lsm_imu_topic').value)
+        self.imu_lpf_alpha = float(self.get_parameter('imu_lpf_alpha').value)
         
         # Phase 2 parameter values
         self.enable_multi_objective_optimization = self.get_parameter('enable_multi_objective_optimization').value
@@ -234,6 +242,7 @@ class NPUExplorationBEVNode(Node):
         self.get_logger().info(f"  BEV Range: {self.bev_x_range}x{self.bev_y_range}m")
         self.get_logger().info(f"  Height Channels: {self.bev_height_channels}")
         self.get_logger().info(f"  Ground Removal: {self.enable_ground_removal}")
+        self.get_logger().info(f"  LSM IMU Proprio: {self.enable_lsm_imu_proprio}")
         
         self.angular_scale = 0.8  # reduced from 2.0 to lessen spin dominance
         self.spin_penalty = 3.0
@@ -259,6 +268,21 @@ class NPUExplorationBEVNode(Node):
         # Adjusted recovery parameters to prevent excessive backward movement
         self.recovery_reverse_speed = -0.3  # Reduced from -0.5
         self.recovery_max_duration = 80     # Reduced from 120
+
+        # IMU state and subscription (optional)
+        self.imu_ready = False
+        self.imu_state = {
+            'yaw_rate': 0.0,
+            'roll': 0.0,
+            'pitch': 0.0,
+            'accel_forward': 0.0,
+            'accel_mag': 0.0,
+        }
+        if self.enable_lsm_imu_proprio:
+            try:
+                self.imu_sub = self.create_subscription(Imu, self.lsm_imu_topic, self.imu_callback, 50)
+            except Exception as e:
+                self.get_logger().warn(f"IMU subscription failed: {e}")
 
     def handle_save_models(self, request, response):
         try:
@@ -286,10 +310,13 @@ class NPUExplorationBEVNode(Node):
                 # Initialize appropriate trainer based on mode
                 # For now, always use BEV trainer since we're working with BEV images
                 # TODO: Create ES trainer that supports BEV images
+                # Determine extra proprio size (base extras 13 + optional 5 IMU features)
+                extra_proprio = 13 + (5 if self.enable_lsm_imu_proprio else 0)
                 self.trainer = RKNNTrainerBEV(
                     bev_channels=bev_channels,
                     enable_debug=enable_debug,
-                    enable_bayesian_training_optimization=self.enable_training_optimization
+                    enable_bayesian_training_optimization=self.enable_training_optimization,
+                    extra_proprio=extra_proprio
                 )
                 
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
@@ -297,7 +324,8 @@ class NPUExplorationBEVNode(Node):
                     self.trainer = EvolutionaryStrategyTrainerBEV(
                         bev_channels=bev_channels,
                         enable_debug=enable_debug,
-                        enable_bayesian_optimization=self.enable_bayesian_optimization
+                        enable_bayesian_optimization=self.enable_bayesian_optimization,
+                        extra_proprio=extra_proprio
                     )
                     self.get_logger().info("ES BEV Trainer initialized")
                 else:
@@ -369,7 +397,8 @@ class NPUExplorationBEVNode(Node):
                         pbt_interval=pbt_interval,
                         perturb_prob=pbt_perturb,
                         resample_prob=pbt_resample,
-                        enable_debug=enable_debug
+                        enable_debug=enable_debug,
+                        extra_proprio=extra_proprio
                     )
                     # Use the same interval for agent switching in this node
                     self.pbt_update_interval = pbt_interval
@@ -929,24 +958,12 @@ class NPUExplorationBEVNode(Node):
             # Enhanced obstacle awareness - calculate gradient of free space in BEV
             bev_gradient = self._calculate_bev_gradient(bev_image)
             
-            proprioceptive = np.array([
-                self.current_velocity[0],
-                self.current_velocity[1],
-                float(self.step_count % 100) / 100.0,
-                self.last_action[0],
-                self.last_action[1],
-                wheel_diff,
-                min_d_global,
-                mean_d_global,
-                near_collision_flag,
-                emergency_numeric,
-                left_free,
-                right_free,
-                center_free,
-                bev_gradient[0],  # left gradient
-                bev_gradient[1],  # center gradient
-                bev_gradient[2]   # right gradient
-            ], dtype=np.float32)
+            proprioceptive = self.build_proprio_vector(
+                wheel_diff, min_d_global, mean_d_global,
+                near_collision_flag, emergency_numeric,
+                left_free, right_free, center_free,
+                bev_gradient
+            )
             
             action, confidence = self.trainer.inference(bev_image, proprioceptive)
             
@@ -1244,6 +1261,71 @@ class NPUExplorationBEVNode(Node):
         cmd.linear.x = 0.0
         cmd.angular.z = 0.0
         self.cmd_pub.publish(cmd)
+
+    def imu_callback(self, msg: Imu):
+        """Low-pass filter IMU signals and cache for proprio usage"""
+        try:
+            a = self.imu_lpf_alpha
+            # Yaw rate from gyro z
+            self.imu_state['yaw_rate'] = (1-a) * self.imu_state['yaw_rate'] + a * float(msg.angular_velocity.z)
+            # Roll/pitch from orientation (if provided)
+            try:
+                # Convert quaternion to roll/pitch (radians)
+                x, y, z, w = msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w
+                # Roll (x-axis rotation)
+                sinr_cosp = 2 * (w * x + y * z)
+                cosr_cosp = 1 - 2 * (x * x + y * y)
+                roll = np.arctan2(sinr_cosp, cosr_cosp)
+                # Pitch (y-axis rotation)
+                sinp = 2 * (w * y - z * x)
+                pitch = np.arcsin(np.clip(sinp, -1.0, 1.0))
+            except Exception:
+                roll = 0.0
+                pitch = 0.0
+            self.imu_state['roll'] = (1-a) * self.imu_state['roll'] + a * float(roll)
+            self.imu_state['pitch'] = (1-a) * self.imu_state['pitch'] + a * float(pitch)
+            # Accel forward (x) and magnitude
+            ax, ay, az = float(msg.linear_acceleration.x), float(msg.linear_acceleration.y), float(msg.linear_acceleration.z)
+            accel_mag = float(np.sqrt(ax*ax + ay*ay + az*az))
+            self.imu_state['accel_forward'] = (1-a) * self.imu_state['accel_forward'] + a * ax
+            self.imu_state['accel_mag'] = (1-a) * self.imu_state['accel_mag'] + a * accel_mag
+            self.imu_ready = True
+        except Exception as e:
+            self.get_logger().debug(f"IMU processing failed: {e}")
+
+    def build_proprio_vector(self, wheel_diff, min_d_global, mean_d_global,
+                              near_collision_flag, emergency_numeric,
+                              left_free, right_free, center_free,
+                              bev_gradient):
+        """Assemble proprio vector; append IMU features if enabled"""
+        vec = [
+            self.current_velocity[0],
+            self.current_velocity[1],
+            float(self.step_count % 100) / 100.0,
+            self.last_action[0],
+            self.last_action[1],
+            wheel_diff,
+            min_d_global,
+            mean_d_global,
+            near_collision_flag,
+            emergency_numeric,
+            left_free,
+            right_free,
+            center_free,
+            bev_gradient[0],
+            bev_gradient[1],
+            bev_gradient[2]
+        ]
+        if self.enable_lsm_imu_proprio:
+            imu_feats = [
+                self.imu_state['yaw_rate'],
+                self.imu_state['roll'],
+                self.imu_state['pitch'],
+                self.imu_state['accel_forward'],
+                self.imu_state['accel_mag']
+            ]
+            vec.extend(imu_feats)
+        return np.array(vec, dtype=np.float32)
         if self.trainer:
             self.trainer.safe_save()
         

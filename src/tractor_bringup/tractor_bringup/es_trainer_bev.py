@@ -43,7 +43,7 @@ class EvolutionaryStrategyTrainerBEV:
     
     def __init__(self, model_dir="models", bev_channels: int = 4, enable_debug: bool = False, 
                  population_size: int = 10, sigma: float = 0.1, learning_rate: float = 0.01,
-                 enable_bayesian_optimization: bool = True):
+                 enable_bayesian_optimization: bool = True, extra_proprio: int = 13):
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -51,8 +51,8 @@ class EvolutionaryStrategyTrainerBEV:
         self.bev_height = 200
         self.bev_width = 200
         
-        # Extended proprio feature count now: base(3) + extras(13) = 16 total features
-        self.extra_proprio = 13  # updated to match 16-element proprio vector (3 base + 13 extras)
+        # Extended proprio feature count now: base(3) + extras
+        self.extra_proprio = int(extra_proprio)
         
         # Evolutionary Strategy parameters
         self.population_size = population_size
