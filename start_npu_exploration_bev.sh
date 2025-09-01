@@ -156,6 +156,12 @@ DEFAULT_MAX_SPEED="0.15"
 DEFAULT_EXPLORATION_TIME="300"
 DEFAULT_SAFETY_DISTANCE="0.2"
 
+# PBT default values
+DEFAULT_PBT_POPULATION_SIZE="4"
+DEFAULT_PBT_UPDATE_INTERVAL="1000"  # Increased from 200 for stability
+DEFAULT_PBT_PERTURB_PROB="0.25"
+DEFAULT_PBT_RESAMPLE_PROB="0.25"
+
 # Fallback-friendly interactive helpers
 supports_arrows() {
   # Disable with env var or if terminal looks incompatible
@@ -263,6 +269,21 @@ if [ $# -eq 0 ] && [ -t 0 ]; then
   read -p "Maximum Speed [${DEFAULT_MAX_SPEED}]: " INPUT_MAX_SPEED
   read -p "Exploration Time seconds [${DEFAULT_EXPLORATION_TIME}]: " INPUT_EXPLORATION_TIME
   read -p "Safety Distance meters [${DEFAULT_SAFETY_DISTANCE}]: " INPUT_SAFETY_DISTANCE
+  
+  # PBT-specific configuration for es_rl_hybrid mode
+  if [[ "$MODE" == "es_rl_hybrid" ]]; then
+    echo ""
+    echo "PBT (Population-Based Training) Configuration:"
+    read -p "Population Size [${DEFAULT_PBT_POPULATION_SIZE}]: " INPUT_PBT_POPULATION_SIZE
+    read -p "Update Interval steps [${DEFAULT_PBT_UPDATE_INTERVAL}]: " INPUT_PBT_UPDATE_INTERVAL
+    read -p "Perturbation Probability [${DEFAULT_PBT_PERTURB_PROB}]: " INPUT_PBT_PERTURB_PROB
+    read -p "Resample Probability [${DEFAULT_PBT_RESAMPLE_PROB}]: " INPUT_PBT_RESAMPLE_PROB
+    PBT_POPULATION_SIZE=${INPUT_PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
+    PBT_UPDATE_INTERVAL=${INPUT_PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
+    PBT_PERTURB_PROB=${INPUT_PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
+    PBT_RESAMPLE_PROB=${INPUT_PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
+  fi
+  
   MAX_SPEED=${INPUT_MAX_SPEED:-$DEFAULT_MAX_SPEED}
   EXPLORATION_TIME=${INPUT_EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
   SAFETY_DISTANCE=${INPUT_SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
@@ -272,11 +293,56 @@ else
   MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
   EXPLORATION_TIME=${2:-$DEFAULT_EXPLORATION_TIME}
   SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
+  # Set PBT defaults for non-interactive mode
+  PBT_POPULATION_SIZE=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
+  PBT_UPDATE_INTERVAL=${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
+  PBT_PERTURB_PROB=${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
+  PBT_RESAMPLE_PROB=${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
 fi
 
 if [[ "$MODE" != "cpu_training" && "$MODE" != "hybrid" && "$MODE" != "inference" && "$MODE" != "safe_training" && "$MODE" != "es_training" && "$MODE" != "es_hybrid" && "$MODE" != "es_inference" && "$MODE" != "safe_es_training" && "$MODE" != "es_rl_hybrid" ]]; then
   echo "Invalid mode '$MODE'. Valid: cpu_training | hybrid | inference | safe_training | es_training | es_hybrid | es_inference | safe_es_training | es_rl_hybrid"
   exit 1
+fi
+
+# PBT-specific validation for es_rl_hybrid mode
+if [[ "$MODE" == "es_rl_hybrid" ]]; then
+    echo "Validating PBT dependencies for es_rl_hybrid mode..."
+    python3 - <<'PBT_CHECK'
+try:
+    from tractor_bringup.pbt_es_rl_trainer import PBT_ES_RL_Trainer
+    from tractor_bringup.rknn_trainer_bev import RKNNTrainerBEV
+    import torch.multiprocessing as mp
+    
+    # Test PBT interface compatibility
+    dummy_trainer = RKNNTrainerBEV(bev_channels=4, enable_debug=False)
+    if not hasattr(dummy_trainer, 'copy_weights_from'):
+        raise AttributeError("RKNNTrainerBEV missing copy_weights_from method")
+    if not hasattr(dummy_trainer, 'get_model'):
+        raise AttributeError("RKNNTrainerBEV missing get_model method")
+    if not hasattr(dummy_trainer, 'torch'):
+        raise AttributeError("RKNNTrainerBEV missing torch module exposure")
+    
+    print("✓ PBT dependencies and interface compatibility verified")
+except ImportError as e:
+    print(f"❌ PBT dependency missing: {e}")
+    print("Please ensure tractor_bringup package is built and PBT trainer is available")
+    exit(1)
+except AttributeError as e:
+    print(f"❌ PBT interface error: {e}")
+    print("RKNNTrainerBEV class needs PBT interface methods")
+    exit(1)
+except Exception as e:
+    print(f"❌ PBT validation failed: {e}")
+    exit(1)
+PBT_CHECK
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ PBT validation failed - cannot run es_rl_hybrid mode"
+        exit 1
+    fi
+    
+    echo "✓ PBT validation passed"
 fi
 
 echo ""
@@ -297,6 +363,12 @@ esac
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
 echo "  Safety Distance: ${SAFETY_DISTANCE} m"
+if [[ "$MODE" == "es_rl_hybrid" ]]; then
+  echo "  PBT Population: ${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} agents"
+  echo "  PBT Update Interval: ${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL} steps"
+  echo "  PBT Perturbation Prob: ${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}"
+  echo "  PBT Resample Prob: ${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}"
+fi
 echo "  IMU Status: Disabled (to reduce USB errors)"
 echo "  USB Mode: Optimized for stability"
 if [[ "$MODE" == "safe_training" ]]; then
@@ -335,6 +407,10 @@ ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     safety_distance:=${SAFETY_DISTANCE} \
     anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     enable_bayesian_optimization:=$([[ "$MODE" == "es_training" || "$MODE" == "es_hybrid" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
+    pbt_population_size:=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} \
+    pbt_update_interval:=${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL} \
+    pbt_perturb_prob:=${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB} \
+    pbt_resample_prob:=${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB} \
     optimization_level:=standard \
     enable_training_optimization:=true \
     enable_reward_optimization:=false \
@@ -389,6 +465,40 @@ except Exception as e:
 SAVE_LOGS
     fi
     
+    # Save PBT population state if es_rl_hybrid mode was used
+    if [[ "$MODE" == "es_rl_hybrid" ]]; then
+        echo "💾 Saving PBT population state..."
+        python3 - <<'SAVE_PBT'
+try:
+    import os
+    import pickle
+    from datetime import datetime
+    from tractor_bringup.pbt_es_rl_trainer import PBT_ES_RL_Trainer
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir = "logs/pbt_sessions"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Save PBT session metadata
+    session_info = {
+        "timestamp": timestamp,
+        "population_size": "${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}",
+        "update_interval": "${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}",
+        "session_type": "es_rl_hybrid"
+    }
+    
+    session_file = os.path.join(log_dir, f"pbt_session_{timestamp}.json")
+    with open(session_file, "w") as f:
+        import json
+        json.dump(session_info, f, indent=2)
+    
+    print(f"PBT session info saved to {session_file}")
+    
+except Exception as e:
+    print(f"PBT state save failed: {e}")
+SAVE_PBT
+    fi
+    
     echo "✅ NPU BEV exploration stopped safely"
     echo "=================================================="
     exit 0
@@ -403,6 +513,13 @@ if [[ "$MODE" == "safe_training" ]]; then
   echo "   Anti-overtraining monitoring active"
   echo "   Training health: ros2 topic echo /training_health"
 fi
+if [[ "$MODE" == "es_rl_hybrid" ]]; then
+  echo "🧠 PBT Population-Based Training active:"
+  echo "   - Population size: ${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} agents"
+  echo "   - Agent switching: ros2 topic echo /pbt_agent_status"
+  echo "   - Population metrics: ros2 topic echo /pbt_population_metrics"
+  echo "   - Memory usage: ~$(( (${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} * 500) ))MB expected"
+fi
 echo ""
 
 # Enhanced monitoring for safe modes
@@ -412,6 +529,17 @@ if [[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]]; then
   echo "   - Reward gaming detection" 
   echo "   - Automatic early stopping"
   echo "   - Training health indicators"
+  echo ""
+fi
+
+# Enhanced monitoring for PBT mode
+if [[ "$MODE" == "es_rl_hybrid" ]]; then
+  echo "🧠 PBT Population-Based Training monitoring:"
+  echo "   - Population diversity: ros2 topic echo /pbt_population_diversity"
+  echo "   - Agent performance: ros2 topic echo /pbt_agent_fitness"
+  echo "   - Weight evolution: ros2 topic echo /pbt_evolution_status"
+  echo "   - Hyperparameter exploration: ros2 topic echo /pbt_hyperparams"
+  echo "   - Memory optimization active"
   echo ""
   
   # Start background monitoring

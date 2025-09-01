@@ -18,6 +18,13 @@ from cv_bridge import CvBridge
 import cv2
 
 try:
+    from sensor_msgs_py import point_cloud2
+    SENSOR_MSGS_PY_AVAILABLE = True
+except ImportError:
+    SENSOR_MSGS_PY_AVAILABLE = False
+    print("sensor_msgs_py not available - using slower point cloud conversion")
+
+try:
     from rknn.api import RKNN
     RKNN_AVAILABLE = True
     print("RKNN library successfully imported")
@@ -165,14 +172,18 @@ class NPUExplorationBEVNode(Node):
         # Simple tracking for movement detection
         self.movement_check_counter = 0
         
-        # Initialize BEV generator
+        # Initialize BEV generator with grass-aware filtering
         self.bev_generator = BEVGenerator(
             bev_size=(self.bev_height, self.bev_width),
             bev_range=(self.bev_x_range, self.bev_y_range),
             height_channels=self.bev_height_channels,
             enable_ground_removal=self.enable_ground_removal,
             ground_ransac_iterations=self.ground_ransac_iterations,
-            ground_ransac_threshold=self.ground_ransac_threshold
+            ground_ransac_threshold=self.ground_ransac_threshold,
+            # Grass-aware filtering parameters
+            enable_grass_filtering=True,
+            grass_height_tolerance=0.15,  # 15cm grass tolerance
+            min_obstacle_height=0.25      # 25cm minimum obstacle height
         )
         
         # Initialize NPU or fallback
@@ -610,8 +621,8 @@ class NPUExplorationBEVNode(Node):
         self.latest_pointcloud = self.preprocess_pointcloud(msg)
         self.step_count += 1
         
-        # For PBT, select an active agent periodically
-        if self.operation_mode == 'es_rl_hybrid' and self.step_count % 200 == 0: # Every 200 steps, switch agent
+        # For PBT, select an active agent periodically (increased interval for better learning)
+        if self.operation_mode == 'es_rl_hybrid' and self.step_count % 1000 == 0: # Every 1000 steps, switch agent
             self.trainer.select_active_agent()
             self.get_logger().info(f"Switched to PBT agent {self.trainer.active_agent_idx}")
 

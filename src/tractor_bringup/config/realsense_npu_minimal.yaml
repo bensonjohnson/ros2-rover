@@ -4,15 +4,15 @@ realsense2_camera:
     camera_name: "camera"
     camera_namespace: "camera"
     
-    # Stream profiles - balanced for performance and quality
+    # Stream profiles - optimized for 32GB RAM system (higher quality/throughput)
     depth_module:
-      depth_profile: 640x480x15
+      depth_profile: 848x480x30  # Higher res + frame rate with abundant RAM
       enable_auto_exposure: true
-      emitter_enabled: 0  # Disable IR emitter for power saving
-      laser_power: 0.0
+      emitter_enabled: 1  # Enable IR emitter for better depth quality
+      laser_power: 150.0  # Moderate laser power
     
     rgb_camera:
-      color_profile: 640x480x15  # Match depth resolution
+      color_profile: 848x480x30  # Match depth resolution and higher FPS
     
     # Enable required streams for pointcloud
     enable_color: true   # Required for pointcloud texturing
@@ -30,25 +30,32 @@ realsense2_camera:
     align_depth:
       enable: true
     
-    # Disable unnecessary streams to reduce USB bandwidth
-    enable_infra1: false
+    # Enable IMU with abundant processing power
+    enable_infra1: false  # Keep these off to save USB bandwidth
     enable_infra2: false
-    enable_gyro: false
-    enable_accel: false
+    enable_gyro: true     # Enable for better pose estimation
+    enable_accel: true    # Enable for motion detection
     
-    # Filters for performance
+    # Enhanced filters for high-quality point clouds (32GB RAM allows more processing)
     decimation_filter:
-      enable: true
-      magnitude: 2  # Reduce from 4 for better quality
+      enable: false  # Disable to maintain full resolution with abundant RAM
     
     temporal_filter:
-      enable: false
+      enable: true   # Enable for noise reduction
+      smooth_alpha: 0.4
+      smooth_delta: 20
+      persistence_control: 3
     
     spatial_filter:
-      enable: false
+      enable: true   # Enable for edge preservation
+      smooth_alpha: 0.5
+      smooth_delta: 20
+      magnitude: 2
+      holes_fill: 0
     
     hole_filling_filter:
-      enable: false
+      enable: true   # Fill holes in depth data
+      holes_fill: 1
     
     # TF and performance settings
     publish_tf: true

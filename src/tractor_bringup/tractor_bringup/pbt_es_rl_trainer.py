@@ -20,7 +20,7 @@ class PBT_ES_RL_Trainer:
         self.active_agent_idx = 0
         
         # PBT parameters
-        self.pbt_interval = 200  # steps before considering a PBT update
+        self.pbt_interval = 1000  # steps before considering a PBT update (increased for stability)
         self.perturb_prob = 0.8
         self.resample_prob = 0.2
         
