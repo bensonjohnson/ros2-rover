@@ -283,6 +283,7 @@ ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     max_speed:=${MAX_SPEED} \
     exploration_time:=${EXPLORATION_TIME} \
     safety_distance:=${SAFETY_DISTANCE} \
+    enable_lsm_imu_proprio:=true \
     anti_overtraining:=$([[ "$MODE" == "safe_training" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     enable_bayesian_optimization:=$([[ "$MODE" == "es_training" || "$MODE" == "es_hybrid" || "$MODE" == "safe_es_training" ]] && echo "true" || echo "false") \
     pbt_population_size:=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} \

@@ -310,8 +310,9 @@ class NPUExplorationBEVNode(Node):
                 # Initialize appropriate trainer based on mode
                 # For now, always use BEV trainer since we're working with BEV images
                 # TODO: Create ES trainer that supports BEV images
-                # Determine extra proprio size (base extras 13 + optional 5 IMU features)
-                extra_proprio = 13 + (5 if self.enable_lsm_imu_proprio else 0)
+                # Determine extra proprio size (standardize: base extras 13 + 5 IMU features)
+                # IMU features default to zeros if IMU data is disabled/unavailable
+                extra_proprio = 13 + 5
                 self.trainer = RKNNTrainerBEV(
                     bev_channels=bev_channels,
                     enable_debug=enable_debug,
@@ -1316,15 +1317,15 @@ class NPUExplorationBEVNode(Node):
             bev_gradient[1],
             bev_gradient[2]
         ]
-        if self.enable_lsm_imu_proprio:
-            imu_feats = [
-                self.imu_state['yaw_rate'],
-                self.imu_state['roll'],
-                self.imu_state['pitch'],
-                self.imu_state['accel_forward'],
-                self.imu_state['accel_mag']
-            ]
-            vec.extend(imu_feats)
+        # Always append IMU features (zeros by default when not enabled/ready)
+        imu_feats = [
+            self.imu_state['yaw_rate'],
+            self.imu_state['roll'],
+            self.imu_state['pitch'],
+            self.imu_state['accel_forward'],
+            self.imu_state['accel_mag']
+        ]
+        vec.extend(imu_feats)
         return np.array(vec, dtype=np.float32)
         if self.trainer:
             self.trainer.safe_save()
