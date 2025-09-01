@@ -36,36 +36,13 @@ except ImportError as e:
 try:
     from .rknn_trainer_bev import RKNNTrainerBEV
     from .es_trainer_bev import EvolutionaryStrategyTrainerBEV
-    from .es_trainer_depth import EvolutionaryStrategyTrainer
     from .pbt_es_rl_trainer import PBT_ES_RL_Trainer
-    from .multi_metric_evaluator import MultiMetricEvaluator, ObjectiveWeights
-    from .optimization_monitor import OptimizationMonitor
-    from .bayesian_reward_optimizer import AdaptiveBayesianRewardWrapper
-    # Phase 2 imports - Multi-objective and Architecture Optimization
-    from .multi_objective_optimizer import MultiObjectiveBayesianOptimizer, MultiObjectivePoint
-    from .safety_constraint_optimizer import SafetyConstraintHandler
-    from .bayesian_nas import BayesianArchitectureOptimizer, NetworkArchitecture
-    from .progressive_architecture_refinement import ProgressiveArchitectureRefinement, ProgressionConfig
-    from .bayesian_sensor_fusion_optimizer import BayesianSensorFusionOptimizer, SensorFusionConfig
     from .bev_generator import BEVGenerator
     TRAINER_AVAILABLE = True
-    OPTIMIZATION_AVAILABLE = True
-    PHASE2_AVAILABLE = True
-    print("RKNN Trainer successfully imported")
-    print("ES Trainer successfully imported") 
-    print("Optimization components successfully imported")
-    print("Phase 2 multi-objective and architecture optimization components imported")
-    print("BEV Generator successfully imported")
-except ImportError as e:
-    TRAINER_AVAILABLE = False
-    OPTIMIZATION_AVAILABLE = False
-    PHASE2_AVAILABLE = False
-    print(f"RKNN/ES/Optimization components not available - using simple reactive navigation. Error: {e}")
+    print("Core BEV trainers imported")
 except Exception as e:
     TRAINER_AVAILABLE = False
-    OPTIMIZATION_AVAILABLE = False
-    PHASE2_AVAILABLE = False
-    print(f"RKNN/ES/Optimization initialization failed - using simple reactive navigation. Error: {e}")
+    print(f"Core trainer imports failed: {e}")
 
 class NPUExplorationBEVNode(Node):
     def __init__(self):
@@ -200,8 +177,10 @@ class NPUExplorationBEVNode(Node):
         # Initialize NPU or fallback
         self.init_inference_engine()
         
-        # Initialize optimization components
-        self.init_optimization_components()
+        # Disable heavy optimization components in simplified setup
+        self.multi_metric_evaluator = None
+        self.optimization_monitor = None
+        self.bayesian_reward_wrapper = None
         
         # ROS2 interfaces
         self.pc_sub = self.create_subscription(
