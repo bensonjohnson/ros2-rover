@@ -70,6 +70,13 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('pbt_update_interval', 1000)
         self.declare_parameter('pbt_perturb_prob', 0.25)
         self.declare_parameter('pbt_resample_prob', 0.25)
+        # Distillation parameters (reward-based auto distill)
+        self.declare_parameter('enable_reward_based_distill', True)
+        self.declare_parameter('distill_check_interval_sec', 300)
+        self.declare_parameter('distill_cooldown_sec', 600)
+        self.declare_parameter('distill_plateau_sec', 900)
+        self.declare_parameter('distill_min_improvement', 0.5)
+        self.declare_parameter('distill_min_reward', 0.0)
         
         # Phase 2 parameters - Multi-objective and Architecture Optimization
         self.declare_parameter('enable_multi_objective_optimization', False)  # Enable Pareto frontier optimization
@@ -215,13 +222,21 @@ class NPUExplorationBEVNode(Node):
         
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/npu_exploration_status', 10)
-        # Expose a service to trigger model saves on shutdown
+        # Expose services to save and distill models
         self.save_srv = self.create_service(Trigger, '/save_models', self.handle_save_models)
+        self.distill_srv = self.create_service(Trigger, '/distill_best', self.handle_distill_best)
         
         # Control timer
         self.control_timer = self.create_timer(0.1, self.control_loop)  # 10Hz control
         # Separate status timer (1 Hz) to reduce coupling to point cloud rate
         self.status_timer = self.create_timer(1.0, self.publish_status)
+        # Reward-based distillation tracking and timer
+        self.enable_reward_based_distill = bool(self.get_parameter('enable_reward_based_distill').value)
+        self.last_distill_time = 0.0
+        self.last_distill_metric = None
+        if self.enable_reward_based_distill:
+            check_int = float(self.get_parameter('distill_check_interval_sec').value)
+            self.distill_timer = self.create_timer(max(30.0, check_int), self._maybe_distill)
         self.get_logger().info(f"NPU BEV Exploration Node initialized")
         self.get_logger().info(f"  Max Speed: {self.max_speed} m/s")
         self.get_logger().info(f"  Min Battery: {self.min_battery_percentage}%")
@@ -293,6 +308,30 @@ class NPUExplorationBEVNode(Node):
         except Exception as e:
             response.success = False
             response.message = f"Save failed: {e}"
+        return response
+
+    def handle_distill_best(self, request, response):
+        try:
+            if not self.trainer:
+                response.success = False
+                response.message = "No trainer available"
+                return response
+            # Prefer PBT distillation if available
+            if hasattr(self.trainer, 'distill_best'):
+                out = self.trainer.distill_best()
+            elif hasattr(self.trainer, 'distill_to_student'):
+                out = self.trainer.distill_to_student()
+            else:
+                out = ""
+            if out:
+                response.success = True
+                response.message = f"Distilled to {out}.pth/.rknn"
+            else:
+                response.success = False
+                response.message = "Distillation not supported or failed"
+        except Exception as e:
+            response.success = False
+            response.message = f"Distillation error: {e}"
         return response
 
     def init_inference_engine(self):
@@ -1389,6 +1428,63 @@ class NPUExplorationBEVNode(Node):
             status_msg.data = f"NPU Exploration | Mode: {self.exploration_mode} | Battery: {self.current_battery_percentage:.1f}% | Steps: {self.step_count}"
             
         self.status_pub.publish(status_msg)
+
+    def _current_reward_metric(self) -> float:
+        try:
+            if not self.trainer:
+                return float('-inf')
+            stats = self.trainer.get_training_stats()
+            if self.operation_mode == 'es_rl_hybrid':
+                return float(stats.get('max_population_fitness', 0.0))
+            elif self.operation_mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:
+                return float(stats.get('best_fitness', -999.0))
+            else:
+                return float(stats.get('avg_reward', 0.0))
+        except Exception:
+            return float('-inf')
+
+    def _maybe_distill(self):
+        if not self.enable_reward_based_distill or not self.trainer:
+            return
+        now = time.time()
+        cooldown = float(self.get_parameter('distill_cooldown_sec').value)
+        if now - self.last_distill_time < cooldown:
+            return
+        metric = self._current_reward_metric()
+        if metric == float('-inf'):
+            return
+        min_reward = float(self.get_parameter('distill_min_reward').value)
+        if metric < min_reward:
+            return
+        improved = False
+        min_impr = float(self.get_parameter('distill_min_improvement').value)
+        if self.last_distill_metric is None:
+            improved = True  # allow first distill once cooldown passed
+        else:
+            if (metric - self.last_distill_metric) >= min_impr:
+                improved = True
+        plateau_ok = False
+        plateau_sec = float(self.get_parameter('distill_plateau_sec').value)
+        if (now - self.last_distill_time) >= plateau_sec:
+            plateau_ok = True
+        if not (improved or plateau_ok):
+            return
+        # Trigger distillation
+        try:
+            if hasattr(self.trainer, 'distill_best'):
+                out = self.trainer.distill_best()
+            elif hasattr(self.trainer, 'distill_to_student'):
+                out = self.trainer.distill_to_student()
+            else:
+                out = ""
+            if out:
+                self.last_distill_time = now
+                self.last_distill_metric = metric
+                self.get_logger().info(f"Distilled student at metric={metric:.3f} -> {out}")
+            else:
+                self.get_logger().warn("Distillation requested but no output produced")
+        except Exception as e:
+            self.get_logger().warn(f"Distillation failed: {e}")
     
     def post_process_action(self, action):
         """Post-process action to encourage forward movement and reduce spinning"""

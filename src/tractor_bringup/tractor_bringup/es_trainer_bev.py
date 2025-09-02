@@ -115,12 +115,12 @@ class EvolutionaryStrategyTrainerBEV:
         # Initialize population
         self._initialize_population()
         
-        # Experience replay (simplified for ES) - increased for RK3588's abundant RAM
-        self.buffer_capacity = 50000  # 5x larger buffer for more diverse ES training data
+        # Experience replay (simplified for ES). Store BEV as uint8 to reduce RAM.
+        self.buffer_capacity = 50000
         self.buffer_size = 0
         self.insert_ptr = 0
         self.proprio_dim = 3 + self.extra_proprio
-        self.bev_store = np.zeros((self.buffer_capacity, self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+        self.bev_store = np.zeros((self.buffer_capacity, self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
         self.proprio_store = np.zeros((self.buffer_capacity, self.proprio_dim), dtype=np.float32)
         self.action_store = np.zeros((self.buffer_capacity, 2), dtype=np.float32)  # linear, angular
         self.reward_store = np.zeros((self.buffer_capacity,), dtype=np.float32)
@@ -239,7 +239,8 @@ class EvolutionaryStrategyTrainerBEV:
             proprioceptive = proprioceptive[:expected]
         # Ring buffer insert
         i = self.insert_ptr
-        self.bev_store[i] = processed.astype(np.float32)
+        # Store as uint8
+        self.bev_store[i] = processed
         self.proprio_store[i] = proprioceptive.astype(np.float32)
         # Action expected length 2 (linear, angular); trim/pad if needed
         if action.shape[0] < 2:
@@ -741,13 +742,13 @@ class EvolutionaryStrategyTrainerBEV:
                 # Unexpected dimensions, create default
                 bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
                 
-            return bev_processed.astype(np.float32)
+            return bev_processed.astype(np.float32) / 255.0 if bev_processed.dtype == np.uint8 else bev_processed.astype(np.float32)
         except Exception:
             # Fallback zero tensor
             return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
     
     def preprocess_bev_for_storage(self, bev_image: np.ndarray) -> np.ndarray:
-        """Preprocess BEV image for storage in replay buffer."""
+        """Preprocess BEV image for storage as uint8 [0,255] in replay buffer."""
         try:
             # Ensure correct shape (C,H,W)
             if bev_image.ndim == 3:
@@ -759,14 +760,23 @@ class EvolutionaryStrategyTrainerBEV:
                     bev_processed = bev_image
                 else:
                     # Unexpected shape, create default
-                    bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+                    bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
             else:
                 # Unexpected dimensions, create default
-                bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
-                
-            return bev_processed.astype(np.float32)
+                bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
+
+            # If not already uint8, scale/clip
+            if bev_processed.dtype != np.uint8:
+                arr = bev_processed.astype(np.float32)
+                scale = 255.0 if np.percentile(arr, 99) <= 1.5 else 1.0
+                arr = np.clip(arr * scale, 0.0, 255.0)
+                bev_u8 = arr.astype(np.uint8)
+            else:
+                bev_u8 = bev_processed
+
+            return bev_u8
         except Exception:
-            return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+            return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
         
     def enable_rknn_inference(self):
         """Enable RKNN runtime inference if model file exists."""

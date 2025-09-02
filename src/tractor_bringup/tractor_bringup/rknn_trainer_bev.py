@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 import cv2
+import copy
 
 try:
     from rknn.api import RKNN
@@ -135,13 +136,15 @@ class RKNNTrainerBEV:
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
         
-        # Experience replay (replaced deque with ring buffer + priorities for prioritized replay)
-        self.buffer_capacity = int(buffer_capacity)   # Optimized for learning quality: large buffer with 4 channels
-        # Memory usage: ~15GB for experience buffer (50k x 4 x 200 x 200 x 4 bytes)
+        # Experience replay (ring buffer + priorities). Store BEV as uint8 to reduce RAM.
+        self.buffer_capacity = int(buffer_capacity)
         self.buffer_size = 0
         self.insert_ptr = 0
         self.proprio_dim = 3 + self.extra_proprio
-        self.bev_store = np.zeros((self.buffer_capacity, self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+        # Store BEV as uint8 [0,255]; decode to float32 at sample time.
+        self.bev_store = np.zeros(
+            (self.buffer_capacity, self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8
+        )
         self.proprio_store = np.zeros((self.buffer_capacity, self.proprio_dim), dtype=np.float32)
         self.action_store = np.zeros((self.buffer_capacity, 2), dtype=np.float32)  # linear, angular
         self.reward_store = np.zeros((self.buffer_capacity,), dtype=np.float32)
@@ -288,7 +291,8 @@ class RKNNTrainerBEV:
             proprioceptive = proprioceptive[:expected]
         # Ring buffer insert
         i = self.insert_ptr
-        self.bev_store[i] = processed.astype(np.float32)
+        # Store as uint8 (0..255)
+        self.bev_store[i] = processed
         self.proprio_store[i] = proprioceptive.astype(np.float32)
         # Action expected length 2 (linear, angular); trim/pad if needed
         if action.shape[0] < 2:
@@ -424,7 +428,9 @@ class RKNNTrainerBEV:
         # Assemble batch tensors
         # Ensure indices is a proper numpy array of integers
         indices = np.asarray(indices, dtype=np.int32)
-        bev_batch = torch.from_numpy(self.bev_store[indices]).float().to(self.device)
+        # Decode uint8 -> float32 in [0,1]
+        bev_batch_np = self.bev_store[indices].astype(np.float32) / 255.0
+        bev_batch = torch.from_numpy(bev_batch_np).to(self.device)
         # Debug: check batch tensor shape
         if bev_batch.ndim != 4:
             print(f"DEBUG: Unexpected bev_batch shape: {bev_batch.shape}, indices shape: {indices.shape}")
@@ -556,13 +562,14 @@ class RKNNTrainerBEV:
                 # Unexpected dimensions, create default
                 bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
                 
-            return bev_processed.astype(np.float32)
+            # Normalize to [0,1] for model input
+            return bev_processed.astype(np.float32) / 255.0 if bev_processed.dtype == np.uint8 else bev_processed.astype(np.float32)
         except Exception:
             # Fallback zero tensor
             return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
     
     def preprocess_bev_for_storage(self, bev_image: np.ndarray) -> np.ndarray:
-        """Preprocess BEV image for storage in replay buffer."""
+        """Preprocess BEV image for storage as uint8 [0,255] in replay buffer."""
         try:
             # Ensure correct shape (C,H,W)
             if bev_image.ndim == 3:
@@ -574,14 +581,134 @@ class RKNNTrainerBEV:
                     bev_processed = bev_image
                 else:
                     # Unexpected shape, create default
-                    bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+                    bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
             else:
                 # Unexpected dimensions, create default
-                bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
-                
-            return bev_processed.astype(np.float32)
+                bev_processed = np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
+
+            # If input is float in [0,1] or arbitrary floats, scale and clip to [0,255]
+            if bev_processed.dtype != np.uint8:
+                arr = bev_processed.astype(np.float32)
+                # Heuristic: if values mostly <=1.5, assume [0,1]
+                scale = 255.0 if np.percentile(arr, 99) <= 1.5 else 1.0
+                arr = np.clip(arr * scale, 0.0, 255.0)
+                bev_u8 = arr.astype(np.uint8)
+            else:
+                bev_u8 = bev_processed
+
+            return bev_u8
         except Exception:
-            return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.float32)
+            return np.zeros((self.bev_channels, self.bev_height, self.bev_width), dtype=np.uint8)
+
+    # -------- Distillation: compact student from teacher behavior --------
+    class StudentBEVExplorationNet(nn.Module):
+        def __init__(self, bev_channels: int, proprio_inputs: int):
+            super().__init__()
+            # Smaller encoder and heads for RK3588 NPU throughput
+            self.enc = nn.Sequential(
+                nn.Conv2d(bev_channels, 16, 3, 2, 1), nn.ReLU(),
+                nn.Conv2d(16, 32, 3, 2, 1), nn.ReLU(),
+                nn.Conv2d(32, 64, 3, 2, 1), nn.ReLU(),
+                nn.AvgPool2d(2), nn.Flatten()
+            )
+            # Estimate flatten dim for 200x200 -> 100 -> 50 -> 25 -> avgpool 12 -> 64*12*12
+            self.enc_fc = nn.Linear(64 * 12 * 12, 128)
+            self.sens = nn.Sequential(
+                nn.Linear(proprio_inputs, 64), nn.ReLU(), nn.Linear(64, 64)
+            )
+            self.head = nn.Sequential(
+                nn.Linear(128 + 64, 128), nn.ReLU(), nn.Linear(128, 3)
+            )
+        def forward(self, x, s):
+            f = self.enc(x)
+            f = self.enc_fc(f)
+            g = self.sens(s)
+            h = torch.cat([f, g], dim=1)
+            return self.head(h)
+
+    def distill_to_student(self, out_dir: str = "models", steps: int = 2000, batch_size: int = 64) -> str:
+        """Distill current policy into a compact student using self buffer as dataset.
+        Returns the path prefix of saved student (without extension)."""
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            teacher = copy.deepcopy(self.model).to(self.device)
+            teacher.eval()
+            student = self.StudentBEVExplorationNet(self.bev_channels, self.proprio_dim).to(self.device)
+            opt = optim.Adam(student.parameters(), lr=3e-4)
+            mse = nn.MSELoss()
+            # Simple KD on raw logits; also tanh/sigmoid match for stability
+            for t in range(steps):
+                if self.buffer_size < batch_size:
+                    break
+                idx = np.random.choice(self.buffer_size, batch_size, replace=False)
+                bev_np = self.bev_store[idx].astype(np.float32) / 255.0
+                sens_np = self.proprio_store[idx].astype(np.float32)
+                bev = torch.from_numpy(bev_np).to(self.device)
+                sens = torch.from_numpy(sens_np).to(self.device)
+                with torch.no_grad():
+                    teacher_out = teacher(bev, sens)
+                student_out = student(bev, sens)
+                # Blend raw and squashed targets
+                loss = mse(student_out, teacher_out)
+                loss += 0.1 * mse(torch.tanh(student_out[:, :2]), torch.tanh(teacher_out[:, :2]))
+                loss += 0.05 * mse(torch.sigmoid(student_out[:, 2:3]), torch.sigmoid(teacher_out[:, 2:3]))
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(student.parameters(), 1.0)
+                opt.step()
+                if self.enable_debug and (t % 200 == 0):
+                    print(f"[Distill] step={t} loss={float(loss.item()):.4f}")
+            # Save student
+            ts = int(time.time())
+            base = os.path.join(out_dir, f"exploration_student_{ts}")
+            torch.save({'model_state_dict': student.state_dict(),
+                        'bev_channels': self.bev_channels,
+                        'proprio_dim': self.proprio_dim}, base + ".pth")
+            # Export RKNN/ONNX for student
+            try:
+                self.export_model_rknn(student, base)
+            except Exception as e:
+                print(f"[Distill] RKNN export failed: {e}")
+            return base
+        except Exception as e:
+            print(f"[Distill] Failed: {e}")
+            return ""
+
+    def export_model_rknn(self, model: nn.Module, base_path: str):
+        """Export an arbitrary model to ONNX and RKNN with current input shapes."""
+        try:
+            onnx_path = base_path + ".onnx"
+            dummy_bev = torch.randn(1, self.bev_channels, self.bev_height, self.bev_width).to(self.device)
+            dummy_sensor = torch.randn(1, self._proprio_feature_size()).to(self.device)
+            torch.onnx.export(model, (dummy_bev, dummy_sensor), onnx_path,
+                              export_params=True, opset_version=11, do_constant_folding=True,
+                              input_names=['bev_image', 'sensor'], output_names=['action_confidence'],
+                              dynamic_axes=None)
+            print(f"[Distill] ONNX exported: {onnx_path}")
+        except Exception as e:
+            print(f"[Distill] ONNX export failed: {e}")
+        if not RKNN_AVAILABLE:
+            return
+        try:
+            from rknn.api import RKNN
+            r = RKNN(verbose=self.enable_debug)
+            ret = r.load_onnx(base_path + ".onnx")
+            if ret != 0:
+                print("[Distill] RKNN load_onnx failed")
+                return
+            # Dataset may contain two inputs; use fallback single-input quant if needed
+            dataset_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '..', 'dataset.txt')
+            ret = r.build(do_quantization=True, dataset=dataset_path)
+            if ret != 0:
+                print("[Distill] RKNN build failed")
+                return
+            out = base_path + ".rknn"
+            ret = r.export_rknn(out)
+            if ret == 0:
+                print(f"[Distill] RKNN exported: {out}")
+            r.release()
+        except Exception as e:
+            print(f"[Distill] RKNN export error: {e}")
         
     def enable_rknn_inference(self):
         """Enable RKNN runtime inference if model file exists."""

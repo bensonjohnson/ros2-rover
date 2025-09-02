@@ -169,8 +169,8 @@ case "$MODE_INPUT" in
     MODE="es_rl_hybrid";;
 esac
 
-# PBT defaults
-PBT_POPULATION_SIZE=${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE}
+# PBT defaults (enforce static population size 4)
+PBT_POPULATION_SIZE=4
 PBT_UPDATE_INTERVAL=${PBT_UPDATE_INTERVAL:-$DEFAULT_PBT_UPDATE_INTERVAL}
 PBT_PERTURB_PROB=${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}
 PBT_RESAMPLE_PROB=${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}
@@ -236,7 +236,7 @@ if [[ "$MODE" == "es_rl_hybrid" ]]; then
   echo "  PBT Perturbation Prob: ${PBT_PERTURB_PROB:-$DEFAULT_PBT_PERTURB_PROB}"
   echo "  PBT Resample Prob: ${PBT_RESAMPLE_PROB:-$DEFAULT_PBT_RESAMPLE_PROB}"
 fi
-echo "  IMU Status: Disabled (to reduce USB errors)"
+echo "  IMU Status: Enabled (LSM9DS1 fused into proprio)"
 echo "  USB Mode: Optimized for stability"
 if [[ "$MODE" == "safe_training" ]]; then
   echo "  Reward System: Anti-overtraining measures active"
@@ -272,11 +272,8 @@ else
   echo "Skipping Foxglove bridge (training-focused mode or disabled)"
 fi
 
-# Adjust BEV size for PBT to reduce memory footprint when population is large
+# Strictly fixed BEV size to maintain 5cm/pixel ratio
 BEV_SIZE_PARAM="[200, 200]"
-if [[ "$MODE" == "es_rl_hybrid" ]] && [[ ${PBT_POPULATION_SIZE:-$DEFAULT_PBT_POPULATION_SIZE} -ge 3 ]]; then
-  BEV_SIZE_PARAM="[160, 160]"
-fi
 
 ros2 launch tractor_bringup npu_exploration_bev.launch.py \
     operation_mode:=${MODE} \

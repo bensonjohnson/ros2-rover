@@ -27,6 +27,8 @@ class PBT_ES_RL_Trainer:
         
         self.population = [self._create_agent() for _ in range(self.population_size)]
         self.active_agent_idx = 0
+        # Track elite agent (index) to freeze from destructive resample/perturb
+        self.elite_idx = 0
         
         # PBT parameters
         self.pbt_interval = int(pbt_interval) if pbt_interval is not None else 1000  # steps before PBT update
@@ -108,17 +110,25 @@ class PBT_ES_RL_Trainer:
         """Perform a PBT exploit-and-explore step"""
         agent_data = self.population[agent_idx]
         
-        # Find a better performing agent
+        # Rank agents by fitness and update elite
+        fitnesses = [p['fitness'] for p in self.population]
+        best_idx = int(np.argmax(fitnesses)) if len(fitnesses) > 0 else 0
+        self.elite_idx = best_idx
+        
+        # Do not perturb or resample the elite
+        if agent_idx == self.elite_idx:
+            return
+
+        # Find a better performing agent (the current elite)
         contenders = [p for i, p in enumerate(self.population) if i != agent_idx]
         if not contenders:
             return
-            
-        best_contender = max(contenders, key=lambda x: x['fitness'])
+        best_contender = self.population[self.elite_idx]
         
         if agent_data['fitness'] < best_contender['fitness']:
             print(f"PBT Update for Agent {agent_idx}: Fitness {agent_data['fitness']:.2f} < Best Contender {best_contender['fitness']:.2f}")
-            # Exploit: copy weights from the better agent
-            agent_data['trainer'].copy_weights_from(best_contender['trainer'])
+            # Exploit: soft-copy weights toward the better agent to reduce shocks
+            self._soft_copy_weights(agent_data['trainer'], best_contender['trainer'], alpha=0.25)
             # Reset optimizer state after weight copy (avoid stale moments)
             if hasattr(agent_data['trainer'], 'reset_optimizer_state'):
                 agent_data['trainer'].reset_optimizer_state()
@@ -135,6 +145,18 @@ class PBT_ES_RL_Trainer:
                     self._perturb_weights(agent_data['trainer'])
                 else:
                     print("  - Skipped perturbation this cycle")
+
+    def _soft_copy_weights(self, dest_trainer, src_trainer, alpha=0.25):
+        """Interpolate dest parameters towards src: theta <- (1-alpha)*theta + alpha*theta_src"""
+        try:
+            dmodel = dest_trainer.get_model()
+            smodel = src_trainer.get_model()
+            with dest_trainer.torch.no_grad():
+                for dp, sp in zip(dmodel.parameters(), smodel.parameters()):
+                    dp.data.mul_(1.0 - alpha).add_(sp.data, alpha=alpha)
+        except Exception as e:
+            print(f"  - Soft copy failed, falling back to hard copy: {e}")
+            dest_trainer.copy_weights_from(src_trainer)
 
     def _resample_agent(self, agent_idx: int):
         """Reinitialize the model for an agent to increase diversity."""
@@ -189,6 +211,21 @@ class PBT_ES_RL_Trainer:
             agent_data['trainer'].model_path = f"models/pbt_agent_{i}_model.pth"
             agent_data['trainer'].safe_save()
         print("Saved all PBT population models.")
+
+    def distill_best(self, steps: int = 2000, batch_size: int = 64) -> str:
+        """Distill the elite agent to a compact student. Returns saved path prefix."""
+        if not self.population:
+            return ""
+        # Update elite by current fitness
+        fitnesses = [p['fitness'] for p in self.population]
+        self.elite_idx = int(np.argmax(fitnesses)) if len(fitnesses) > 0 else 0
+        elite_trainer = self.population[self.elite_idx]['trainer']
+        if hasattr(elite_trainer, 'distill_to_student'):
+            print(f"[PBT] Distilling elite agent {self.elite_idx} (fitness={fitnesses[self.elite_idx]:.3f})")
+            return elite_trainer.distill_to_student(out_dir="models", steps=steps, batch_size=batch_size)
+        else:
+            print("[PBT] Elite trainer does not support distillation")
+            return ""
 
     def get_training_stats(self):
         """Get aggregated training stats for the population"""
