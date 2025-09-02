@@ -7,6 +7,7 @@ Integrates with existing Hiwonder motor controller for odometry
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from sensor_msgs.msg import PointCloud2, Imu, JointState
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -1617,15 +1618,16 @@ class NPUExplorationBEVNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = NPUExplorationBEVNode()
-    
+
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         node.get_logger().info("NPU BEV exploration interrupted")
     finally:
         node.stop_robot()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
