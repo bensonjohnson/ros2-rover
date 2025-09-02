@@ -403,6 +403,9 @@ class LSM9DS1Publisher(Node):
 
     def publish_data(self):
         """Publish sensor data"""
+        # Avoid publishing when context is shutting down
+        if not rclpy.ok():
+            return
         current_time = self.get_clock().now()
 
         with self.data_lock:
@@ -449,7 +452,10 @@ class LSM9DS1Publisher(Node):
         imu_msg.linear_acceleration_covariance[4] = accel_var
         imu_msg.linear_acceleration_covariance[8] = accel_var
 
-        self.imu_pub.publish(imu_msg)
+        try:
+            self.imu_pub.publish(imu_msg)
+        except Exception:
+            return
 
         # Magnetometer message
         mag_msg = MagneticField()
@@ -465,7 +471,10 @@ class LSM9DS1Publisher(Node):
         mag_msg.magnetic_field_covariance[4] = mag_var
         mag_msg.magnetic_field_covariance[8] = mag_var
 
-        self.mag_pub.publish(mag_msg)
+        try:
+            self.mag_pub.publish(mag_msg)
+        except Exception:
+            return
 
         # Temperature message
         temp_msg = Temperature()
@@ -474,7 +483,10 @@ class LSM9DS1Publisher(Node):
         temp_msg.temperature = float(data['temperature'])
         temp_msg.variance = 2.0  # ±2°C accuracy
 
-        self.temp_pub.publish(temp_msg)
+        try:
+            self.temp_pub.publish(temp_msg)
+        except Exception:
+            return
 
         # Raw sensor data messages (useful for debugging)
         accel_raw_msg = Vector3Stamped()
@@ -483,7 +495,10 @@ class LSM9DS1Publisher(Node):
         accel_raw_msg.vector.x = data['accel'][0]
         accel_raw_msg.vector.y = data['accel'][1]
         accel_raw_msg.vector.z = data['accel'][2]
-        self.raw_accel_pub.publish(accel_raw_msg)
+        try:
+            self.raw_accel_pub.publish(accel_raw_msg)
+        except Exception:
+            return
 
         gyro_raw_msg = Vector3Stamped()
         gyro_raw_msg.header.stamp = current_time.to_msg()
@@ -491,7 +506,10 @@ class LSM9DS1Publisher(Node):
         gyro_raw_msg.vector.x = data['gyro'][0]
         gyro_raw_msg.vector.y = data['gyro'][1]
         gyro_raw_msg.vector.z = data['gyro'][2]
-        self.raw_gyro_pub.publish(gyro_raw_msg)
+        try:
+            self.raw_gyro_pub.publish(gyro_raw_msg)
+        except Exception:
+            return
 
     def destroy_node(self):
         """Clean shutdown"""
@@ -512,8 +530,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        lsm9ds1_pub.destroy_node()
-        rclpy.shutdown()
+        try:
+            lsm9ds1_pub.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -549,6 +549,9 @@ class HiwonderMotorDriver(Node):
 
     def publish_joint_states(self, left_encoder, right_encoder):
         """Publish joint states from encoder data"""
+        import rclpy
+        if not rclpy.ok():
+            return
         # Tank tracks are fixed joints - don't publish rotating positions!
         # The encoder data is used for odometry calculation, not joint
         # visualization
@@ -576,10 +579,16 @@ class HiwonderMotorDriver(Node):
         # Fixed tracks + wheel velocities
         joint_msg.velocity = [0.0, 0.0, self.left_velocity, self.right_velocity]
 
-        self.joint_state_pub.publish(joint_msg)
+        try:
+            self.joint_state_pub.publish(joint_msg)
+        except Exception:
+            return
 
     def publish_odometry(self):
         """Calculate and publish wheel odometry"""
+        import rclpy
+        if not rclpy.ok():
+            return
         # Tank steering kinematics (fixed coordinate frame orientation)
         linear_vel = (
             (self.left_velocity + self.right_velocity) * self.wheel_radius / 2.0
@@ -628,7 +637,10 @@ class HiwonderMotorDriver(Node):
         odom_msg.twist.covariance[0] = 0.1  # vx
         odom_msg.twist.covariance[35] = 0.1  # vtheta
 
-        self.odom_pub.publish(odom_msg)
+        try:
+            self.odom_pub.publish(odom_msg)
+        except Exception:
+            return
 
         # Publish TF transform (odom -> base_footprint, base_footprint ->
         # base_link is in URDF)
@@ -641,11 +653,17 @@ class HiwonderMotorDriver(Node):
         tf_msg.transform.translation.z = 0.0
         tf_msg.transform.rotation = odom_msg.pose.pose.orientation
 
-        self.tf_broadcaster.sendTransform(tf_msg)
+        try:
+            self.tf_broadcaster.sendTransform(tf_msg)
+        except Exception:
+            return
 
     def battery_callback(self):
         """Read and publish battery voltage from motor controller"""
         if self.bus is None:
+            return
+        import rclpy
+        if not rclpy.ok():
             return
 
         try:
@@ -661,14 +679,20 @@ class HiwonderMotorDriver(Node):
                 # Publish the real voltage
                 voltage_msg = Float32()
                 voltage_msg.data = voltage_volts
-                self.battery_voltage_pub.publish(voltage_msg)
+                try:
+                    self.battery_voltage_pub.publish(voltage_msg)
+                except Exception:
+                    return
 
                 # Calculate and publish battery percentage (3S LiPo: 9.9V=0%,
                 # 12.6V=100%)
                 battery_percentage = self.calculate_battery_percentage(voltage_volts)
                 percentage_msg = Float32()
                 percentage_msg.data = battery_percentage
-                self.battery_percentage_pub.publish(percentage_msg)
+                try:
+                    self.battery_percentage_pub.publish(percentage_msg)
+                except Exception:
+                    return
 
                 # Update voltage history for drain rate calculation
                 current_time = time.time()
@@ -681,7 +705,10 @@ class HiwonderMotorDriver(Node):
                 runtime_hours = self.calculate_dynamic_runtime()
                 runtime_msg = Float32()
                 runtime_msg.data = runtime_hours
-                self.battery_runtime_pub.publish(runtime_msg)
+                try:
+                    self.battery_runtime_pub.publish(runtime_msg)
+                except Exception:
+                    return
 
                 # Enhanced logging with runtime status
                 if runtime_hours < 0:
@@ -700,17 +727,26 @@ class HiwonderMotorDriver(Node):
                 # Fallback to dummy value if read fails
                 voltage_msg = Float32()
                 voltage_msg.data = 12.0
-                self.battery_voltage_pub.publish(voltage_msg)
+                try:
+                    self.battery_voltage_pub.publish(voltage_msg)
+                except Exception:
+                    return
 
                 # Publish dummy percentage and runtime too
                 dummy_percentage = self.calculate_battery_percentage(12.0)
                 percentage_msg = Float32()
                 percentage_msg.data = dummy_percentage
-                self.battery_percentage_pub.publish(percentage_msg)
+                try:
+                    self.battery_percentage_pub.publish(percentage_msg)
+                except Exception:
+                    return
 
                 runtime_msg = Float32()
                 runtime_msg.data = -1.0  # Indicate unknown runtime
-                self.battery_runtime_pub.publish(runtime_msg)
+                try:
+                    self.battery_runtime_pub.publish(runtime_msg)
+                except Exception:
+                    return
 
                 self.get_logger().debug("Battery read failed - using dummy 12V")
 
@@ -718,17 +754,26 @@ class HiwonderMotorDriver(Node):
             # Fallback to dummy value on error
             voltage_msg = Float32()
             voltage_msg.data = 12.0
-            self.battery_voltage_pub.publish(voltage_msg)
+            try:
+                self.battery_voltage_pub.publish(voltage_msg)
+            except Exception:
+                return
 
             # Publish dummy percentage and runtime too
             dummy_percentage = self.calculate_battery_percentage(12.0)
             percentage_msg = Float32()
             percentage_msg.data = dummy_percentage
-            self.battery_percentage_pub.publish(percentage_msg)
+            try:
+                self.battery_percentage_pub.publish(percentage_msg)
+            except Exception:
+                return
 
             runtime_msg = Float32()
             runtime_msg.data = -1.0  # Indicate unknown runtime
-            self.battery_runtime_pub.publish(runtime_msg)
+            try:
+                self.battery_runtime_pub.publish(runtime_msg)
+            except Exception:
+                return
 
             self.get_logger().debug(f"Battery reading error: {e} - using dummy 12V")
 
@@ -827,8 +872,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        motor_driver.destroy_node()
-        rclpy.shutdown()
+        try:
+            motor_driver.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
