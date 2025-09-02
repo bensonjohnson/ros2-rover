@@ -220,7 +220,8 @@ class NPUExplorationBEVNode(Node):
             self.joint_state_callback, 10
         )
         
-        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        # Publish AI commands to a dedicated topic; safety monitor gates this to cmd_vel_raw
+        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
         self.status_pub = self.create_publisher(String, '/npu_exploration_status', 10)
         # Expose services to save and distill models
         self.save_srv = self.create_service(Trigger, '/save_models', self.handle_save_models)

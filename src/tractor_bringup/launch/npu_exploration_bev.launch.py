@@ -266,7 +266,32 @@ def generate_launch_description():
         ]
     )
 
-    # Removed training monitor and safety monitor for simplified setup
+    # 5. Velocity feedback controller (reads cmd_vel_raw, publishes cmd_vel)
+    vfc_node = Node(
+        package="tractor_control",
+        executable="velocity_feedback_controller",
+        name="velocity_feedback_controller",
+        output="screen",
+        parameters=[
+            {"control_frequency": 50.0}
+        ]
+    )
+
+    # 6. Simple BEV safety monitor (gates forward motion)
+    safety_monitor_node = Node(
+        package="tractor_bringup",
+        executable="simple_safety_monitor_bev.py",
+        name="simple_safety_monitor_bev",
+        output="screen",
+        parameters=[
+            {
+                "emergency_stop_distance": LaunchConfiguration("safety_distance"),
+                "pointcloud_topic": "/camera/camera/depth/color/points",
+                "input_cmd_topic": "cmd_vel_ai",
+                "output_cmd_topic": "cmd_vel_raw"
+            }
+        ]
+    )
 
     # Build launch description
     ld = LaunchDescription()
@@ -314,5 +339,8 @@ def generate_launch_description():
 
     # NPU system - start after camera is ready
     ld.add_action(TimerAction(period=8.0, actions=[npu_exploration_node]))
+    # Safety + controller chain
+    ld.add_action(TimerAction(period=9.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=9.5, actions=[vfc_node]))
 
     return ld
