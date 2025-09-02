@@ -440,6 +440,13 @@ class NPUExplorationBEVNode(Node):
                         enable_debug=enable_debug,
                         extra_proprio=extra_proprio
                     )
+                    # Try to enable RKNN runtime for current active agent if a model exists
+                    try:
+                        active = self.trainer.get_active_agent()
+                        if hasattr(active, 'enable_rknn_inference'):
+                            active.enable_rknn_inference()
+                    except Exception:
+                        pass
                     # Use the same interval for agent switching in this node
                     self.pbt_update_interval = pbt_interval
                     self.get_logger().info("Mode: PBT ES-RL Hybrid training")
@@ -712,6 +719,13 @@ class NPUExplorationBEVNode(Node):
             interval = getattr(self, 'pbt_update_interval', 1000)
             if interval > 0 and self.step_count % interval == 0:
                 self.trainer.select_active_agent()
+                # Try to enable RKNN runtime for the new active agent
+                try:
+                    active = self.trainer.get_active_agent()
+                    if hasattr(active, 'enable_rknn_inference'):
+                        active.enable_rknn_inference()
+                except Exception:
+                    pass
                 self.get_logger().info(f"Switched to PBT agent {self.trainer.active_agent_idx}")
 
         # Train neural network if available

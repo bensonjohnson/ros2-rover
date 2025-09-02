@@ -500,6 +500,11 @@ class RKNNTrainerBEV:
                 self.last_rknn_conversion = current_time
                 self.last_export_loss = median_loss
                 self.last_export_avg_reward = avg_reward
+                # Try enabling RKNN runtime for hybrid inference after export
+                try:
+                    self.enable_rknn_inference()
+                except Exception:
+                    pass
                 if self.enable_debug:
                     print(f"RKNN export triggered (improved={improved}, force={force_due_interval}) median_loss={median_loss:.4f} avg_reward={avg_reward:.2f}")
             except Exception as e:
