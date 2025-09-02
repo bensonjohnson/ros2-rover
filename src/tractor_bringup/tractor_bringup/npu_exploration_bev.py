@@ -939,42 +939,66 @@ class NPUExplorationBEVNode(Node):
         return cmd
         
     def check_emergency_collision(self):
-        """Check for imminent collision requiring emergency stop using BEV data"""
+        """Guardian: compute nearest forward obstacle distance in meters from BEV and enforce safety stop.
+        Uses obstacle confidence channel and correct BEV orientation (bottom = forward)."""
         if self.latest_pointcloud is None or self.latest_pointcloud.size == 0:
-            return False, 0.0, 0.0, 0.0, 0.0
-            
+            return False, 10.0, 0.0, 0.0, 0.0
+
         try:
-            # Generate BEV from point cloud
             bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
-            
-            # Use max height channel (channel 0) for collision detection
-            max_height_channel = bev_image[:, :, 0]
-            
-            # Define front region (front third of BEV)
-            h, w = max_height_channel.shape
-            front_region = max_height_channel[:h//3, w//3:2*w//3]  # Front center region
-            
-            # Find minimum distance in front region
-            valid_front = front_region[front_region > 0.05]  # Ignore very low obstacles
-            min_distance = float(np.min(valid_front)) if valid_front.size else 10.0
-            
-            # Side regions for steering guidance
-            left_region = max_height_channel[:h//2, :w//3]
-            right_region = max_height_channel[:h//2, 2*w//3:]
-            center_region = max_height_channel[:h//2, w//3:2*w//3]
-            
-            def free_metric(region):
-                valid = region[region > 0.05]
-                return float(np.mean(valid)) if valid.size else 0.0
-                
-            left_free = free_metric(left_region)
-            right_free = free_metric(right_region)
-            center_free = free_metric(center_region)
-            
-            emergency = min_distance < 0.18  # slightly higher to start recovery earlier
-            return emergency, min_distance, left_free, right_free, center_free
+            h, w, _ = bev_image.shape
+            # Channels
+            conf = bev_image[:, :, 3]  # obstacle confidence [0,1]
+            low = bev_image[:, :, 2]   # low obstacle presence
+            # Occupancy mask (confidence or low obstacles)
+            occ = (conf > 0.25) | (low > 0.1)
+
+            # Define regions. In our BEV, pixel_x maps x in [-range, +range] to [0..H-1].
+            # Front (forward) is at larger pixel_x (bottom of image).
+            front_rows = slice(int(h*2/3), h)
+            center_cols = slice(int(w/3), int(2*w/3))
+            left_cols = slice(0, int(w/3))
+            right_cols = slice(int(2*w/3), w)
+
+            # Helper to compute nearest forward distance (meters) in a region
+            def nearest_forward_distance(mask_region):
+                ys, xs = np.where(mask_region)
+                if ys.size == 0:
+                    return 10.0
+                # Convert row index to meters: x = -x_range .. +x_range
+                # px = ((x + x_range) / (2*x_range)) * H  => x = (px/H)*2*x_range - x_range
+                px = ys.astype(np.float32)
+                x_m = (px / float(h)) * (2.0 * self.bev_generator.x_range) - self.bev_generator.x_range
+                # Forward only
+                x_m = x_m[x_m >= 0.0]
+                if x_m.size == 0:
+                    return 10.0
+                return float(np.min(x_m))
+
+            # Compose regional masks
+            front_center_mask = occ[front_rows, center_cols]
+            left_mask = occ[front_rows, left_cols]
+            right_mask = occ[front_rows, right_cols]
+            center_mask = occ[front_rows, center_cols]
+
+            min_d = nearest_forward_distance(front_center_mask)
+            left_d = nearest_forward_distance(left_mask)
+            right_d = nearest_forward_distance(right_mask)
+            center_d = nearest_forward_distance(center_mask)
+
+            # Convert distances into free metrics (larger distance => more free)
+            # Normalize by x_range to [0,1]
+            xr = float(self.bev_generator.x_range)
+            left_free = float(np.clip(left_d / xr, 0.0, 1.0))
+            right_free = float(np.clip(right_d / xr, 0.0, 1.0))
+            center_free = float(np.clip(center_d / xr, 0.0, 1.0))
+
+            # Emergency if nearest forward obstacle is closer than safety_distance
+            sd = float(self.safety_distance)
+            emergency = (min_d < sd)
+            return emergency, float(min_d), left_free, right_free, center_free
         except Exception:
-            return False, 0.0, 0.0, 0.0, 0.0
+            return False, 10.0, 0.0, 0.0, 0.0
 
     def npu_inference(self, emergency_flag=None, min_d=0.0, left_free=0.0, right_free=0.0, center_free=0.0):
         if not self.all_sensors_ready():

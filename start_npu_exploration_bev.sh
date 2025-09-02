@@ -152,11 +152,32 @@ DEFAULT_PBT_UPDATE_INTERVAL="1000"  # Increased from 200 for stability
 DEFAULT_PBT_PERTURB_PROB="0.25"
 DEFAULT_PBT_RESAMPLE_PROB="0.25"
 
-MODE_INPUT=${1:-$DEFAULT_MODE}
-shift || true
-MAX_SPEED=${1:-$DEFAULT_MAX_SPEED}
-EXPLORATION_TIME=${2:-$DEFAULT_EXPLORATION_TIME}
-SAFETY_DISTANCE=${3:-$DEFAULT_SAFETY_DISTANCE}
+MODE_INPUT=${1:-}
+MAX_SPEED=${2:-}
+EXPLORATION_TIME=${3:-}
+SAFETY_DISTANCE=${4:-}
+
+# Interactive prompt when no args provided and running in a TTY
+if [ -z "$MODE_INPUT" ] && [ -t 0 ]; then
+  echo "Select mode [train/infer] (default: $DEFAULT_MODE):"
+  read -r MODE_INPUT
+  MODE_INPUT=${MODE_INPUT:-$DEFAULT_MODE}
+  echo "Set max speed m/s (default: $DEFAULT_MAX_SPEED):"
+  read -r MAX_SPEED
+  MAX_SPEED=${MAX_SPEED:-$DEFAULT_MAX_SPEED}
+  echo "Set exploration time seconds (default: $DEFAULT_EXPLORATION_TIME):"
+  read -r EXPLORATION_TIME
+  EXPLORATION_TIME=${EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
+  echo "Set safety distance meters (default: $DEFAULT_SAFETY_DISTANCE):"
+  read -r SAFETY_DISTANCE
+  SAFETY_DISTANCE=${SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
+fi
+
+# Fallback to defaults if still unset
+MODE_INPUT=${MODE_INPUT:-$DEFAULT_MODE}
+MAX_SPEED=${MAX_SPEED:-$DEFAULT_MAX_SPEED}
+EXPLORATION_TIME=${EXPLORATION_TIME:-$DEFAULT_EXPLORATION_TIME}
+SAFETY_DISTANCE=${SAFETY_DISTANCE:-$DEFAULT_SAFETY_DISTANCE}
 
 # Map simple modes to internal operation modes
 case "$MODE_INPUT" in
