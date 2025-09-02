@@ -1336,10 +1336,17 @@ class NPUExplorationBEVNode(Node):
         
     def stop_robot(self):
         """Send stop command"""
-        cmd = Twist()
-        cmd.linear.x = 0.0
-        cmd.angular.z = 0.0
-        self.cmd_pub.publish(cmd)
+        try:
+            cmd = Twist()
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            # Only attempt publish if context likely valid
+            import rclpy
+            if rclpy.ok():
+                self.cmd_pub.publish(cmd)
+        except Exception:
+            # Ignore publish errors during shutdown
+            pass
 
     def imu_callback(self, msg: Imu):
         """Low-pass filter IMU signals and cache for proprio usage"""
