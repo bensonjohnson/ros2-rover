@@ -24,7 +24,10 @@ class BEVGenerator:
                  # Grass-specific parameters
                  enable_grass_filtering: bool = True,
                  grass_height_tolerance: float = 0.15,  # 15cm grass tolerance
-                 min_obstacle_height: float = 0.25):   # Objects must be >25cm to be obstacles
+                 min_obstacle_height: float = 0.25,   # Objects must be >25cm to be obstacles
+                 # Performance tuning
+                 ground_update_interval: int = 10,
+                 enable_opencl: bool = False):
         """
         Initialize BEV generator
         
@@ -48,12 +51,77 @@ class BEVGenerator:
         self.grass_height_tolerance = grass_height_tolerance
         self.min_obstacle_height = min_obstacle_height
         
+        # Performance/caching
+        self.ground_update_interval = max(1, int(ground_update_interval))
+        self._frame_counter = 0
+        self._cached_ground_plane = None  # (normal, d)
+        
+        # Optional OpenCL (lazy init)
+        self.enable_opencl = bool(enable_opencl)
+        self._ocl_ready = False
+        self._ocl_ctx = None
+        self._ocl_queue = None
+        self._ocl_prg = None
+        
         # Calculate pixel resolution
         self.x_resolution = (2 * self.x_range) / self.bev_height
         self.y_resolution = (2 * self.y_range) / self.bev_width
         
         # Precompute coordinate mappings for efficiency
         self._precompute_coordinate_mappings()
+        
+    def _init_opencl(self):
+        """Try to initialize OpenCL context and program. Falls back if unavailable."""
+        if not self.enable_opencl or self._ocl_ready:
+            return
+        try:
+            import pyopencl as cl
+            kernel_src = """
+            __kernel void bev_bins(
+                __global const float *x,
+                __global const float *y,
+                __global const float *z,
+                const int n,
+                const float x_range,
+                const float y_range,
+                const int H,
+                const int W,
+                __global int *density,
+                __global int *lowcnt,
+                __global int *zmax_scaled,
+                const float low_thresh,
+                const float z_scale
+            ){
+                int i = get_global_id(0);
+                if (i >= n) return;
+                float xf = x[i];
+                float yf = y[i];
+                float zf = z[i];
+                if (xf < -x_range || xf > x_range || yf < -y_range || yf > y_range) return;
+                int px = (int)((xf + x_range) / (2.0f*x_range) * (float)H);
+                int py = (int)((yf + y_range) / (2.0f*y_range) * (float)W);
+                if (px < 0) px = 0; if (px >= H) px = H-1;
+                if (py < 0) py = 0; if (py >= W) py = W-1;
+                int idx = px * W + py;
+                atomic_inc((volatile __global int *)&density[idx]);
+                if (zf > low_thresh) atomic_inc((volatile __global int *)&lowcnt[idx]);
+                int zscaled = (int)(zf * z_scale);
+                // emulate atomic max via CAS loop on int
+                volatile __global int *addr = &zmax_scaled[idx];
+                int old = *addr;
+                while (zscaled > old) {
+                    int prev = atomic_cmpxchg(addr, old, zscaled);
+                    if (prev == old) break;
+                    old = prev;
+                }
+            }
+            """
+            self._ocl_ctx = cl.create_some_context(interactive=False)
+            self._ocl_queue = cl.CommandQueue(self._ocl_ctx)
+            self._ocl_prg = cl.Program(self._ocl_ctx, kernel_src).build()
+            self._ocl_ready = True
+        except Exception:
+            self._ocl_ready = False
         
     def _precompute_coordinate_mappings(self):
         """Precompute coordinate mappings for faster BEV generation"""
@@ -75,45 +143,43 @@ class BEVGenerator:
         if not self.enable_ground_removal or len(points) < 3:
             return points
             
-        # RANSAC-based ground plane removal
-        best_inliers = []
-        best_plane = None
-        
-        for _ in range(self.ground_ransac_iterations):
-            # Randomly sample 3 points
-            if len(points) < 3:
-                break
-                
-            indices = np.random.choice(len(points), min(3, len(points)), replace=False)
-            sample_points = points[indices]
-            
-            # Fit plane to sample points
-            try:
-                # Calculate plane normal using cross product
-                v1 = sample_points[1] - sample_points[0]
-                v2 = sample_points[2] - sample_points[0]
-                normal = np.cross(v1, v2)
-                
-                if np.linalg.norm(normal) == 0:
+        # Update cadence: reuse cached plane most frames
+        self._frame_counter += 1
+        use_cached = self._cached_ground_plane is not None and (self._frame_counter % self.ground_update_interval != 0)
+        if use_cached:
+            normal, d = self._cached_ground_plane
+            distances = np.abs(np.dot(points, normal) + d)
+            inliers = np.where(distances < self.ground_ransac_threshold)[0]
+            best_inliers = inliers
+            best_plane = self._cached_ground_plane
+        else:
+            # RANSAC-based ground plane removal
+            best_inliers = []
+            best_plane = None
+            for _ in range(self.ground_ransac_iterations):
+                if len(points) < 3:
+                    break
+                indices = np.random.choice(len(points), 3, replace=False)
+                sample_points = points[indices]
+                try:
+                    v1 = sample_points[1] - sample_points[0]
+                    v2 = sample_points[2] - sample_points[0]
+                    normal = np.cross(v1, v2)
+                    nrm = np.linalg.norm(normal)
+                    if nrm == 0:
+                        continue
+                    normal = normal / nrm
+                    d = -np.dot(normal, sample_points[0])
+                    distances = np.abs(np.dot(points, normal) + d)
+                    inliers = np.where(distances < self.ground_ransac_threshold)[0]
+                    if len(inliers) > len(best_inliers):
+                        best_inliers = inliers
+                        best_plane = (normal, d)
+                except Exception:
                     continue
-                    
-                normal = normal / np.linalg.norm(normal)
-                d = -np.dot(normal, sample_points[0])
-                
-                # Calculate distances to plane
-                distances = np.abs(np.dot(points, normal) + d)
-                
-                # Find inliers
-                inliers = np.where(distances < self.ground_ransac_threshold)[0]
-                
-                # Update best model if this one is better
-                if len(inliers) > len(best_inliers):
-                    best_inliers = inliers
-                    best_plane = (normal, d)
-                    
-            except Exception:
-                continue
-                
+            # Cache plane if robust
+            if best_plane is not None and len(best_inliers) > 100:
+                self._cached_ground_plane = best_plane
         # Apply grass-aware ground filtering
         if self.enable_grass_filtering and len(best_inliers) > 0:
             original_count = len(points)
@@ -180,39 +246,83 @@ class BEVGenerator:
         pixel_x = np.clip(pixel_x, 0, self.bev_height - 1)
         pixel_y = np.clip(pixel_y, 0, self.bev_width - 1)
         
-        # Create BEV channels - Optimized 4-channel approach for maximum learning efficiency
-        # Focus on essential information: max height, density, low obstacles, obstacles confidence
-        num_channels = 4  # Fixed 4 channels for optimal buffer size vs quality tradeoff
+        # Create BEV channels - vectorized per-pixel aggregation (no Python loops)
+        num_channels = 4
         bev_image = np.zeros((self.bev_height, self.bev_width, num_channels), dtype=np.float32)
-        
-        # Create coordinate pairs for efficient processing
-        coords = np.column_stack((pixel_x, pixel_y))
-        unique_coords, inverse_indices = np.unique(coords, axis=0, return_inverse=True)
-        
-        # Process each unique coordinate
-        for i, (px, py) in enumerate(unique_coords):
-            # Find all points at this coordinate
-            point_indices = np.where(inverse_indices == i)[0]
-            z_values = z_coords[point_indices]
-            
-            # Maximum height channel (channel 0)
-            bev_image[px, py, 0] = np.max(z_values)
-            
-            # Point density channel (channel 1)
-            bev_image[px, py, 1] = len(z_values) / 100.0  # Normalize by typical count
-            
-            # Channel 2: Low obstacle detection (0.2m threshold - critical for navigation)
-            low_obstacles = np.sum(z_values > 0.2)
-            bev_image[px, py, 2] = np.clip(low_obstacles / 10.0, 0, 1)  # Normalize
-            
-            # Channel 3: Obstacle confidence (combined height and density score)
-            # This replaces multiple redundant channels with one high-quality confidence metric
-            height_score = np.clip(np.max(z_values) / 1.0, 0, 1)  # 1m = full confidence
-            density_score = np.clip(len(z_values) / 20.0, 0, 1)   # 20 points = full confidence 
-            bev_image[px, py, 3] = height_score * density_score
-                
-        # Normalize height channel (0-3 meters typical range)
-        bev_image[:, :, 0] = np.clip(bev_image[:, :, 0] / 3.0, 0.0, 1.0)
+
+        H, W = self.bev_height, self.bev_width
+        lin_idx = (pixel_x * W + pixel_y).astype(np.int64)
+        # Density per pixel
+        density = np.bincount(lin_idx, minlength=H * W).astype(np.float32)
+        # Low obstacles count per pixel
+        low_counts = np.bincount(lin_idx, weights=(z_coords > 0.2).astype(np.float32), minlength=H * W)
+        # Max height per pixel
+        zmax = np.full(H * W, -1e9, dtype=np.float32)
+        np.maximum.at(zmax, lin_idx, z_coords.astype(np.float32))
+
+        # Reshape to images
+        density_img = density.reshape(H, W)
+        low_img = low_counts.reshape(H, W)
+        zmax_img = np.clip(zmax.reshape(H, W), 0.0, None)
+
+        # Channel 0: normalized max height (0..3m typical)
+        bev_image[:, :, 0] = np.clip(zmax_img / 3.0, 0.0, 1.0)
+        # Channel 1: density normalized by a typical count (20)
+        bev_image[:, :, 1] = np.clip(density_img / 20.0, 0.0, 1.0)
+        # Channel 2: low obstacle normalized by 10
+        bev_image[:, :, 2] = np.clip(low_img / 10.0, 0.0, 1.0)
+        # Channel 3: obstacle confidence = height_score * density_score
+        height_score = np.clip(zmax_img / 1.0, 0.0, 1.0)
+        density_score = np.clip(density_img / 20.0, 0.0, 1.0)
+        bev_image[:, :, 3] = height_score * density_score
+
+        # Optional OpenCL acceleration (experimental)
+        if self.enable_opencl:
+            self._init_opencl()
+            if self._ocl_ready:
+                try:
+                    import pyopencl as cl
+                    n = len(x_coords)
+                    if n > 0:
+                        mf = cl.mem_flags
+                        ctx = self._ocl_ctx
+                        queue = self._ocl_queue
+                        prg = self._ocl_prg
+                        x_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=x_coords.astype(np.float32))
+                        y_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=y_coords.astype(np.float32))
+                        z_buf = cl.Buffer(ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=z_coords.astype(np.float32))
+                        dens_buf = cl.Buffer(ctx, mf.READ_WRITE, size=H * W * 4)
+                        low_buf = cl.Buffer(ctx, mf.READ_WRITE, size=H * W * 4)
+                        zmax_buf = cl.Buffer(ctx, mf.READ_WRITE, size=H * W * 4)
+                        cl.enqueue_fill_buffer(queue, dens_buf, np.int32(0), 0, H * W * 4)
+                        cl.enqueue_fill_buffer(queue, low_buf, np.int32(0), 0, H * W * 4)
+                        cl.enqueue_fill_buffer(queue, zmax_buf, np.int32(0), 0, H * W * 4)
+                        prg.bev_bins(
+                            queue, (int(n),), None,
+                            x_buf, y_buf, z_buf, np.int32(n),
+                            np.float32(self.x_range), np.float32(self.y_range),
+                            np.int32(H), np.int32(W),
+                            dens_buf, low_buf, zmax_buf,
+                            np.float32(0.2), np.float32(1000.0)
+                        )
+                        dens_out = np.empty(H * W, dtype=np.int32)
+                        low_out = np.empty(H * W, dtype=np.int32)
+                        zmax_out = np.empty(H * W, dtype=np.int32)
+                        cl.enqueue_copy(queue, dens_out, dens_buf)
+                        cl.enqueue_copy(queue, low_out, low_buf)
+                        cl.enqueue_copy(queue, zmax_out, zmax_buf)
+                        queue.finish()
+                        density_img = dens_out.astype(np.float32).reshape(H, W)
+                        low_img = low_out.astype(np.float32).reshape(H, W)
+                        zmax_img = (zmax_out.astype(np.float32) / 1000.0).reshape(H, W)
+                        bev_image[:, :, 0] = np.clip(zmax_img / 3.0, 0.0, 1.0)
+                        bev_image[:, :, 1] = np.clip(density_img / 20.0, 0.0, 1.0)
+                        bev_image[:, :, 2] = np.clip(low_img / 10.0, 0.0, 1.0)
+                        height_score = np.clip(zmax_img / 1.0, 0.0, 1.0)
+                        density_score = np.clip(density_img / 20.0, 0.0, 1.0)
+                        bev_image[:, :, 3] = height_score * density_score
+                except Exception:
+                    pass
         
         return bev_image
     
