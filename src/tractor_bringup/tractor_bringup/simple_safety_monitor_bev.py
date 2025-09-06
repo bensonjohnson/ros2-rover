@@ -91,13 +91,29 @@ class SimpleSafetyMonitorBEV(Node):
             self.get_logger().info(f"Shared BEV topic: {self.bev_image_topic}")
 
     def pc_callback(self, msg: PointCloud2):
-        # Convert to Nx3 float32 points (x forward, y left, z up) using fast path
+        # Convert to Nx3 float32 points (x forward, y left, z up) using robust path
         try:
             if not SENSOR_MSGS_PY_AVAILABLE:
                 self.sensor_failures += 1
-                self.get_logger().error("sensor_msgs_py not available - safety monitor cannot process point clouds!")
+                self.get_logger().warn("sensor_msgs_py not available - skipping point cloud fallback")
                 return
-            pts = np.array(list(point_cloud2.read_points(msg, field_names=("x","y","z"), skip_nans=True)), dtype=np.float32)
+            pts_list = list(point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True))
+            if not pts_list:
+                self.latest_pc = np.zeros((0, 3), dtype=np.float32)
+                self.last_pc_time = self.get_clock().now()
+                return
+            first = pts_list[0]
+            if isinstance(first, (tuple, list)) and len(first) >= 3:
+                pts = np.asarray(pts_list, dtype=np.float32).reshape(-1, 3)
+            else:
+                structured = np.asarray(pts_list)
+                if getattr(structured, 'dtype', None) is not None and structured.dtype.names is not None:
+                    x = structured['x'].astype(np.float32, copy=False)
+                    y = structured['y'].astype(np.float32, copy=False)
+                    z = structured['z'].astype(np.float32, copy=False)
+                    pts = np.stack((x, y, z), axis=1)
+                else:
+                    pts = np.array([[p[0], p[1], p[2]] for p in pts_list], dtype=np.float32)
             self.latest_pc = pts
             self.last_pc_time = self.get_clock().now()
         except Exception as e:
