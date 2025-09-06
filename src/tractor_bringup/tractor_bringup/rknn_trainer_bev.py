@@ -186,9 +186,10 @@ class RKNNTrainerBEV:
         self.save_interval = 300  # Save every 5 minutes (time-based)
         self.step_save_interval = 250  # NEW: fallback checkpoint every N steps
         self.last_rknn_conversion = 0
-        self.rknn_conversion_interval = 300  # hard max interval (seconds) (was 1800)
-        # Metric-gated export parameters
-        self.rknn_min_interval = 600  # minimum seconds between exports if improvement seen
+        # Make exports more frequent to avoid long hangs between generations
+        self.rknn_conversion_interval = 180  # was 300; force export at least every 3 minutes
+        # Metric-gated export parameters (allow quicker improved exports)
+        self.rknn_min_interval = 120  # was 600; minimum seconds between improved exports
         self.rknn_loss_improve_ratio = 0.90  # export if median loss improved by >=10%
         self.rknn_reward_improve_delta = 0.5  # or avg reward improved by this amount
         self.loss_history = deque(maxlen=200)
@@ -265,6 +266,39 @@ class RKNNTrainerBEV:
                 self.optimizer.state = {}
         except Exception:
             pass
+
+    def clear_replay_buffer(self):
+        """Clear replay buffer and related histories to avoid backlog after model swap."""
+        try:
+            self.buffer_size = 0
+            self.insert_ptr = 0
+            if isinstance(self.priorities, np.ndarray):
+                self.priorities.fill(0)
+            # Clear histories
+            try:
+                self.reward_history.clear()
+            except Exception:
+                self.reward_history = deque(maxlen=1000)
+            try:
+                self.action_history.clear()
+            except Exception:
+                self.action_history = deque(maxlen=100)
+            try:
+                self.loss_history.clear()
+            except Exception:
+                self.loss_history = deque(maxlen=200)
+            # Reset prioritized replay annealing
+            self.pr_beta = 0.4
+            # Clear frame stack buffer if present
+            try:
+                self.frame_stack_buffer.clear()
+            except Exception:
+                pass
+            if self.enable_debug:
+                print("[ReplayBuffer] Cleared after RKNN export/reload")
+        except Exception as e:
+            if self.enable_debug:
+                print(f"[ReplayBuffer] Clear failed: {e}")
 
     def add_experience(self,
                       bev_image: np.ndarray,
@@ -518,6 +552,8 @@ class RKNNTrainerBEV:
                 # Try enabling RKNN runtime for hybrid inference after export
                 try:
                     self.enable_rknn_inference()
+                    # Refresh buffer to prevent training backlog and let new policy collect fresh data
+                    self.clear_replay_buffer()
                 except Exception:
                     pass
                 if self.enable_debug:
