@@ -54,6 +54,7 @@ def generate_launch_description():
             "enable_accel": "false",
             "decimation_filter.enable": "true",
             "decimation_filter.filter_magnitude": "2",
+            "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
         }.items()
     )
 
@@ -168,4 +169,3 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=8.0, actions=[ppo_node]))
 
     return ld
-
