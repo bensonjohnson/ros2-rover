@@ -331,7 +331,8 @@ def generate_launch_description():
                 "output_cmd_topic": "cmd_vel_raw",
                 "use_shared_bev": True,
                 "bev_image_topic": "/bev/image",
-                "bev_freshness_timeout": 0.5
+                "bev_freshness_timeout": 0.5,
+                "bev_x_range": 10.0
             }
         ]
     )
