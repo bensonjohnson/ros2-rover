@@ -39,6 +39,7 @@ class SimpleSafetyMonitorBEV(Node):
         self.declare_parameter('bev_image_topic', '/bev/image')
         self.declare_parameter('bev_freshness_timeout', 0.5)
         self.declare_parameter('bev_x_range', 10.0)
+        self.declare_parameter('forward_min_distance', 0.05)
 
         self.safety_distance = float(self.get_parameter('emergency_stop_distance').value)
         self.hard_stop_distance = float(self.get_parameter('hard_stop_distance').value)
@@ -49,6 +50,7 @@ class SimpleSafetyMonitorBEV(Node):
         self.bev_image_topic = str(self.get_parameter('bev_image_topic').value)
         self.bev_freshness_timeout = float(self.get_parameter('bev_freshness_timeout').value)
         self.bev_x_range = float(self.get_parameter('bev_x_range').value)
+        self.forward_min_distance = float(self.get_parameter('forward_min_distance').value)
 
         # BEV for fast forward-distance checks
         self.bev = BEVGenerator(bev_size=(200, 200), bev_range=(10.0, 10.0), height_channels=(0.2, 1.0), enable_ground_removal=True)
@@ -144,7 +146,8 @@ class SimpleSafetyMonitorBEV(Node):
                     occ = (conf > 0.22) | (low > 0.08)
                     x_range = max(0.5, float(self.bev_x_range))
                     sd = float(self.safety_distance)
-                    px0 = int(((0.0 + x_range) / (2.0 * x_range)) * h)
+                    start_x = max(0.0, float(self.forward_min_distance))
+                    px0 = int(((start_x + x_range) / (2.0 * x_range)) * h)
                     px_end_x = min(sd * 4.0, x_range)
                     px1 = int(((px_end_x + x_range) / (2.0 * x_range)) * h)
                     px0 = max(0, min(h - 1, px0))
@@ -178,7 +181,7 @@ class SimpleSafetyMonitorBEV(Node):
                 lateral = points[:, l_idx]
                 height_up = v_sign * points[:, v_idx]
                 sd = float(self.safety_distance)
-                forward_mask = (forward >= 0.0) & (forward <= sd * 4.0)
+                forward_mask = (forward >= float(self.forward_min_distance)) & (forward <= sd * 4.0)
                 width = 1.0
                 width_mask = (lateral >= -width * 0.5) & (lateral <= width * 0.5)
                 height_mask = (height_up >= -0.5) & (height_up <= 2.0)
