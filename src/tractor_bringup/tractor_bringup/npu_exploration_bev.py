@@ -12,6 +12,7 @@ from sensor_msgs.msg import PointCloud2, Imu, JointState
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Float32
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 import numpy as np
 import time
@@ -54,6 +55,12 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('min_battery_percentage', 30.0)
         self.declare_parameter('safety_distance', 0.2)
         self.declare_parameter('npu_inference_rate', 10.0)  # Higher rate for BEV processing
+        # Guardian/slowdown parameters
+        self.declare_parameter('slowdown_zone', 0.4)  # meters beyond safety_distance to linearly scale speed
+        self.declare_parameter('min_slowdown_scale', 0.2)  # minimum forward scale in slowdown zone
+        self.declare_parameter('safety_time_headway', 0.4)  # dynamic safety buffer = v * headway
+        self.declare_parameter('guardian_distance_alpha', 0.5)  # EMA smoothing for min distance
+        self.declare_parameter('guardian_steer_gain', 0.6)  # bias steering away from closer side when near obstacle
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
         self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
@@ -105,6 +112,11 @@ class NPUExplorationBEVNode(Node):
         self.min_battery_percentage = self.get_parameter('min_battery_percentage').value
         self.safety_distance = self.get_parameter('safety_distance').value
         self.inference_rate = self.get_parameter('npu_inference_rate').value
+        self.slowdown_zone = float(self.get_parameter('slowdown_zone').value)
+        self.min_slowdown_scale = float(self.get_parameter('min_slowdown_scale').value)
+        self.safety_time_headway = float(self.get_parameter('safety_time_headway').value)
+        self.guardian_distance_alpha = float(self.get_parameter('guardian_distance_alpha').value)
+        self.guardian_steer_gain = float(self.get_parameter('guardian_steer_gain').value)
         self.operation_mode = self.get_parameter('operation_mode').value
         self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
         self.enable_bayesian_optimization = self.get_parameter('enable_bayesian_optimization').value
@@ -167,11 +179,17 @@ class NPUExplorationBEVNode(Node):
         self.prev_bev_image = None
         self.collision_detected = False
         
+        # External safety feedback from safety monitor
+        self.external_emergency_stop = False
+        self.external_min_forward_distance = 10.0
+        
         # Exploration state
         self.exploration_mode = "forward_explore"  # forward_explore, turn_explore, retreat
         self.stuck_counter = 0
         self.last_position = np.array([0.0, 0.0])
         self.movement_threshold = 0.05  # meters
+        # Guardian smoothing state
+        self.min_d_ema = None
         
         # Simple tracking for movement detection
         self.movement_check_counter = 0
@@ -219,6 +237,16 @@ class NPUExplorationBEVNode(Node):
         self.joint_sub = self.create_subscription(
             JointState, 'joint_states',
             self.joint_state_callback, 10
+        )
+        
+        # Subscribe to safety monitor outputs to make NN aware of safety gating
+        self.estop_sub = self.create_subscription(
+            Bool, 'emergency_stop',
+            self.emergency_stop_callback, 10
+        )
+        self.min_forward_sub = self.create_subscription(
+            Float32, 'min_forward_distance',
+            self.min_forward_distance_callback, 10
         )
         
         # Publish AI commands to a dedicated topic; safety monitor gates this to cmd_vel_raw
@@ -897,6 +925,34 @@ class NPUExplorationBEVNode(Node):
                 cmd.angular.z = 0.0
                 self.exploration_mode = "WAITING_FOR_NPU"
                 self.last_action = np.array([0.0, 0.0])
+
+        # Proactive slowdown near obstacles (applies in both normal and recovery if moving forward)
+        try:
+            if cmd.linear.x > 0.0 and not emergency_stop:
+                # Dynamic safety buffer grows with speed
+                sd_eff = float(self.safety_distance) + max(0.0, self.current_velocity[0]) * self.safety_time_headway
+                # Use smoothed distance if present
+                d = float(min_d)
+                if self.min_d_ema is not None:
+                    d = min(d, float(self.min_d_ema))
+                if d <= sd_eff:
+                    # Should already have triggered emergency, but clamp just in case
+                    cmd.linear.x = 0.0
+                elif d < sd_eff + max(0.05, self.slowdown_zone):
+                    # Linearly scale speed within slowdown zone
+                    scale = (d - sd_eff) / max(1e-3, self.slowdown_zone)
+                    scale = float(np.clip(scale, self.min_slowdown_scale, 1.0))
+                    cmd.linear.x = cmd.linear.x * scale
+                # Add gentle steer bias away from closer side when center is constrained
+                center_is_tight = (d < sd_eff + self.slowdown_zone) or (abs((left_free + right_free) * 0.5 - center_free) > 0.1) or (center_free < 0.5)
+                if center_is_tight:
+                    delta_lr = float(np.clip(right_free - left_free, -1.0, 1.0))
+                    steer_bias = self.angular_scale * self.guardian_steer_gain * delta_lr
+                    # Limit bias to prevent abrupt turns
+                    steer_bias = float(np.clip(steer_bias, -self.angular_scale * 0.6, self.angular_scale * 0.6))
+                    cmd.angular.z = float(np.clip(cmd.angular.z + steer_bias, -self.angular_scale, self.angular_scale))
+        except Exception:
+            pass
         
         # Update multi-metric evaluation
         if self.multi_metric_evaluator and self.step_count % 10 == 0:  # Every 10 steps
@@ -953,7 +1009,7 @@ class NPUExplorationBEVNode(Node):
                 self.get_logger().warn(f"Multi-metric evaluation failed: {e}")
         
         return cmd
-        
+
     def check_emergency_collision(self):
         """Guardian: compute nearest forward obstacle distance in meters from BEV and enforce safety stop.
         Uses obstacle confidence channel and correct BEV orientation (bottom = forward)."""
@@ -1010,11 +1066,38 @@ class NPUExplorationBEVNode(Node):
             center_free = float(np.clip(center_d / xr, 0.0, 1.0))
 
             # Emergency if nearest forward obstacle is closer than safety_distance
+            # Fuse with external safety monitor signals
             sd = float(self.safety_distance)
-            emergency = (min_d < sd)
+            ext_min = float(self.external_min_forward_distance) if self.external_min_forward_distance is not None else 10.0
+            if np.isfinite(ext_min):
+                min_d = float(min(min_d, ext_min))
+            external_flag = bool(self.external_emergency_stop)
+            # Smooth min distance with EMA to avoid jitter
+            try:
+                if self.min_d_ema is None:
+                    self.min_d_ema = float(min_d)
+                else:
+                    a = float(np.clip(self.guardian_distance_alpha, 0.0, 1.0))
+                    self.min_d_ema = (1.0 - a) * float(self.min_d_ema) + a * float(min_d)
+            except Exception:
+                self.min_d_ema = float(min_d)
+            # Inclusive threshold to align with safety gate behavior
+            emergency = (min_d <= sd) or external_flag
             return emergency, float(min_d), left_free, right_free, center_free
         except Exception:
             return False, 10.0, 0.0, 0.0, 0.0
+
+    def emergency_stop_callback(self, msg: Bool):
+        try:
+            self.external_emergency_stop = bool(msg.data)
+        except Exception:
+            self.external_emergency_stop = False
+
+    def min_forward_distance_callback(self, msg: Float32):
+        try:
+            self.external_min_forward_distance = float(msg.data)
+        except Exception:
+            self.external_min_forward_distance = 10.0
 
     def npu_inference(self, emergency_flag=None, min_d=0.0, left_free=0.0, right_free=0.0, center_free=0.0):
         if not self.all_sensors_ready():
