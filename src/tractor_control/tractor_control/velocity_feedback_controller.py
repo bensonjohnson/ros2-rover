@@ -29,6 +29,10 @@ class VelocityFeedbackController(Node):
         self.declare_parameter(
             "drift_correction_gain", 0.0001
         )  # Gain for encoder drift correction
+        # Logging controls
+        self.declare_parameter("log_cmd_vel", False)  # If true, log published cmd_vel at INFO
+        self.declare_parameter("log_received_cmd", False)  # If true, log received cmd_vel at INFO
+        self.declare_parameter("log_throttle_sec", 1.0)  # Minimum seconds between repeated logs
 
         self.wheel_separation = self.get_parameter("wheel_separation").value
         self.wheel_radius = self.get_parameter("wheel_radius").value
@@ -40,6 +44,12 @@ class VelocityFeedbackController(Node):
         self.control_frequency = self.get_parameter("control_frequency").value
         self.deadband = self.get_parameter("deadband").value
         self.drift_correction_gain = self.get_parameter("drift_correction_gain").value
+        # Logging controls
+        self.log_cmd_vel = bool(self.get_parameter("log_cmd_vel").value)
+        self.log_received_cmd = bool(self.get_parameter("log_received_cmd").value)
+        self.log_throttle_sec = float(self.get_parameter("log_throttle_sec").value)
+        self._last_pub_log_time = 0.0
+        self._last_recv_log_time = 0.0
 
         # Control state
         self.desired_linear = 0.0
@@ -135,8 +145,14 @@ class VelocityFeedbackController(Node):
             self.desired_angular = msg.angular.z
             
         # Log received commands for debugging
-        if abs(msg.linear.x) > 0.001 or abs(msg.angular.z) > 0.001:
-            self.get_logger().info(f"Received cmd_vel: linear={msg.linear.x:.3f}, angular={msg.angular.z:.3f}")
+        if self.log_received_cmd and (abs(msg.linear.x) > 0.001 or abs(msg.angular.z) > 0.001):
+            now = time.time()
+            if now - self._last_recv_log_time >= self.log_throttle_sec:
+                self._last_recv_log_time = now
+                self.get_logger().info(f"Received cmd_vel: linear={msg.linear.x:.3f}, angular={msg.angular.z:.3f}")
+        else:
+            # Quiet by default
+            self.get_logger().debug(f"Received cmd_vel: linear={msg.linear.x:.3f}, angular={msg.angular.z:.3f}")
 
     def odom_callback(self, msg):
         """Receive filtered odometry from robot_localization EKF"""
@@ -252,7 +268,7 @@ class VelocityFeedbackController(Node):
             if abs(desired_linear) < 0.05 or abs(desired_angular) > 0.3:
                 self.publish_velocity_command(desired_linear, desired_angular)
                 if abs(desired_angular) > 0.3:
-                    self.get_logger().info("Intentional turn detected, no drift correction")
+                    self.get_logger().debug("Intentional turn detected, no drift correction")
                     # Reset target heading when turning
                     self.target_heading = None
                 return
@@ -265,7 +281,7 @@ class VelocityFeedbackController(Node):
                 # Set target heading when starting to go straight (use EKF filtered heading)
                 if self.target_heading is None:
                     self.target_heading = self.current_yaw  # Use EKF heading
-                    self.get_logger().info(f"Target heading set from EKF: {math.degrees(self.current_yaw):.1f}°")
+                    self.get_logger().debug(f"Target heading set from EKF: {math.degrees(self.current_yaw):.1f}°")
                 
                 # Calculate heading error using EKF filtered odometry
                 if self.target_heading is not None:
@@ -298,7 +314,7 @@ class VelocityFeedbackController(Node):
                         
                         corrected_angular += heading_correction
                         
-                        self.get_logger().info(
+                        self.get_logger().debug(
                             f"EKF correction ({correction_type}): heading_error={math.degrees(heading_error):.1f}°, "
                             f"correction={heading_correction:.3f}"
                         )
@@ -316,8 +332,13 @@ class VelocityFeedbackController(Node):
         cmd_msg.angular.z = angular
 
         # Log published commands for debugging
-        if abs(linear) > 0.001 or abs(angular) > 0.001:
-            self.get_logger().info(f"Publishing cmd_vel: linear={linear:.3f}, angular={angular:.3f}")
+        if self.log_cmd_vel and (abs(linear) > 0.001 or abs(angular) > 0.001):
+            now = time.time()
+            if now - self._last_pub_log_time >= self.log_throttle_sec:
+                self._last_pub_log_time = now
+                self.get_logger().info(f"Publishing cmd_vel: linear={linear:.3f}, angular={angular:.3f}")
+        else:
+            self.get_logger().debug(f"Publishing cmd_vel: linear={linear:.3f}, angular={angular:.3f}")
 
         self.cmd_vel_pub.publish(cmd_msg)
 
