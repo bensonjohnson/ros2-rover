@@ -1124,8 +1124,10 @@ class NPUExplorationBEVNode(Node):
             occ = (conf > 0.25) | (low > 0.1)
 
             # Define regions. In our BEV, pixel_x maps x in [-range, +range] to [0..H-1].
-            # Front (forward) is at larger pixel_x (bottom of image).
-            front_rows = slice(int(h*2/3), h)
+            # Near-field forward band corresponds to ~0..2-3m ahead (px/h ~ 0.5..0.75).
+            near_start = int(h * 0.50)
+            near_end = int(h * 0.80)
+            front_rows = slice(near_start, near_end)
             center_cols = slice(int(w/3), int(2*w/3))
             left_cols = slice(0, int(w/3))
             right_cols = slice(int(2*w/3), w)

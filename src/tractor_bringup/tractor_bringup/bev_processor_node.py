@@ -170,7 +170,9 @@ class BEVProcessorNode(Node):
         conf = bev_img[:, :, 3]
         low = bev_img[:, :, 2]
         occ = (conf > 0.25) | (low > 0.1)
-        front_rows = slice(int(h * 2 / 3), h)
+        near_start = int(h * 0.50)
+        near_end = int(h * 0.75)
+        front_rows = slice(near_start, near_end)
         center_cols = slice(int(w / 3), int(2 * w / 3))
         mask = occ[front_rows, center_cols]
         ys, xs = np.where(mask)
@@ -196,4 +198,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
