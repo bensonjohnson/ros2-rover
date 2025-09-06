@@ -209,14 +209,16 @@ def generate_launch_description():
         launch_arguments={
             "enable_pointcloud": "true",  # Enable pointcloud for BEV
             "align_depth": "true",  # Align depth for better accuracy
-            "enable_color": "true",  # Enable color for point cloud
+            "enable_color": "false",  # Disable color to reduce processing overhead
             "enable_depth": "true",
-            "enable_sync": "true",
+            "enable_sync": "false",  # Disable sync for faster processing
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x30",  # Higher FPS for better data collection
+            "depth_module.depth_profile": "424x240x60",  # Even higher FPS for real-time safety
+            "rgb_camera.color_profile": "424x240x60",  # Match depth profile
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
+            "pointcloud.stream_filter": "2",  # Filter to depth only 
             "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
         }.items(),
     )
@@ -277,11 +279,11 @@ def generate_launch_description():
         ]
     )
 
-    # 6. Simple BEV safety monitor (gates forward motion)
+    # 6. Simple safety monitor (gates forward motion) - direct point cloud processing
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor_bev.py",
-        name="simple_safety_monitor_bev",
+        executable="simple_safety_monitor.py",
+        name="simple_safety_monitor",
         output="screen",
         parameters=[
             {
