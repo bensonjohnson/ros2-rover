@@ -11,7 +11,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, String, Float32
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, Image
 from rclpy.qos import qos_profile_sensor_data
 from diagnostic_msgs.msg import DiagnosticStatus, DiagnosticArray, KeyValue
 import numpy as np
@@ -35,12 +35,18 @@ class SimpleSafetyMonitorBEV(Node):
         self.declare_parameter('pointcloud_topic', '/camera/camera/depth/color/points')
         self.declare_parameter('input_cmd_topic', 'cmd_vel_ai')
         self.declare_parameter('output_cmd_topic', 'cmd_vel_raw')
+        self.declare_parameter('use_shared_bev', True)
+        self.declare_parameter('bev_image_topic', '/bev/image')
+        self.declare_parameter('bev_freshness_timeout', 0.5)
 
         self.safety_distance = float(self.get_parameter('emergency_stop_distance').value)
         self.hard_stop_distance = float(self.get_parameter('hard_stop_distance').value)
         self.pc_topic = str(self.get_parameter('pointcloud_topic').value)
         self.in_cmd_topic = str(self.get_parameter('input_cmd_topic').value)
         self.out_cmd_topic = str(self.get_parameter('output_cmd_topic').value)
+        self.use_shared_bev = bool(self.get_parameter('use_shared_bev').value)
+        self.bev_image_topic = str(self.get_parameter('bev_image_topic').value)
+        self.bev_freshness_timeout = float(self.get_parameter('bev_freshness_timeout').value)
 
         # BEV for fast forward-distance checks
         self.bev = BEVGenerator(bev_size=(200, 200), bev_range=(10.0, 10.0), height_channels=(0.2, 1.0), enable_ground_removal=True)
@@ -54,10 +60,15 @@ class SimpleSafetyMonitorBEV(Node):
         self.emergency_stops = 0
         self.sensor_failures = 0
         self.last_cmd_time = None
+        # Shared BEV cache
+        self.latest_bev = None
+        self.last_bev_time = None
 
         # Subs/Pubs
         self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, qos_profile_sensor_data)
         self.cmd_sub = self.create_subscription(Twist, self.in_cmd_topic, self.cmd_callback, 10)
+        if self.use_shared_bev:
+            self.bev_sub = self.create_subscription(Image, self.bev_image_topic, self.bev_callback, 10)
         self.cmd_pub = self.create_publisher(Twist, self.out_cmd_topic, 10)
         self.estop_pub = self.create_publisher(Bool, 'emergency_stop', 10)
         
@@ -76,6 +87,8 @@ class SimpleSafetyMonitorBEV(Node):
         self.get_logger().info(f"Safety monitor active. safety_distance={self.safety_distance} hard_stop={self.hard_stop_distance}")
         self.get_logger().info(f"Input topic: {self.in_cmd_topic}, Output topic: {self.out_cmd_topic}")
         self.get_logger().info(f"Point cloud topic: {self.pc_topic}")
+        if self.use_shared_bev:
+            self.get_logger().info(f"Shared BEV topic: {self.bev_image_topic}")
 
     def pc_callback(self, msg: PointCloud2):
         # Convert to Nx3 float32 points (x forward, y left, z up) using fast path
@@ -93,11 +106,38 @@ class SimpleSafetyMonitorBEV(Node):
             self.get_logger().error(f"Point cloud processing failed: {e}")
 
     def _update_min_distance(self):
+        current_time = self.get_clock().now()
+        # Prefer shared BEV if available and fresh
+        if self.use_shared_bev and self.latest_bev is not None and self.last_bev_time is not None:
+            age = (current_time - self.last_bev_time).nanoseconds / 1e9
+            if age <= self.bev_freshness_timeout:
+                try:
+                    bev_img = self.latest_bev
+                    h, w, _ = bev_img.shape
+                    conf = bev_img[:, :, 3]
+                    low = bev_img[:, :, 2]
+                    occ = (conf > 0.25) | (low > 0.1)
+                    front_rows = slice(int(h*2/3), h)
+                    center_cols = slice(int(w/3), int(2*w/3))
+                    mask = occ[front_rows, center_cols]
+                    ys, xs = np.where(mask)
+                    if ys.size == 0:
+                        self.min_forward = 10.0
+                    else:
+                        px = ys.astype(np.float32)
+                        x_range = 10.0
+                        x_m = (px / float(h)) * (2.0 * x_range) - x_range
+                        x_m = x_m[x_m >= 0.0]
+                        self.min_forward = float(np.min(x_m)) if x_m.size else 10.0
+                    self.min_distance_pub.publish(Float32(data=self.min_forward))
+                    return
+                except Exception as e:
+                    self.get_logger().debug(f"Shared BEV distance compute failed: {e}")
+
         if self.latest_pc is None or self.latest_pc.size == 0:
             self.min_forward = 10.0
             # Check if point cloud is too old
-            current_time = self.get_clock().now()
-            if self.last_pc_time and (current_time - self.last_pc_time).nanoseconds > 2e9:  # 2 seconds
+            if self.last_pc_time and (current_time - self.last_pc_time).nanoseconds > 2e9:
                 self.get_logger().warn("Point cloud data is stale - safety may be compromised")
             return
         try:
@@ -172,7 +212,7 @@ class SimpleSafetyMonitorBEV(Node):
         """Publish comprehensive safety diagnostics"""
         # Safety status message
         status = "ACTIVE"
-        if self.latest_pc is None:
+        if (self.latest_pc is None) and (not (self.use_shared_bev and self.latest_bev is not None)):
             status = "NO_SENSOR_DATA"
         elif self.min_forward < self.hard_stop_distance:
             status = "EMERGENCY_STOP"
@@ -225,6 +265,17 @@ class SimpleSafetyMonitorBEV(Node):
         
         diag_array.status = [safety_diag]
         self.diagnostics_pub.publish(diag_array)
+
+    def bev_callback(self, msg: Image):
+        try:
+            from cv_bridge import CvBridge
+            bridge = CvBridge()
+            bev = bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            if isinstance(bev, np.ndarray) and bev.ndim == 3:
+                self.latest_bev = bev.astype(np.float32, copy=False)
+                self.last_bev_time = self.get_clock().now()
+        except Exception as e:
+            self.get_logger().debug(f"BEV image conversion failed: {e}")
 
     def _verify_connections(self):
         """Verify that required topics are connected"""

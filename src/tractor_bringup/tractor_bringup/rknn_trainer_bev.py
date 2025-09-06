@@ -163,6 +163,8 @@ class RKNNTrainerBEV:
         self.batch_size = 32
         # Adaptive batch sizing (warmup with larger batches for vectorization)
         self.max_warmup_batch = 256  # Increased for 32GB RAM - better GPU utilization
+        # Cap for prioritized sampling pool to keep O(n) ops bounded
+        self.max_pr_sample_pool = 4000  # sample candidates capped to this many entries
         
         # Enhanced memory capabilities with 32GB RAM
         self.enable_frame_stacking = True  # Stack 4 frames for temporal consistency
@@ -408,21 +410,34 @@ class RKNNTrainerBEV:
             return {"loss": 0.0, "samples": self.buffer_size}
         # Prioritized sampling
         valid = self.buffer_size
-        raw = self.priorities[:valid]
-        if not np.any(raw):
-            probs = np.full(valid, 1.0 / valid, dtype=np.float32)
+        # Build candidate pool to bound per-step O(n) work
+        if valid > self.max_pr_sample_pool:
+            candidate_idx = np.random.choice(valid, self.max_pr_sample_pool, replace=False)
+            raw = self.priorities[candidate_idx]
         else:
-            probs = raw ** self.pr_alpha
-            probs /= probs.sum()
+            candidate_idx = np.arange(valid, dtype=np.int32)
+            raw = self.priorities[:valid]
+        if not np.any(raw):
+            pool = len(candidate_idx)
+            probs_local = np.full(pool, 1.0 / max(pool, 1), dtype=np.float32)
+        else:
+            probs_local = raw ** self.pr_alpha
+            s = probs_local.sum()
+            if s <= 0:
+                pool = len(candidate_idx)
+                probs_local = np.full(pool, 1.0 / max(pool, 1), dtype=np.float32)
+            else:
+                probs_local /= s
+        # Sample within candidate pool
         try:
-            indices = np.random.choice(valid, self.batch_size, replace=False, p=probs)
+            local_sel = np.random.choice(len(candidate_idx), self.batch_size, replace=False, p=probs_local)
         except ValueError:
-            # Fallback uniform
-            indices = np.random.choice(valid, self.batch_size, replace=False)
-            probs = np.full(valid, 1.0 / valid, dtype=np.float32)
-        # Importance sampling weights
-        sample_probs = probs[indices]
-        weights = (valid * sample_probs) ** (-self.pr_beta)
+            local_sel = np.random.choice(len(candidate_idx), self.batch_size, replace=False)
+            probs_local = np.full(len(candidate_idx), 1.0 / max(len(candidate_idx), 1), dtype=np.float32)
+        indices = candidate_idx[local_sel]
+        # Importance sampling weights (approximate, based on pool size)
+        sample_probs = probs_local[local_sel]
+        weights = (len(candidate_idx) * sample_probs) ** (-self.pr_beta)
         weights /= weights.max()
         self.pr_beta = min(1.0, self.pr_beta + self.pr_beta_inc)
         # Assemble batch tensors

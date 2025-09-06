@@ -193,6 +193,8 @@ class NPUExplorationBEVNode(Node):
         # Sensor data storage
         self.latest_pointcloud = None
         self.bridge = CvBridge()
+        self.latest_bev_image = None
+        self.last_bev_time = 0.0
         
         # Previous state for reward calculation
         self.prev_position = np.array([0.0, 0.0])
@@ -273,6 +275,13 @@ class NPUExplorationBEVNode(Node):
             Float32, 'min_forward_distance',
             self.min_forward_distance_callback, 10
         )
+        # Subscribe to shared BEV image
+        try:
+            self.bev_sub = self.create_subscription(
+                Image, '/bev/image', self.bev_image_callback, 10
+            )
+        except Exception as e:
+            self.get_logger().warn(f"BEV image subscription failed: {e}")
         
         # Publish AI commands to a dedicated topic; safety monitor gates this to cmd_vel_raw
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
@@ -1103,7 +1112,8 @@ class NPUExplorationBEVNode(Node):
             return False, 10.0, 0.0, 0.0, 0.0
 
         try:
-            bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
+            use_shared = self.latest_bev_image is not None and (time.time() - self.last_bev_time) < 0.3
+            bev_image = self.latest_bev_image if use_shared else self.bev_generator.generate_bev(self.latest_pointcloud)
             # Cache for reuse in inference this cycle
             self.cached_bev_image = bev_image
             h, w, _ = bev_image.shape
@@ -1191,10 +1201,12 @@ class NPUExplorationBEVNode(Node):
         if not self.all_sensors_ready():
             return np.array([0.0, 0.0]), 0.0
         try:
-            # Generate or reuse BEV from guardian to avoid duplicate work
+            # Generate or reuse BEV from guardian/shared publisher to avoid duplicate work
             if self.cached_bev_image is not None:
                 bev_image = self.cached_bev_image
                 self.cached_bev_image = None  # consume
+            elif self.latest_bev_image is not None and (time.time() - self.last_bev_time) < 0.3:
+                bev_image = self.latest_bev_image
             else:
                 bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
             
@@ -1363,8 +1375,13 @@ class NPUExplorationBEVNode(Node):
         if not self.all_sensors_ready() or not hasattr(self, 'last_action'):
             return
         try:
-            # Generate BEV from point cloud
-            bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
+            # Reuse BEV from guardian/shared publisher if available to avoid duplicate work
+            if self.cached_bev_image is not None:
+                bev_image = self.cached_bev_image
+            elif self.latest_bev_image is not None and (time.time() - self.last_bev_time) < 0.3:
+                bev_image = self.latest_bev_image
+            else:
+                bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
             
             # Calculate BEV-based metrics
             max_height_channel = bev_image[:, :, 0]
@@ -1794,6 +1811,15 @@ class NPUExplorationBEVNode(Node):
         except Exception as e:
             self.get_logger().warn(f"Point cloud conversion failed: {e}")
             return np.zeros((0, 3), dtype=np.float32)
+
+    def bev_image_callback(self, msg: Image):
+        try:
+            bev = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            if isinstance(bev, np.ndarray) and bev.ndim == 3:
+                self.latest_bev_image = bev.astype(np.float32, copy=False)
+                self.last_bev_time = time.time()
+        except Exception as e:
+            self.get_logger().debug(f"BEV image conversion failed: {e}")
 
 def main(args=None):
     rclpy.init(args=args)

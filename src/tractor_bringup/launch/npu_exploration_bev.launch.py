@@ -239,6 +239,27 @@ def generate_launch_description():
     )
 
     # 4. NPU Exploration Node (Main AI controller)
+    # 3.5 BEV Processor (compute once and share via /bev/image)
+    bev_processor_node = Node(
+        package="tractor_bringup",
+        executable="bev_processor_node.py",
+        name="bev_processor",
+        output="screen",
+        parameters=[
+            {
+                "pointcloud_topic": "/camera/camera/depth/color/points",
+                "bev_image_topic": "/bev/image",
+                "publish_rate_hz": 10.0,
+                # Reuse BEV params and performance tuning
+                "bev_size": LaunchConfiguration("bev_size"),
+                "bev_range": LaunchConfiguration("bev_range"),
+                "bev_height_channels": LaunchConfiguration("bev_height_channels"),
+                "enable_ground_removal": LaunchConfiguration("enable_ground_removal"),
+                "bev_ground_update_interval": LaunchConfiguration("bev_ground_update_interval"),
+                "bev_enable_opencl": LaunchConfiguration("bev_enable_opencl"),
+            }
+        ],
+    )
     npu_exploration_node = Node(
         package="tractor_bringup",
         executable="npu_exploration_bev.py",
@@ -299,7 +320,7 @@ def generate_launch_description():
     # 6. Simple safety monitor (gates forward motion) - direct point cloud processing
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor.py",
+        executable="simple_safety_monitor_bev.py",
         name="simple_safety_monitor",
         output="screen",
         parameters=[
@@ -307,7 +328,10 @@ def generate_launch_description():
                 "emergency_stop_distance": LaunchConfiguration("safety_distance"),
                 "pointcloud_topic": "/camera/camera/depth/color/points",
                 "input_cmd_topic": "cmd_vel_ai",
-                "output_cmd_topic": "cmd_vel_raw"
+                "output_cmd_topic": "cmd_vel_raw",
+                "use_shared_bev": True,
+                "bev_image_topic": "/bev/image",
+                "bev_freshness_timeout": 0.5
             }
         ]
     )
@@ -358,8 +382,10 @@ def generate_launch_description():
     # IMU - start shortly after
     ld.add_action(TimerAction(period=4.0, actions=[lsm9ds1_launch]))
 
-    # Safety monitor - start early to ensure it's ready before AI
-    ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_node]))
+    # Start BEV processor early so NPU can subscribe
+    ld.add_action(TimerAction(period=6.0, actions=[bev_processor_node]))
+    # Safety monitor - start after BEV (doesn't depend on it, but keeps order tidy)
+    ld.add_action(TimerAction(period=6.5, actions=[safety_monitor_node]))
     # Velocity controller - start after safety monitor
     ld.add_action(TimerAction(period=7.0, actions=[vfc_node]))
     # NPU system - start last after safety chain is established
