@@ -62,6 +62,14 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('safety_time_headway', 0.4)  # dynamic safety buffer = v * headway
         self.declare_parameter('guardian_distance_alpha', 0.5)  # EMA smoothing for min distance
         self.declare_parameter('guardian_steer_gain', 0.6)  # bias steering away from closer side when near obstacle
+        # Minimum effective command gating and stuck-nudge
+        self.declare_parameter('min_linear_cmd_mps', 0.03)
+        self.declare_parameter('min_angular_cmd_rps', 0.05)
+        self.declare_parameter('stuck_no_motion_threshold_mps', 0.005)
+        self.declare_parameter('stuck_ticks_to_nudge', 15)
+        self.declare_parameter('nudge_duration_ticks', 6)
+        self.declare_parameter('nudge_linear_cmd_mps', 0.05)
+        self.declare_parameter('nudge_angular_cmd_rps', 0.0)
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
         self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
@@ -120,6 +128,13 @@ class NPUExplorationBEVNode(Node):
         self.safety_time_headway = float(self.get_parameter('safety_time_headway').value)
         self.guardian_distance_alpha = float(self.get_parameter('guardian_distance_alpha').value)
         self.guardian_steer_gain = float(self.get_parameter('guardian_steer_gain').value)
+        self.min_linear_cmd_mps = float(self.get_parameter('min_linear_cmd_mps').value)
+        self.min_angular_cmd_rps = float(self.get_parameter('min_angular_cmd_rps').value)
+        self.stuck_no_motion_threshold_mps = float(self.get_parameter('stuck_no_motion_threshold_mps').value)
+        self.stuck_ticks_to_nudge = int(self.get_parameter('stuck_ticks_to_nudge').value)
+        self.nudge_duration_ticks = int(self.get_parameter('nudge_duration_ticks').value)
+        self.nudge_linear_cmd_mps = float(self.get_parameter('nudge_linear_cmd_mps').value)
+        self.nudge_angular_cmd_rps = float(self.get_parameter('nudge_angular_cmd_rps').value)
         self.operation_mode = self.get_parameter('operation_mode').value
         self.train_every_n_frames = int(self.get_parameter('train_every_n_frames').value)
         self.enable_bayesian_optimization = self.get_parameter('enable_bayesian_optimization').value
@@ -199,6 +214,8 @@ class NPUExplorationBEVNode(Node):
         
         # Simple tracking for movement detection
         self.movement_check_counter = 0
+        self.no_motion_ticks = 0
+        self.nudge_ticks_remaining = 0
         
         # Initialize BEV generator with grass-aware filtering
         self.bev_generator = BEVGenerator(
@@ -961,6 +978,13 @@ class NPUExplorationBEVNode(Node):
                     cmd.angular.z = float(np.clip(cmd.angular.z + steer_bias, -self.angular_scale, self.angular_scale))
         except Exception:
             pass
+
+        # Gate tiny commands and apply a small nudge if stuck and safe to do so
+        try:
+            if not emergency_stop:
+                cmd = self._apply_min_command_gate(cmd, min_d)
+        except Exception:
+            pass
         
         # Update multi-metric evaluation
         if self.multi_metric_evaluator and self.step_count % 10 == 0:  # Every 10 steps
@@ -1016,6 +1040,60 @@ class NPUExplorationBEVNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"Multi-metric evaluation failed: {e}")
         
+        return cmd
+
+    def _apply_min_command_gate(self, cmd: Twist, min_d: float) -> Twist:
+        """Avoid sending ineffectually small commands; optionally nudge if stuck.
+        - If both linear and angular are tiny, zero them.
+        - Otherwise, raise magnitudes to minimum effective thresholds when safe.
+        - If commanded forward but no motion for several ticks, apply a brief nudge.
+        """
+        # Compute effective safety buffer
+        sd_eff = float(self.safety_distance) + max(0.0, self.current_velocity[0]) * self.safety_time_headway
+        clear_enough = (min_d is not None) and (min_d > sd_eff + self.slowdown_zone)
+
+        lin = float(cmd.linear.x)
+        ang = float(cmd.angular.z)
+
+        # Nudge state update: if commanded forward and not moving, count ticks
+        if lin > 0.0 and abs(self.current_velocity[0]) < self.stuck_no_motion_threshold_mps and clear_enough:
+            self.no_motion_ticks += 1
+        else:
+            self.no_motion_ticks = 0
+
+        # Trigger a nudge if stuck long enough
+        if self.no_motion_ticks >= self.stuck_ticks_to_nudge:
+            self.nudge_ticks_remaining = self.nudge_duration_ticks
+            self.no_motion_ticks = 0
+
+        # Apply nudge if active
+        if self.nudge_ticks_remaining > 0 and clear_enough:
+            lin = max(lin, self.nudge_linear_cmd_mps)
+            # Optional angular nudge
+            if self.nudge_angular_cmd_rps != 0.0:
+                # Maintain sign of existing command; otherwise steer straight
+                if ang == 0.0:
+                    ang = np.sign(np.random.randn()) * abs(self.nudge_angular_cmd_rps)
+                else:
+                    ang = np.sign(ang) * max(abs(ang), self.nudge_angular_cmd_rps)
+            self.nudge_ticks_remaining -= 1
+
+        # Gate tiny commands
+        if abs(lin) < self.min_linear_cmd_mps and abs(ang) < self.min_angular_cmd_rps:
+            lin, ang = 0.0, 0.0
+        else:
+            # Only boost linear if space is clear; always allow angular min
+            if abs(lin) > 0.0 and abs(lin) < self.min_linear_cmd_mps and clear_enough:
+                lin = np.sign(lin) * self.min_linear_cmd_mps
+            if abs(ang) > 0.0 and abs(ang) < self.min_angular_cmd_rps:
+                ang = np.sign(ang) * self.min_angular_cmd_rps
+
+        # Clamp to configured scales
+        lin = float(np.clip(lin, -self.max_speed, self.max_speed))
+        ang = float(np.clip(ang, -self.angular_scale, self.angular_scale))
+
+        cmd.linear.x = lin
+        cmd.angular.z = ang
         return cmd
 
     def check_emergency_collision(self):
