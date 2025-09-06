@@ -87,9 +87,27 @@ class SimpleSafetyMonitor(Node):
                 # Fall back to direct parsing
                 points = self._parse_pointcloud2_direct(msg)
             else:
-                # Use sensor_msgs_py for conversion - handle structured array properly
+                # Use sensor_msgs_py for conversion - handle both tuple and structured outputs
                 points_gen = point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
-                points = np.array(list(points_gen), dtype=np.float32).reshape(-1, 3)
+                pts_list = list(points_gen)
+                if len(pts_list) == 0:
+                    points = np.empty((0, 3), dtype=np.float32)
+                else:
+                    # Try fast path if elements are tuples/lists
+                    first = pts_list[0]
+                    if isinstance(first, (tuple, list)) and len(first) >= 3:
+                        points = np.asarray(pts_list, dtype=np.float32).reshape(-1, 3)
+                    else:
+                        # Structured array path; extract named fields explicitly
+                        structured = np.asarray(pts_list)
+                        if getattr(structured, 'dtype', None) is not None and structured.dtype.names is not None:
+                            x = structured['x'].astype(np.float32, copy=False)
+                            y = structured['y'].astype(np.float32, copy=False)
+                            z = structured['z'].astype(np.float32, copy=False)
+                            points = np.stack((x, y, z), axis=1)
+                        else:
+                            # Fallback: build from iteration
+                            points = np.array([[p[0], p[1], p[2]] for p in pts_list], dtype=np.float32)
 
             self.latest_pc = points
             self.last_pc_time = self.get_clock().now()
