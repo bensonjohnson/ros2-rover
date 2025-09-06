@@ -337,10 +337,11 @@ def generate_launch_description():
     # IMU - start shortly after
     ld.add_action(TimerAction(period=4.0, actions=[lsm9ds1_launch]))
 
-    # NPU system - start after camera is ready
+    # Safety monitor - start early to ensure it's ready before AI
+    ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_node]))
+    # Velocity controller - start after safety monitor
+    ld.add_action(TimerAction(period=7.0, actions=[vfc_node]))
+    # NPU system - start last after safety chain is established
     ld.add_action(TimerAction(period=8.0, actions=[npu_exploration_node]))
-    # Safety + controller chain
-    ld.add_action(TimerAction(period=9.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=9.5, actions=[vfc_node]))
 
     return ld

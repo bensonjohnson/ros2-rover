@@ -10,8 +10,9 @@ Simple BEV Safety Monitor
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String, Float32
 from sensor_msgs.msg import PointCloud2
+from diagnostic_msgs.msg import DiagnosticStatus, DiagnosticArray, KeyValue
 import numpy as np
 
 try:
@@ -46,31 +47,57 @@ class SimpleSafetyMonitorBEV(Node):
         # State
         self.latest_pc = None
         self.min_forward = 10.0
+        self.last_pc_time = self.get_clock().now()
+        self.commands_received = 0
+        self.commands_blocked = 0
+        self.emergency_stops = 0
+        self.sensor_failures = 0
+        self.last_cmd_time = None
 
         # Subs/Pubs
         self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, 5)
         self.cmd_sub = self.create_subscription(Twist, self.in_cmd_topic, self.cmd_callback, 10)
         self.cmd_pub = self.create_publisher(Twist, self.out_cmd_topic, 10)
         self.estop_pub = self.create_publisher(Bool, 'emergency_stop', 10)
+        
+        # Diagnostic publishers
+        self.safety_status_pub = self.create_publisher(String, 'safety_monitor_status', 5)
+        self.min_distance_pub = self.create_publisher(Float32, 'min_forward_distance', 5)
+        self.diagnostics_pub = self.create_publisher(DiagnosticArray, 'diagnostics', 5)
 
         # Timer to recompute distance if needed
         self.create_timer(0.1, self._update_min_distance)
+        # Timer for diagnostics
+        self.create_timer(1.0, self._publish_diagnostics)
+        # Timer for connection verification
+        self.create_timer(5.0, self._verify_connections)
 
         self.get_logger().info(f"Safety monitor active. safety_distance={self.safety_distance} hard_stop={self.hard_stop_distance}")
+        self.get_logger().info(f"Input topic: {self.in_cmd_topic}, Output topic: {self.out_cmd_topic}")
+        self.get_logger().info(f"Point cloud topic: {self.pc_topic}")
 
     def pc_callback(self, msg: PointCloud2):
         # Convert to Nx3 float32 points (x forward, y left, z up) using fast path
         try:
             if not SENSOR_MSGS_PY_AVAILABLE:
+                self.sensor_failures += 1
+                self.get_logger().error("sensor_msgs_py not available - safety monitor cannot process point clouds!")
                 return
             pts = np.array(list(point_cloud2.read_points(msg, field_names=("x","y","z"), skip_nans=True)), dtype=np.float32)
             self.latest_pc = pts
-        except Exception:
+            self.last_pc_time = self.get_clock().now()
+        except Exception as e:
             self.latest_pc = None
+            self.sensor_failures += 1
+            self.get_logger().error(f"Point cloud processing failed: {e}")
 
     def _update_min_distance(self):
         if self.latest_pc is None or self.latest_pc.size == 0:
             self.min_forward = 10.0
+            # Check if point cloud is too old
+            current_time = self.get_clock().now()
+            if self.last_pc_time and (current_time - self.last_pc_time).nanoseconds > 2e9:  # 2 seconds
+                self.get_logger().warn("Point cloud data is stale - safety may be compromised")
             return
         try:
             bev_img = self.bev.generate_bev(self.latest_pc)
@@ -90,33 +117,136 @@ class SimpleSafetyMonitorBEV(Node):
             x_m = (px / float(h)) * (2.0 * x_range) - x_range
             x_m = x_m[x_m >= 0.0]
             self.min_forward = float(np.min(x_m)) if x_m.size else 10.0
-        except Exception:
+            
+            # Publish distance for monitoring
+            distance_msg = Float32()
+            distance_msg.data = self.min_forward
+            self.min_distance_pub.publish(distance_msg)
+            
+        except Exception as e:
             self.min_forward = 10.0
+            self.sensor_failures += 1
+            self.get_logger().error(f"Distance calculation failed: {e}")
 
     def cmd_callback(self, msg: Twist):
+        # Track command reception
+        self.commands_received += 1
+        self.last_cmd_time = self.get_clock().now()
+        
         # Gate forward motion if obstacle is too close
         out = Twist()
         out.angular.z = msg.angular.z
-
-        # Emergency stop handling
+        
+        # Emergency stop handling - allow escape turns
         hard = (self.min_forward < self.hard_stop_distance)
         if hard:
+            self.emergency_stops += 1
             out.linear.x = 0.0
-            out.angular.z = 0.0
+            # Allow turning to escape, but reduce angular velocity for safety
+            if abs(msg.angular.z) > 0.1:  # If significant turn command
+                out.angular.z = msg.angular.z * 0.5  # Reduce turn speed by 50%
+                self.get_logger().warn(f"EMERGENCY: Obstacle at {self.min_forward:.2f}m - allowing escape turn")
+            else:
+                out.angular.z = 0.0
+                self.get_logger().warn(f"EMERGENCY: Obstacle at {self.min_forward:.2f}m - full stop")
             self.estop_pub.publish(Bool(data=True))
             self.cmd_pub.publish(out)
             return
         else:
             # Clear estop if previously set
             self.estop_pub.publish(Bool(data=False))
-
+        
+        # Soft safety - block forward motion only
         if msg.linear.x > 0.0 and self.min_forward < self.safety_distance:
             # Block forward, allow turning/backward
             out.linear.x = 0.0
+            self.commands_blocked += 1
+            self.get_logger().info(f"Blocking forward motion - obstacle at {self.min_forward:.2f}m")
         else:
             out.linear.x = msg.linear.x
-
+        
         self.cmd_pub.publish(out)
+
+    def _publish_diagnostics(self):
+        """Publish comprehensive safety diagnostics"""
+        # Safety status message
+        status = "ACTIVE"
+        if self.latest_pc is None:
+            status = "NO_SENSOR_DATA"
+        elif self.min_forward < self.hard_stop_distance:
+            status = "EMERGENCY_STOP"
+        elif self.min_forward < self.safety_distance:
+            status = "SAFETY_BLOCKED"
+        
+        status_msg = String()
+        status_msg.data = f"Safety: {status}, Distance: {self.min_forward:.2f}m, Commands: {self.commands_received}, Blocked: {self.commands_blocked}"
+        self.safety_status_pub.publish(status_msg)
+        
+        # Detailed diagnostics
+        diag_array = DiagnosticArray()
+        diag_array.header.stamp = self.get_clock().now().to_msg()
+        
+        # Safety monitor status
+        safety_diag = DiagnosticStatus()
+        safety_diag.name = "safety_monitor_bev"
+        safety_diag.hardware_id = "simple_safety_monitor_bev"
+        
+        if self.latest_pc is None:
+            safety_diag.level = DiagnosticStatus.ERROR
+            safety_diag.message = "No point cloud data available"
+        elif self.sensor_failures > 0:
+            safety_diag.level = DiagnosticStatus.WARN
+            safety_diag.message = f"Sensor processing failures: {self.sensor_failures}"
+        elif self.min_forward < self.safety_distance:
+            safety_diag.level = DiagnosticStatus.WARN
+            safety_diag.message = f"Obstacle detected at {self.min_forward:.2f}m"
+        else:
+            safety_diag.level = DiagnosticStatus.OK
+            safety_diag.message = "Safety monitor operating normally"
+        
+        # Add diagnostic values
+        safety_diag.values = [
+            KeyValue(key="min_forward_distance", value=f"{self.min_forward:.3f}"),
+            KeyValue(key="safety_distance", value=f"{self.safety_distance:.3f}"),
+            KeyValue(key="hard_stop_distance", value=f"{self.hard_stop_distance:.3f}"),
+            KeyValue(key="commands_received", value=str(self.commands_received)),
+            KeyValue(key="commands_blocked", value=str(self.commands_blocked)),
+            KeyValue(key="emergency_stops", value=str(self.emergency_stops)),
+            KeyValue(key="sensor_failures", value=str(self.sensor_failures)),
+        ]
+        
+        # Check for stale command data
+        if self.last_cmd_time:
+            cmd_age = (self.get_clock().now() - self.last_cmd_time).nanoseconds / 1e9
+            if cmd_age > 2.0:
+                safety_diag.level = max(safety_diag.level, DiagnosticStatus.WARN)
+                safety_diag.message += f" | No commands for {cmd_age:.1f}s"
+        
+        diag_array.status = [safety_diag]
+        self.diagnostics_pub.publish(diag_array)
+
+    def _verify_connections(self):
+        """Verify that required topics are connected"""
+        # Check if we're receiving point cloud data
+        pc_info = self.get_subscriptions_info_by_topic(self.pc_topic)
+        if not pc_info:
+            self.get_logger().warn(f"Point cloud topic {self.pc_topic} has no publishers - safety compromised!")
+        
+        # Check if we're receiving command data
+        cmd_info = self.get_subscriptions_info_by_topic(self.in_cmd_topic)
+        if not cmd_info:
+            self.get_logger().warn(f"Input command topic {self.in_cmd_topic} has no publishers - AI may not be connected!")
+        
+        # Check if our output is being consumed
+        out_info = self.get_publishers_info_by_topic(self.out_cmd_topic)
+        if not any(pub.node_name == self.get_name() for pub in out_info):
+            self.get_logger().warn(f"Output topic {self.out_cmd_topic} may not have subscribers!")
+        
+        # Log connection status periodically
+        if self.commands_received == 0:
+            self.get_logger().warn(f"No commands received on {self.in_cmd_topic} yet - waiting for AI node...")
+        elif self.commands_received % 100 == 0:  # Every 100 commands
+            self.get_logger().info(f"Safety monitor healthy: {self.commands_received} commands processed, {self.commands_blocked} blocked")
 
 
 def main(args=None):
