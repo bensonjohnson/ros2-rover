@@ -29,6 +29,7 @@ setup(
             "npu_exploration_bev.py = tractor_bringup.npu_exploration_bev:main",
             "simple_safety_monitor_bev.py = tractor_bringup.simple_safety_monitor_bev:main",
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
+            "bev_processor_node.py = tractor_bringup.bev_processor_node:main",
         ],
     },
 )
