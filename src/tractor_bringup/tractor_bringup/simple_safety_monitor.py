@@ -35,6 +35,7 @@ class SimpleSafetyMonitor(Node):
         self.declare_parameter('detection_width', 1.0)  # meters left/right of center
         self.declare_parameter('min_obstacle_height', 0.25)  # minimum height for obstacle (25cm)
         self.declare_parameter('ground_tolerance', 0.3)  # tolerance for ground detection (30cm)
+        self.declare_parameter('forward_min_distance', 0.05)  # start checking very close-in points (meters)
 
         self.safety_distance = float(self.get_parameter('emergency_stop_distance').value)
         self.hard_stop_distance = float(self.get_parameter('hard_stop_distance').value)
@@ -44,6 +45,7 @@ class SimpleSafetyMonitor(Node):
         self.detection_width = float(self.get_parameter('detection_width').value)
         self.min_obstacle_height = float(self.get_parameter('min_obstacle_height').value)
         self.ground_tolerance = float(self.get_parameter('ground_tolerance').value)
+        self.forward_min_distance = float(self.get_parameter('forward_min_distance').value)
 
         # State
         self.latest_pc = None
@@ -208,7 +210,8 @@ class SimpleSafetyMonitor(Node):
             lateral = points[:, l_idx]
             height_up = v_sign * points[:, v_idx]
 
-            forward_mask = (forward > 0.2) & (forward <= self.safety_distance * 4.0)
+            # Start very close to robot; rely on height filtering to reject ground
+            forward_mask = (forward >= self.forward_min_distance) & (forward <= self.safety_distance * 4.0)
             width_mask = (lateral >= -self.detection_width * 0.5) & (lateral <= self.detection_width * 0.5)
             height_mask = (height_up >= -0.5) & (height_up <= 2.0)
 
@@ -269,7 +272,8 @@ class SimpleSafetyMonitor(Node):
             self.estop_pub.publish(Bool(data=False))
         
         # Soft safety - block forward motion only
-        if msg.linear.x > 0.0 and self.min_forward < self.safety_distance:
+        # Inclusive threshold to avoid off-by-one at the boundary
+        if msg.linear.x > 0.0 and self.min_forward <= self.safety_distance:
             out.linear.x = 0.0
             self.commands_blocked += 1
             self.get_logger().info(f"Blocking forward motion - obstacle at {self.min_forward:.2f}m")
