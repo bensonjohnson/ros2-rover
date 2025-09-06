@@ -124,7 +124,11 @@ def generate_launch_description():
             "bev_size": [200, 200],
             "bev_range": [10.0, 10.0],
             "bev_height_channels": [0.2, 1.0],
-        }]
+        }],
+        remappings=[
+            ("point_cloud", "/camera/camera/depth/color/points"),
+            ("odom", "/odom"),
+        ]
     )
 
     # PPO Manager
