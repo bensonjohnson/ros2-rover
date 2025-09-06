@@ -49,6 +49,7 @@ class SimpleSafetyMonitor(Node):
         self.latest_pc = None
         self.min_forward = 10.0
         self.last_pc_time = self.get_clock().now()
+        self.pc_frame_id = ""
         self.commands_received = 0
         self.commands_blocked = 0
         self.emergency_stops = 0
@@ -88,22 +89,14 @@ class SimpleSafetyMonitor(Node):
             else:
                 # Use sensor_msgs_py for conversion - handle structured array properly
                 points_gen = point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
-                points_list = list(points_gen)
-                
-                if len(points_list) > 0:
-                    # Convert structured array to regular array
-                    points_structured = np.array(points_list)
-                    # Extract x, y, z fields into regular float32 array
-                    points = np.column_stack((
-                        points_structured['x'].astype(np.float32),
-                        points_structured['y'].astype(np.float32), 
-                        points_structured['z'].astype(np.float32)
-                    ))
-                else:
-                    points = np.array([], dtype=np.float32).reshape(0, 3)
+                points = np.array(list(points_gen), dtype=np.float32).reshape(-1, 3)
 
             self.latest_pc = points
             self.last_pc_time = self.get_clock().now()
+            try:
+                self.pc_frame_id = getattr(msg.header, 'frame_id', '') or ''
+            except Exception:
+                self.pc_frame_id = ""
             
         except Exception as e:
             self.latest_pc = None
@@ -115,6 +108,10 @@ class SimpleSafetyMonitor(Node):
                 self.latest_pc = points
                 self.last_pc_time = self.get_clock().now()
                 self.get_logger().info("Fallback to direct parsing successful")
+                try:
+                    self.pc_frame_id = getattr(msg.header, 'frame_id', '') or ''
+                except Exception:
+                    self.pc_frame_id = ""
             except Exception as e2:
                 self.get_logger().error(f"Direct parsing also failed: {e2}")
 
@@ -179,45 +176,46 @@ class SimpleSafetyMonitor(Node):
 
         try:
             points = self.latest_pc
-            
-            # Filter to detection area (forward cone in front of robot)
-            # X: forward (0.2m to safety_distance*4) - skip immediate ground in front
-            # Y: left/right (-detection_width/2 to +detection_width/2)  
-            # Z: reasonable height range (-0.5m to 2.0m)
-            
-            forward_mask = (points[:, 0] > 0.2) & (points[:, 0] <= self.safety_distance * 4)  # Start 20cm ahead
-            width_mask = (points[:, 1] >= -self.detection_width/2) & (points[:, 1] <= self.detection_width/2)
-            height_mask = (points[:, 2] >= -0.5) & (points[:, 2] <= 2.0)  # Reasonable height range
-            
+
+            # Determine axis mapping from frame id
+            frame = (self.pc_frame_id or "").lower()
+            optical = ('optical' in frame)
+            f_idx = 2 if optical else 0  # forward: z for optical, x otherwise
+            l_idx = 0 if optical else 1  # lateral: x for optical, y otherwise
+            v_idx = 1 if optical else 2  # vertical raw: y (down) for optical, z (up) otherwise
+            v_sign = -1.0 if optical else 1.0  # convert to "up" height
+
+            # Masks for region of interest
+            forward = points[:, f_idx]
+            lateral = points[:, l_idx]
+            height_up = v_sign * points[:, v_idx]
+
+            forward_mask = (forward > 0.2) & (forward <= self.safety_distance * 4.0)
+            width_mask = (lateral >= -self.detection_width * 0.5) & (lateral <= self.detection_width * 0.5)
+            height_mask = (height_up >= -0.5) & (height_up <= 2.0)
+
             detection_mask = forward_mask & width_mask & height_mask
-            detection_points = points[detection_mask]
-            
-            if len(detection_points) == 0:
+            if not np.any(detection_mask):
                 self.min_forward = 10.0
                 return
-            
-            # Improved obstacle detection - points significantly above likely ground level
-            # Estimate ground level from lowest 10% of points in detection area
-            z_values = detection_points[:, 2]
-            ground_level = np.percentile(z_values, 10)  # 10th percentile as ground estimate
-            
-            # Obstacles are points well above the estimated ground level
-            obstacle_mask = detection_points[:, 2] > (ground_level + self.min_obstacle_height)
-            obstacle_points = detection_points[obstacle_mask]
-            
-            if len(obstacle_points) == 0:
+
+            det_height = height_up[detection_mask]
+            det_forward = forward[detection_mask]
+
+            # Estimate ground level from lowest 10% height (in "up" coordinates)
+            ground_level = np.percentile(det_height, 10)
+            obstacle_mask = det_height > (ground_level + self.min_obstacle_height)
+
+            if not np.any(obstacle_mask):
                 self.min_forward = 10.0
                 return
-            
-            # Find minimum forward distance to any obstacle
-            forward_distances = obstacle_points[:, 0]
-            self.min_forward = float(np.min(forward_distances))
-            
-            # Publish distance for monitoring
+
+            self.min_forward = float(np.min(det_forward[obstacle_mask]))
+
             distance_msg = Float32()
             distance_msg.data = self.min_forward
             self.min_distance_pub.publish(distance_msg)
-            
+
         except Exception as e:
             self.min_forward = 10.0
             self.sensor_failures += 1
