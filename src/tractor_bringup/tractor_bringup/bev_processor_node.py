@@ -96,6 +96,17 @@ class BEVProcessorNode(Node):
         self.last_pc_time = now
         # Convert to Nx3
         pts = self._pc2_to_numpy(msg)
+        # Map to forward-left-up if coming from an optical frame
+        try:
+            frame = (msg.header.frame_id or '').lower()
+        except Exception:
+            frame = ''
+        if pts.size > 0 and 'optical' in frame:
+            # RealSense optical: x=right, y=down, z=forward -> convert to forward-left-up
+            x_fwd = pts[:, 2]
+            y_left = -pts[:, 0]
+            z_up = -pts[:, 1]
+            pts = np.column_stack((x_fwd, y_left, z_up)).astype(np.float32)
         if pts.size == 0:
             return
         # Generate BEV
@@ -170,7 +181,10 @@ class BEVProcessorNode(Node):
         conf = bev_img[:, :, 3]
         low = bev_img[:, :, 2]
         occ = (conf > 0.25) | (low > 0.1)
-        near_start = int(h * 0.50)
+        # Start slightly ahead of 0 to avoid self/noise
+        start_x = 0.05  # 5 cm
+        x_range = float(self.bev.x_range)
+        near_start = int(((start_x + x_range) / (2.0 * x_range)) * h)
         near_end = int(h * 0.75)
         front_rows = slice(near_start, near_end)
         center_cols = slice(int(w / 3), int(2 * w / 3))

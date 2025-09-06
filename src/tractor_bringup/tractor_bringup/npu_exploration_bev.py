@@ -851,6 +851,17 @@ class NPUExplorationBEVNode(Node):
                 # Return empty array
                 return np.zeros((0, 3), dtype=np.float32)
                 
+            # Map to forward-left-up if message is in an optical frame
+            try:
+                frame = (pc_msg.header.frame_id or '').lower()
+            except Exception:
+                frame = ''
+            if 'optical' in frame:
+                x_fwd = points[:, 2]
+                y_left = -points[:, 0]
+                z_up = -points[:, 1]
+                points = np.column_stack((x_fwd, y_left, z_up)).astype(np.float32)
+
             # Log some information about the point cloud
             self.get_logger().debug(f"Raw point cloud shape: {points.shape}")
             
@@ -1125,9 +1136,14 @@ class NPUExplorationBEVNode(Node):
 
             # Define regions. In our BEV, pixel_x maps x in [-range, +range] to [0..H-1].
             # Near-field forward band corresponds to ~0..2-3m ahead (px/h ~ 0.5..0.75).
-            near_start = int(h * 0.50)
-            near_end = int(h * 0.80)
-            front_rows = slice(near_start, near_end)
+            # Map meters to rows; start slightly ahead (5cm)
+            x_range = float(self.bev_generator.x_range)
+            start_x = 0.05
+            px0 = int(((start_x + x_range) / (2.0 * x_range)) * h)
+            px1 = int(h * 0.80)
+            px0 = max(0, min(h - 1, px0))
+            px1 = max(px0 + 1, min(h, px1))
+            front_rows = slice(px0, px1)
             center_cols = slice(int(w/3), int(2*w/3))
             left_cols = slice(0, int(w/3))
             right_cols = slice(int(2*w/3), w)
