@@ -289,6 +289,8 @@ class NPUExplorationBEVNode(Node):
         # Expose services to save and distill models
         self.save_srv = self.create_service(Trigger, '/save_models', self.handle_save_models)
         self.distill_srv = self.create_service(Trigger, '/distill_best', self.handle_distill_best)
+        # RKNN reload service for external trainers (e.g., PPO manager)
+        self.reload_srv = self.create_service(Trigger, '/reload_rknn', self.handle_reload_rknn)
         
         # Control timer
         self.control_timer = self.create_timer(0.1, self.control_loop)  # 10Hz control
@@ -396,6 +398,20 @@ class NPUExplorationBEVNode(Node):
         except Exception as e:
             response.success = False
             response.message = f"Distillation error: {e}"
+        return response
+
+    def handle_reload_rknn(self, request, response):
+        try:
+            if self.trainer and hasattr(self.trainer, 'enable_rknn_inference'):
+                ok = self.trainer.enable_rknn_inference()
+                response.success = bool(ok)
+                response.message = "RKNN reload attempted"
+            else:
+                response.success = False
+                response.message = "Trainer not available for RKNN reload"
+        except Exception as e:
+            response.success = False
+            response.message = f"Reload failed: {e}"
         return response
 
     def init_inference_engine(self):
