@@ -178,7 +178,7 @@ class BEVProcessorNode(Node):
         ys, xs = np.where(mask)
         if ys.size == 0:
             return 10.0
-        px = ys.astype(np.float32)
+        px = ys.astype(np.float32) + near_start
         x_range = float(self.bev.x_range)
         x_m = (px / float(h)) * (2.0 * x_range) - x_range
         x_m = x_m[x_m >= 0.0]

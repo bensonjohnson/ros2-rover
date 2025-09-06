@@ -38,6 +38,7 @@ class SimpleSafetyMonitorBEV(Node):
         self.declare_parameter('use_shared_bev', True)
         self.declare_parameter('bev_image_topic', '/bev/image')
         self.declare_parameter('bev_freshness_timeout', 0.5)
+        self.declare_parameter('bev_x_range', 10.0)
 
         self.safety_distance = float(self.get_parameter('emergency_stop_distance').value)
         self.hard_stop_distance = float(self.get_parameter('hard_stop_distance').value)
@@ -47,6 +48,7 @@ class SimpleSafetyMonitorBEV(Node):
         self.use_shared_bev = bool(self.get_parameter('use_shared_bev').value)
         self.bev_image_topic = str(self.get_parameter('bev_image_topic').value)
         self.bev_freshness_timeout = float(self.get_parameter('bev_freshness_timeout').value)
+        self.bev_x_range = float(self.get_parameter('bev_x_range').value)
 
         # BEV for fast forward-distance checks
         self.bev = BEVGenerator(bev_size=(200, 200), bev_range=(10.0, 10.0), height_channels=(0.2, 1.0), enable_ground_removal=True)
@@ -63,6 +65,8 @@ class SimpleSafetyMonitorBEV(Node):
         # Shared BEV cache
         self.latest_bev = None
         self.last_bev_time = None
+        # For point cloud fallback frame mapping
+        self.pc_frame_id = ""
 
         # Subs/Pubs
         self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, qos_profile_sensor_data)
@@ -116,6 +120,10 @@ class SimpleSafetyMonitorBEV(Node):
                     pts = np.array([[p[0], p[1], p[2]] for p in pts_list], dtype=np.float32)
             self.latest_pc = pts
             self.last_pc_time = self.get_clock().now()
+            try:
+                self.pc_frame_id = getattr(msg.header, 'frame_id', '') or ''
+            except Exception:
+                self.pc_frame_id = ""
         except Exception as e:
             self.latest_pc = None
             self.sensor_failures += 1
@@ -123,7 +131,8 @@ class SimpleSafetyMonitorBEV(Node):
 
     def _update_min_distance(self):
         current_time = self.get_clock().now()
-        # Prefer shared BEV if available and fresh
+        # Compute BEV-derived min distance if available
+        d_bev = None
         if self.use_shared_bev and self.latest_bev is not None and self.last_bev_time is not None:
             age = (current_time - self.last_bev_time).nanoseconds / 1e9
             if age <= self.bev_freshness_timeout:
@@ -132,63 +141,73 @@ class SimpleSafetyMonitorBEV(Node):
                     h, w, _ = bev_img.shape
                     conf = bev_img[:, :, 3]
                     low = bev_img[:, :, 2]
-                    occ = (conf > 0.25) | (low > 0.1)
-                    # Near-field forward band: ~0m..~2m ahead (px/h ~ 0.5..0.6)
-                    near_start = int(h * 0.50)
-                    near_end = int(h * 0.75)
-                    front_rows = slice(near_start, near_end)
+                    occ = (conf > 0.22) | (low > 0.08)
+                    x_range = max(0.5, float(self.bev_x_range))
+                    sd = float(self.safety_distance)
+                    px0 = int(((0.0 + x_range) / (2.0 * x_range)) * h)
+                    px_end_x = min(sd * 4.0, x_range)
+                    px1 = int(((px_end_x + x_range) / (2.0 * x_range)) * h)
+                    px0 = max(0, min(h - 1, px0))
+                    px1 = max(px0 + 1, min(h, px1))
+                    front_rows = slice(px0, px1)
                     center_cols = slice(int(w/3), int(2*w/3))
                     mask = occ[front_rows, center_cols]
                     ys, xs = np.where(mask)
                     if ys.size == 0:
-                        self.min_forward = 10.0
+                        d_bev = 10.0
                     else:
-                        px = ys.astype(np.float32)
-                        x_range = 10.0
+                        px = ys.astype(np.float32) + px0
                         x_m = (px / float(h)) * (2.0 * x_range) - x_range
                         x_m = x_m[x_m >= 0.0]
-                        self.min_forward = float(np.min(x_m)) if x_m.size else 10.0
-                    self.min_distance_pub.publish(Float32(data=self.min_forward))
-                    return
+                        d_bev = float(np.min(x_m)) if x_m.size else 10.0
                 except Exception as e:
                     self.get_logger().debug(f"Shared BEV distance compute failed: {e}")
 
-        if self.latest_pc is None or self.latest_pc.size == 0:
-            self.min_forward = 10.0
-            # Check if point cloud is too old
+        # Compute point cloud fallback min distance
+        d_pc = None
+        if self.latest_pc is not None and self.latest_pc.size > 0:
+            try:
+                points = self.latest_pc
+                frame = (self.pc_frame_id or "").lower()
+                optical = ('optical' in frame)
+                f_idx = 2 if optical else 0
+                l_idx = 0 if optical else 1
+                v_idx = 1 if optical else 2
+                v_sign = -1.0 if optical else 1.0
+                forward = points[:, f_idx]
+                lateral = points[:, l_idx]
+                height_up = v_sign * points[:, v_idx]
+                sd = float(self.safety_distance)
+                forward_mask = (forward >= 0.0) & (forward <= sd * 4.0)
+                width = 1.0
+                width_mask = (lateral >= -width * 0.5) & (lateral <= width * 0.5)
+                height_mask = (height_up >= -0.5) & (height_up <= 2.0)
+                det_mask = forward_mask & width_mask & height_mask
+                if not np.any(det_mask):
+                    d_pc = 10.0
+                else:
+                    z_vals = height_up[det_mask]
+                    ground = np.percentile(z_vals, 10)
+                    obs_mask = z_vals > (ground + 0.20)
+                    if not np.any(obs_mask):
+                        d_pc = 10.0
+                    else:
+                        d_pc = float(np.min(forward[det_mask][obs_mask]))
+            except Exception as e:
+                self.get_logger().debug(f"PC min distance failed: {e}")
+                d_pc = None
+        else:
             if self.last_pc_time and (current_time - self.last_pc_time).nanoseconds > 2e9:
                 self.get_logger().warn("Point cloud data is stale - safety may be compromised")
-            return
-        try:
-            bev_img = self.bev.generate_bev(self.latest_pc)
-            h, w, _ = bev_img.shape
-            conf = bev_img[:, :, 3]
-            low = bev_img[:, :, 2]
-            occ = (conf > 0.25) | (low > 0.1)
-            near_start = int(h * 0.50)
-            near_end = int(h * 0.75)
-            front_rows = slice(near_start, near_end)
-            center_cols = slice(int(w/3), int(2*w/3))
-            mask = occ[front_rows, center_cols]
-            ys, xs = np.where(mask)
-            if ys.size == 0:
-                self.min_forward = 10.0
-                return
-            px = ys.astype(np.float32)
-            x_range = float(self.bev.x_range)
-            x_m = (px / float(h)) * (2.0 * x_range) - x_range
-            x_m = x_m[x_m >= 0.0]
-            self.min_forward = float(np.min(x_m)) if x_m.size else 10.0
-            
-            # Publish distance for monitoring
-            distance_msg = Float32()
-            distance_msg.data = self.min_forward
-            self.min_distance_pub.publish(distance_msg)
-            
-        except Exception as e:
-            self.min_forward = 10.0
-            self.sensor_failures += 1
-            self.get_logger().error(f"Distance calculation failed: {e}")
+
+        # Fuse conservative
+        candidates = []
+        if d_bev is not None:
+            candidates.append(d_bev)
+        if d_pc is not None:
+            candidates.append(d_pc)
+        self.min_forward = float(min(candidates)) if candidates else 10.0
+        self.min_distance_pub.publish(Float32(data=self.min_forward))
 
     def cmd_callback(self, msg: Twist):
         # Track command reception
@@ -219,7 +238,7 @@ class SimpleSafetyMonitorBEV(Node):
             self.estop_pub.publish(Bool(data=False))
         
         # Soft safety - block forward motion only
-        if msg.linear.x > 0.0 and self.min_forward < self.safety_distance:
+        if msg.linear.x > 0.0 and self.min_forward <= self.safety_distance:
             # Block forward, allow turning/backward
             out.linear.x = 0.0
             self.commands_blocked += 1
