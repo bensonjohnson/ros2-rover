@@ -8,7 +8,7 @@ Integrates with existing Hiwonder motor controller for odometry
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
-from sensor_msgs.msg import PointCloud2, Imu, JointState
+from sensor_msgs.msg import PointCloud2, Imu, JointState, Image
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String, Float32
