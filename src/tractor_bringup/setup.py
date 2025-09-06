@@ -27,6 +27,8 @@ setup(
     entry_points={
         "console_scripts": [
             "npu_exploration_bev.py = tractor_bringup.npu_exploration_bev:main",
+            "simple_safety_monitor_bev.py = tractor_bringup.simple_safety_monitor_bev:main",
+            "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
         ],
     },
 )
