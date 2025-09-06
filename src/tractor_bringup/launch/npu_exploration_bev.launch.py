@@ -176,6 +176,18 @@ def generate_launch_description():
         description="Enable ground plane removal (true/false)",
     )
 
+    # BEV performance tuning
+    declare_bev_ground_update_interval_cmd = DeclareLaunchArgument(
+        "bev_ground_update_interval",
+        default_value="10",
+        description="Update cached ground plane every N frames (int)",
+    )
+    declare_bev_enable_opencl_cmd = DeclareLaunchArgument(
+        "bev_enable_opencl",
+        default_value="true",
+        description="Enable OpenCL offload for BEV histogramming (true/false)",
+    )
+
     # 1. Robot Description (TF only)
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -213,8 +225,8 @@ def generate_launch_description():
             "enable_depth": "true",
             "enable_sync": "false",  # Disable sync for faster processing
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x60",  # Even higher FPS for real-time safety
-            "rgb_camera.color_profile": "424x240x60",  # Match depth profile
+            "depth_module.depth_profile": "424x240x30",  # 30 FPS to reduce CPU load
+            "rgb_camera.color_profile": "424x240x30",  # Match depth profile
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
@@ -260,6 +272,8 @@ def generate_launch_description():
                 "bev_range": LaunchConfiguration("bev_range"),
                 "bev_height_channels": LaunchConfiguration("bev_height_channels"),
                 "enable_ground_removal": LaunchConfiguration("enable_ground_removal"),
+                "bev_ground_update_interval": LaunchConfiguration("bev_ground_update_interval"),
+                "bev_enable_opencl": LaunchConfiguration("bev_enable_opencl"),
             }
         ],
         remappings=[
@@ -329,6 +343,8 @@ def generate_launch_description():
     ld.add_action(declare_bev_range_cmd)
     ld.add_action(declare_bev_height_channels_cmd)
     ld.add_action(declare_enable_ground_removal_cmd)
+    ld.add_action(declare_bev_ground_update_interval_cmd)
+    ld.add_action(declare_bev_enable_opencl_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)

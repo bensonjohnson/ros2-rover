@@ -18,6 +18,7 @@ import numpy as np
 import time
 import struct
 from cv_bridge import CvBridge
+from rclpy.qos import qos_profile_sensor_data
 import cv2
 
 try:
@@ -100,6 +101,8 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('enable_ground_removal', True)  # Enable ground plane removal
         self.declare_parameter('ground_ransac_iterations', 100)  # RANSAC iterations for ground removal
         self.declare_parameter('ground_ransac_threshold', 0.05)  # Distance threshold for ground points
+        self.declare_parameter('bev_ground_update_interval', 10)  # Update cached ground plane every N frames
+        self.declare_parameter('bev_enable_opencl', False)  # Optional OpenCL offload for BEV histogramming
         
         # Initialize critical attributes BEFORE subscriptions / inference
         self.last_action = np.array([0.0, 0.0])
@@ -156,6 +159,8 @@ class NPUExplorationBEVNode(Node):
         self.enable_ground_removal = self.get_parameter('enable_ground_removal').value
         self.ground_ransac_iterations = self.get_parameter('ground_ransac_iterations').value
         self.ground_ransac_threshold = self.get_parameter('ground_ransac_threshold').value
+        self.bev_ground_update_interval = int(self.get_parameter('bev_ground_update_interval').value)
+        self.bev_enable_opencl = bool(self.get_parameter('bev_enable_opencl').value)
         
         # State tracking
         self.current_velocity = np.array([0.0, 0.0])  # [linear, angular]
@@ -177,6 +182,7 @@ class NPUExplorationBEVNode(Node):
         # Previous state for reward calculation
         self.prev_position = np.array([0.0, 0.0])
         self.prev_bev_image = None
+        self.cached_bev_image = None
         self.collision_detected = False
         
         # External safety feedback from safety monitor
@@ -205,7 +211,9 @@ class NPUExplorationBEVNode(Node):
             # Grass-aware filtering parameters
             enable_grass_filtering=True,
             grass_height_tolerance=0.15,  # 15cm grass tolerance
-            min_obstacle_height=0.25      # 25cm minimum obstacle height
+            min_obstacle_height=0.25,     # 25cm minimum obstacle height
+            ground_update_interval=self.bev_ground_update_interval,
+            enable_opencl=self.bev_enable_opencl
         )
         
         # Initialize NPU or fallback
@@ -219,7 +227,7 @@ class NPUExplorationBEVNode(Node):
         # ROS2 interfaces
         self.pc_sub = self.create_subscription(
             PointCloud2, 'point_cloud',
-            self.pointcloud_callback, 10
+            self.pointcloud_callback, qos_profile_sensor_data
         )
         
         self.odom_sub = self.create_subscription(
@@ -1018,6 +1026,8 @@ class NPUExplorationBEVNode(Node):
 
         try:
             bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
+            # Cache for reuse in inference this cycle
+            self.cached_bev_image = bev_image
             h, w, _ = bev_image.shape
             # Channels
             conf = bev_image[:, :, 3]  # obstacle confidence [0,1]
@@ -1103,8 +1113,12 @@ class NPUExplorationBEVNode(Node):
         if not self.all_sensors_ready():
             return np.array([0.0, 0.0]), 0.0
         try:
-            # Generate BEV from point cloud
-            bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
+            # Generate or reuse BEV from guardian to avoid duplicate work
+            if self.cached_bev_image is not None:
+                bev_image = self.cached_bev_image
+                self.cached_bev_image = None  # consume
+            else:
+                bev_image = self.bev_generator.generate_bev(self.latest_pointcloud)
             
             # Calculate BEV-based metrics
             max_height_channel = bev_image[:, :, 0]
@@ -1659,44 +1673,49 @@ class NPUExplorationBEVNode(Node):
         return odom_ok and wheels_ok
 
     def ros_pc2_to_numpy(self, pc_msg):
-        """Convert ROS PointCloud2 to numpy array"""
+        """Convert ROS PointCloud2 to numpy array efficiently"""
         try:
-            # More robust point cloud conversion
-            points = []
-            point_step = pc_msg.point_step
-            height = pc_msg.height
-            width = pc_msg.width
-            
-            # Handle both organized and unorganized point clouds
-            if height > 1 and width > 1:
-                # Organized point cloud
-                for v in range(height):
-                    for u in range(width):
-                        i = (v * width + u) * point_step
-                        if i + 12 <= len(pc_msg.data):
-                            try:
-                                x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
-                                # Only add valid points (not NaN or Inf)
-                                if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
-                                    points.append([x, y, z])
-                            except:
-                                continue
+            if SENSOR_MSGS_PY_AVAILABLE:
+                from sensor_msgs_py import point_cloud2
+                pts_list = list(point_cloud2.read_points(pc_msg, field_names=("x", "y", "z"), skip_nans=True))
+                if not pts_list:
+                    return np.zeros((0, 3), dtype=np.float32)
+                first = pts_list[0]
+                if isinstance(first, (tuple, list)) and len(first) >= 3:
+                    arr = np.asarray(pts_list, dtype=np.float32).reshape(-1, 3)
+                else:
+                    structured = np.asarray(pts_list)
+                    if getattr(structured, 'dtype', None) is not None and structured.dtype.names is not None:
+                        x = structured['x'].astype(np.float32, copy=False)
+                        y = structured['y'].astype(np.float32, copy=False)
+                        z = structured['z'].astype(np.float32, copy=False)
+                        arr = np.stack((x, y, z), axis=1)
+                    else:
+                        arr = np.array([[p[0], p[1], p[2]] for p in pts_list], dtype=np.float32)
+                # Filter invalids
+                if arr.size == 0:
+                    return np.zeros((0, 3), dtype=np.float32)
+                mask = np.isfinite(arr).all(axis=1)
+                return arr[mask]
             else:
-                # Unorganized point cloud
-                for i in range(0, len(pc_msg.data), point_step):
-                    if i + 12 <= len(pc_msg.data):
+                # Fallback: minimal structured unpack
+                points = []
+                step = pc_msg.point_step
+                data = pc_msg.data
+                for i in range(0, len(data), step):
+                    if i + 12 <= len(data):
                         try:
-                            x, y, z = struct.unpack('fff', pc_msg.data[i:i+12])
-                            # Only add valid points (not NaN or Inf)
+                            x, y, z = struct.unpack('fff', data[i:i+12])
                             if np.isfinite(x) and np.isfinite(y) and np.isfinite(z):
                                 points.append([x, y, z])
-                        except:
+                        except Exception:
                             continue
-                    
-            return np.array(points) if points else np.zeros((0, 3))
+                if not points:
+                    return np.zeros((0, 3), dtype=np.float32)
+                return np.asarray(points, dtype=np.float32)
         except Exception as e:
             self.get_logger().warn(f"Point cloud conversion failed: {e}")
-            return np.zeros((0, 3))
+            return np.zeros((0, 3), dtype=np.float32)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -11,6 +11,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, String, Float32
 from sensor_msgs.msg import PointCloud2
+from rclpy.qos import qos_profile_sensor_data
 from diagnostic_msgs.msg import DiagnosticStatus, DiagnosticArray, KeyValue
 import numpy as np
 import struct
@@ -59,7 +60,7 @@ class SimpleSafetyMonitor(Node):
         self.last_cmd_time = None
 
         # Subscribers - increase queue size for better real-time performance
-        self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, 1)  # Keep only latest
+        self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, qos_profile_sensor_data)
         self.cmd_sub = self.create_subscription(Twist, self.in_cmd_topic, self.cmd_callback, 10)
 
         # Publishers
