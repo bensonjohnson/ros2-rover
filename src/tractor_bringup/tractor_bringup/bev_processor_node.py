@@ -107,6 +107,9 @@ class BEVProcessorNode(Node):
             y_left = -pts[:, 0]
             z_up = -pts[:, 1]
             pts = np.column_stack((x_fwd, y_left, z_up)).astype(np.float32)
+        # Early ROI filter and voxel downsample to reduce load before BEV
+        if pts.size > 0:
+            pts = self._early_roi_and_voxel(pts)
         if pts.size == 0:
             return
         # Generate BEV
@@ -135,6 +138,35 @@ class BEVProcessorNode(Node):
             age = (self.get_clock().now() - self.latest_bev_time).nanoseconds / 1e9
         status.data = f"BEV: age={age:.2f}s, pub_rate={self.publish_rate}Hz"
         self.status_pub.publish(status)
+
+    def _early_roi_and_voxel(self, pts: np.ndarray) -> np.ndarray:
+        """Apply an early ROI crop and voxel downsample in (x_fwd, y_left) to reduce compute.
+        - ROI: x in [0, x_range], |y| <= y_range, z in [-0.5, 2.0]
+        - Voxel grid: size ~6 cm (configurable here) on x/y plane; keep one point per cell.
+        """
+        try:
+            if pts is None or pts.size == 0:
+                return pts
+            x = pts[:, 0]
+            y = pts[:, 1]
+            z = pts[:, 2]
+            xr = float(getattr(self.bev, 'x_range', 6.0))
+            yr = float(getattr(self.bev, 'y_range', 4.0))
+            # ROI mask
+            roi = (x >= 0.0) & (x <= xr) & (y >= -yr) & (y <= yr) & (z >= -0.5) & (z <= 2.0)
+            if not np.any(roi):
+                return np.zeros((0, 3), dtype=np.float32)
+            pts_roi = pts[roi]
+            # Voxel downsample
+            vx = 0.06  # 6 cm voxel size
+            # Compute voxel indices relative to ROI min (0 for x, -yr for y)
+            ix = np.floor((pts_roi[:, 0] - 0.0) / vx).astype(np.int32)
+            iy = np.floor((pts_roi[:, 1] + yr) / vx).astype(np.int32)
+            key = ix.astype(np.int64) * 1000003 + iy.astype(np.int64)  # hash pair
+            _, unique_idx = np.unique(key, return_index=True)
+            return pts_roi[unique_idx]
+        except Exception:
+            return pts
 
     def _pc2_to_numpy(self, msg: PointCloud2) -> np.ndarray:
         try:
