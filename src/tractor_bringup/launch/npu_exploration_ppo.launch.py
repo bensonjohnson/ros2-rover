@@ -120,6 +120,7 @@ def generate_launch_description():
             "enable_reward_optimization": False,
             "enable_multi_metric_evaluation": False,
             "enable_optimization_monitoring": False,
+            "enable_reward_based_distill": False,
             "enable_ground_removal": True,
             "bev_size": [200, 200],
             "bev_range": [10.0, 10.0],

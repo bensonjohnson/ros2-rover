@@ -113,6 +113,8 @@ class PPOManagerNode(Node):
         self.get_logger().info("PPO Manager initialized (live training, bounded updates)")
         # Try to load latest PPO checkpoint to resume training
         self.load_ppo_checkpoint()
+        # Control flags
+        self.training_paused = False
 
     def bev_cb(self, msg: Image):
         try:
@@ -152,6 +154,8 @@ class PPOManagerNode(Node):
         return r
 
     def maybe_add_transition(self):
+        if self.training_paused:
+            return
         if self.latest_bev is None or not self.have_odom:
             return
         now = time.time()
@@ -175,6 +179,9 @@ class PPOManagerNode(Node):
             self.last_pos = self.position.copy()
 
     def update_timer(self):
+        # Skip updates if paused for export/reload
+        if self.training_paused:
+            return
         # Background PPO update with small budget
         stats = self.trainer.update()
         if stats.get('updated'):
@@ -182,16 +189,28 @@ class PPOManagerNode(Node):
             # Export on min interval
             if (time.time() - self.last_export_time) > self.min_export_interval:
                 try:
+                    self.training_paused = True
+                    pause_t0 = time.time()
+                    self.get_logger().info("Pausing rollouts/updates for export + reload")
                     # Load actor weights into export helper and convert
                     self.export_helper.model.load_state_dict(self.trainer.actor_state_dict(), strict=False)
                     # Save PPO checkpoint (.pth) alongside RKNN so training can resume later
                     self.save_ppo_checkpoint()
+                    exp_t0 = time.time()
                     self.export_helper.convert_to_rknn()
+                    exp_t1 = time.time()
+                    self.get_logger().info(f"RKNN export completed in {exp_t1-exp_t0:.2f}s")
                     self.last_export_time = time.time()
                     # Request NPU to reload RKNN
                     self.reload_rknn()
+                    # Give the NPU node some time to settle after reload
+                    time.sleep(3.0)
+                    self.training_paused = False
+                    self.get_logger().info(f"Resumed training after export/reload (paused {time.time()-pause_t0:.2f}s)")
                 except Exception as e:
                     self.get_logger().warn(f"RKNN export/reload failed: {e}")
+                    # Ensure we unpause even on failure
+                    self.training_paused = False
 
     def reload_rknn(self):
         if not self.reload_cli.wait_for_service(timeout_sec=1.0):
