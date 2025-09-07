@@ -199,11 +199,16 @@ class PPOManagerNode(Node):
             return
         req = Trigger.Request()
         future = self.reload_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        if future.result() and future.result().success:
-            self.get_logger().info("RKNN reloaded via NPU node")
+        # Allow longer time for the NPU node to reload the runtime
+        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
+        if future.done():
+            resp = future.result()
+            if resp and resp.success:
+                self.get_logger().info(f"RKNN reloaded via NPU node: {resp.message}")
+            else:
+                self.get_logger().warn(f"RKNN reload service call failed: {getattr(resp, 'message', 'no response')}" )
         else:
-            self.get_logger().warn("RKNN reload service call failed")
+            self.get_logger().warn("RKNN reload service call timed out")
 
     def save_ppo_checkpoint(self):
         try:
