@@ -11,7 +11,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.executors import ExternalShutdownException
 
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import Image, Imu, JointState
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool, Float32, String
@@ -48,8 +48,11 @@ class PPOManagerNode(Node):
         self.declare_parameter('gae_lambda', 0.95)
         self.declare_parameter('bev_channels', 4)
         self.declare_parameter('bev_size', [200, 200])
-        # IMU-enhanced proprio: [yaw_rate, roll, pitch, accel_forward, current_linear]
-        self.declare_parameter('proprio_dim', 5)
+        # Proprio matches NPU runtime (21 dims):
+        # [lin, ang, phase, last_a0, last_a1, wheel_diff, min_d, mean_d,
+        #  near_collision, emergency, left_free, right_free, center_free,
+        #  bev_gx, bev_gy, bev_gf, yaw_rate, roll, pitch, accel_forward, accel_mag]
+        self.declare_parameter('proprio_dim', 21)
         self.declare_parameter('imu_topic', '/lsm9ds1_imu_publisher/imu/data')
         self.declare_parameter('reward_forward_scale', 5.0)
         self.declare_parameter('reward_block_penalty', -1.0)
@@ -102,6 +105,9 @@ class PPOManagerNode(Node):
         self.roll = 0.0
         self.pitch = 0.0
         self.accel_forward = 0.0
+        self.accel_mag = 0.0
+        # Wheels
+        self.wheel_velocities = (0.0, 0.0)
         # Rolling metrics
         self.win_size = 600
         self.forward_attempts = 0
@@ -119,6 +125,7 @@ class PPOManagerNode(Node):
         self.create_subscription(Twist, 'cmd_vel_ai', self.act_cb, 10)
         self.create_subscription(Odometry, 'odom', self.odom_cb, 10)
         self.create_subscription(Imu, self.get_parameter('imu_topic').value, self.imu_cb, 50)
+        self.create_subscription(JointState, 'joint_states', self.joint_state_cb, 10)
         self.create_subscription(Bool, 'emergency_stop', self.emerg_cb, 10)
         self.create_subscription(Float32, 'min_forward_distance', self.minf_cb, 10)
 
@@ -191,12 +198,38 @@ class PPOManagerNode(Node):
         self.last_step_time = now
         # Observation
         bev = self.latest_bev
+        # Derive BEV metrics to match NPU runtime
+        min_d_global, mean_d_global, near_collision = self._bev_distance_stats(bev)
+        left_free, center_free, right_free = self._bev_free_bands(bev)
+        bev_gx, bev_gy, bev_gf = self._bev_gradient(bev)
+        # Fuse min distance with safety monitor min_forward (conservative)
+        # Match NPU runtime: use BEV-derived min_d_global for proprio; emergency is separate
+        min_d = float(min_d_global)
+        wheel_diff = float(self.wheel_velocities[0] - self.wheel_velocities[1])
+        phase = float(self.total_steps % 100) / 100.0
+        emergency_numeric = 1.0 if self.emergency else 0.0
         sens = np.array([
+            float(self.current_linear),
+            float(self.current_angular),
+            phase,
+            float(self.last_action[0]),
+            float(self.last_action[1]),
+            wheel_diff,
+            min_d,
+            float(mean_d_global),
+            near_collision,
+            emergency_numeric,
+            float(left_free),
+            float(right_free),
+            float(center_free),
+            float(bev_gx),
+            float(bev_gy),
+            float(bev_gf),
             float(self.yaw_rate),
             float(self.roll),
             float(self.pitch),
             float(self.accel_forward),
-            float(self.current_linear),
+            float(self.accel_mag),
         ], dtype=np.float32)
         # Map action to [-1, 1] policy domain based on expected scaling in runtime
         # Here we assume commands are already normalized in [-1,1] by the NPU; if not, clamp
@@ -404,7 +437,98 @@ class PPOManagerNode(Node):
             self.roll = math.atan2(sinr_cosp, cosr_cosp)
             sinp = 2 * (w * y - z * x)
             self.pitch = math.asin(max(-1.0, min(1.0, sinp)))
-            self.accel_forward = float(msg.linear_acceleration.x)
+            ax, ay, az = float(msg.linear_acceleration.x), float(msg.linear_acceleration.y), float(msg.linear_acceleration.z)
+            self.accel_forward = ax
+            self.accel_mag = float((ax*ax + ay*ay + az*az) ** 0.5)
+        except Exception:
+            pass
+
+    def _bev_distance_stats(self, bev: np.ndarray):
+        try:
+            if bev is None or bev.size == 0:
+                return 0.0, 0.0, 0.0
+            max_h = bev[:, :, 0]
+            valid = max_h[max_h > 0.05]
+            if valid.size == 0:
+                return 0.0, 0.0, 0.0
+            min_d = float(np.min(valid))
+            mean_d = float(np.mean(valid))
+            near_flag = 1.0 if (np.percentile(valid, 5) < 0.25) else 0.0
+            return min_d, mean_d, near_flag
+        except Exception:
+            return 0.0, 0.0, 0.0
+
+    def _bev_free_bands(self, bev: np.ndarray):
+        """Compute left/center/right free metrics normalized to [0,1], matching NPU logic."""
+        try:
+            if bev is None or bev.size == 0:
+                return 0.0, 0.0, 0.0
+            h, w, c = bev.shape
+            conf = bev[:, :, 3]
+            low = bev[:, :, 2]
+            occ = (conf > 0.25) | (low > 0.1)
+            # Regions similar to NPU guardian
+            start_x = 0.05
+            x_range = 6.0  # conservative; training normalization only
+            near_start = int(((start_x + x_range) / (2.0 * x_range)) * h)
+            near_end = int(h * 0.75)
+            front_rows = slice(near_start, near_end)
+            left_cols = slice(0, int(w / 3))
+            center_cols = slice(int(w / 3), int(2 * w / 3))
+            right_cols = slice(int(2 * w / 3), w)
+
+            def nearest_forward_distance(mask_slice):
+                mask = occ[front_rows, mask_slice]
+                ys, xs = np.where(mask)
+                if ys.size == 0:
+                    return x_range
+                px = ys.astype(np.float32) + near_start
+                x_m = (px / float(h)) * (2.0 * x_range) - x_range
+                x_m = x_m[x_m >= 0.0]
+                return float(np.min(x_m)) if x_m.size else x_range
+
+            left_d = nearest_forward_distance(left_cols)
+            right_d = nearest_forward_distance(right_cols)
+            center_d = nearest_forward_distance(center_cols)
+            left_free = float(np.clip(left_d / x_range, 0.0, 1.0))
+            right_free = float(np.clip(right_d / x_range, 0.0, 1.0))
+            center_free = float(np.clip(center_d / x_range, 0.0, 1.0))
+            return left_free, center_free, right_free
+        except Exception:
+            return 0.0, 0.0, 0.0
+
+    def _bev_gradient(self, bev: np.ndarray):
+        try:
+            if bev is None or bev.size == 0:
+                return 0.0, 0.0, 0.0
+            h, w, c = bev.shape
+            height_channel = bev[:, :, 0]
+            left_region = height_channel[:2*h//3, :w//3]
+            center_region = height_channel[:2*h//3, w//3:2*w//3]
+            right_region = height_channel[:2*h//3, 2*w//3:]
+
+            def calc_grad(region):
+                valid = region[region > 0.1]
+                if valid.size < 10:
+                    return 0.0
+                s = np.sort(valid)
+                near = s[:len(s)//3]
+                far = s[-len(s)//3:]
+                if near.size and far.size:
+                    return float(np.mean(far) - np.mean(near))
+                return 0.0
+            return calc_grad(left_region), calc_grad(center_region), calc_grad(right_region)
+        except Exception:
+            return 0.0, 0.0, 0.0
+
+    def joint_state_cb(self, msg: JointState):
+        try:
+            if 'left_viz_wheel_joint' in msg.name and 'right_viz_wheel_joint' in msg.name:
+                li = msg.name.index('left_viz_wheel_joint')
+                ri = msg.name.index('right_viz_wheel_joint')
+                lv = float(msg.velocity[li]) if li < len(msg.velocity) else 0.0
+                rv = float(msg.velocity[ri]) if ri < len(msg.velocity) else 0.0
+                self.wheel_velocities = (lv, rv)
         except Exception:
             pass
 

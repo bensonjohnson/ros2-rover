@@ -314,6 +314,9 @@ def generate_launch_description():
                 "enable_reward_optimization": LaunchConfiguration("enable_reward_optimization"),
                 "enable_multi_metric_evaluation": LaunchConfiguration("enable_multi_metric_evaluation"),
                 "enable_optimization_monitoring": LaunchConfiguration("enable_optimization_monitoring"),
+                # IMU proprio feed for runtime actor
+                "enable_lsm_imu_proprio": True,
+                "lsm_imu_topic": "/lsm9ds1_imu_publisher/imu/data",
                 # PBT parameters (used in es_rl_hybrid mode)
                 "pbt_population_size": LaunchConfiguration("pbt_population_size"),
                 "pbt_update_interval": LaunchConfiguration("pbt_update_interval"),
