@@ -152,7 +152,8 @@ def generate_launch_description():
             "gae_lambda": 0.95,
             "bev_channels": 4,
             "bev_size": [200, 200],
-            "proprio_dim": 3,
+            "proprio_dim": 5,
+            "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "reward_forward_scale": 5.0,
             "reward_block_penalty": -1.0,
             "reward_emergency_penalty": -5.0,
@@ -168,9 +169,16 @@ def generate_launch_description():
     ld.add_action(hiwonder_motor_node)
     ld.add_action(TimerAction(period=2.0, actions=[realsense_launch]))
     ld.add_action(TimerAction(period=4.0, actions=[bev_processor_node]))
-    ld.add_action(TimerAction(period=5.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=6.0, actions=[vfc_node]))
-    ld.add_action(TimerAction(period=7.0, actions=[npu_node]))
-    ld.add_action(TimerAction(period=8.0, actions=[ppo_node]))
+    ld.add_action(TimerAction(period=5.0, actions=[lsm9ds1_launch]))
+    ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=7.0, actions=[vfc_node]))
+    ld.add_action(TimerAction(period=8.0, actions=[npu_node]))
+    ld.add_action(TimerAction(period=9.0, actions=[ppo_node]))
 
+    # IMU (LSM9DS1)
+    lsm9ds1_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
+        )
+    )
     return ld
