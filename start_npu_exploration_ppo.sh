@@ -75,17 +75,43 @@ else
 fi
 
 echo "Launching PPO exploration stack..."
-ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
-  max_speed:=${MAX_SPEED} \
-  safety_distance:=${SAFETY_DISTANCE} \
-  > log/ppo_exploration_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+# Prepare logging
+mkdir -p log
+LOG_FILE="log/ppo_exploration_$(date +%Y%m%d_%H%M%S).log"
+{
+  echo "[INFO] $(date) Starting launch with max_speed=${MAX_SPEED} safety_distance=${SAFETY_DISTANCE}"
+  ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
+    max_speed:=${MAX_SPEED} \
+    safety_distance:=${SAFETY_DISTANCE}
+} | tee -a "$LOG_FILE" &
 
 LAUNCH_PID=$!
 
 trap 'echo; echo "🛑 Stopping PPO exploration..."; kill $LAUNCH_PID 2>/dev/null; sleep 2; kill -9 $LAUNCH_PID 2>/dev/null; echo "✅ Stopped"; exit 0' SIGINT SIGTERM
 
 echo "PPO exploration running (PID: $LAUNCH_PID)"
+echo "Log file: $LOG_FILE"
 echo "- Monitor: ros2 topic echo /ppo_status"
 echo "- Safety: ros2 topic echo /safety_monitor_status"
 echo "- Min distance: ros2 topic echo /min_forward_distance"
+
+# Background diagnostics snapshot after startup
+(
+  sleep 12
+  {
+    echo "[DIAG] $(date) Topics present:";
+    ros2 topic list;
+    echo "[DIAG] Nodes:";
+    ros2 node list;
+    echo "[DIAG] /bev/image rate (5s):";
+    timeout 5s ros2 topic hz /bev/image || true;
+    echo "[DIAG] /cmd_vel_ai rate (5s):";
+    timeout 5s ros2 topic hz /cmd_vel_ai || true;
+    echo "[DIAG] /min_forward_distance samples (5s):";
+    timeout 5s ros2 topic echo /min_forward_distance || true;
+    echo "[DIAG] /ppo_status samples (5s):";
+    timeout 5s ros2 topic echo /ppo_status || true;
+    echo "[HINT] grep -E 'PPO updated|RKNN model saved|RKNN reloaded' $LOG_FILE"
+  } | tee -a "$LOG_FILE"
+) &
 wait $LAUNCH_PID

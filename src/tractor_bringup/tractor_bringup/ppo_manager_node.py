@@ -21,6 +21,9 @@ import numpy as np
 import time
 from cv_bridge import CvBridge
 import threading
+import os
+import glob
+import torch
 
 from .ppo_trainer_bev import PPOTrainerBEV
 from .rknn_trainer_bev import RKNNTrainerBEV
@@ -108,6 +111,8 @@ class PPOManagerNode(Node):
         self.reload_cli = self.create_client(Trigger, '/reload_rknn')
 
         self.get_logger().info("PPO Manager initialized (live training, bounded updates)")
+        # Try to load latest PPO checkpoint to resume training
+        self.load_ppo_checkpoint()
 
     def bev_cb(self, msg: Image):
         try:
@@ -179,6 +184,8 @@ class PPOManagerNode(Node):
                 try:
                     # Load actor weights into export helper and convert
                     self.export_helper.model.load_state_dict(self.trainer.actor_state_dict(), strict=False)
+                    # Save PPO checkpoint (.pth) alongside RKNN so training can resume later
+                    self.save_ppo_checkpoint()
                     self.export_helper.convert_to_rknn()
                     self.last_export_time = time.time()
                     # Request NPU to reload RKNN
@@ -197,6 +204,75 @@ class PPOManagerNode(Node):
             self.get_logger().info("RKNN reloaded via NPU node")
         else:
             self.get_logger().warn("RKNN reload service call failed")
+
+    def save_ppo_checkpoint(self):
+        try:
+            model_dir = getattr(self.export_helper, 'model_dir', 'models')
+            os.makedirs(model_dir, exist_ok=True)
+            ts = int(time.time())
+            ckpt_path = os.path.join(model_dir, f"ppo_actor_critic_{ts}.pth")
+            payload = {
+                'actor_state_dict': self.trainer.actor.state_dict(),
+                'critic_state_dict': self.trainer.critic.state_dict(),
+                'log_std': self.trainer.log_std.data.clone().cpu(),
+                'optimizer_state_dict': self.trainer.optimizer.state_dict(),
+                'bev_channels': self.trainer.bev_channels,
+                'bev_size': self.trainer.bev_size,
+                'proprio_dim': self.trainer.proprio_dim,
+                'timestamp': ts,
+            }
+            torch.save(payload, ckpt_path)
+            # Update latest symlink
+            latest = os.path.join(model_dir, "ppo_actor_critic_latest.pth")
+            try:
+                if os.path.islink(latest) or os.path.exists(latest):
+                    os.remove(latest)
+            except Exception:
+                pass
+            try:
+                os.symlink(os.path.basename(ckpt_path), latest)
+            except Exception:
+                # Symlink might fail on some FS; ignore
+                pass
+            self.get_logger().info(f"Saved PPO checkpoint: {ckpt_path}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to save PPO checkpoint: {e}")
+
+    def load_ppo_checkpoint(self):
+        try:
+            model_dir = getattr(self.export_helper, 'model_dir', 'models')
+            latest = os.path.join(model_dir, "ppo_actor_critic_latest.pth")
+            ckpt_path = None
+            if os.path.exists(latest):
+                ckpt_path = latest
+            else:
+                cand = sorted(glob.glob(os.path.join(model_dir, "ppo_actor_critic_*.pth")))
+                if cand:
+                    ckpt_path = cand[-1]
+            if not ckpt_path:
+                self.get_logger().info("No PPO checkpoint found; starting fresh")
+                return
+            payload = torch.load(ckpt_path, map_location='cpu')
+            # Basic shape checks (best-effort)
+            self.trainer.actor.load_state_dict(payload.get('actor_state_dict', {}), strict=False)
+            self.trainer.critic.load_state_dict(payload.get('critic_state_dict', {}), strict=False)
+            log_std = payload.get('log_std')
+            if log_std is not None and hasattr(self.trainer, 'log_std'):
+                with torch.no_grad():
+                    self.trainer.log_std.copy_(log_std.to(self.trainer.log_std.device))
+            opt_state = payload.get('optimizer_state_dict')
+            if opt_state:
+                try:
+                    self.trainer.optimizer.load_state_dict(opt_state)
+                except Exception:
+                    # Optimizer shapes may change; skip silently
+                    pass
+            ts = payload.get('timestamp', 0)
+            if ts:
+                self.last_export_time = float(ts)
+            self.get_logger().info(f"Loaded PPO checkpoint: {ckpt_path}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to load PPO checkpoint: {e}")
 
     def status_timer(self):
         msg = String()
@@ -218,4 +294,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
