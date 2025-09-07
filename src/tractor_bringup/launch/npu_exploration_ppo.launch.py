@@ -130,6 +130,9 @@ def generate_launch_description():
             "enable_multi_metric_evaluation": False,
             "enable_optimization_monitoring": False,
             "enable_reward_based_distill": False,
+            # IMU proprio feed for runtime actor
+            "enable_lsm_imu_proprio": True,
+            "lsm_imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "enable_ground_removal": True,
             "bev_size": [160, 160],
             "bev_range": [6.0, 4.0],
@@ -163,7 +166,7 @@ def generate_launch_description():
             "gae_lambda": 0.95,
             "bev_channels": 4,
             "bev_size": [200, 200],
-            "proprio_dim": 5,
+            "proprio_dim": 21,
             "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "reward_forward_scale": 5.0,
             "reward_block_penalty": -1.0,
