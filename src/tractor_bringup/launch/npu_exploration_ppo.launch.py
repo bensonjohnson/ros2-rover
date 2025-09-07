@@ -160,6 +160,13 @@ def generate_launch_description():
         }]
     )
 
+    # IMU (LSM9DS1)
+    lsm9ds1_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
+        )
+    )
+
     ld = LaunchDescription()
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_safety_distance_cmd)
@@ -175,10 +182,4 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=8.0, actions=[npu_node]))
     ld.add_action(TimerAction(period=9.0, actions=[ppo_node]))
 
-    # IMU (LSM9DS1)
-    lsm9ds1_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
-        )
-    )
     return ld
