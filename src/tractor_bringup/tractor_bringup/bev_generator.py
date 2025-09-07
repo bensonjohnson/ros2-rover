@@ -55,6 +55,15 @@ class BEVGenerator:
         self.ground_update_interval = max(1, int(ground_update_interval))
         self._frame_counter = 0
         self._cached_ground_plane = None  # (normal, d)
+        self._last_ransac_time = 0.0
+        self._last_att_rp = (0.0, 0.0)
+        
+        # IMU-assisted ground model
+        self._imu_up_vec: Optional[np.ndarray] = None  # unit up vector in point frame
+        self._sensor_height_m: float = 0.30  # camera height above ground when level
+        self._imu_bias_m: float = 0.0  # small height bias correction from occasional RANSAC
+        self._imu_ransac_interval_s: float = 4.0
+        self._imu_rp_threshold_deg: float = 3.0
         
         # Optional OpenCL (lazy init)
         self.enable_opencl = bool(enable_opencl)
@@ -70,6 +79,36 @@ class BEVGenerator:
         # Precompute coordinate mappings for efficiency
         self._precompute_coordinate_mappings()
         
+    def set_imu_up(self, up_vec_body: np.ndarray):
+        """Set unit up vector in the same frame as input points (forward-left-up).
+        up_vec_body: shape (3,), will be normalized. If invalid, ignored.
+        """
+        try:
+            v = np.asarray(up_vec_body, dtype=np.float32).reshape(3)
+            n = np.linalg.norm(v)
+            if n > 1e-6:
+                self._imu_up_vec = (v / n).astype(np.float32)
+        except Exception:
+            pass
+
+    def set_sensor_height(self, h_m: float):
+        try:
+            self._sensor_height_m = float(h_m)
+        except Exception:
+            pass
+
+    def set_imu_ground_params(self, ransac_interval_s: float = None, rp_threshold_deg: float = None):
+        if ransac_interval_s is not None:
+            try:
+                self._imu_ransac_interval_s = float(ransac_interval_s)
+            except Exception:
+                pass
+        if rp_threshold_deg is not None:
+            try:
+                self._imu_rp_threshold_deg = float(rp_threshold_deg)
+            except Exception:
+                pass
+
     def _init_opencl(self):
         """Try to initialize OpenCL context and program. Falls back if unavailable."""
         if not self.enable_opencl or self._ocl_ready:
@@ -142,7 +181,13 @@ class BEVGenerator:
         """
         if not self.enable_ground_removal or len(points) < 3:
             return points
-            
+        
+        # Prefer IMU-based ground filtering for most frames
+        if self._imu_up_vec is not None:
+            return self._imu_ground_filter(points)
+
+        # Fallback to RANSAC-only method if IMU not available
+        
         # Update cadence: reuse cached plane most frames
         self._frame_counter += 1
         use_cached = self._cached_ground_plane is not None and (self._frame_counter % self.ground_update_interval != 0)
@@ -464,6 +509,141 @@ class BEVGenerator:
                 pass
         # Default to max height
         return bev_multi[:, :, 0]
+
+    # --- IMU-assisted ground filtering ---
+    def _imu_ground_filter(self, points: np.ndarray) -> np.ndarray:
+        """Fast IMU-assisted ground removal with local percentile fallback.
+        - Computes z_up = dot(n_up, p) + sensor_height + bias.
+        - Removes points close to ground (<= grass tolerance), keeps obstacles above min height.
+        - Applies per-cell 10th percentile adjustment to handle uneven/soft ground (grass).
+        - Runs occasional light RANSAC to correct bias and (optionally) fuse normal.
+        """
+        if len(points) == 0:
+            return points
+        n_up = self._imu_up_vec
+        if n_up is None:
+            return points
+
+        # Signed height above ground using IMU up
+        z_up = points @ n_up.astype(np.float32) + (self._sensor_height_m + self._imu_bias_m)
+
+        # Primary fast mask
+        grass_tol = float(self.grass_height_tolerance)
+        min_obs = float(self.min_obstacle_height)
+        keep_mask = z_up >= np.minimum(min_obs, grass_tol)
+
+        # Local percentile fallback in coarse grid
+        pts_kept = points[keep_mask]
+        if len(pts_kept) == 0:
+            pts_kept = points  # fallback to raw
+
+        try:
+            # Compute 10th percentile of z_up in coarse cells in (x,y)
+            cell = max(self.x_resolution * 4.0, 0.20)  # ~4 pixels or at least 20cm
+            x = points[:, 0]
+            y = points[:, 1]
+            ix = np.floor((x + self.x_range) / cell).astype(np.int32)
+            iy = np.floor((y + self.y_range) / cell).astype(np.int32)
+            key = (ix.astype(np.int64) << 32) ^ (iy.astype(np.int64) & 0xffffffff)
+            # Group indices by cell
+            order = np.argsort(key)
+            key_sorted = key[order]
+            z_sorted = z_up[order]
+            x_sorted = x[order]
+            y_sorted = y[order]
+            unique_keys, starts = np.unique(key_sorted, return_index=True)
+            ends = np.r_[starts[1:], len(key_sorted)]
+            local_keep = np.zeros_like(z_sorted, dtype=bool)
+            for s, e in zip(starts, ends):
+                if e - s < 6:
+                    continue
+                z_cell = z_sorted[s:e]
+                # 10th percentile as local ground
+                p10 = np.percentile(z_cell, 10.0)
+                # Keep if sufficiently above local ground
+                local_keep[s:e] = (z_cell - p10) >= np.minimum(min_obs, grass_tol)
+            # Map back to original order
+            back = np.empty_like(local_keep)
+            back[order] = local_keep
+            keep_mask = keep_mask | back
+        except Exception:
+            pass
+
+        filtered = points[keep_mask]
+        if len(filtered) == 0:
+            filtered = points  # ensure non-empty fallback
+
+        # Occasional light RANSAC to refine bias/normal
+        self._maybe_update_bias_with_ransac(points, z_up, n_up)
+        return filtered
+
+    def _maybe_update_bias_with_ransac(self, points: np.ndarray, z_up: np.ndarray, n_up: np.ndarray):
+        now = time.time()
+        do_time = (now - self._last_ransac_time) >= float(self._imu_ransac_interval_s)
+        # Estimate roll/pitch from n_up relative to canonical up [0,0,1]
+        try:
+            # roll/pitch angles approximation from up vector
+            ux, uy, uz = float(n_up[0]), float(n_up[1]), float(n_up[2])
+            pitch = np.degrees(np.arctan2(-ux, max(uz, 1e-6)))
+            roll = np.degrees(np.arctan2(uy, max(uz, 1e-6)))
+        except Exception:
+            roll = pitch = 0.0
+        dr = abs(roll - self._last_att_rp[0])
+        dp = abs(pitch - self._last_att_rp[1])
+        do_att = (dr > self._imu_rp_threshold_deg) or (dp > self._imu_rp_threshold_deg)
+        if not (do_time or do_att):
+            return
+        self._last_ransac_time = now
+        self._last_att_rp = (roll, pitch)
+        try:
+            # Sample subset for speed
+            N = len(points)
+            if N < 100:
+                return
+            idx = np.random.choice(N, size=min(2000, N), replace=False)
+            P = points[idx]
+            best_inliers = []
+            best_plane = None
+            iters = int(min(max(30, self.ground_ransac_iterations // 3), 35))
+            thr = float(max(self.ground_ransac_threshold, 0.04))
+            for _ in range(iters):
+                ids = np.random.choice(len(P), 3, replace=False)
+                a, b, c = P[ids]
+                n = np.cross(b - a, c - a)
+                nrm = np.linalg.norm(n)
+                if nrm < 1e-6:
+                    continue
+                n = n / nrm
+                # Ensure normal points roughly up (same hemisphere as n_up)
+                if np.dot(n, n_up) < 0:
+                    n = -n
+                d = -np.dot(n, a)
+                dist = np.abs(P @ n + d)
+                inl = np.where(dist < thr)[0]
+                if len(inl) > len(best_inliers):
+                    best_inliers = inl
+                    best_plane = (n, d)
+            if best_plane is None or len(best_inliers) < 50:
+                return
+            n_hat, d_hat = best_plane
+            # Update bias so that plane height along n_up is at zero for ground
+            # For points p on plane: n_hat·p + d_hat = 0. We want z_up = n_up·p + (h + bias) ≈ 0.
+            # Approximate bias by projecting plane offset along n_up using centroid of inliers.
+            Q = P[best_inliers]
+            if len(Q) > 0:
+                p0 = np.mean(Q, axis=0)
+                # Height above ground of p0 by plane model is 0; by IMU model is n_up·p0 + (h + bias)
+                est_bias = -(p0 @ n_up) - self._sensor_height_m
+                # Conservative EMA update of bias
+                alpha = 0.2
+                self._imu_bias_m = (1 - alpha) * self._imu_bias_m + alpha * est_bias
+                # Optionally blend normal a bit toward plane normal to reduce tilt drift
+                blend = 0.1
+                n_blend = (1 - blend) * n_up + blend * n_hat
+                n_blend = n_blend / max(np.linalg.norm(n_blend), 1e-6)
+                self._imu_up_vec = n_blend.astype(np.float32)
+        except Exception:
+            return
 
 # Example usage and testing
 if __name__ == "__main__":

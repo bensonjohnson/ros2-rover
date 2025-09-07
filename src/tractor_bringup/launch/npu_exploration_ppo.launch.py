@@ -76,6 +76,13 @@ def generate_launch_description():
             "ground_ransac_iterations": 40,
             "ground_ransac_threshold": 0.06,
             "bev_enable_opencl": True,
+            # IMU-assisted ground removal
+            "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
+            "sensor_height_m": 0.17,
+            "imu_ransac_interval_s": 4.0,
+            "imu_roll_pitch_threshold_deg": 3.0,
+            "min_obstacle_height_m": 0.25,
+            "grass_height_tolerance_m": 0.15,
         }]
     )
 

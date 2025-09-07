@@ -10,7 +10,7 @@ BEV Processor Node
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2, Image
+from sensor_msgs.msg import PointCloud2, Image, Imu
 from std_msgs.msg import Float32, String
 import numpy as np
 import struct
@@ -33,6 +33,11 @@ class BEVProcessorNode(Node):
         self.declare_parameter('pointcloud_topic', '/camera/camera/depth/color/points')
         self.declare_parameter('bev_image_topic', '/bev/image')
         self.declare_parameter('publish_rate_hz', 10.0)
+        # IMU-assisted ground removal
+        self.declare_parameter('imu_topic', '/lsm9ds1_imu_publisher/imu/data')
+        self.declare_parameter('sensor_height_m', 0.17)
+        self.declare_parameter('imu_ransac_interval_s', 4.0)
+        self.declare_parameter('imu_roll_pitch_threshold_deg', 3.0)
         # BEV parameters
         self.declare_parameter('bev_size', [200, 200])
         self.declare_parameter('bev_range', [10.0, 10.0])
@@ -42,6 +47,9 @@ class BEVProcessorNode(Node):
         self.declare_parameter('ground_ransac_threshold', 0.05)
         self.declare_parameter('bev_ground_update_interval', 10)
         self.declare_parameter('bev_enable_opencl', True)
+        # Obstacle/grass thresholds
+        self.declare_parameter('min_obstacle_height_m', 0.25)
+        self.declare_parameter('grass_height_tolerance_m', 0.15)
 
         self.pc_topic = str(self.get_parameter('pointcloud_topic').value)
         self.bev_topic = str(self.get_parameter('bev_image_topic').value)
@@ -55,6 +63,12 @@ class BEVProcessorNode(Node):
         ground_ransac_threshold = float(self.get_parameter('ground_ransac_threshold').value)
         ground_update_interval = int(self.get_parameter('bev_ground_update_interval').value)
         enable_opencl = bool(self.get_parameter('bev_enable_opencl').value)
+        imu_topic = str(self.get_parameter('imu_topic').value)
+        sensor_height_m = float(self.get_parameter('sensor_height_m').value)
+        imu_ransac_interval_s = float(self.get_parameter('imu_ransac_interval_s').value)
+        imu_rp_thresh = float(self.get_parameter('imu_roll_pitch_threshold_deg').value)
+        min_ob_h = float(self.get_parameter('min_obstacle_height_m').value)
+        grass_tol = float(self.get_parameter('grass_height_tolerance_m').value)
 
         # BEV generator
         self.bev = BEVGenerator(
@@ -66,7 +80,13 @@ class BEVProcessorNode(Node):
             ground_ransac_threshold=ground_ransac_threshold,
             ground_update_interval=ground_update_interval,
             enable_opencl=enable_opencl,
+            enable_grass_filtering=True,
+            grass_height_tolerance=grass_tol,
+            min_obstacle_height=min_ob_h,
         )
+        # Configure IMU-assisted ground filtering
+        self.bev.set_sensor_height(sensor_height_m)
+        self.bev.set_imu_ground_params(ransac_interval_s=imu_ransac_interval_s, rp_threshold_deg=imu_rp_thresh)
 
         self.bridge = CvBridge()
         self.last_pub_time = self.get_clock().now()
@@ -79,13 +99,42 @@ class BEVProcessorNode(Node):
         self.min_dist_pub = self.create_publisher(Float32, '/bev_min_forward_distance', 5)
         self.status_pub = self.create_publisher(String, '/bev_processor_status', 2)
 
-        # Subscriber
+        # Subscribers
         self.pc_sub = self.create_subscription(PointCloud2, self.pc_topic, self.pc_callback, qos_profile_sensor_data)
+        self.imu_sub = self.create_subscription(Imu, imu_topic, self.imu_callback, qos_profile_sensor_data)
 
         # Timer to publish status
         self.create_timer(1.0, self.publish_status)
 
         self.get_logger().info(f"BEV Processor active. Subscribing to {self.pc_topic}, publishing {self.bev_topic}")
+
+        # IMU cache
+        self._last_up = None
+        self._last_imu_time = None
+        self.get_logger().info(f"IMU-assisted ground filter: imu_topic={imu_topic}, sensor_height={sensor_height_m:.2f}m")
+
+    def imu_callback(self, msg: Imu):
+        try:
+            q = msg.orientation
+            # Rotation from body to world; up in world is [0,0,1]
+            # Body up vector = R^T * [0,0,1]
+            w, x, y, z = q.w, q.x, q.y, q.z
+            # Rotation matrix elements
+            # Using standard quaternion to rotation matrix
+            R = np.array([
+                [1 - 2*(y*y + z*z),     2*(x*y - z*w),         2*(x*z + y*w)],
+                [2*(x*y + z*w),         1 - 2*(x*x + z*z),     2*(y*z - x*w)],
+                [2*(x*z - y*w),         2*(y*z + x*w),         1 - 2*(x*x + y*y)]
+            ], dtype=np.float32)
+            up_world = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            up_body = R.T @ up_world
+            n = up_body / max(np.linalg.norm(up_body), 1e-6)
+            self._last_up = n.astype(np.float32)
+            self._last_imu_time = self.get_clock().now()
+            # Provide to BEV generator
+            self.bev.set_imu_up(self._last_up)
+        except Exception as e:
+            self.get_logger().debug(f"IMU processing failed: {e}")
 
     def pc_callback(self, msg: PointCloud2):
         # Rate limit by publish_rate
@@ -138,6 +187,10 @@ class BEVProcessorNode(Node):
             age = (self.get_clock().now() - self.latest_bev_time).nanoseconds / 1e9
         status.data = f"BEV: age={age:.2f}s, pub_rate={self.publish_rate}Hz"
         self.status_pub.publish(status)
+
+    # TODO(organized-depth fast path): add direct depth->BEV projection to avoid PointCloud2 construction
+    # This will compute per-pixel 3D rays and project directly into the BEV histogram, skipping point cloud builds.
+    # Keep on roadmap to push BEV toward 10–12 Hz on CPU.
 
     def _early_roi_and_voxel(self, pts: np.ndarray) -> np.ndarray:
         """Apply an early ROI crop and voxel downsample in (x_fwd, y_left) to reduce compute.
