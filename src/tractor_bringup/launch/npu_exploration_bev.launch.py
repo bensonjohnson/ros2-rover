@@ -188,6 +188,33 @@ def generate_launch_description():
         description="Enable OpenCL offload for BEV histogramming (true/false)",
     )
 
+    # IMU-assisted ground removal args
+    declare_sensor_height_cmd = DeclareLaunchArgument(
+        "sensor_height_m",
+        default_value="0.17",
+        description="Sensor height above ground (meters)",
+    )
+    declare_imu_ransac_interval_cmd = DeclareLaunchArgument(
+        "imu_ransac_interval_s",
+        default_value="4.0",
+        description="Interval (s) for light RANSAC bias correction",
+    )
+    declare_imu_rp_thresh_cmd = DeclareLaunchArgument(
+        "imu_roll_pitch_threshold_deg",
+        default_value="3.0",
+        description="Roll/pitch change (deg) triggering RANSAC correction",
+    )
+    declare_min_ob_h_cmd = DeclareLaunchArgument(
+        "min_obstacle_height_m",
+        default_value="0.25",
+        description="Minimum height above ground to treat as obstacle (m)",
+    )
+    declare_grass_tol_cmd = DeclareLaunchArgument(
+        "grass_height_tolerance_m",
+        default_value="0.15",
+        description="Grass height tolerance (m) below which to ignore",
+    )
+
     # 1. Robot Description (TF only)
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -257,6 +284,13 @@ def generate_launch_description():
                 "enable_ground_removal": LaunchConfiguration("enable_ground_removal"),
                 "bev_ground_update_interval": LaunchConfiguration("bev_ground_update_interval"),
                 "bev_enable_opencl": LaunchConfiguration("bev_enable_opencl"),
+                # IMU-assisted ground removal
+                "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
+                "sensor_height_m": LaunchConfiguration("sensor_height_m"),
+                "imu_ransac_interval_s": LaunchConfiguration("imu_ransac_interval_s"),
+                "imu_roll_pitch_threshold_deg": LaunchConfiguration("imu_roll_pitch_threshold_deg"),
+                "min_obstacle_height_m": LaunchConfiguration("min_obstacle_height_m"),
+                "grass_height_tolerance_m": LaunchConfiguration("grass_height_tolerance_m"),
             }
         ],
     )
@@ -373,6 +407,12 @@ def generate_launch_description():
     ld.add_action(declare_enable_ground_removal_cmd)
     ld.add_action(declare_bev_ground_update_interval_cmd)
     ld.add_action(declare_bev_enable_opencl_cmd)
+    # IMU-assisted ground removal args
+    ld.add_action(declare_sensor_height_cmd)
+    ld.add_action(declare_imu_ransac_interval_cmd)
+    ld.add_action(declare_imu_rp_thresh_cmd)
+    ld.add_action(declare_min_ob_h_cmd)
+    ld.add_action(declare_grass_tol_cmd)
 
     # Core system - immediate start
     ld.add_action(robot_description_launch)
