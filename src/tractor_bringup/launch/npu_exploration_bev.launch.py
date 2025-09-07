@@ -225,14 +225,14 @@ def generate_launch_description():
             "enable_depth": "true",
             "enable_sync": "false",  # Disable sync for faster processing
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x30",  # 30 FPS to reduce CPU load
-            "rgb_camera.color_profile": "424x240x30",  # Match depth profile
+            "depth_module.depth_profile": "320x240x30",
+            "rgb_camera.color_profile": "320x240x30",
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
             # Post-processing filters (decimation reduces point cloud density significantly)
             "decimation_filter.enable": "true",
-            "decimation_filter.filter_magnitude": "2",
+            "decimation_filter.filter_magnitude": "3",
             "pointcloud.stream_filter": "2",  # Filter to depth only 
             "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
         }.items(),

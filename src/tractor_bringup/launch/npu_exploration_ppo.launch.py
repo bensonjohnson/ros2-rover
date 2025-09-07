@@ -68,11 +68,13 @@ def generate_launch_description():
             "pointcloud_topic": "/camera/camera/depth/color/points",
             "bev_image_topic": "/bev/image",
             "publish_rate_hz": 10.0,
-            "bev_size": [200, 200],
-            "bev_range": [10.0, 10.0],
+            "bev_size": [160, 160],
+            "bev_range": [6.0, 4.0],
             "bev_height_channels": [0.2, 1.0],
             "enable_ground_removal": True,
-            "bev_ground_update_interval": 10,
+            "bev_ground_update_interval": 20,
+            "ground_ransac_iterations": 40,
+            "ground_ransac_threshold": 0.06,
             "bev_enable_opencl": True,
         }]
     )
@@ -91,7 +93,7 @@ def generate_launch_description():
             "use_shared_bev": True,
             "bev_image_topic": "/bev/image",
             "bev_freshness_timeout": 0.5,
-            "bev_x_range": 10.0,
+            "bev_x_range": 6.0,
             "forward_min_distance": 0.05,
         }]
     )
@@ -122,9 +124,11 @@ def generate_launch_description():
             "enable_optimization_monitoring": False,
             "enable_reward_based_distill": False,
             "enable_ground_removal": True,
-            "bev_size": [200, 200],
-            "bev_range": [10.0, 10.0],
+            "bev_size": [160, 160],
+            "bev_range": [6.0, 4.0],
             "bev_height_channels": [0.2, 1.0],
+            "ground_ransac_iterations": 40,
+            "ground_ransac_threshold": 0.06,
         }],
         remappings=[
             ("point_cloud", "/camera/camera/depth/color/points"),
