@@ -15,7 +15,7 @@ align_depth.enable: true
 
 # Depth camera settings - minimal bandwidth configuration
 depth_module.enable: true
-depth_module.profile: "424x240x15"  # Valid profile format: widthxheightxfps
+depth_module.profile: "320x240x30"  # Valid profile format: widthxheightxfps
 depth_module.enable_auto_exposure: true
 depth_module.auto_exposure_limit: 100000
 depth_module.emitter_enabled: 0 # Disabled to reduce USB bandwidth (0=off, 1=on, 2=auto)
@@ -45,7 +45,7 @@ enable_infra1: false
 enable_infra2: false
 
 # Clip distance for outdoor use
-clip_distance: 8.0
+clip_distance: 6.0
 
 # IMU covariance settings
 linear_accel_cov: 0.01
@@ -53,7 +53,7 @@ angular_velocity_cov: 0.01
 
 # Quality settings - enable decimation to reduce point count
 decimation_filter.enable: true
-decimation_filter.magnitude: 2  # Reduce point cloud density for performance
+decimation_filter.magnitude: 3  # Reduce point cloud density for performance
 temporal_filter.enable: true
 spatial_filter.enable: true
 hole_filling_filter.enable: true
