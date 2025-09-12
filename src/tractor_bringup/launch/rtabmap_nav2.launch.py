@@ -102,12 +102,30 @@ def generate_launch_description():
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
+            # Keep name+namespace as "camera" to match existing topics (/camera/camera/...)
             "use_sim_time": use_sim_time,
             "camera_name": "camera",
             "camera_namespace": "camera",
-            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_config.yaml"),
+            # Core enablements
             "enable_pointcloud": "true",
             "align_depth": "true",
+            "device_type": "435i",
+            "enable_color": "true",
+            "enable_depth": "true",
+            "enable_sync": "true",
+            # Profiles (reduced bandwidth)
+            "depth_module.depth_profile": "424x240x30",
+            "rgb_camera.color_profile": "424x240x30",
+            # Disable camera IMU to save bandwidth (we use LSM9DS1 IMU)
+            "enable_imu": "false",
+            "enable_gyro": "false",
+            "enable_accel": "false",
+            # Filters
+            "decimation_filter.enable": "true",
+            "decimation_filter.filter_magnitude": "3",
+            "spatial_filter.enable": "true",
+            "temporal_filter.enable": "true",
+            "hole_filling_filter.enable": "true",
         }.items(),
     )
 
@@ -119,9 +137,9 @@ def generate_launch_description():
         output="screen",
         parameters=[{"approx_sync": True, "queue_size": 30, "use_sim_time": use_sim_time}],
         remappings=[
-            ("rgb/image", "/camera/color/image_raw"),
-            ("depth/image", "/camera/aligned_depth_to_color/image_raw"),
-            ("rgb/camera_info", "/camera/color/camera_info"),
+            ("rgb/image", "/camera/camera/color/image_raw"),
+            ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
+            ("rgb/camera_info", "/camera/camera/color/camera_info"),
         ],
     )
 
