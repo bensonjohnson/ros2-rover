@@ -1,0 +1,91 @@
+# RTAB-Map parameters tuned for outdoor RGB-D (D435i) without GPS
+# Uses external wheel/IMU EKF odometry on /odometry/filtered as prior
+
+rtabmap:
+  ros__parameters:
+    use_sim_time: false
+
+    # Frames and TF
+    frame_id: "base_link"
+    map_frame_id: "map"
+    odom_frame_id: "odom"
+    publish_tf: true
+    tf_delay: 0.05
+
+    # Input selection: use RGBD sync + external odometry
+    subscribe_rgbd: true
+    subscribe_depth: false
+    subscribe_rgb: false
+    subscribe_stereo: false
+    subscribe_scan: false
+    subscribe_scan_cloud: false
+    subscribe_user_data: false
+    subscribe_odom_info: false
+    subscribe_imu: true
+
+    # External odom topic (from robot_localization EKF)
+    odom_topic: "/odometry/filtered"
+
+    # Sync and queueing
+    approx_sync: true
+    queue_size: 30
+
+    # Keyframe / update thresholds (reduce drift, keep CPU reasonable)
+    RGBD/LinearUpdate: "0.15"        # meters
+    RGBD/AngularUpdate: "0.10"       # radians
+    RGBD/NewMapOdomChangeDistance: "0.0"
+    RGBD/OptimizeFromGraphEnd: "true"
+
+    # Visual features
+    Kp/DetectorStrategy: "6"         # GFTT+BRIEF (fast, robust)
+    Kp/MaxFeatures: "800"
+    Vis/MinInliers: "12"
+    Vis/EstimationType: "1"         # PnP
+    Vis/PnPReprojError: "3.0"
+
+    # Memory / loop closure
+    Mem/IncrementalMemory: "true"
+    Mem/InitWMWithAllNodes: "false"
+    Mem/STMSize: "30"
+    RGBD/LoopClosureReextractFeatures: "true"
+    RGBD/ProximityBySpace: "true"    # Helps in low-texture areas
+    RGBD/ProximityMaxGraphDepth: "50"
+    RGBD/NeighborLinkRefining: "true"
+
+    # IMU fusion (gravity alignment)
+    Vh/Strategy: "0"
+    imu_topic: "/imu/data"
+    Mem/UseOdomGravity: "true"
+
+    # Grid map (2D occupancy) published on /map
+    Grid/FromDepth: "true"
+    Grid/DepthDecimation: "3"
+    Grid/RangeMax: "6.0"
+    Grid/MinClusterSize: "10"
+    Grid/MaxGroundAngle: "15"
+    Grid/NormalK: "20"
+    Grid/FlatObstaclesDetected: "true"
+    Grid/NoiseFilteringRadius: "0.08"
+    Grid/NoiseFilteringMinNeighbors: "2"
+    Grid/FootprintLength: "0.40"     # adjust to robot footprint
+    Grid/FootprintWidth: "0.30"
+    Grid/MaxObstacleHeight: "0.80"
+    Grid/ClusterRadius: "0.2"
+    Grid/Scan2dUnknownSpaceFilled: "true"
+    Grid/PreVoxelFiltering: "true"
+    Grid/PreVoxelSize: "0.05"
+
+    # Database
+    Rtabmap/TimeThr: "0"
+    Rtabmap/DetectionRate: "5.0"      # Hz
+    Rtabmap/StartNewMapOnLoopClosure: "false"
+    Rtabmap/CreateIntermediateNodes: "true"
+    Database/Path: "~/.ros/rtabmap.db"
+
+    # Performance
+    Reg/Strategy: "1"                 # ICP+Vis
+    Icp/MaxCorrespondenceDistance: "0.2"
+    Icp/PointToPlane: "true"
+    Icp/VoxelSize: "0.07"
+    Odom/ResetCountdown: "0"
+

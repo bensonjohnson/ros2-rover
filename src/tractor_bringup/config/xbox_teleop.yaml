@@ -1,0 +1,24 @@
+joy_node:
+  ros__parameters:
+    deadzone: 0.05
+    autorepeat_rate: 20.0
+
+teleop_twist_joy:
+  ros__parameters:
+    enable_button: 5         # RB acts as deadman (hold to move)
+    enable_turbo_button: 4   # LB for turbo
+
+    axis_linear:
+      x: 1                   # Left stick vertical
+    scale_linear:
+      x: 0.25                # m/s normal
+    scale_linear_turbo:
+      x: 0.35
+
+    axis_angular:
+      yaw: 0                 # Left stick horizontal
+    scale_angular:
+      yaw: 0.5               # rad/s normal
+    scale_angular_turbo:
+      yaw: 0.8
+
