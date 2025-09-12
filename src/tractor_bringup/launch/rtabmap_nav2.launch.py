@@ -27,6 +27,7 @@ def generate_launch_description():
     with_autonomous_mapper = LaunchConfiguration("with_autonomous_mapper")
     with_motor = LaunchConfiguration("with_motor")
     with_rtabmap = LaunchConfiguration("with_rtabmap")
+    with_safety = LaunchConfiguration("with_safety")
 
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use sim time"
@@ -53,6 +54,9 @@ def generate_launch_description():
     )
     declare_with_rtabmap_cmd = DeclareLaunchArgument(
         "with_rtabmap", default_value="true", description="Start RTAB-Map nodes"
+    )
+    declare_with_safety_cmd = DeclareLaunchArgument(
+        "with_safety", default_value="true", description="Start safety monitor"
     )
 
     # 1) Robot description
@@ -266,10 +270,15 @@ def generate_launch_description():
             {
                 "use_sim_time": use_sim_time,
                 "max_speed_limit": max_speed,
-                "emergency_stop_distance": 0.025,
-                "warning_distance": 0.15,
+                "emergency_stop_distance": 0.25,
+                "hard_stop_distance": 0.08,
+                "warning_distance": 0.20,
+                "pointcloud_topic": "/camera/camera/depth/color/points",
+                "input_cmd_topic": "cmd_vel_nav",
+                "output_cmd_topic": "cmd_vel_safe",
             }
         ],
+        condition=IfCondition(with_safety),
     )
 
     foxglove_bridge_node = Node(
@@ -290,6 +299,7 @@ def generate_launch_description():
     ld.add_action(declare_with_autonomous_mapper_cmd)
     ld.add_action(declare_with_motor_cmd)
     ld.add_action(declare_with_rtabmap_cmd)
+    ld.add_action(declare_with_safety_cmd)
 
     # Core
     ld.add_action(robot_description_launch)

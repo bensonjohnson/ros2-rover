@@ -23,6 +23,7 @@ MODE=${1:-mapping}
 WITH_TELEOP=false
 WITH_AUTO=true
 WITH_MOTOR=true
+WITH_SAFETY=true
 
 for arg in "$@"; do
   case "$arg" in
@@ -32,6 +33,8 @@ for arg in "$@"; do
       WITH_AUTO=false ;;
     --no-motor)
       WITH_MOTOR=false ;;
+    --no-safety)
+      WITH_SAFETY=false ;;
   esac
 done
 
@@ -39,12 +42,12 @@ if [[ "$MODE" == "mapping" ]]; then
   echo "Launching RTAB-Map mapping mode (global_frame=odom)..."
   ros2 launch tractor_bringup rtabmap_nav2.launch.py \
     nav2_params_file:=`ros2 pkg prefix tractor_bringup`/share/tractor_bringup/config/nav2_params.yaml \
-    with_teleop:=${WITH_TELEOP} with_autonomous_mapper:=${WITH_AUTO} with_motor:=${WITH_MOTOR}
+    with_teleop:=${WITH_TELEOP} with_autonomous_mapper:=${WITH_AUTO} with_motor:=${WITH_MOTOR} with_safety:=${WITH_SAFETY}
 elif [[ "$MODE" == "localization" ]]; then
   echo "Launching RTAB-Map localization mode (global_frame=map + static layer)..."
   ros2 launch tractor_bringup rtabmap_nav2.launch.py \
     nav2_params_file:=`ros2 pkg prefix tractor_bringup`/share/tractor_bringup/config/nav2_params_localization.yaml \
-    with_teleop:=${WITH_TELEOP} with_autonomous_mapper:=${WITH_AUTO} with_motor:=${WITH_MOTOR}
+    with_teleop:=${WITH_TELEOP} with_autonomous_mapper:=${WITH_AUTO} with_motor:=${WITH_MOTOR} with_safety:=${WITH_SAFETY}
 else
   echo "Unknown mode: $MODE (use 'mapping' or 'localization')" >&2
   exit 1
