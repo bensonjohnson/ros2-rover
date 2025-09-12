@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
+# Ensure ROS 2 + workspace environment is sourced so pluginlib can find image_transport plugins
+if [ -f "/opt/ros/jazzy/setup.bash" ]; then
+  source /opt/ros/jazzy/setup.bash
+fi
+
+if [ -f "install/setup.bash" ]; then
+  source install/setup.bash
+else
+  echo "Workspace not built yet; building tractor_bringup (fast)..."
+  colcon build --packages-select tractor_bringup --cmake-args -DCMAKE_BUILD_TYPE=Release
+  source install/setup.bash
+fi
+
 # Simple starter for RTAB-Map + Nav2
 # Usage:
 #   ./start_rtabmap_nav2.sh mapping        # builds map, global frame=odom
