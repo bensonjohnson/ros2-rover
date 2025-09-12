@@ -36,8 +36,9 @@ rtabmap:
     RGBD/NewMapOdomChangeDistance: "0.0"
     RGBD/OptimizeFromGraphEnd: "true"
 
-    # Visual features
-    Kp/DetectorStrategy: "6"         # GFTT+BRIEF (fast, robust)
+    # Visual features (use ORB only; works without xfeatures2d)
+    Kp/DetectorStrategy: "7"         # 7 = ORB
+    Vis/FeatureType: "7"            # 7 = ORB
     Kp/MaxFeatures: "800"
     Vis/MinInliers: "12"
     Vis/EstimationType: "1"         # PnP
@@ -56,6 +57,7 @@ rtabmap:
     Vh/Strategy: "0"
     imu_topic: "/imu/data"
     Mem/UseOdomGravity: "true"
+    Mem/UseOdomFeatures: "false"
 
     # Grid map (2D occupancy) published on /map
     Grid/FromDepth: "true"
@@ -88,4 +90,3 @@ rtabmap:
     Icp/PointToPlane: "true"
     Icp/VoxelSize: "0.07"
     Odom/ResetCountdown: "0"
-

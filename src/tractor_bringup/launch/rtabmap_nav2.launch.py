@@ -259,7 +259,7 @@ def generate_launch_description():
 
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="safety_monitor.py",
+        executable="simple_safety_monitor.py",
         name="safety_monitor",
         output="screen",
         parameters=[
