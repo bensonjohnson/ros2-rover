@@ -135,7 +135,7 @@ def generate_launch_description():
 
     # 6) RTAB-Map RGBD sync
     rgbd_sync_node = Node(
-        package="rtabmap_ros",
+        package="rtabmap_sync",
         executable="rgbd_sync",
         name="rgbd_sync",
         output="screen",
@@ -150,7 +150,7 @@ def generate_launch_description():
 
     # 7) RTAB-Map core
     rtabmap_node = Node(
-        package="rtabmap_ros",
+        package="rtabmap_slam",
         executable="rtabmap",
         name="rtabmap",
         output="screen",
