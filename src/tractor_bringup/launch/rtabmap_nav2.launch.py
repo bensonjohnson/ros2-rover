@@ -25,6 +25,7 @@ def generate_launch_description():
     nav2_params_file = LaunchConfiguration("nav2_params_file")
     with_teleop = LaunchConfiguration("with_teleop")
     with_autonomous_mapper = LaunchConfiguration("with_autonomous_mapper")
+    with_motor = LaunchConfiguration("with_motor")
 
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use sim time"
@@ -46,6 +47,9 @@ def generate_launch_description():
     declare_with_autonomous_mapper_cmd = DeclareLaunchArgument(
         "with_autonomous_mapper", default_value="true", description="Start autonomous mapper"
     )
+    declare_with_motor_cmd = DeclareLaunchArgument(
+        "with_motor", default_value="true", description="Start motor driver"
+    )
 
     # 1) Robot description
     robot_description_launch = IncludeLaunchDescription(
@@ -66,6 +70,7 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time},
         ],
         remappings=[("cmd_vel", "cmd_vel_safe")],
+        condition=IfCondition(with_motor),
     )
 
     # 3) Sensors
@@ -259,6 +264,7 @@ def generate_launch_description():
     ld.add_action(declare_nav2_params_cmd)
     ld.add_action(declare_with_teleop_cmd)
     ld.add_action(declare_with_autonomous_mapper_cmd)
+    ld.add_action(declare_with_motor_cmd)
 
     # Core
     ld.add_action(robot_description_launch)
