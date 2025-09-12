@@ -26,6 +26,7 @@ def generate_launch_description():
     with_teleop = LaunchConfiguration("with_teleop")
     with_autonomous_mapper = LaunchConfiguration("with_autonomous_mapper")
     with_motor = LaunchConfiguration("with_motor")
+    with_rtabmap = LaunchConfiguration("with_rtabmap")
 
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use sim time"
@@ -49,6 +50,9 @@ def generate_launch_description():
     )
     declare_with_motor_cmd = DeclareLaunchArgument(
         "with_motor", default_value="true", description="Start motor driver"
+    )
+    declare_with_rtabmap_cmd = DeclareLaunchArgument(
+        "with_rtabmap", default_value="true", description="Start RTAB-Map nodes"
     )
 
     # 1) Robot description
@@ -141,6 +145,7 @@ def generate_launch_description():
             ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
             ("rgb/camera_info", "/camera/camera/color/camera_info"),
         ],
+        condition=IfCondition(with_rtabmap),
     )
 
     # 7) RTAB-Map core
@@ -157,6 +162,7 @@ def generate_launch_description():
             ("rgbd_image", "rgbd_image"),
             ("imu", "/imu/data"),
         ],
+        condition=IfCondition(with_rtabmap),
     )
 
     # 8) Nav2 stack (mapping mode: odom global frame)
@@ -283,6 +289,7 @@ def generate_launch_description():
     ld.add_action(declare_with_teleop_cmd)
     ld.add_action(declare_with_autonomous_mapper_cmd)
     ld.add_action(declare_with_motor_cmd)
+    ld.add_action(declare_with_rtabmap_cmd)
 
     # Core
     ld.add_action(robot_description_launch)
