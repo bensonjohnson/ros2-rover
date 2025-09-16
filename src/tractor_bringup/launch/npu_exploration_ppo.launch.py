@@ -178,6 +178,10 @@ def generate_launch_description():
             "low_activity_angular_threshold": 0.1,
             "export_wait_timeout_sec": 15.0,
             "rknn_drift_tolerance": 0.15,
+            "min_effective_linear": 0.03,
+            "min_effective_angular": 0.05,
+            "small_action_penalty": -0.3,
+            "small_action_patience": 3,
         }]
     )
 

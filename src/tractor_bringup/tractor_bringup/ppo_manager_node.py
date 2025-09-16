@@ -66,6 +66,10 @@ class PPOManagerNode(Node):
         self.declare_parameter('low_activity_angular_threshold', 0.1)
         self.declare_parameter('export_wait_timeout_sec', 15.0)
         self.declare_parameter('rknn_drift_tolerance', 0.15)
+        self.declare_parameter('min_effective_linear', 0.03)
+        self.declare_parameter('min_effective_angular', 0.05)
+        self.declare_parameter('small_action_penalty', -0.3)
+        self.declare_parameter('small_action_patience', 3)
 
         self.bev_topic = self.get_parameter('bev_image_topic').value
         self.update_interval = float(self.get_parameter('update_interval_sec').value)
@@ -78,6 +82,10 @@ class PPOManagerNode(Node):
         self.low_activity_angular_threshold = float(self.get_parameter('low_activity_angular_threshold').value)
         self.export_wait_timeout = float(self.get_parameter('export_wait_timeout_sec').value)
         self.rknn_drift_tolerance = float(self.get_parameter('rknn_drift_tolerance').value)
+        self.min_effective_linear = float(self.get_parameter('min_effective_linear').value)
+        self.min_effective_angular = float(self.get_parameter('min_effective_angular').value)
+        self.small_action_penalty = float(self.get_parameter('small_action_penalty').value)
+        self.small_action_patience = max(1, int(self.get_parameter('small_action_patience').value))
 
         C = int(self.get_parameter('bev_channels').value)
         bev_size = self.get_parameter('bev_size').value
@@ -143,6 +151,7 @@ class PPOManagerNode(Node):
         self.pending_export = None
         self.defer_start_time = None
         self.last_validation_report = None
+        self.small_action_streak = 0
 
         # Subscriptions
         self.create_subscription(Image, self.bev_topic, self.bev_cb, qos_profile_sensor_data)
@@ -208,6 +217,18 @@ class PPOManagerNode(Node):
         # Penalty if trying to go forward while blocked very near
         if self.last_action[0] > 0.0 and self.min_forward <= 0.25:
             r += self.reward_block_penalty
+        # Penalize ineffective tiny commands that fail to move the robot
+        if (abs(self.last_action[0]) < self.min_effective_linear and
+                abs(self.last_action[1]) < self.min_effective_angular and
+                abs(self.current_linear) < self.min_effective_linear * 0.5 and
+                abs(self.current_angular) < self.min_effective_angular and
+                self.min_forward > self.min_effective_linear):
+            self.small_action_streak = min(self.small_action_streak + 1, self.small_action_patience)
+        else:
+            self.small_action_streak = 0
+        if self.small_action_streak >= self.small_action_patience:
+            r += self.small_action_penalty
+            self.small_action_streak = 0
         return r
 
     def maybe_add_transition(self):
@@ -605,7 +626,10 @@ class PPOManagerNode(Node):
 
     def status_timer(self):
         msg = String()
-        msg.data = f"PPO | buf={self.trainer.buffer.size} last_export={int(time.time()-self.last_export_time)}s ago"
+        msg.data = (
+            f"PPO | buf={self.trainer.buffer.size} last_export={int(time.time()-self.last_export_time)}s "
+            f"small_action_streak={self.small_action_streak}"
+        )
         self.status_pub.publish(msg)
 
     def check_export_gate(self):
