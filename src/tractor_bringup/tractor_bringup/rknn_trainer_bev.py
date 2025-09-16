@@ -131,7 +131,8 @@ class RKNNTrainerBEV:
     def __init__(self, model_dir="models", bev_channels: int = 4, enable_debug: bool = False, 
                  enable_bayesian_training_optimization: bool = True,
                  buffer_capacity: int = 50000,
-                 extra_proprio: int = 13):  # Optimized: more buffer over channels
+                 extra_proprio: int = 13,
+                 encoder_freeze_step: int = 0):  # Optimized: more buffer over channels
         self.model_dir = model_dir
         os.makedirs(model_dir, exist_ok=True)
         self.enable_debug = enable_debug
@@ -157,6 +158,8 @@ class RKNNTrainerBEV:
         self.model = BEVExplorationNet(bev_channels=bev_channels, extra_proprio=self.extra_proprio).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
+        self.encoder_freeze_step = max(0, int(encoder_freeze_step))
+        self.encoder_frozen = False
         
         # Experience replay (ring buffer + priorities). Store BEV as uint8 to reduce RAM.
         self.buffer_capacity = int(buffer_capacity)
@@ -321,6 +324,21 @@ class RKNNTrainerBEV:
         except Exception as e:
             if self.enable_debug:
                 print(f"[ReplayBuffer] Clear failed: {e}")
+
+    def _maybe_freeze_encoder(self):
+        if self.encoder_frozen:
+            return
+        if self.encoder_freeze_step > 0 and self.training_step >= self.encoder_freeze_step:
+            try:
+                for param in self.model.encoder.parameters():
+                    param.requires_grad = False
+                self.model.encoder.eval()
+                self.encoder_frozen = True
+                if self.enable_debug:
+                    print(f"[Trainer] Encoder frozen at step {self.training_step}")
+            except Exception as exc:
+                if self.enable_debug:
+                    print(f"[Trainer] Encoder freeze failed: {exc}")
 
     def add_experience(self,
                       bev_image: np.ndarray,
@@ -547,6 +565,7 @@ class RKNNTrainerBEV:
         # Tracking
         self.loss_history.append(float(loss.item()))
         self.training_step += 1
+        self._maybe_freeze_encoder()
         # Checkpoint logic (unchanged except for buffer reference)
         if self.step_save_interval > 0 and (self.training_step % self.step_save_interval == 0):
             self.save_model()

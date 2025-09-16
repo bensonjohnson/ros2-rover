@@ -130,6 +130,7 @@ def generate_launch_description():
             "enable_multi_metric_evaluation": False,
             "enable_optimization_monitoring": False,
             "enable_reward_based_distill": False,
+            "encoder_freeze_step": 0,
             # IMU proprio feed for runtime actor
             "enable_lsm_imu_proprio": True,
             "lsm_imu_topic": "/lsm9ds1_imu_publisher/imu/data",
@@ -171,6 +172,12 @@ def generate_launch_description():
             "reward_forward_scale": 5.0,
             "reward_block_penalty": -1.0,
             "reward_emergency_penalty": -5.0,
+            "encoder_freeze_step": 5,
+            "validation_margin": 0.05,
+            "low_activity_linear_threshold": 0.03,
+            "low_activity_angular_threshold": 0.1,
+            "export_wait_timeout_sec": 15.0,
+            "rknn_drift_tolerance": 0.15,
         }]
     )
 

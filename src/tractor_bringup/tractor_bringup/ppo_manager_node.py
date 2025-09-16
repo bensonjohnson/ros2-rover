@@ -25,6 +25,8 @@ import threading
 import os
 import glob
 import torch
+import shutil
+from collections import deque
 
 from .ppo_trainer_bev import PPOTrainerBEV
 from .rknn_trainer_bev import RKNNTrainerBEV
@@ -58,6 +60,12 @@ class PPOManagerNode(Node):
         self.declare_parameter('reward_block_penalty', -1.0)
         self.declare_parameter('reward_emergency_penalty', -5.0)
         self.declare_parameter('cpu_guard_skip_updates', True)
+        self.declare_parameter('encoder_freeze_step', 0)
+        self.declare_parameter('validation_margin', 0.05)
+        self.declare_parameter('low_activity_linear_threshold', 0.03)
+        self.declare_parameter('low_activity_angular_threshold', 0.1)
+        self.declare_parameter('export_wait_timeout_sec', 15.0)
+        self.declare_parameter('rknn_drift_tolerance', 0.15)
 
         self.bev_topic = self.get_parameter('bev_image_topic').value
         self.update_interval = float(self.get_parameter('update_interval_sec').value)
@@ -65,6 +73,11 @@ class PPOManagerNode(Node):
         self.reward_forward_scale = float(self.get_parameter('reward_forward_scale').value)
         self.reward_block_penalty = float(self.get_parameter('reward_block_penalty').value)
         self.reward_emergency_penalty = float(self.get_parameter('reward_emergency_penalty').value)
+        self.validation_margin = float(self.get_parameter('validation_margin').value)
+        self.low_activity_linear_threshold = float(self.get_parameter('low_activity_linear_threshold').value)
+        self.low_activity_angular_threshold = float(self.get_parameter('low_activity_angular_threshold').value)
+        self.export_wait_timeout = float(self.get_parameter('export_wait_timeout_sec').value)
+        self.rknn_drift_tolerance = float(self.get_parameter('rknn_drift_tolerance').value)
 
         C = int(self.get_parameter('bev_channels').value)
         bev_size = self.get_parameter('bev_size').value
@@ -82,10 +95,16 @@ class PPOManagerNode(Node):
             value_coef=float(self.get_parameter('value_coef').value),
             gamma=float(self.get_parameter('gamma').value),
             gae_lambda=float(self.get_parameter('gae_lambda').value),
+            encoder_freeze_step=int(self.get_parameter('encoder_freeze_step').value)
         )
 
         # Export helper reuses existing RKNN pipeline
-        self.export_helper = RKNNTrainerBEV(bev_channels=C, enable_debug=False, extra_proprio=proprio_dim - 3)
+        self.export_helper = RKNNTrainerBEV(
+            bev_channels=C,
+            enable_debug=False,
+            extra_proprio=proprio_dim - 3,
+            encoder_freeze_step=int(self.get_parameter('encoder_freeze_step').value)
+        )
         self.last_export_time = 0.0
 
         # State
@@ -119,6 +138,11 @@ class PPOManagerNode(Node):
         self.emergency_count = 0
         self.total_steps = 0
         self.gate_baseline = None
+        self.validation_buffer = deque(maxlen=512)
+        self.deployed_actor_state = None
+        self.pending_export = None
+        self.defer_start_time = None
+        self.last_validation_report = None
 
         # Subscriptions
         self.create_subscription(Image, self.bev_topic, self.bev_cb, qos_profile_sensor_data)
@@ -239,6 +263,14 @@ class PPOManagerNode(Node):
         done = False  # keep continuous episodes
         # Add transition
         self.trainer.add_transition(bev, sens, act, reward, done)
+        self.validation_buffer.append({
+            'bev': bev.copy() if isinstance(bev, np.ndarray) else bev,
+            'sensor': sens.copy(),
+            'reward': float(reward),
+            'min_forward': float(self.min_forward),
+            'emergency': bool(self.emergency),
+            'action': act.copy(),
+        })
         # Update rolling metrics and last_pos
         step_progress = 0.0
         if self.have_odom and hasattr(self, 'last_pos'):
@@ -255,50 +287,230 @@ class PPOManagerNode(Node):
         self.time_sum += dt
 
     def update_timer(self):
-        # Skip updates if paused for export/reload
+        now = time.time()
+        if self.pending_export and self.training_paused:
+            if self._ready_for_deferred_export(now):
+                self._perform_export(self.pending_export)
+            return
         if self.training_paused:
             return
-        # Background PPO update with small budget
         stats = self.trainer.update()
-        if stats.get('updated'):
-            self.get_logger().info(f"PPO updated: size={stats['size']} loss={stats['avg_loss']:.3f}")
-            # Export on min interval
-            if (time.time() - self.last_export_time) > self.min_export_interval:
-                # Export gate
-                gate_ok, metrics, reason = self.check_export_gate()
-                self.publish_metrics(metrics, gate_ok, reason)
-                if not gate_ok and self.gate_baseline is not None:
-                    self.get_logger().info(f"Export gated: {reason}")
-                    return
+        if not stats.get('updated'):
+            return
+        self.get_logger().info(f"PPO updated: size={stats['size']} loss={stats['avg_loss']:.3f}")
+        if (now - self.last_export_time) <= self.min_export_interval:
+            return
+        gate_ok, metrics, reason = self.check_export_gate()
+        self.publish_metrics(metrics, gate_ok, reason)
+        if not gate_ok and self.gate_baseline is not None:
+            self.get_logger().info(f"Export gated: {reason}")
+            return
+        candidate_state = self._clone_state_dict(self.trainer.actor.state_dict())
+        validation_ok, val_report = self._candidate_passes_validation(candidate_state)
+        self.last_validation_report = val_report
+        if not validation_ok:
+            self.get_logger().info("Candidate actor failed validation gate; keeping deployed model")
+            return
+        payload = {
+            'state_dict': candidate_state,
+            'metrics': metrics,
+            'reason': reason,
+            'validation': val_report,
+            'created': now,
+        }
+        if not self._low_activity():
+            self.training_paused = True
+            self.pending_export = payload
+            self.defer_start_time = now
+            self.get_logger().info("Deferring RKNN export until rover motion is low")
+            return
+        self.training_paused = True
+        self._perform_export(payload)
+
+    def _low_activity(self) -> bool:
+        return (abs(self.current_linear) < self.low_activity_linear_threshold and
+                abs(self.current_angular) < self.low_activity_angular_threshold)
+
+    def _ready_for_deferred_export(self, now: float) -> bool:
+        if not self.pending_export:
+            return False
+        if self._low_activity():
+            return True
+        if self.export_wait_timeout > 0 and self.defer_start_time is not None:
+            if now - self.defer_start_time > self.export_wait_timeout:
+                self.get_logger().info("Low-activity window not found; forcing export after timeout")
+                return True
+        return False
+
+    def _clone_state_dict(self, state_dict):
+        return {k: v.detach().cpu().clone() for k, v in state_dict.items()}
+
+    def _candidate_passes_validation(self, candidate_state):
+        candidate_score, candidate_metrics = self._evaluate_actor_state(candidate_state)
+        report = {
+            'candidate': {
+                **candidate_metrics,
+                'score': candidate_score,
+            }
+        }
+        if self.deployed_actor_state is None:
+            return True, report
+        baseline_score, baseline_metrics = self._evaluate_actor_state(self.deployed_actor_state)
+        report['baseline'] = {**baseline_metrics, 'score': baseline_score}
+        improvement = candidate_score - baseline_score
+        report['delta'] = improvement
+        return improvement >= self.validation_margin, report
+
+    def _evaluate_actor_state(self, state_dict):
+        if not self.validation_buffer:
+            return 0.0, {
+                'forward_clear_mean': 0.0,
+                'blocked_forward_rate': 0.0,
+                'emergency_forward_rate': 0.0,
+                'samples': 0,
+            }
+        actor = self.trainer.actor
+        backup = actor.state_dict()
+        actor.load_state_dict(state_dict, strict=False)
+        device = next(actor.parameters()).device
+        forward_clear = []
+        blocked_forward = 0
+        emergency_forward = 0
+        total = 0
+        for sample in list(self.validation_buffer)[-128:]:
+            bev = sample['bev']
+            sensor = sample['sensor']
+            bev_t = torch.from_numpy(np.transpose(bev, (2, 0, 1))).unsqueeze(0).to(device)
+            sens_t = torch.from_numpy(sensor.astype(np.float32)).unsqueeze(0).to(device)
+            with torch.no_grad():
+                feat = actor.encode(bev_t)
+                out = actor.forward_from_features(feat, sens_t)[0]
+                action = torch.tanh(out[:2]).cpu().numpy()
+            if sample['min_forward'] > 0.5:
+                forward_clear.append(action[0])
+            if sample['min_forward'] <= 0.25 and action[0] > 0.0:
+                blocked_forward += 1
+            if sample['emergency'] and action[0] > 0.0:
+                emergency_forward += 1
+            total += 1
+        actor.load_state_dict(backup, strict=False)
+        forward_clear_mean = float(np.mean(forward_clear)) if forward_clear else 0.0
+        blocked_rate = float(blocked_forward) / max(1, total)
+        emergency_rate = float(emergency_forward) / max(1, total)
+        score = forward_clear_mean - (blocked_rate * 0.5) - (emergency_rate * 0.5)
+        return score, {
+            'forward_clear_mean': forward_clear_mean,
+            'blocked_forward_rate': blocked_rate,
+            'emergency_forward_rate': emergency_rate,
+            'samples': total,
+        }
+
+    def _perform_export(self, payload):
+        cand_state = payload['state_dict']
+        val_delta = payload.get('validation', {}).get('delta', float('nan'))
+        self.get_logger().info(f"Starting RKNN export (validation Δ={val_delta:.3f})")
+        try:
+            self.export_helper.model.load_state_dict(cand_state, strict=False)
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to load candidate weights into export helper: {exc}")
+            self.training_paused = False
+            self.pending_export = None
+            return
+        self.save_ppo_checkpoint()
+        backup_path = self._backup_rknn_file()
+        exp_t0 = time.time()
+        try:
+            self.export_helper.convert_to_rknn()
+        except Exception as exc:
+            self.get_logger().warn(f"RKNN conversion failed: {exc}")
+            self._restore_rknn_backup(backup_path)
+            self.training_paused = False
+            self.pending_export = None
+            return
+        exp_t1 = time.time()
+        self.get_logger().info(f"RKNN export completed in {exp_t1-exp_t0:.2f}s")
+        drift_ok, drift_value = self._check_rknn_drift()
+        if not drift_ok:
+            self.get_logger().warn(f"RKNN drift {drift_value:.3f} exceeds tolerance; reverting to previous model")
+            self._restore_rknn_backup(backup_path)
+            self.training_paused = False
+            self.pending_export = None
+            return
+        self.last_export_time = time.time()
+        self.gate_baseline = payload['metrics']
+        self.pending_export = None
+        self.defer_start_time = None
+        reloaded = self.reload_rknn()
+        if reloaded:
+            self.deployed_actor_state = cand_state
+            self._log_drift_metric(drift_value)
+            time.sleep(3.0)
+            if backup_path and os.path.exists(backup_path):
                 try:
-                    self.training_paused = True
-                    pause_t0 = time.time()
-                    self.get_logger().info("Pausing rollouts/updates for export + reload")
-                    # Load actor weights into export helper and convert
-                    self.export_helper.model.load_state_dict(self.trainer.actor_state_dict(), strict=False)
-                    # Save PPO checkpoint (.pth) alongside RKNN so training can resume later
-                    self.save_ppo_checkpoint()
-                    exp_t0 = time.time()
-                    self.export_helper.convert_to_rknn()
-                    exp_t1 = time.time()
-                    self.get_logger().info(f"RKNN export completed in {exp_t1-exp_t0:.2f}s")
-                    self.last_export_time = time.time()
-                    self.gate_baseline = metrics
-                    # Request NPU to reload RKNN
-                    self.reload_rknn()
-                    # Give the NPU node some time to settle after reload
-                    time.sleep(3.0)
-                    self.training_paused = False
-                    self.get_logger().info(f"Resumed training after export/reload (paused {time.time()-pause_t0:.2f}s)")
-                except Exception as e:
-                    self.get_logger().warn(f"RKNN export/reload failed: {e}")
-                    # Ensure we unpause even on failure
-                    self.training_paused = False
+                    os.remove(backup_path)
+                except Exception:
+                    pass
+        else:
+            self._restore_rknn_backup(backup_path)
+        self.training_paused = False
+        self.get_logger().info("Resumed training after export cycle")
+
+    def _backup_rknn_file(self):
+        model_dir = getattr(self.export_helper, 'model_dir', 'models')
+        rknn_path = os.path.join(model_dir, "exploration_model_bev.rknn")
+        if not os.path.exists(rknn_path):
+            return None
+        backup_path = os.path.join(model_dir, "exploration_model_bev_prev.rknn")
+        try:
+            shutil.copy2(rknn_path, backup_path)
+            return backup_path
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to backup RKNN model: {exc}")
+            return None
+
+    def _restore_rknn_backup(self, backup_path):
+        if not backup_path or not os.path.exists(backup_path):
+            return
+        model_dir = getattr(self.export_helper, 'model_dir', 'models')
+        rknn_path = os.path.join(model_dir, "exploration_model_bev.rknn")
+        try:
+            shutil.copy2(backup_path, rknn_path)
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to restore RKNN backup: {exc}")
+
+    def _check_rknn_drift(self):
+        if not self.validation_buffer:
+            return True, 0.0
+        try:
+            self.export_helper.enable_rknn_inference()
+        except Exception as exc:
+            self.get_logger().warn(f"Unable to initialize RKNN runtime for drift check: {exc}")
+            return False, float('inf')
+        diffs = []
+        for sample in list(self.validation_buffer)[-32:]:
+            bev = sample['bev']
+            sensor = sample['sensor']
+            bev_chw = np.transpose(bev, (2, 0, 1)).astype(np.float32)
+            bev_t = torch.from_numpy(bev_chw).unsqueeze(0).to(self.trainer.device)
+            sens_t = torch.from_numpy(sensor.astype(np.float32)).unsqueeze(0).to(self.trainer.device)
+            with torch.no_grad():
+                feat = self.trainer.actor.encode(bev_t)
+                out = self.trainer.actor.forward_from_features(feat, sens_t)[0]
+                pytorch_action = torch.tanh(out[:2]).cpu().numpy()
+            rknn_action, _ = self.export_helper.inference(bev, sensor)
+            if np.isnan(rknn_action).any():
+                return False, float('inf')
+            diffs.append(np.max(np.abs(pytorch_action - rknn_action)))
+        max_diff = float(np.max(diffs)) if diffs else 0.0
+        return max_diff <= self.rknn_drift_tolerance, max_diff
+
+    def _log_drift_metric(self, drift_value: float):
+        self.get_logger().info(f"RKNN vs PyTorch max action diff: {drift_value:.3f}")
 
     def reload_rknn(self):
         if not self.reload_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn("/reload_rknn service not available")
-            return
+            return False
         req = Trigger.Request()
         future = self.reload_cli.call_async(req)
         # Allow longer time for the NPU node to reload the runtime
@@ -307,10 +519,12 @@ class PPOManagerNode(Node):
             resp = future.result()
             if resp and resp.success:
                 self.get_logger().info(f"RKNN reloaded via NPU node: {resp.message}")
+                return True
             else:
                 self.get_logger().warn(f"RKNN reload service call failed: {getattr(resp, 'message', 'no response')}" )
         else:
             self.get_logger().warn("RKNN reload service call timed out")
+        return False
 
     def save_ppo_checkpoint(self):
         try:
@@ -385,6 +599,7 @@ class PPOManagerNode(Node):
             if ts:
                 self.last_export_time = float(ts)
             self.get_logger().info(f"Loaded PPO checkpoint: {ckpt_path}")
+            self.deployed_actor_state = self._clone_state_dict(self.trainer.actor.state_dict())
         except Exception as e:
             self.get_logger().warn(f"Failed to load PPO checkpoint: {e}")
 
