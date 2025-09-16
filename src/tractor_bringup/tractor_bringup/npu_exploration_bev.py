@@ -72,6 +72,7 @@ class NPUExplorationBEVNode(Node):
         self.declare_parameter('nudge_angular_cmd_rps', 0.0)
         self.declare_parameter('operation_mode', 'cpu_training')  # cpu_training | hybrid | inference
         self.declare_parameter('train_every_n_frames', 3)  # NEW: train interval to reduce CPU load
+        self.declare_parameter('encoder_freeze_step', 0)
         self.declare_parameter('enable_bayesian_optimization', True)  # Enable Bayesian optimization for ES modes
         self.declare_parameter('optimization_level', 'standard')  # basic | standard | full | research
         self.declare_parameter('enable_training_optimization', True)  # Enable training parameter optimization
@@ -431,12 +432,13 @@ class NPUExplorationBEVNode(Node):
                 # TODO: Create ES trainer that supports BEV images
                 # Determine extra proprio size (standardize: base extras 13 + 5 IMU features)
                 # IMU features default to zeros if IMU data is disabled/unavailable
-                extra_proprio = 13 + 5
+               extra_proprio = 13 + 5
                 self.trainer = RKNNTrainerBEV(
                     bev_channels=bev_channels,
                     enable_debug=enable_debug,
                     enable_bayesian_training_optimization=self.enable_training_optimization,
-                    extra_proprio=extra_proprio
+                    extra_proprio=extra_proprio,
+                    encoder_freeze_step=int(self.get_parameter('encoder_freeze_step').value)
                 )
                 
                 if mode in ['es_training', 'es_hybrid', 'es_inference', 'safe_es_training']:

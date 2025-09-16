@@ -103,7 +103,8 @@ class PPOTrainerBEV:
                  gamma: float = 0.99,
                  gae_lambda: float = 0.95,
                  update_epochs: int = 2,
-                 minibatch_size: int = 128):
+                 minibatch_size: int = 128,
+                 encoder_freeze_step: int = 0):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         C = bev_channels
         H, W = bev_size
@@ -125,6 +126,9 @@ class PPOTrainerBEV:
         self.bev_channels = C
         self.bev_size = (H, W)
         self.proprio_dim = proprio_dim
+        self.encoder_freeze_step = max(0, int(encoder_freeze_step))
+        self.encoder_frozen = False
+        self.update_count = 0
 
     def preprocess_bev(self, bev_hwc: np.ndarray) -> np.ndarray:
         # Input HxWxC float32; transpose to CxHxW
@@ -236,6 +240,8 @@ class PPOTrainerBEV:
                 total_closs += policy_loss.item()
 
         avg_loss = total_loss / max(1, (self.update_epochs * (N // self.minibatch_size + 1)))
+        self.update_count += 1
+        self._maybe_freeze_encoder()
         self.buffer.clear()
         return {
             "updated": True,
@@ -247,3 +253,12 @@ class PPOTrainerBEV:
 
     def actor_state_dict(self):
         return self.actor.state_dict()
+
+    def _maybe_freeze_encoder(self):
+        if self.encoder_frozen:
+            return
+        if self.encoder_freeze_step > 0 and self.update_count >= self.encoder_freeze_step:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            self.encoder.eval()
+            self.encoder_frozen = True
