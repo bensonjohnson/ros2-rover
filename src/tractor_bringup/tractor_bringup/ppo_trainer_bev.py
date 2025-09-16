@@ -26,15 +26,15 @@ def atanh(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 class CriticNet(nn.Module):
     def __init__(self, bev_feature_dim: int, proprio_inputs: int):
         super().__init__()
-        self.bev_fc = nn.Linear(bev_feature_dim, 256)
+        self.bev_fc = nn.Linear(bev_feature_dim, 512)
         self.sensor_fc = nn.Sequential(
             nn.Linear(proprio_inputs, 128), nn.ReLU(),
             nn.Linear(128, 256), nn.ReLU(),
-            nn.Linear(256, 128)
+            nn.Linear(256, 256)
         )
         self.fusion = nn.Sequential(
-            nn.Linear(256 + 128, 256), nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(512 + 256, 512), nn.ReLU(),
+            nn.Linear(512, 1)
         )
 
     def forward(self, bev_features: torch.Tensor, sensor: torch.Tensor) -> torch.Tensor:

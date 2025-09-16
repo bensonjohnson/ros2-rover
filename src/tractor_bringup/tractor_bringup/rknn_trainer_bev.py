@@ -36,16 +36,30 @@ except ImportError:
     BAYESIAN_TRAINING_AVAILABLE = False
     print("Bayesian training optimization not available - using fixed parameters")
 
-def _depthwise_separable(in_channels: int, out_channels: int, stride: int) -> nn.Sequential:
-    return nn.Sequential(
-        nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=stride, padding=1,
-                  groups=in_channels, bias=False),
-        nn.BatchNorm2d(in_channels),
+def _depthwise_separable(in_channels: int, out_channels: int, stride: int,
+                         expansion: int = 4, use_se: bool = False) -> nn.Sequential:
+    mid_channels = in_channels * expansion
+    layers = [
+        nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False),
+        nn.BatchNorm2d(mid_channels),
         nn.ReLU(inplace=True),
-        nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+        nn.Conv2d(mid_channels, mid_channels, kernel_size=3, stride=stride, padding=1,
+                  groups=mid_channels, bias=False),
+        nn.BatchNorm2d(mid_channels),
+        nn.ReLU(inplace=True),
+    ]
+    if use_se:
+        layers.append(nn.AdaptiveAvgPool2d(1))
+        layers.append(nn.Conv2d(mid_channels, mid_channels // 8, kernel_size=1))
+        layers.append(nn.ReLU(inplace=True))
+        layers.append(nn.Conv2d(mid_channels // 8, mid_channels, kernel_size=1))
+        layers.append(nn.Sigmoid())
+    layers.extend([
+        nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False),
         nn.BatchNorm2d(out_channels),
         nn.ReLU(inplace=True),
-    )
+    ])
+    return nn.Sequential(*layers)
 
 
 class BEVEncoder(nn.Module):
@@ -54,19 +68,19 @@ class BEVEncoder(nn.Module):
     def __init__(self, bev_channels: int = 4):
         super().__init__()
         self.trunk = nn.Sequential(
-            nn.Conv2d(bev_channels, 16, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(bev_channels, 32, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            _depthwise_separable(16, 32, stride=2),
-            _depthwise_separable(32, 64, stride=2),
-            _depthwise_separable(64, 128, stride=2),
-            nn.Conv2d(128, 128, kernel_size=1, bias=False),
-            nn.BatchNorm2d(128),
+            _depthwise_separable(32, 64, stride=2, expansion=4),
+            _depthwise_separable(64, 128, stride=2, expansion=4, use_se=True),
+            _depthwise_separable(128, 256, stride=2, expansion=4, use_se=True),
+            nn.Conv2d(256, 256, kernel_size=1, bias=False),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten()
         )
-        self.output_dim = 128
+        self.output_dim = 256
 
     def forward(self, bev_image: torch.Tensor) -> torch.Tensor:
         return self.trunk(bev_image)
@@ -85,22 +99,22 @@ class BEVExplorationNet(nn.Module):
         self.encoder = encoder if encoder is not None else BEVEncoder(bev_channels)
         # Maintain legacy attribute name for downstream references
         self.bev_conv = self.encoder
-        self.bev_fc = nn.Linear(self.encoder.output_dim, 256)
+        self.bev_fc = nn.Linear(self.encoder.output_dim, 512)
         proprio_inputs = 3 + extra_proprio
         self.sensor_fc = nn.Sequential(
-            nn.Linear(proprio_inputs, 96),
+            nn.Linear(proprio_inputs, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(96, 160),
+            nn.Linear(128, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(160, 128)
+            nn.Linear(256, 256)
         )
         self.fusion = nn.Sequential(
-            nn.Linear(256 + 128, 256),
+            nn.Linear(512 + 256, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.25),
-            nn.Linear(256, 128),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 3)
+            nn.Linear(256, 3)
         )
 
     def encode(self, bev_image: torch.Tensor) -> torch.Tensor:
