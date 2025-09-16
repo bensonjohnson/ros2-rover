@@ -432,7 +432,7 @@ class NPUExplorationBEVNode(Node):
                 # TODO: Create ES trainer that supports BEV images
                 # Determine extra proprio size (standardize: base extras 13 + 5 IMU features)
                 # IMU features default to zeros if IMU data is disabled/unavailable
-               extra_proprio = 13 + 5
+                extra_proprio = 13 + 5
                 self.trainer = RKNNTrainerBEV(
                     bev_channels=bev_channels,
                     enable_debug=enable_debug,
