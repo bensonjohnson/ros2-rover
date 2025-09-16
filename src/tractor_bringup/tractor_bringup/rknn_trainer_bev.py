@@ -36,63 +36,85 @@ except ImportError:
     BAYESIAN_TRAINING_AVAILABLE = False
     print("Bayesian training optimization not available - using fixed parameters")
 
-class BEVExplorationNet(nn.Module):
-    """
-    Optimized Neural network for BEV-based rover exploration (32GB RAM optimized)
-    Inputs: BEV image (4-channel), IMU data, proprioceptive data
-    Outputs: Linear velocity, angular velocity, exploration confidence
-    """
-    
-    def __init__(self, bev_channels: int = 4, extra_proprio: int = 0):  # Optimized: quality over quantity
+def _depthwise_separable(in_channels: int, out_channels: int, stride: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=stride, padding=1,
+                  groups=in_channels, bias=False),
+        nn.BatchNorm2d(in_channels),
+        nn.ReLU(inplace=True),
+        nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+        nn.BatchNorm2d(out_channels),
+        nn.ReLU(inplace=True),
+    )
+
+
+class BEVEncoder(nn.Module):
+    """Shared BEV encoder with lightweight depthwise separable blocks"""
+
+    def __init__(self, bev_channels: int = 4):
         super().__init__()
-        self.bev_channels = bev_channels
-        # BEV image branch (CNN)
-        self.bev_conv = nn.Sequential(
-            nn.Conv2d(bev_channels, 32, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.AvgPool2d(kernel_size=(3, 3), stride=(3, 3)),
+        self.trunk = nn.Sequential(
+            nn.Conv2d(bev_channels, 16, kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(16),
+            nn.ReLU(inplace=True),
+            _depthwise_separable(16, 32, stride=2),
+            _depthwise_separable(32, 64, stride=2),
+            _depthwise_separable(64, 128, stride=2),
+            nn.Conv2d(128, 128, kernel_size=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten()
         )
-        # After conv stack with input 200x200 -> sizes: /2=100x100 /2=50x50 /2=25x25 /2=12x12 then pool /3 -> 4x4
-        self.bev_fc = nn.Linear(256 * 4 * 4, 512)
-        proprio_inputs = 3 + extra_proprio  # base + added features
+        self.output_dim = 128
+
+    def forward(self, bev_image: torch.Tensor) -> torch.Tensor:
+        return self.trunk(bev_image)
+
+
+class BEVExplorationNet(nn.Module):
+    """
+    Optimized neural network for BEV-based rover exploration.
+    Inputs: BEV image (multi-channel), proprioceptive data.
+    Outputs: Linear velocity, angular velocity, exploration confidence.
+    """
+
+    def __init__(self, bev_channels: int = 4, extra_proprio: int = 0, encoder: BEVEncoder = None):
+        super().__init__()
+        self.bev_channels = bev_channels
+        self.encoder = encoder if encoder is not None else BEVEncoder(bev_channels)
+        # Maintain legacy attribute name for downstream references
+        self.bev_conv = self.encoder
+        self.bev_fc = nn.Linear(self.encoder.output_dim, 256)
+        proprio_inputs = 3 + extra_proprio
         self.sensor_fc = nn.Sequential(
-            nn.Linear(proprio_inputs, 128),
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128)
+            nn.Linear(proprio_inputs, 96),
+            nn.ReLU(inplace=True),
+            nn.Linear(96, 160),
+            nn.ReLU(inplace=True),
+            nn.Linear(160, 128)
         )
         self.fusion = nn.Sequential(
-            nn.Linear(512 + 128, 512),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 3)
+            nn.Linear(256 + 128, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.25),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 3)
         )
-        
-    def forward(self, bev_image, sensor_data):
-        # BEV image processing
-        bev_features = self.bev_conv(bev_image)
+
+    def encode(self, bev_image: torch.Tensor) -> torch.Tensor:
+        return self.encoder(bev_image)
+
+    def forward_from_features(self, bev_features: torch.Tensor, sensor_data: torch.Tensor) -> torch.Tensor:
         bev_out = self.bev_fc(bev_features)
-        
-        # Sensor processing
         sensor_out = self.sensor_fc(sensor_data)
-        
-        # Fusion
         fused = torch.cat([bev_out, sensor_out], dim=1)
-        output = self.fusion(fused)
-        
-        return output
+        return self.fusion(fused)
+
+    def forward(self, bev_image: torch.Tensor, sensor_data: torch.Tensor) -> torch.Tensor:
+        feats = self.encode(bev_image)
+        return self.forward_from_features(feats, sensor_data)
 
 # NEW: lightweight proxy so external len(trainer.experience_buffer) keeps working
 class _BufferLenProxy:
@@ -944,8 +966,27 @@ class RKNNTrainerBEV:
                     state_dict[sensor_key_w] = new_w
                     # Bias shape should match; if not, skip (unlikely)
                     transplanted = True
+            bev_fc_key_w = 'bev_fc.weight'
+            if bev_fc_key_w in state_dict:
+                old_w = state_dict[bev_fc_key_w]
+                new_w = self.model.state_dict()[bev_fc_key_w]
+                if old_w.shape != new_w.shape:
+                    try:
+                        # Collapse old spatial weights (4x4) into the new 1x1 pooled layout
+                        ratio = old_w.shape[1] // new_w.shape[1]
+                        reshaped = old_w.view(old_w.shape[0], new_w.shape[1], ratio)
+                        new_w.copy_(reshaped.mean(dim=2))
+                    except Exception:
+                        # Fallback: copy overlapping portion and leave remainder as init
+                        cols = min(old_w.shape[1], new_w.shape[1])
+                        new_w[:, :cols] = old_w[:, :cols]
+                    state_dict[bev_fc_key_w] = new_w
             # Load model with strict=False to allow missing/extra keys (e.g., optimizer-specific buffers)
-            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            try:
+                missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            except RuntimeError as e:
+                print(f"Model load skipped mismatched layers: {e}")
+                missing, unexpected = [], []
             if transplanted:
                 print(f"Partial transplant: adjusted sensor_fc input from old feature size to {self.model.sensor_fc[0].in_features}")
             if missing:

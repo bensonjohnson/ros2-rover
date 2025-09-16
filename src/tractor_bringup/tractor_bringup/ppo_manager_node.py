@@ -361,8 +361,15 @@ class PPOManagerNode(Node):
                 return
             payload = torch.load(ckpt_path, map_location='cpu')
             # Basic shape checks (best-effort)
-            self.trainer.actor.load_state_dict(payload.get('actor_state_dict', {}), strict=False)
-            self.trainer.critic.load_state_dict(payload.get('critic_state_dict', {}), strict=False)
+            actor_state = payload.get('actor_state_dict', {})
+            critic_state = payload.get('critic_state_dict', {})
+            try:
+                if actor_state:
+                    self.trainer.actor.load_state_dict(actor_state, strict=False)
+                if critic_state:
+                    self.trainer.critic.load_state_dict(critic_state, strict=False)
+            except RuntimeError as err:
+                self.get_logger().warn(f"Checkpoint load skipped mismatched layers: {err}")
             log_std = payload.get('log_std')
             if log_std is not None and hasattr(self.trainer, 'log_std'):
                 with torch.no_grad():
