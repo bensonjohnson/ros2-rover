@@ -155,10 +155,10 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "bev_image_topic": "/bev/image",
-            "update_interval_sec": 15.0,
+            "update_interval_sec": 25.0,
             "min_export_interval_sec": 120.0,
-            "rollout_capacity": 4096,
-            "minibatch_size": 128,
+            "rollout_capacity": 2048,
+            "minibatch_size": 64,
             "update_epochs": 2,
             "ppo_clip": 0.2,
             "entropy_coef": 0.01,
