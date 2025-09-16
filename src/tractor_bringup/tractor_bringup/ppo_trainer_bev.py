@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque
 
-from .rknn_trainer_bev import BEVExplorationNet
+from .rknn_trainer_bev import BEVExplorationNet, BEVEncoder
 
 
 def atanh(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -24,31 +24,21 @@ def atanh(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 
 
 class CriticNet(nn.Module):
-    def __init__(self, bev_channels: int, proprio_inputs: int):
+    def __init__(self, bev_feature_dim: int, proprio_inputs: int):
         super().__init__()
-        # Mirror actor trunk (separate weights)
-        self.bev_conv = nn.Sequential(
-            nn.Conv2d(bev_channels, 32, kernel_size=3, stride=2, padding=1), nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), nn.ReLU(),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1), nn.ReLU(),
-            nn.AvgPool2d(kernel_size=(3, 3), stride=(3, 3)), nn.Flatten()
-        )
-        self.bev_fc = nn.Linear(256 * 4 * 4, 512)
+        self.bev_fc = nn.Linear(bev_feature_dim, 256)
         self.sensor_fc = nn.Sequential(
             nn.Linear(proprio_inputs, 128), nn.ReLU(),
             nn.Linear(128, 256), nn.ReLU(),
             nn.Linear(256, 128)
         )
         self.fusion = nn.Sequential(
-            nn.Linear(512 + 128, 256), nn.ReLU(),
+            nn.Linear(256 + 128, 256), nn.ReLU(),
             nn.Linear(256, 1)
         )
 
-    def forward(self, bev_image: torch.Tensor, sensor: torch.Tensor) -> torch.Tensor:
-        bev_feat = self.bev_conv(bev_image)
-        bev_out = self.bev_fc(bev_feat)
+    def forward(self, bev_features: torch.Tensor, sensor: torch.Tensor) -> torch.Tensor:
+        bev_out = self.bev_fc(bev_features)
         sens_out = self.sensor_fc(sensor)
         fused = torch.cat([bev_out, sens_out], dim=1)
         value = self.fusion(fused)
@@ -117,8 +107,10 @@ class PPOTrainerBEV:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         C = bev_channels
         H, W = bev_size
-        self.actor = BEVExplorationNet(bev_channels=C, extra_proprio=proprio_dim - 3).to(self.device)
-        self.critic = CriticNet(bev_channels=C, proprio_inputs=proprio_dim).to(self.device)
+        shared_encoder = BEVEncoder(bev_channels=C)
+        self.actor = BEVExplorationNet(bev_channels=C, extra_proprio=proprio_dim - 3, encoder=shared_encoder).to(self.device)
+        self.encoder = self.actor.encoder
+        self.critic = CriticNet(bev_feature_dim=shared_encoder.output_dim, proprio_inputs=proprio_dim).to(self.device)
         # Learnable log_std
         self.log_std = nn.Parameter(torch.zeros(2, dtype=torch.float32, device=self.device))
         self.optimizer = optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()) + [self.log_std], lr=lr)
@@ -146,9 +138,10 @@ class PPOTrainerBEV:
         with torch.no_grad():
             bev_t = torch.from_numpy(bev_chw).unsqueeze(0).to(self.device)
             sens_t = torch.from_numpy(sensor_vec.astype(np.float32)).unsqueeze(0).to(self.device)
-            out = self.actor(bev_t, sens_t)[0]  # shape (3)
+            bev_feat = self.actor.encode(bev_t)
+            out = self.actor.forward_from_features(bev_feat, sens_t)[0]
             mean_raw = out[:2]
-            value = self.critic(bev_t, sens_t)[0]
+            value = self.critic(bev_feat, sens_t)[0]
             std = self.log_std.exp()
             dist = torch.distributions.Normal(mean_raw, std)
             # Runtime action is tanh(mean); we evaluate log_prob for observed action later via atanh
@@ -157,7 +150,8 @@ class PPOTrainerBEV:
 
     def log_prob_and_value(self, bev_batch: torch.Tensor, sens_batch: torch.Tensor, actions_tanh: torch.Tensor):
         # Compute log_prob with tanh-squash correction
-        out = self.actor(bev_batch, sens_batch)
+        bev_features = self.actor.encode(bev_batch)
+        out = self.actor.forward_from_features(bev_features, sens_batch)
         mean_raw = out[:, :2]
         std = self.log_std.exp()
         dist = torch.distributions.Normal(mean_raw, std)
@@ -165,7 +159,7 @@ class PPOTrainerBEV:
         log_prob = dist.log_prob(pre_squash).sum(dim=1)
         # Change of variables: log|det J| = sum log(1 - a^2)
         log_prob -= torch.log(1 - actions_tanh.pow(2) + 1e-6).sum(dim=1)
-        value = self.critic(bev_batch, sens_batch)
+        value = self.critic(bev_features, sens_batch)
         entropy = dist.entropy().sum(dim=1)
         return log_prob, value, entropy
 
@@ -205,7 +199,8 @@ class PPOTrainerBEV:
         values_np = data['values'].cpu().numpy()
         # Bootstrap next_value as last value
         with torch.no_grad():
-            next_value = self.critic(bev[-1:], sens[-1:])[0].item()
+            next_feat = self.actor.encode(bev[-1:])
+            next_value = self.critic(next_feat, sens[-1:])[0].item()
         adv, ret = self._gae(rewards, dones, values_np, next_value)
         adv_t = torch.from_numpy((adv - adv.mean()) / (adv.std() + 1e-8)).to(self.device)
         ret_t = torch.from_numpy(ret).to(self.device)
@@ -252,4 +247,3 @@ class PPOTrainerBEV:
 
     def actor_state_dict(self):
         return self.actor.state_dict()
-
