@@ -415,6 +415,59 @@ class NPUExplorationBEVNode(Node):
             response.message = f"Reload failed: {e}"
         return response
 
+    def _validate_startup_model(self):
+        """Validate that startup models exist and are functional."""
+        try:
+            if not self.trainer:
+                return False
+            
+            model_dir = getattr(self.trainer, 'model_dir', 'models')
+            rknn_path = os.path.join(model_dir, "exploration_model_bev.rknn")
+            pytorch_path = os.path.join(model_dir, "exploration_model_bev_latest.pth")
+            
+            # Check if we have at least one working model
+            has_rknn = os.path.exists(rknn_path) and os.path.getsize(rknn_path) > 1024
+            has_pytorch = os.path.exists(pytorch_path) and os.path.getsize(pytorch_path) > 1024
+            
+            if not has_rknn and not has_pytorch:
+                self.get_logger().warn("No valid models found at startup - will need initial training")
+                return False
+            
+            # Try basic model loading test
+            if has_rknn and RKNN_AVAILABLE:
+                try:
+                    # Quick RKNN file validation
+                    from rknn.api import RKNN
+                    test_rknn = RKNN(verbose=False)
+                    ret = test_rknn.load_rknn(rknn_path)
+                    test_rknn.release()
+                    if ret == 0:
+                        self.get_logger().info(f"✓ Valid RKNN model found: {rknn_path}")
+                        return True
+                    else:
+                        self.get_logger().warn(f"⚠ RKNN model failed to load: {rknn_path}")
+                except Exception as e:
+                    self.get_logger().warn(f"⚠ RKNN validation error: {e}")
+            
+            if has_pytorch:
+                try:
+                    # Quick PyTorch model validation
+                    import torch
+                    checkpoint = torch.load(pytorch_path, map_location='cpu')
+                    if 'model_state_dict' in checkpoint or 'state_dict' in checkpoint:
+                        self.get_logger().info(f"✓ Valid PyTorch model found: {pytorch_path}")
+                        return True
+                    else:
+                        self.get_logger().warn(f"⚠ PyTorch model missing state dict: {pytorch_path}")
+                except Exception as e:
+                    self.get_logger().warn(f"⚠ PyTorch validation error: {e}")
+            
+            return False
+            
+        except Exception as e:
+            self.get_logger().warn(f"Startup model validation failed: {e}")
+            return False
+
     def init_inference_engine(self):
         self.use_npu = False
         self.trainer = None
@@ -468,7 +521,8 @@ class NPUExplorationBEVNode(Node):
                         self.get_logger().warn("Hybrid mode requested but RKNN runtime not available - using PyTorch")
                 elif mode == 'inference':
                     # Pure inference: load RKNN and disable training logic
-                    if self.trainer.enable_rknn_inference():
+                    startup_validation_ok = self._validate_startup_model()
+                    if startup_validation_ok and self.trainer.enable_rknn_inference():
                         self.use_npu = True
                         # Disable optimizer to avoid accidental training
                         if hasattr(self.trainer, 'optimizer'):
@@ -476,7 +530,10 @@ class NPUExplorationBEVNode(Node):
                         self.get_logger().info("Mode: Pure RKNN inference (no training)")
                     else:
                         self.use_npu = True
-                        self.get_logger().warn("Pure inference mode requested but RKNN file/runtime not available - falling back to PyTorch")
+                        if not startup_validation_ok:
+                            self.get_logger().warn("Startup model validation failed - using PyTorch fallback")
+                        else:
+                            self.get_logger().warn("Pure inference mode requested but RKNN file/runtime not available - falling back to PyTorch")
                 elif mode == 'safe_training':
                     # Safe training with anti-overtraining measures
                     self.use_npu = True

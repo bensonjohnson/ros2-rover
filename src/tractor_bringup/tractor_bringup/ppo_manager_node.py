@@ -450,6 +450,10 @@ class PPOManagerNode(Node):
             return
         exp_t1 = time.time()
         self.get_logger().info(f"RKNN export completed in {exp_t1-exp_t0:.2f}s")
+        
+        # Save timestamped version of new RKNN model before testing
+        self._save_versioned_rknn()
+        
         drift_ok, drift_value = self._check_rknn_drift()
         if not drift_ok:
             self.get_logger().warn(f"RKNN drift {drift_value:.3f} exceeds tolerance; reverting to previous model")
@@ -481,13 +485,89 @@ class PPOManagerNode(Node):
         rknn_path = os.path.join(model_dir, "exploration_model_bev.rknn")
         if not os.path.exists(rknn_path):
             return None
-        backup_path = os.path.join(model_dir, "exploration_model_bev_prev.rknn")
+        
+        # Create timestamped backup for better versioning
+        timestamp = int(time.time())
+        backup_path = os.path.join(model_dir, f"exploration_model_bev_{timestamp}_backup.rknn")
+        
         try:
             shutil.copy2(rknn_path, backup_path)
+            self.get_logger().info(f"RKNN model backed up to: {backup_path}")
+            
+            # Clean up old backups (keep last 3)
+            self._cleanup_old_backups(model_dir)
+            
             return backup_path
         except Exception as exc:
             self.get_logger().warn(f"Failed to backup RKNN model: {exc}")
             return None
+
+    def _cleanup_old_backups(self, model_dir):
+        """Keep only the last 3 RKNN backup files to prevent disk bloat."""
+        try:
+            backup_pattern = os.path.join(model_dir, "exploration_model_bev_*_backup.rknn")
+            backup_files = sorted(glob.glob(backup_pattern))
+            
+            # Keep only the 3 most recent backups
+            if len(backup_files) > 3:
+                files_to_remove = backup_files[:-3]  # All but the last 3
+                for old_backup in files_to_remove:
+                    try:
+                        os.remove(old_backup)
+                        self.get_logger().debug(f"Cleaned up old backup: {old_backup}")
+                    except Exception as e:
+                        self.get_logger().debug(f"Failed to remove old backup {old_backup}: {e}")
+        except Exception as e:
+            self.get_logger().debug(f"Backup cleanup failed: {e}")
+
+    def _save_versioned_rknn(self):
+        """Save timestamped version of the current RKNN model for history tracking."""
+        try:
+            model_dir = getattr(self.export_helper, 'model_dir', 'models')
+            current_rknn = os.path.join(model_dir, "exploration_model_bev.rknn")
+            
+            if not os.path.exists(current_rknn):
+                return
+            
+            timestamp = int(time.time())
+            versioned_path = os.path.join(model_dir, f"exploration_model_bev_{timestamp}.rknn")
+            
+            shutil.copy2(current_rknn, versioned_path)
+            self.get_logger().info(f"Saved versioned RKNN model: {versioned_path}")
+            
+            # Create/update latest symlink for RKNN models
+            latest_link = os.path.join(model_dir, "exploration_model_bev_latest.rknn")
+            try:
+                if os.path.islink(latest_link) or os.path.exists(latest_link):
+                    os.remove(latest_link)
+                os.symlink(os.path.basename(versioned_path), latest_link)
+            except Exception:
+                # Symlink might fail on some filesystems; not critical
+                pass
+            
+            # Clean up old versioned RKNN models (keep last 5)
+            self._cleanup_versioned_rknn(model_dir)
+            
+        except Exception as e:
+            self.get_logger().debug(f"Failed to save versioned RKNN: {e}")
+
+    def _cleanup_versioned_rknn(self, model_dir):
+        """Keep only the last 5 versioned RKNN models."""
+        try:
+            version_pattern = os.path.join(model_dir, "exploration_model_bev_[0-9]*.rknn")
+            versioned_files = sorted(glob.glob(version_pattern))
+            
+            # Keep only the 5 most recent versions
+            if len(versioned_files) > 5:
+                files_to_remove = versioned_files[:-5]
+                for old_version in files_to_remove:
+                    try:
+                        os.remove(old_version)
+                        self.get_logger().debug(f"Cleaned up old RKNN version: {old_version}")
+                    except Exception as e:
+                        self.get_logger().debug(f"Failed to remove old version {old_version}: {e}")
+        except Exception as e:
+            self.get_logger().debug(f"Versioned RKNN cleanup failed: {e}")
 
     def _restore_rknn_backup(self, backup_path):
         if not backup_path or not os.path.exists(backup_path):

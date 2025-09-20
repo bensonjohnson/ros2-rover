@@ -90,6 +90,31 @@ LAUNCH_PID=$!
 trap 'echo; echo "🛑 Stopping PPO exploration..."; kill $LAUNCH_PID 2>/dev/null; sleep 2; kill -9 $LAUNCH_PID 2>/dev/null; echo "✅ Stopped"; exit 0' SIGINT SIGTERM
 
 echo "PPO exploration running (PID: $LAUNCH_PID)"
+
+# Wait for critical services to become available
+echo "Checking service readiness..."
+(
+  sleep 15  # Give nodes time to start
+  echo "Waiting for /reload_rknn service..."
+  for i in {1..10}; do
+    if ros2 service list | grep -q "/reload_rknn"; then
+      echo "✓ /reload_rknn service is available"
+      # Test the service with a quick call
+      if ros2 service call /reload_rknn std_srvs/srv/Trigger --timeout 10; then
+        echo "✓ RKNN service responded successfully"
+      else
+        echo "⚠ RKNN service available but not responding properly"
+      fi
+      break
+    else
+      echo "⏳ Waiting for RKNN service... (attempt $i/10)"
+      sleep 2
+    fi
+  done
+  if [ $i -eq 10 ]; then
+    echo "⚠ /reload_rknn service not available after 30s - continuing anyway"
+  fi
+) &
 echo "Log file: $LOG_FILE"
 echo "- Monitor: ros2 topic echo /ppo_status"
 echo "- Safety: ros2 topic echo /safety_monitor_status"
