@@ -1,8 +1,7 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
-DEFAULT_MODE="rtab"          # rtab | bev
 DEFAULT_MAX_SPEED="0.18"
 DEFAULT_SAFETY_DISTANCE="0.25"
 DEFAULT_BUILD="on"
@@ -12,7 +11,6 @@ DEFAULT_BAG_RATE="1.0"
 DEFAULT_BAG_LOOP="false"
 DEFAULT_LOG_DIR="log"
 
-MODE="$DEFAULT_MODE"
 MAX_SPEED="$DEFAULT_MAX_SPEED"
 SAFETY_DISTANCE="$DEFAULT_SAFETY_DISTANCE"
 DO_BUILD="$DEFAULT_BUILD"
@@ -21,24 +19,17 @@ BAG_PATH="$DEFAULT_BAG_PATH"
 BAG_RATE="$DEFAULT_BAG_RATE"
 BAG_LOOP="$DEFAULT_BAG_LOOP"
 LOG_DIR="$DEFAULT_LOG_DIR"
+SESSION_MODE="explore"  # explore | train
 
-function ensure_workspace() {
+ensure_workspace() {
   if [ ! -f "install/setup.bash" ]; then
-    echo "Error: Please run this script from the ros2-rover workspace root"
+    echo "Error: run this script from the ros2-rover workspace root"
     echo "Current directory: $(pwd)"
     exit 1
   fi
 }
 
-function toggle_mode() {
-  if [ "$MODE" = "rtab" ]; then
-    MODE="bev"
-  else
-    MODE="rtab"
-  fi
-}
-
-function toggle_build() {
+toggle_build() {
   if [ "$DO_BUILD" = "on" ]; then
     DO_BUILD="off"
   else
@@ -46,7 +37,7 @@ function toggle_build() {
   fi
 }
 
-function toggle_bag_replay() {
+toggle_bag_replay() {
   if [ "$BAG_REPLAY" = "on" ]; then
     BAG_REPLAY="off"
   else
@@ -54,7 +45,7 @@ function toggle_bag_replay() {
   fi
 }
 
-function prompt_value() {
+prompt_value() {
   local prompt="$1"
   local current="$2"
   local varname="$3"
@@ -64,65 +55,64 @@ function prompt_value() {
   fi
 }
 
-function draw_menu() {
+draw_menu() {
   clear
   cat <<MENU
 ==================================================
- ROS2 Tractor - Exploration Launcher
+ ROS2 Tractor - RTAB Control Menu
 ==================================================
- (1) Exploration mode .............. ${MODE^^}
- (2) Max speed (m/s) ............... $MAX_SPEED
- (3) Safety distance (m) ........... $SAFETY_DISTANCE
- (4) Colcon build on start ......... ${DO_BUILD^^}
- (5) Bag replay .................... ${BAG_REPLAY^^}
+ (1) Max speed (m/s) ............... $MAX_SPEED
+ (2) Safety distance (m) ........... $SAFETY_DISTANCE
+ (3) Colcon build on start ......... ${DO_BUILD^^}
+ (4) Bag replay .................... ${BAG_REPLAY^^}
 MENU
   if [ "$BAG_REPLAY" = "on" ]; then
     cat <<MENU
-  (6) Bag path ..................... ${BAG_PATH:-<unset>}
-  (7) Bag rate scale ................ $BAG_RATE
-  (8) Bag loop playback ............ ${BAG_LOOP^^}
+ (5) Bag path ..................... ${BAG_PATH:-<unset>}
+ (6) Bag rate scale ................ $BAG_RATE
+ (7) Bag loop playback ............ ${BAG_LOOP^^}
 MENU
   fi
   cat <<MENU
- (S) Start exploration
+ (S) Start exploration (live sensors)
+ (T) Start offline training (bag replay)
  (Q) Quit without starting
 --------------------------------------------------
  Select option: 
 MENU
 }
 
-function run_colcon() {
+run_colcon() {
   echo "Building workspace (tractor_bringup + tractor_control)..."
   colcon build --packages-select tractor_bringup tractor_control --cmake-args -DCMAKE_BUILD_TYPE=Release
 }
 
-function launch_stack() {
+launch_exploration() {
   mkdir -p "$LOG_DIR"
-  local log_file="$LOG_DIR/$(printf '%s_exploration_%s.log' "$MODE" "$(date +%Y%m%d_%H%M%S)")"
+  local log_file="$LOG_DIR/rtab_exploration_$(date +%Y%m%d_%H%M%S).log"
 
   source /opt/ros/jazzy/setup.bash
   source install/setup.bash
 
-  local args=(
-    ros2 launch tractor_bringup npu_exploration_ppo.launch.py
-    max_speed:=$MAX_SPEED
-    safety_distance:=$SAFETY_DISTANCE
-  )
-
-  if [ "$MODE" = "rtab" ]; then
-    args+=(use_rtab_observation:=true)
-  else
-    args+=(use_rtab_observation:=false)
-  fi
-
-  echo "Launching exploration stack (mode=$MODE) ..."
+  echo "Launching RTAB exploration stack..."
   {
-    printf '[INFO] %s starting exploration mode=%s max_speed=%s safety_distance=%s\n' "$(date)" "$MODE" "$MAX_SPEED" "$SAFETY_DISTANCE"
-    "${args[@]}"
+    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE"
+    ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
+      max_speed:=$MAX_SPEED \
+      safety_distance:=$SAFETY_DISTANCE \
+      use_rtab_observation:=true
   } | tee "$log_file"
 }
 
-function start_bag_replay() {
+launch_training() {
+  source /opt/ros/jazzy/setup.bash
+  source install/setup.bash
+
+  echo "Launching RTAB offline training stack..."
+  ros2 launch tractor_bringup rtab_offline_training.launch.py
+}
+
+start_bag_replay() {
   if [ "$BAG_REPLAY" != "on" ] || [ -z "$BAG_PATH" ]; then
     BAG_REPLAY_PID=""
     return
@@ -141,7 +131,7 @@ function start_bag_replay() {
   fi
 }
 
-function stop_bag_replay() {
+stop_bag_replay() {
   if [ -n "$1" ] && ps -p "$1" > /dev/null 2>&1; then
     kill "$1" 2>/dev/null || true
     wait "$1" 2>/dev/null || true
@@ -155,40 +145,50 @@ while true; do
   read -r choice
   case "${choice^^}" in
     1)
-      toggle_mode
-      ;;
-    2)
       prompt_value "Enter max speed" "$MAX_SPEED" MAX_SPEED
       ;;
-    3)
+    2)
       prompt_value "Enter safety distance" "$SAFETY_DISTANCE" SAFETY_DISTANCE
       ;;
-    4)
+    3)
       toggle_build
       ;;
-    5)
+    4)
       toggle_bag_replay
       ;;
-    6)
+    5)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
       fi
       ;;
-    7)
+    6)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter rate scale" "$BAG_RATE" BAG_RATE
       fi
       ;;
-    8)
+    7)
       if [ "$BAG_REPLAY" = "on" ]; then
-        if [ "$BAG_LOOP" = "true" ]; then
-          BAG_LOOP="false"
-        else
-          BAG_LOOP="true"
-        fi
+        BAG_LOOP=$([ "$BAG_LOOP" = "true" ] && echo "false" || echo "true")
       fi
       ;;
     S)
+      SESSION_MODE="explore"
+      break
+      ;;
+    T)
+      SESSION_MODE="train"
+      if [ "$BAG_REPLAY" = "off" ]; then
+        echo "Bag replay must be enabled for offline training."
+        BAG_REPLAY="on"
+      fi
+      if [ -z "$BAG_PATH" ]; then
+        prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
+      fi
+      if [ -z "$BAG_PATH" ]; then
+        echo "Bag path required for training."
+        sleep 1
+        continue
+      fi
       break
       ;;
     Q)
@@ -196,27 +196,8 @@ while true; do
       exit 0
       ;;
     *)
-      # Additional shortcuts when bag replay enabled
-      if [ "$BAG_REPLAY" = "on" ]; then
-        case "${choice^^}" in
-          P)
-            prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
-            ;;
-          T)
-            prompt_value "Topics (comma separated, optional)" "${TOPICS:-}" TOPICS
-            ;;
-          *)
-            ;;
-        esac
-      fi
       ;;
   esac
-  if [ "${choice^^}" = "" ]; then
-    continue
-  fi
-  if [[ "${choice^^}" =~ ^[0-9A-Z]$ ]]; then
-    continue
-  fi
   sleep 0.2
 done
 
@@ -227,11 +208,15 @@ else
 fi
 
 BAG_REPLAY_PID=""
-trap 'echo; echo "🛑 Stopping exploration..."; [ -n "$MAIN_PID" ] && kill "$MAIN_PID" 2>/dev/null; stop_bag_replay "$BAG_REPLAY_PID"; exit 0' SIGINT SIGTERM
+trap 'echo; echo "🛑 Stopping session..."; [ -n "$MAIN_PID" ] && kill "$MAIN_PID" 2>/dev/null; stop_bag_replay "$BAG_REPLAY_PID"; exit 0' SIGINT SIGTERM
 
 start_bag_replay
 
-launch_stack &
+if [ "$SESSION_MODE" = "explore" ]; then
+  launch_exploration &
+else
+  launch_training &
+fi
 MAIN_PID=$!
 wait $MAIN_PID
 EXIT_CODE=$?
