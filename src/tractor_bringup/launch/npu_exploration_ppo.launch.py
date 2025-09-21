@@ -8,6 +8,7 @@ PPO Live-Training Exploration Launch File
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -20,6 +21,7 @@ def generate_launch_description():
     # Args
     declare_max_speed_cmd = DeclareLaunchArgument("max_speed", default_value="0.15")
     declare_safety_distance_cmd = DeclareLaunchArgument("safety_distance", default_value="0.2")
+    declare_use_rtab_cmd = DeclareLaunchArgument("use_rtab_observation", default_value="false")
 
     # Robot description
     robot_description_launch = IncludeLaunchDescription(
@@ -34,6 +36,8 @@ def generate_launch_description():
         output="screen",
         parameters=[os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml")]
     )
+
+    use_rtab = LaunchConfiguration("use_rtab_observation")
 
     # RealSense
     realsense_launch = IncludeLaunchDescription(
@@ -55,6 +59,23 @@ def generate_launch_description():
             "decimation_filter.enable": "true",
             "decimation_filter.filter_magnitude": "2",
             "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
+        }.items()
+    )
+
+    # RTAB-Map bringup (optional)
+    rtabmap_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("rtabmap_ros"), "launch", "rtabmap.launch.py")
+        ),
+        condition=IfCondition(use_rtab),
+        launch_arguments={
+            'use_sim_time': 'false',
+            'frame_id': 'base_link',
+            'odom_topic': '/odom',
+            'subscribe_depth': 'true',
+            'subscribe_rgb': 'true',
+            'approx_sync': 'true',
+            'queue_size': '10',
         }.items()
     )
 
@@ -83,10 +104,31 @@ def generate_launch_description():
             "imu_roll_pitch_threshold_deg": 3.0,
             "min_obstacle_height_m": 0.25,
             "grass_height_tolerance_m": 0.15,
-        }]
+        }],
+        condition=UnlessCondition(use_rtab)
     )
 
-    # Safety monitor (shared BEV + PC fallback)
+    # RTAB observation builder
+    rtab_observation_node = Node(
+        package="tractor_bringup",
+        executable="rtab_observation_node.py",
+        name="rtab_observation",
+        output="screen",
+        parameters=[{
+            "depth_topic": "/camera/aligned_depth_to_color/image_raw",
+            "occupancy_topic": "/rtabmap/local_grid_map",
+            "frontier_topic": "/rtabmap/frontiers",
+            "odom_topic": "/odom",
+            "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
+            "publish_rate_hz": 10.0,
+            "occupancy_window_m": 12.0,
+            "output_resolution": [128, 128],
+            "depth_clip_m": 6.0,
+        }],
+        condition=IfCondition(use_rtab)
+    )
+
+    # Safety monitor variants
     safety_monitor_node = Node(
         package="tractor_bringup",
         executable="simple_safety_monitor_bev.py",
@@ -102,7 +144,24 @@ def generate_launch_description():
             "bev_freshness_timeout": 0.5,
             "bev_x_range": 6.0,
             "forward_min_distance": 0.05,
-        }]
+        }],
+        condition=UnlessCondition(use_rtab)
+    )
+
+    safety_monitor_rtab = Node(
+        package="tractor_bringup",
+        executable="simple_safety_monitor_rtab.py",
+        name="simple_safety_monitor_rtab",
+        output="screen",
+        parameters=[{
+            "occupancy_topic": "/rtabmap/local_grid_map",
+            "input_cmd_topic": "cmd_vel_ai",
+            "output_cmd_topic": "cmd_vel_raw",
+            "emergency_stop_distance": LaunchConfiguration("safety_distance"),
+            "hard_stop_distance": 0.12,
+            "forward_width_m": 1.2,
+        }],
+        condition=IfCondition(use_rtab)
     )
 
     # Velocity feedback controller
@@ -144,10 +203,24 @@ def generate_launch_description():
         remappings=[
             ("point_cloud", "/camera/camera/depth/color/points"),
             ("odom", "/odom"),
-        ]
+        ],
+        condition=UnlessCondition(use_rtab)
     )
 
-    # PPO Manager
+    npu_rtab_node = Node(
+        package="tractor_bringup",
+        executable="npu_exploration_rtab.py",
+        name="npu_exploration_rtab",
+        output="screen",
+        parameters=[{
+            "max_speed": LaunchConfiguration("max_speed"),
+            "safety_distance": LaunchConfiguration("safety_distance"),
+            "observation_topic": "/exploration/observation",
+        }],
+        condition=IfCondition(use_rtab)
+    )
+
+    # PPO Managers
     ppo_node = Node(
         package="tractor_bringup",
         executable="ppo_manager_node.py",
@@ -182,7 +255,30 @@ def generate_launch_description():
             "min_effective_angular": 0.05,
             "small_action_penalty": -0.3,
             "small_action_patience": 3,
-        }]
+        }],
+        condition=UnlessCondition(use_rtab)
+    )
+
+    ppo_rtab_node = Node(
+        package="tractor_bringup",
+        executable="ppo_manager_rtab.py",
+        name="ppo_manager_rtab",
+        output="screen",
+        parameters=[{
+            "observation_topic": "/exploration/observation",
+            "cmd_topic": "cmd_vel_ai",
+            "update_interval_sec": 20.0,
+            "rollout_capacity": 4096,
+            "minibatch_size": 128,
+            "update_epochs": 3,
+            "reward_forward_scale": 4.0,
+            "reward_emergency_penalty": -5.0,
+            "reward_block_penalty": -1.0,
+            "reward_coverage_scale": 2.0,
+            "max_speed": LaunchConfiguration("max_speed"),
+            "min_forward_threshold": LaunchConfiguration("safety_distance"),
+        }],
+        condition=IfCondition(use_rtab)
     )
 
     # IMU (LSM9DS1)
@@ -195,16 +291,22 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_safety_distance_cmd)
+    ld.add_action(declare_use_rtab_cmd)
 
     # Bringup order
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
     ld.add_action(TimerAction(period=2.0, actions=[realsense_launch]))
+    ld.add_action(TimerAction(period=3.5, actions=[rtabmap_launch]))
     ld.add_action(TimerAction(period=4.0, actions=[bev_processor_node]))
+    ld.add_action(TimerAction(period=4.0, actions=[rtab_observation_node]))
     ld.add_action(TimerAction(period=5.0, actions=[lsm9ds1_launch]))
     ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_rtab]))
     ld.add_action(TimerAction(period=7.0, actions=[vfc_node]))
     ld.add_action(TimerAction(period=8.0, actions=[npu_node]))
+    ld.add_action(TimerAction(period=8.0, actions=[npu_rtab_node]))
     ld.add_action(TimerAction(period=9.0, actions=[ppo_node]))
+    ld.add_action(TimerAction(period=9.0, actions=[ppo_rtab_node]))
 
     return ld
