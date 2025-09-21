@@ -29,8 +29,13 @@ setup(
             "npu_exploration_bev.py = tractor_bringup.npu_exploration_bev:main",
             "simple_safety_monitor_bev.py = tractor_bringup.simple_safety_monitor_bev:main",
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
+            "simple_safety_monitor_rtab.py = tractor_bringup.simple_safety_monitor_rtab:main",
             "bev_processor_node.py = tractor_bringup.bev_processor_node:main",
             "ppo_manager_node.py = tractor_bringup.ppo_manager_node:main",
+            "ppo_manager_rtab.py = tractor_bringup.ppo_manager_rtab:main",
+            "rtab_observation_node.py = tractor_bringup.rtab_observation_node:main",
+            "npu_exploration_rtab.py = tractor_bringup.npu_exploration_rtab:main",
+            "rtab_bag_replay.py = tractor_bringup.rtab_bag_replay:main",
         ],
     },
 )
