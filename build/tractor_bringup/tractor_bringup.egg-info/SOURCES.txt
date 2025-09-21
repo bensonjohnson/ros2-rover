@@ -31,6 +31,7 @@ launch/npu_exploration_depth.launch.py
 launch/npu_exploration_ppo.launch.py
 launch/robot_description.launch.py
 launch/robot_localization.launch.py
+launch/rtab_offline_training.launch.py
 launch/rtabmap_nav2.launch.py
 launch/xbox_teleop.launch.py
 maps/yard_map.pgm
@@ -52,10 +53,16 @@ tractor_bringup/example_usage.py
 tractor_bringup/frontier_explorer.py
 tractor_bringup/improved_reward_system.py
 tractor_bringup/npu_exploration_bev.py
+tractor_bringup/npu_exploration_rtab.py
 tractor_bringup/pbt_es_rl_trainer.py
 tractor_bringup/ppo_manager_node.py
+tractor_bringup/ppo_manager_rtab.py
 tractor_bringup/ppo_trainer_bev.py
+tractor_bringup/ppo_trainer_rtab.py
 tractor_bringup/rknn_trainer_bev.py
+tractor_bringup/rtab_bag_replay.py
+tractor_bringup/rtab_observation_node.py
 tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_bev.py
+tractor_bringup/simple_safety_monitor_rtab.py
 urdf/tractor.urdf.xacro
