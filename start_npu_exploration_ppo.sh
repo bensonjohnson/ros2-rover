@@ -100,7 +100,7 @@ echo "Checking service readiness..."
     if ros2 service list | grep -q "/reload_rknn"; then
       echo "✓ /reload_rknn service is available"
       # Test the service with a quick call
-      if ros2 service call /reload_rknn std_srvs/srv/Trigger --timeout 10; then
+      if timeout 5 ros2 service call /reload_rknn std_srvs/srv/Trigger; then
         echo "✓ RKNN service responded successfully"
       else
         echo "⚠ RKNN service available but not responding properly"
