@@ -123,7 +123,7 @@ def generate_launch_description():
         parameters=[{
             "max_speed": LaunchConfiguration("max_speed"),
             "safety_distance": LaunchConfiguration("safety_distance"),
-            "operation_mode": "inference",
+            "operation_mode": "hybrid",
             "npu_inference_rate": 10.0,
             "enable_training_optimization": False,
             "enable_reward_optimization": False,
