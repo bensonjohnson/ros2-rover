@@ -12,8 +12,11 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
+  <depend>rosidl_runtime_py</depend>
   <depend>robot_state_publisher</depend>
   <depend>joint_state_publisher</depend>
   <depend>nav2_bringup</depend>
@@ -26,6 +29,8 @@
   <depend>urdf</depend>
   <depend>xacro</depend>
   <depend>rknn</depend>
+  <exec_depend>tf_transformations</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

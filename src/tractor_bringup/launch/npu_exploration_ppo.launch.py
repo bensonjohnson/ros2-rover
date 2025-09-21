@@ -39,33 +39,30 @@ def generate_launch_description():
 
     use_rtab = LaunchConfiguration("use_rtab_observation")
 
-    # RealSense
+    # RealSense - use working configuration from depth exploration
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "enable_pointcloud": "true",
-            "align_depth": "true",
-            "enable_color": "false",
+            "pointcloud.enable": "true",
+            "align_depth.enable": "true",
+            "enable_color": "true",  # Enable for RTAB-Map
             "enable_depth": "true",
-            "enable_sync": "false",
+            "enable_sync": "true",
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x30",
-            "rgb_camera.color_profile": "424x240x30",
+            "depth_module.depth_profile": "424x240x30",  # Working format
+            "rgb_camera.color_profile": "424x240x30",   # Working format
             "enable_imu": "false",
             "enable_gyro": "false",
             "enable_accel": "false",
-            "decimation_filter.enable": "true",
-            "decimation_filter.filter_magnitude": "2",
-            "config_file": os.path.join(get_package_share_directory("tractor_bringup"), "config", "realsense_config.yaml"),
         }.items()
     )
 
     # RTAB-Map bringup (optional)
     rtabmap_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("rtabmap_ros"), "launch", "rtabmap.launch.py")
+            os.path.join(get_package_share_directory("rtabmap_launch"), "launch", "rtabmap.launch.py")
         ),
         condition=IfCondition(use_rtab),
         launch_arguments={
@@ -76,6 +73,9 @@ def generate_launch_description():
             'subscribe_rgb': 'true',
             'approx_sync': 'true',
             'queue_size': '10',
+            'rgb_topic': '/camera/color/image_raw',
+            'depth_topic': '/camera/aligned_depth_to_color/image_raw',
+            'camera_info_topic': '/camera/color/camera_info',
         }.items()
     )
 

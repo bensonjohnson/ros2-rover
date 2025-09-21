@@ -87,12 +87,71 @@ run_colcon() {
   colcon build --packages-select tractor_bringup tractor_control --cmake-args -DCMAKE_BUILD_TYPE=Release
 }
 
+configure_realsense_usb() {
+  echo "Configuring USB power management for RealSense..."
+  USB_DEVICE_PATH=""
+  for device in /sys/bus/usb/devices/*/idProduct; do
+    if [ -f "$device" ] && [ "$(cat $device 2>/dev/null)" = "0b3a" ]; then
+      USB_DEVICE_PATH=$(dirname $device)
+      echo "✓ Found D435i at USB path: $USB_DEVICE_PATH"
+      break
+    fi
+  done
+  if [ -z "$USB_DEVICE_PATH" ]; then
+    for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+      if [ -d "$path" ]; then
+        USB_DEVICE_PATH="$path"
+        echo "✓ Using fallback USB path: $USB_DEVICE_PATH"
+        break
+      fi
+    done
+  fi
+  if [ -n "$USB_DEVICE_PATH" ]; then
+    echo "on" | sudo tee $USB_DEVICE_PATH/power/control > /dev/null 2>&1
+    echo "-1" | sudo tee $USB_DEVICE_PATH/power/autosuspend > /dev/null 2>&1
+    echo "✓ USB power management configured"
+  else
+    echo "⚠ USB device path not found, continuing anyway"
+  fi
+
+  echo "Checking RealSense D435i..."
+  if command -v rs-enumerate-devices &> /dev/null; then
+    if timeout 10s rs-enumerate-devices 2>/dev/null | grep -q "D435I" 2>/dev/null; then
+      echo "✓ RealSense D435i detected"
+      if [ -n "$USB_DEVICE_PATH" ] && [ -w "$USB_DEVICE_PATH" ]; then
+        echo "Performing aggressive USB device reset..."
+        echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+        sleep 2
+        echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+        sleep 3
+        
+        # Additional reset via USB subsystem
+        echo "suspend" | sudo tee $USB_DEVICE_PATH/power/level > /dev/null 2>&1
+        sleep 1
+        echo "auto" | sudo tee $USB_DEVICE_PATH/power/level > /dev/null 2>&1
+        echo "✓ USB device reset and power cycled"
+        sleep 3  # Give device time to fully reinitialize
+      fi
+    else
+      echo "⚠ RealSense D435i not detected or timeout - proceeding with launch"
+    fi
+  else
+    echo "⚠ rs-enumerate-devices not found - skipping camera pre-check"
+  fi
+}
+
 launch_exploration() {
   mkdir -p "$LOG_DIR"
   local log_file="$LOG_DIR/rtab_exploration_$(date +%Y%m%d_%H%M%S).log"
 
+  # Configure RealSense USB before launching
+  configure_realsense_usb
+
+  # Temporarily disable strict error checking for ROS sourcing
+  set +u
   source /opt/ros/jazzy/setup.bash
   source install/setup.bash
+  set -u
 
   echo "Launching RTAB exploration stack..."
   {
@@ -105,8 +164,11 @@ launch_exploration() {
 }
 
 launch_training() {
+  # Temporarily disable strict error checking for ROS sourcing
+  set +u
   source /opt/ros/jazzy/setup.bash
   source install/setup.bash
+  set -u
 
   echo "Launching RTAB offline training stack..."
   ros2 launch tractor_bringup rtab_offline_training.launch.py

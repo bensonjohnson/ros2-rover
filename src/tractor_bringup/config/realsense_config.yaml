@@ -10,7 +10,6 @@ camera_namespace: "camera"
 enable_sync: true
 enable_pointcloud: true
 pointcloud.enable: true
-pointcloud__neon_.enable: true
 align_depth.enable: true
 
 # Depth camera settings - minimal bandwidth configuration
@@ -35,8 +34,8 @@ rgb_camera.saturation: 64
 # IMU settings - enabled for NPU exploration  
 enable_gyro: true
 enable_accel: true
-gyro_fps: 63  # Reduced from 200 to lower bandwidth
-accel_fps: 63  # Reduced from 250 to match gyro
+gyro_fps: 200  # Valid value for D435i
+accel_fps: 250  # Valid value for D435i
 unite_imu_method: "linear_interpolation"
 hold_back_imu_for_frames: true
 

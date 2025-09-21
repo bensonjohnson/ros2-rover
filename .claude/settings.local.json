@@ -55,7 +55,11 @@
       "WebFetch(domain:rtklibexplorer.wordpress.com)",
       "WebFetch(domain:robofoundry.medium.com)",
       "Bash(bash:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(ros2 pkg list:*)",
+      "Bash(apt list:*)",
+      "Bash(./start_npu_exploration_depth.sh:*)",
+      "Bash(dmesg:*)"
     ],
     "deny": []
   }
