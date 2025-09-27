@@ -42,6 +42,10 @@ class SimpleSafetyMonitorRTAB(Node):
         self.declare_parameter('occupancy_threshold', 50)
         self.declare_parameter('freshness_timeout', 0.5)
         self.declare_parameter('safety_hint_topic', 'rtab_observation/safety_hints')
+        self.declare_parameter('enable_adaptive_safety', True)
+        self.declare_parameter('adaptive_linear_coeff', 1.0)
+        self.declare_parameter('adaptive_min_distance', 0.15)
+        self.declare_parameter('adaptive_max_distance', 0.6)
 
         self.occupancy_topic = str(self.get_parameter('occupancy_topic').value)
         self.input_cmd_topic = str(self.get_parameter('input_cmd_topic').value)
@@ -54,6 +58,10 @@ class SimpleSafetyMonitorRTAB(Node):
         self.occupancy_threshold = int(self.get_parameter('occupancy_threshold').value)
         self.freshness_timeout = float(self.get_parameter('freshness_timeout').value)
         self.hint_topic = str(self.get_parameter('safety_hint_topic').value)
+        self.adaptive_enabled = bool(self.get_parameter('enable_adaptive_safety').value)
+        self.adaptive_linear_coeff = float(self.get_parameter('adaptive_linear_coeff').value)
+        self.adaptive_min = float(self.get_parameter('adaptive_min_distance').value)
+        self.adaptive_max = float(self.get_parameter('adaptive_max_distance').value)
 
         # State
         self.latest_cmd: Optional[Twist] = None
@@ -67,6 +75,8 @@ class SimpleSafetyMonitorRTAB(Node):
         self.right_clear = 1.0
         self.shared_hint: Optional[tuple[float, float, float]] = None
         self.shared_hint_stamp: Optional[Time] = None
+        self.current_emergency_threshold = self.emergency_distance
+        self.current_hard_stop_threshold = self.hard_stop_distance
 
         # TF
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=5.0))
@@ -102,8 +112,12 @@ class SimpleSafetyMonitorRTAB(Node):
         self.commands_received += 1
         self.latest_cmd = msg
         self._recompute_distances()
-        emergency = self.min_forward <= self.emergency_distance
-        hard_stop = self.min_forward <= self.hard_stop_distance
+        emergency_threshold, hard_stop_threshold = self._effective_thresholds()
+        self.current_emergency_threshold = emergency_threshold
+        self.current_hard_stop_threshold = hard_stop_threshold
+
+        emergency = self.min_forward <= emergency_threshold
+        hard_stop = self.min_forward <= hard_stop_threshold
         if emergency:
             self.emergency_stops += 1
         # Publish estop state
@@ -114,7 +128,7 @@ class SimpleSafetyMonitorRTAB(Node):
         out.angular = msg.angular
         out.linear = msg.linear
 
-        if self.min_forward > self.emergency_distance:
+        if self.min_forward > emergency_threshold:
             self.cmd_pub.publish(msg)
             return
 
@@ -154,6 +168,9 @@ class SimpleSafetyMonitorRTAB(Node):
                 self.min_forward = float(hint_min)
                 self.left_clear = float(hint_left)
                 self.right_clear = float(hint_right)
+                emergency_threshold, hard_stop_threshold = self._effective_thresholds()
+                self.current_emergency_threshold = emergency_threshold
+                self.current_hard_stop_threshold = hard_stop_threshold
                 self.min_distance_pub.publish(Float32(data=float(self.min_forward)))
                 return
         if grid is None:
@@ -190,7 +207,26 @@ class SimpleSafetyMonitorRTAB(Node):
         self.left_clear = float(np.clip(np.min(forward[left_mask]) if np.any(left_mask) else self.max_eval_distance, 0.0, self.max_eval_distance)) / self.max_eval_distance
         self.right_clear = float(np.clip(np.min(forward[right_mask]) if np.any(right_mask) else self.max_eval_distance, 0.0, self.max_eval_distance)) / self.max_eval_distance
 
+        emergency_threshold, hard_stop_threshold = self._effective_thresholds()
+        self.current_emergency_threshold = emergency_threshold
+        self.current_hard_stop_threshold = hard_stop_threshold
+
         self.min_distance_pub.publish(Float32(data=float(self.min_forward)))
+
+    def _effective_thresholds(self) -> tuple[float, float]:
+        if not self.adaptive_enabled or self.latest_cmd is None:
+            return self.emergency_distance, self.hard_stop_distance
+        try:
+            speed = max(float(self.latest_cmd.linear.x), 0.0)
+        except Exception:
+            speed = 0.0
+        emergency = self.emergency_distance + self.adaptive_linear_coeff * speed
+        emergency = float(np.clip(emergency, self.adaptive_min, self.adaptive_max))
+        hard = max(self.hard_stop_distance, emergency * 0.6)
+        hard = min(hard, emergency * 0.95)
+        hard = min(hard, emergency - 0.01)
+        hard = max(0.0, hard)
+        return emergency, hard
 
     def _occupied_points_in_base(self, grid: OccupancyGrid) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         data = np.asarray(grid.data, dtype=np.int16)
