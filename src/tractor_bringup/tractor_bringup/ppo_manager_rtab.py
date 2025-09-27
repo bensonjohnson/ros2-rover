@@ -45,6 +45,10 @@ class PPOManagerRTAB(Node):
         self.declare_parameter('rollout_capacity', 4096)
         self.declare_parameter('minibatch_size', 128)
         self.declare_parameter('update_epochs', 3)
+        self.declare_parameter('min_minibatch_size', 32)
+        self.declare_parameter('max_minibatch_size', 256)
+        self.declare_parameter('min_update_epochs', 1)
+        self.declare_parameter('max_update_epochs', 4)
         self.declare_parameter('ppo_clip', 0.2)
         self.declare_parameter('entropy_coef', 0.01)
         self.declare_parameter('value_coef', 0.5)
@@ -67,6 +71,10 @@ class PPOManagerRTAB(Node):
         self.rollout_capacity = int(self.get_parameter('rollout_capacity').value)
         self.minibatch_size = int(self.get_parameter('minibatch_size').value)
         self.update_epochs = int(self.get_parameter('update_epochs').value)
+        self.min_minibatch = max(1, int(self.get_parameter('min_minibatch_size').value))
+        self.max_minibatch = max(self.minibatch_size, int(self.get_parameter('max_minibatch_size').value))
+        self.min_epochs = max(1, int(self.get_parameter('min_update_epochs').value))
+        self.max_epochs = max(self.update_epochs, int(self.get_parameter('max_update_epochs').value))
         self.ppo_clip = float(self.get_parameter('ppo_clip').value)
         self.entropy_coef = float(self.get_parameter('entropy_coef').value)
         self.value_coef = float(self.get_parameter('value_coef').value)
@@ -268,6 +276,7 @@ class PPOManagerRTAB(Node):
     def update_timer(self) -> None:
         if self.training_paused or self.trainer is None:
             return
+        self._adapt_training_schedule()
         stats = self.trainer.update()
         if not stats.get('updated', False):
             return
@@ -286,6 +295,27 @@ class PPOManagerRTAB(Node):
             f"blocked={self.blocked_count}/{max(self.forward_attempts,1)}"
         )
         self.status_pub.publish(msg)
+
+    def _adapt_training_schedule(self) -> None:
+        if self.trainer is None:
+            return
+        buf_size = self.trainer.buffer.size
+        if buf_size <= 0:
+            return
+        target_batch = int(np.clip(buf_size // 4, self.min_minibatch, self.max_minibatch))
+        if target_batch != self.trainer.minibatch_size:
+            self.trainer.set_minibatch_size(target_batch)
+            self.minibatch_size = target_batch
+
+        avg_progress = np.mean(self.progress_history) if self.progress_history else 0.0
+        epochs = self.trainer.update_epochs
+        if avg_progress < 0.02:
+            epochs = min(self.max_epochs, epochs + 1)
+        elif avg_progress > 0.05 and epochs > self.min_epochs:
+            epochs = max(self.min_epochs, epochs - 1)
+        if epochs != self.trainer.update_epochs:
+            self.trainer.set_update_epochs(epochs)
+            self.update_epochs = epochs
 
     def _maybe_export_policy(self) -> None:
         if self.trainer is None:

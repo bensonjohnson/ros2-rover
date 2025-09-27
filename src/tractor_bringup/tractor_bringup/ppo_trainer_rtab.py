@@ -90,8 +90,8 @@ class RolloutBuffer:
         self.ptr = 0
         self.size = 0
         C, H, W = obs_shape
-        self.obs = np.zeros((capacity, C, H, W), dtype=np.float32)
-        self.proprio = np.zeros((capacity, proprio_dim), dtype=np.float32)
+        self.obs = np.zeros((capacity, C, H, W), dtype=np.float16)
+        self.proprio = np.zeros((capacity, proprio_dim), dtype=np.float16)
         self.actions = np.zeros((capacity, 2), dtype=np.float32)
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.dones = np.zeros((capacity,), dtype=np.float32)
@@ -100,8 +100,8 @@ class RolloutBuffer:
 
     def add(self, obs, proprio, action, reward, done, log_prob, value):
         idx = self.ptr
-        self.obs[idx] = obs
-        self.proprio[idx] = proprio
+        self.obs[idx] = obs.astype(np.float16)
+        self.proprio[idx] = proprio.astype(np.float16)
         self.actions[idx] = action
         self.rewards[idx] = reward
         self.dones[idx] = float(done)
@@ -161,6 +161,8 @@ class PPOTrainerRTAB:
         self.minibatch_size = minibatch_size
         self.buffer = RolloutBuffer(rollout_capacity, obs_shape, proprio_dim)
         self.update_count = 0
+        self._minibatch_size = minibatch_size
+        self.update_epochs = update_epochs
 
     def _to_device(self, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.to(self.device)
@@ -202,8 +204,8 @@ class PPOTrainerRTAB:
         if self.buffer.size < self.minibatch_size:
             return {"updated": False, "size": self.buffer.size}
         data = self.buffer.get()
-        obs = self._to_device(data['obs'])
-        proprio = self._to_device(data['proprio'])
+        obs = self._to_device(data['obs'].float())
+        proprio = self._to_device(data['proprio'].float())
         actions = self._to_device(data['actions'])
         old_log_probs = self._to_device(data['log_probs'])
         values = data['values'].numpy()
@@ -262,6 +264,12 @@ class PPOTrainerRTAB:
             "loss_actor": float(actor_loss.item()),
             "loss_value": float(value_loss.item()),
         }
+
+    def set_minibatch_size(self, minibatch_size: int) -> None:
+        self.minibatch_size = max(1, int(minibatch_size))
+
+    def set_update_epochs(self, epochs: int) -> None:
+        self.update_epochs = max(1, int(epochs))
 
     def state_dict(self) -> Dict[str, torch.Tensor]:
         return {
