@@ -84,6 +84,20 @@ class ValueHead(nn.Module):
         return self.fusion(x).squeeze(1)
 
 
+class ActorONNXWrapper(nn.Module):
+    def __init__(self, encoder_state: dict, policy_state: dict, in_channels: int, proprio_dim: int):
+        super().__init__()
+        self.encoder = RTABEncoder(in_channels)
+        self.policy = PolicyHead(self.encoder.output_dim, proprio_dim)
+        self.encoder.load_state_dict(encoder_state)
+        self.policy.load_state_dict(policy_state)
+
+    def forward(self, obs: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+        feat = self.encoder(obs)
+        logits = self.policy(feat, proprio)
+        return torch.tanh(logits)
+
+
 class RolloutBuffer:
     def __init__(self, capacity: int, obs_shape: Tuple[int, int, int], proprio_dim: int):
         self.capacity = capacity
@@ -270,6 +284,26 @@ class PPOTrainerRTAB:
 
     def set_update_epochs(self, epochs: int) -> None:
         self.update_epochs = max(1, int(epochs))
+
+    def export_onnx(self, path: str) -> None:
+        actor = ActorONNXWrapper(
+            self.encoder.state_dict(),
+            self.policy.state_dict(),
+            self.obs_shape[0],
+            self.proprio_dim,
+        )
+        actor.eval()
+        obs_dummy = torch.zeros(1, *self.obs_shape, dtype=torch.float32)
+        proprio_dummy = torch.zeros(1, self.proprio_dim, dtype=torch.float32)
+        torch.onnx.export(
+            actor,
+            (obs_dummy, proprio_dummy),
+            path,
+            input_names=['observation', 'proprio'],
+            output_names=['action'],
+            dynamic_axes={'observation': {0: 'batch'}, 'proprio': {0: 'batch'}, 'action': {0: 'batch'}},
+            opset_version=11,
+        )
 
     def state_dict(self) -> Dict[str, torch.Tensor]:
         return {

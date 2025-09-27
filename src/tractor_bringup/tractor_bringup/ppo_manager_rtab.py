@@ -14,6 +14,8 @@ import math
 import os
 import time
 from collections import deque
+from itertools import islice
+from pathlib import Path
 from typing import Optional, Deque
 
 import numpy as np
@@ -124,6 +126,7 @@ class PPOManagerRTAB(Node):
         self.training_paused = False
         self.pending_export = None
         self.idle_start: Optional[float] = None
+        self.calibration_buffer: Deque[tuple[np.ndarray, np.ndarray]] = deque(maxlen=256)
 
         # Rolling metrics
         self.reward_history: Deque[float] = deque(maxlen=self.status_window)
@@ -267,6 +270,7 @@ class PPOManagerRTAB(Node):
             self.forward_attempts += 1
 
         self.trainer.add_transition(obs, proprio, self.last_action, reward, False)
+        self.calibration_buffer.append((obs.copy(), proprio.copy()))
         self.reward_history.append(reward)
         self.coverage_history.append(coverage)
         self.progress_history.append(progress / dt)
@@ -343,16 +347,23 @@ class PPOManagerRTAB(Node):
         if self.idle_start is None or (time.time() - self.idle_start) < self.export_idle_timeout:
             return
         timestamp = time.strftime('%Y%m%d_%H%M%S')
-        path = os.path.join(self.export_dir, f'ppo_rtab_{timestamp}.pth')
+        base_name = f'ppo_rtab_{timestamp}'
+        base_path = os.path.join(self.export_dir, base_name)
+        pth_path = base_path + '.pth'
         try:
             torch_state = self.trainer.state_dict()
         except Exception as exc:  # pragma: no cover
             self.get_logger().warn(f'Failed to serialize policy: {exc}')
             return
-        tmp_path = path + '.tmp'
+        tmp_path = pth_path + '.tmp'
         torch.save(torch_state, tmp_path)
-        os.replace(tmp_path, path)
-        self.get_logger().info(f'Policy snapshot saved to {path}')
+        os.replace(tmp_path, pth_path)
+        self.get_logger().info(f'Policy snapshot saved to {pth_path}')
+
+        exported = self._export_rknn_policy(base_path)
+        if exported:
+            self._reload_rknn_runtime()
+            self.idle_start = None
 
     @staticmethod
     def _roll_pitch_from_quaternion(x: float, y: float, z: float, w: float) -> tuple[float, float]:
@@ -363,6 +374,86 @@ class PPOManagerRTAB(Node):
         t2 = max(min(t2, +1.0), -1.0)
         pitch = math.asin(t2)
         return roll, pitch
+
+    def _export_rknn_policy(self, base_path: str) -> bool:
+        if self.trainer is None or not self.calibration_buffer:
+            self.get_logger().warn('Skipping RKNN export: insufficient calibration samples')
+            return False
+
+        try:
+            self.trainer.export_onnx(base_path + '.onnx')
+        except Exception as exc:
+            self.get_logger().warn(f'Failed to export ONNX policy: {exc}')
+            return False
+
+        samples = list(islice(self.calibration_buffer, min(len(self.calibration_buffer), 128)))
+        calib_dir = os.path.join(self.export_dir, 'calibration')
+        os.makedirs(calib_dir, exist_ok=True)
+        dataset_path = os.path.join(calib_dir, f'{Path(base_path).name}_dataset.txt')
+        dataset_lines = []
+        for idx, (obs, proprio) in enumerate(samples):
+            obs_path = os.path.join(calib_dir, f'{Path(base_path).name}_obs_{idx}.npy')
+            proprio_path = os.path.join(calib_dir, f'{Path(base_path).name}_pro_{idx}.npy')
+            np.save(obs_path, obs.astype(np.float32))
+            np.save(proprio_path, proprio.astype(np.float32))
+            dataset_lines.append(f'{obs_path} {proprio_path}')
+        try:
+            with open(dataset_path, 'w') as dataset_file:
+                dataset_file.write('\n'.join(dataset_lines))
+        except OSError as exc:
+            self.get_logger().warn(f'Failed to write RKNN dataset file: {exc}')
+            return False
+
+        try:
+            from rknn.api import RKNN
+        except ImportError:
+            self.get_logger().warn('RKNN toolkit not available; skipping RKNN export')
+            return False
+
+        rknn_path = base_path + '.rknn'
+        rknn = RKNN()
+        try:
+            mean_values = [[0.0] * self.obs_shape[0]] if self.obs_shape else None
+            std_values = [[1.0] * self.obs_shape[0]] if self.obs_shape else None
+            rknn.config(mean_values=mean_values, std_values=std_values, target_platform='rk3588')
+            if rknn.load_onnx(onnx_model=base_path + '.onnx') != 0:
+                self.get_logger().warn('RKNN load_onnx failed')
+                return False
+            build_ret = rknn.build(do_quantization=True, dataset=dataset_path, algorithm='hybrid')
+            if build_ret != 0:
+                self.get_logger().warn(f'RKNN build failed (code {build_ret})')
+                return False
+            if rknn.export_rknn(rknn_path) != 0:
+                self.get_logger().warn('RKNN export failed')
+                return False
+            self.get_logger().info(f'RKNN model exported to {rknn_path}')
+            return True
+        except Exception as exc:
+            self.get_logger().warn(f'RKNN export error: {exc}')
+            return False
+        finally:
+            try:
+                rknn.release()
+            except Exception:
+                pass
+
+    def _reload_rknn_runtime(self) -> None:
+        if not self.reload_cli.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn('RKNN reload service unavailable')
+            return
+        start = time.time()
+        future = self.reload_cli.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        duration = time.time() - start
+        if future.done():
+            result = future.result()
+            if result is not None and result.success:
+                self.get_logger().info(f'RKNN runtime reloaded in {duration:.2f}s: {result.message}')
+            else:
+                message = result.message if result else 'unknown error'
+                self.get_logger().warn(f'RKNN reload failed after {duration:.2f}s: {message}')
+        else:
+            self.get_logger().warn('RKNN reload timed out')
 
 
 def main(args=None) -> None:
