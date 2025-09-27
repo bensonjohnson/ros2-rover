@@ -18,7 +18,7 @@
 
 ## PPO Training Stack
 - [x] Convert rollout storage to `float16` and add dynamic minibatch/epoch adjustments in `ppo_manager_rtab.py` / `ppo_trainer_rtab.py`.
-- [ ] Gate RKNN exports on low-activity windows and thin experience replay when idle.
+- [x] Gate RKNN exports on low-activity windows and thin experience replay when idle.
 
 ## RKNN Export
 - [ ] Build RTAB-based calibration dataset and integrate hybrid INT8 quantization before export.
