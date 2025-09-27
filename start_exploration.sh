@@ -10,6 +10,7 @@ DEFAULT_BAG_PATH=""
 DEFAULT_BAG_RATE="1.0"
 DEFAULT_BAG_LOOP="false"
 DEFAULT_LOG_DIR="log"
+DEFAULT_PPO_UPDATE_INTERVAL="20.0"
 
 MAX_SPEED="$DEFAULT_MAX_SPEED"
 SAFETY_DISTANCE="$DEFAULT_SAFETY_DISTANCE"
@@ -19,6 +20,7 @@ BAG_PATH="$DEFAULT_BAG_PATH"
 BAG_RATE="$DEFAULT_BAG_RATE"
 BAG_LOOP="$DEFAULT_BAG_LOOP"
 LOG_DIR="$DEFAULT_LOG_DIR"
+PPO_UPDATE_INTERVAL="$DEFAULT_PPO_UPDATE_INTERVAL"
 SESSION_MODE="explore"  # explore | train
 
 ensure_workspace() {
@@ -63,14 +65,15 @@ draw_menu() {
 ==================================================
  (1) Max speed (m/s) ............... $MAX_SPEED
  (2) Safety distance (m) ........... $SAFETY_DISTANCE
- (3) Colcon build on start ......... ${DO_BUILD^^}
- (4) Bag replay .................... ${BAG_REPLAY^^}
+ (3) PPO update interval (s) ....... $PPO_UPDATE_INTERVAL
+ (4) Colcon build on start ......... ${DO_BUILD^^}
+ (5) Bag replay .................... ${BAG_REPLAY^^}
 MENU
   if [ "$BAG_REPLAY" = "on" ]; then
     cat <<MENU
- (5) Bag path ..................... ${BAG_PATH:-<unset>}
- (6) Bag rate scale ................ $BAG_RATE
- (7) Bag loop playback ............ ${BAG_LOOP^^}
+ (6) Bag path ..................... ${BAG_PATH:-<unset>}
+ (7) Bag rate scale ................ $BAG_RATE
+ (8) Bag loop playback ............ ${BAG_LOOP^^}
 MENU
   fi
   cat <<MENU
@@ -155,10 +158,11 @@ launch_exploration() {
 
   echo "Launching RTAB exploration stack..."
   {
-    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE"
+    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s ppo_update_interval=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE" "$PPO_UPDATE_INTERVAL"
     ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
       max_speed:=$MAX_SPEED \
-      safety_distance:=$SAFETY_DISTANCE
+      safety_distance:=$SAFETY_DISTANCE \
+      ppo_update_interval_sec:=$PPO_UPDATE_INTERVAL
   } | tee "$log_file"
 }
 
@@ -212,22 +216,25 @@ while true; do
       prompt_value "Enter safety distance" "$SAFETY_DISTANCE" SAFETY_DISTANCE
       ;;
     3)
-      toggle_build
+      prompt_value "Enter PPO update interval" "$PPO_UPDATE_INTERVAL" PPO_UPDATE_INTERVAL
       ;;
     4)
-      toggle_bag_replay
+      toggle_build
       ;;
     5)
+      toggle_bag_replay
+      ;;
+    6)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
       fi
       ;;
-    6)
+    7)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter rate scale" "$BAG_RATE" BAG_RATE
       fi
       ;;
-    7)
+    8)
       if [ "$BAG_REPLAY" = "on" ]; then
         BAG_LOOP=$([ "$BAG_LOOP" = "true" ] && echo "false" || echo "true")
       fi

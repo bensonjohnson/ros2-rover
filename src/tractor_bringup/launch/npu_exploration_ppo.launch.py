@@ -21,6 +21,8 @@ def generate_launch_description():
 
     declare_max_speed_cmd = DeclareLaunchArgument("max_speed", default_value="0.15")
     declare_safety_distance_cmd = DeclareLaunchArgument("safety_distance", default_value="0.2")
+    declare_ppo_update_cmd = DeclareLaunchArgument("ppo_update_interval_sec", default_value="20.0")
+    declare_ppo_min_export_cmd = DeclareLaunchArgument("ppo_min_export_interval_sec", default_value="120.0")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -134,7 +136,8 @@ def generate_launch_description():
         parameters=[{
             "observation_topic": "/exploration/observation",
             "cmd_topic": "cmd_vel_ai",
-            "update_interval_sec": 20.0,
+            "update_interval_sec": LaunchConfiguration("ppo_update_interval_sec"),
+            "min_export_interval_sec": LaunchConfiguration("ppo_min_export_interval_sec"),
             "rollout_capacity": 4096,
             "minibatch_size": 128,
             "update_epochs": 3,
@@ -156,6 +159,8 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_safety_distance_cmd)
+    ld.add_action(declare_ppo_update_cmd)
+    ld.add_action(declare_ppo_min_export_cmd)
 
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
