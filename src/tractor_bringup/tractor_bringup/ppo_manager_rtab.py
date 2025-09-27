@@ -49,6 +49,11 @@ class PPOManagerRTAB(Node):
         self.declare_parameter('max_minibatch_size', 256)
         self.declare_parameter('min_update_epochs', 1)
         self.declare_parameter('max_update_epochs', 4)
+        self.declare_parameter('export_idle_linear_threshold', 0.05)
+        self.declare_parameter('export_idle_angular_threshold', 0.1)
+        self.declare_parameter('export_idle_timeout_sec', 15.0)
+        self.declare_parameter('replay_thin_threshold', 0.02)
+        self.declare_parameter('replay_thin_decay', 0.9)
         self.declare_parameter('ppo_clip', 0.2)
         self.declare_parameter('entropy_coef', 0.01)
         self.declare_parameter('value_coef', 0.5)
@@ -75,6 +80,11 @@ class PPOManagerRTAB(Node):
         self.max_minibatch = max(self.minibatch_size, int(self.get_parameter('max_minibatch_size').value))
         self.min_epochs = max(1, int(self.get_parameter('min_update_epochs').value))
         self.max_epochs = max(self.update_epochs, int(self.get_parameter('max_update_epochs').value))
+        self.export_idle_linear = float(self.get_parameter('export_idle_linear_threshold').value)
+        self.export_idle_angular = float(self.get_parameter('export_idle_angular_threshold').value)
+        self.export_idle_timeout = float(self.get_parameter('export_idle_timeout_sec').value)
+        self.replay_thin_threshold = float(self.get_parameter('replay_thin_threshold').value)
+        self.replay_thin_decay = float(self.get_parameter('replay_thin_decay').value)
         self.ppo_clip = float(self.get_parameter('ppo_clip').value)
         self.entropy_coef = float(self.get_parameter('entropy_coef').value)
         self.value_coef = float(self.get_parameter('value_coef').value)
@@ -113,6 +123,7 @@ class PPOManagerRTAB(Node):
         self.last_step_time = time.time()
         self.training_paused = False
         self.pending_export = None
+        self.idle_start: Optional[float] = None
 
         # Rolling metrics
         self.reward_history: Deque[float] = deque(maxlen=self.status_window)
@@ -260,6 +271,12 @@ class PPOManagerRTAB(Node):
         self.coverage_history.append(coverage)
         self.progress_history.append(progress / dt)
 
+        if abs(self.current_linear) < self.export_idle_linear and abs(self.current_angular) < self.export_idle_angular:
+            if self.idle_start is None:
+                self.idle_start = time.time()
+        else:
+            self.idle_start = None
+
         self.last_position = self.current_position.copy()
         self.last_coverage = coverage
         self.last_step_time = time.time()
@@ -317,8 +334,13 @@ class PPOManagerRTAB(Node):
             self.trainer.set_update_epochs(epochs)
             self.update_epochs = epochs
 
+        if avg_progress < self.replay_thin_threshold and self.trainer.buffer.size > 0:
+            self.trainer.buffer.rewards *= self.replay_thin_decay
+
     def _maybe_export_policy(self) -> None:
         if self.trainer is None:
+            return
+        if self.idle_start is None or (time.time() - self.idle_start) < self.export_idle_timeout:
             return
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         path = os.path.join(self.export_dir, f'ppo_rtab_{timestamp}.pth')
