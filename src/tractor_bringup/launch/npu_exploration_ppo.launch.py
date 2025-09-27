@@ -47,13 +47,12 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "true",
             "align_depth.enable": "true",
-            "enable_color": "true",
-            "enable_depth": "true",
+            "enable_rgb_camera": "true",
+            "enable_depth_camera": "true",
             "enable_sync": "true",
-            "device_type": "435i",
-            "depth_module.depth_profile": "424x240x30",
-            "rgb_camera.color_profile": "424x240x30",
-            "enable_imu": "false",
+            "device_type": "d435i",
+            "depth_module.profile": "424x240x30",
+            "rgb_camera.profile": "424x240x30",
             "enable_gyro": "false",
             "enable_accel": "false",
         }.items()
@@ -171,13 +170,13 @@ def generate_launch_description():
 
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
-    ld.add_action(TimerAction(period=2.0, actions=[realsense_launch]))
-    ld.add_action(TimerAction(period=3.5, actions=[rtabmap_launch]))
-    ld.add_action(TimerAction(period=4.0, actions=[rtab_observation_node]))
-    ld.add_action(TimerAction(period=5.0, actions=[lsm9ds1_launch]))
-    ld.add_action(TimerAction(period=6.0, actions=[safety_monitor_rtab]))
-    ld.add_action(TimerAction(period=7.0, actions=[vfc_node]))
-    ld.add_action(TimerAction(period=8.0, actions=[npu_rtab_node]))
-    ld.add_action(TimerAction(period=9.0, actions=[ppo_rtab_node]))
+    ld.add_action(TimerAction(period=5.0, actions=[realsense_launch]))
+    ld.add_action(TimerAction(period=8.0, actions=[rtabmap_launch]))
+    ld.add_action(TimerAction(period=9.0, actions=[rtab_observation_node]))
+    ld.add_action(TimerAction(period=6.0, actions=[lsm9ds1_launch]))
+    ld.add_action(TimerAction(period=10.0, actions=[safety_monitor_rtab]))
+    ld.add_action(TimerAction(period=11.0, actions=[vfc_node]))
+    ld.add_action(TimerAction(period=12.0, actions=[npu_rtab_node]))
+    ld.add_action(TimerAction(period=13.0, actions=[ppo_rtab_node]))
 
     return ld
