@@ -9,7 +9,7 @@
 - [x] Gate frontier updates in `rtab_observation_node.py` to run at a configurable interval.
 
 ## Safety Monitor
-- [ ] Share occupancy/min-distance buffers between observation node and `simple_safety_monitor_rtab.py`.
+- [x] Share occupancy/min-distance hints between observation node and `simple_safety_monitor_rtab.py`.
 - [ ] Implement adaptive safety-distance scaling tied to commanded speed.
 
 ## Runtime Inference

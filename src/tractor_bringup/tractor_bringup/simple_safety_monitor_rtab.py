@@ -19,7 +19,7 @@ from rclpy.time import Time
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 
 import tf2_ros
@@ -41,6 +41,7 @@ class SimpleSafetyMonitorRTAB(Node):
         self.declare_parameter('max_eval_distance', 4.0)
         self.declare_parameter('occupancy_threshold', 50)
         self.declare_parameter('freshness_timeout', 0.5)
+        self.declare_parameter('safety_hint_topic', 'rtab_observation/safety_hints')
 
         self.occupancy_topic = str(self.get_parameter('occupancy_topic').value)
         self.input_cmd_topic = str(self.get_parameter('input_cmd_topic').value)
@@ -52,6 +53,7 @@ class SimpleSafetyMonitorRTAB(Node):
         self.max_eval_distance = float(self.get_parameter('max_eval_distance').value)
         self.occupancy_threshold = int(self.get_parameter('occupancy_threshold').value)
         self.freshness_timeout = float(self.get_parameter('freshness_timeout').value)
+        self.hint_topic = str(self.get_parameter('safety_hint_topic').value)
 
         # State
         self.latest_cmd: Optional[Twist] = None
@@ -63,6 +65,8 @@ class SimpleSafetyMonitorRTAB(Node):
         self.min_forward = 10.0
         self.left_clear = 1.0
         self.right_clear = 1.0
+        self.shared_hint: Optional[tuple[float, float, float]] = None
+        self.shared_hint_stamp: Optional[Time] = None
 
         # TF
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=5.0))
@@ -71,6 +75,7 @@ class SimpleSafetyMonitorRTAB(Node):
         # Subscriptions
         self.create_subscription(OccupancyGrid, self.occupancy_topic, self.occupancy_callback, 10)
         self.create_subscription(Twist, self.input_cmd_topic, self.cmd_callback, 10)
+        self.create_subscription(Float32MultiArray, self.hint_topic, self.hint_callback, 10)
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, self.output_cmd_topic, 10)
@@ -125,13 +130,35 @@ class SimpleSafetyMonitorRTAB(Node):
             self.commands_blocked += 1
         self.cmd_pub.publish(out)
 
+    def hint_callback(self, msg: Float32MultiArray) -> None:
+        try:
+            data = list(msg.data)
+            if len(data) < 3:
+                return
+            hint_min = float(data[0])
+            hint_left = float(data[1])
+            hint_right = float(data[2])
+            self.shared_hint = (hint_min, hint_left, hint_right)
+            self.shared_hint_stamp = self.get_clock().now()
+        except (ValueError, TypeError):
+            pass
+
     # ------------------------------------------------------------------
     def _recompute_distances(self) -> None:
         grid = self.latest_grid
+        now = self.get_clock().now()
+        if self.shared_hint is not None and self.shared_hint_stamp is not None:
+            age = (now - self.shared_hint_stamp).nanoseconds / 1e9
+            if age <= self.freshness_timeout:
+                hint_min, hint_left, hint_right = self.shared_hint
+                self.min_forward = float(hint_min)
+                self.left_clear = float(hint_left)
+                self.right_clear = float(hint_right)
+                self.min_distance_pub.publish(Float32(data=float(self.min_forward)))
+                return
         if grid is None:
             self.min_forward = 10.0
             return
-        now = self.get_clock().now()
         if self.latest_grid_stamp is not None:
             age = (now - self.latest_grid_stamp).nanoseconds / 1e9
             if age > self.freshness_timeout:
