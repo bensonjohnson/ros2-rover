@@ -17,7 +17,7 @@
 - [ ] Trim proprio vector to essentials and enable `torch.compile` for CPU inference path.
 
 ## PPO Training Stack
-- [ ] Convert rollout storage to `float16` and add dynamic minibatch/epoch adjustments in `ppo_manager_rtab.py` / `ppo_trainer_rtab.py`.
+- [x] Convert rollout storage to `float16` and add dynamic minibatch/epoch adjustments in `ppo_manager_rtab.py` / `ppo_trainer_rtab.py`.
 - [ ] Gate RKNN exports on low-activity windows and thin experience replay when idle.
 
 ## RKNN Export
