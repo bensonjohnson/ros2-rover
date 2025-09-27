@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# NPU BEV Exploration with Live PPO Training (bounded updates)
+# NPU RTAB Exploration with Live PPO Training (bounded updates)
 
 echo "=================================================="
-echo "ROS2 Tractor - NPU BEV Exploration (PPO Live)"
+echo "ROS2 Tractor - NPU RTAB Exploration (PPO Live)"
 echo "=================================================="
 
 if [ ! -f "install/setup.bash" ]; then
@@ -124,12 +124,12 @@ echo "- Min distance: ros2 topic echo /min_forward_distance"
 (
   sleep 12
   {
-    echo "[DIAG] $(date) Topics present:";
+echo "[DIAG] $(date) Topics present:";
     ros2 topic list;
     echo "[DIAG] Nodes:";
     ros2 node list;
-    echo "[DIAG] /bev/image rate (5s):";
-    timeout 5s ros2 topic hz /bev/image || true;
+    echo "[DIAG] /exploration/observation_stats samples (5s):";
+    timeout 5s ros2 topic echo /exploration/observation_stats || true;
     echo "[DIAG] /cmd_vel_ai rate (5s):";
     timeout 5s ros2 topic hz /cmd_vel_ai || true;
     echo "[DIAG] /min_forward_distance samples (5s):";

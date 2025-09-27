@@ -158,8 +158,7 @@ launch_exploration() {
     printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE"
     ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
       max_speed:=$MAX_SPEED \
-      safety_distance:=$SAFETY_DISTANCE \
-      use_rtab_observation:=true
+      safety_distance:=$SAFETY_DISTANCE
   } | tee "$log_file"
 }
 

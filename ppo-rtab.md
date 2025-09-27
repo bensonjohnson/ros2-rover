@@ -22,8 +22,8 @@
   - Stack depth + occupancy + frontier masks + proprio scalars into an `ExplorationObservation` message.
   - Publish to `/exploration/observation` (float tensor + metadata) at ~10 Hz.
 - [x] Update safety monitor to compute min-forward distance from RTAB data (occupancy or `/local_grid_obstacles`) instead of BEV.
-- [x] Replace BEV references in runtime guardian (`npu_exploration_bev.py` → `npu_exploration_rtab.py`) with new observation inputs; keep IMU + wheel features.
-- [x] Retire BEV processor launch stanza or guard it behind a launch argument.
+- [x] Remove legacy BEV runtime stack; rely exclusively on `npu_exploration_rtab.py` with updated observation inputs.
+- [x] Retire BEV processor launch stanzas and scripts.
 - [x] Add Frontier channel or mask derived from `/rtabmap/frontiers` to guide exploration reward shaping.
 - [ ] Define observation message schema (ROS2 custom msg vs. `Float32MultiArray`) and update documentation.
 - [x] Log sample observations to disk (numpy/rosbag) for trainer and RKNN calibration use.
@@ -66,7 +66,7 @@
 - [ ] Schedule periodic map maintenance workflow (e.g., seasonal re-mapping, boundary updates).
 
 ## Notes & Considerations
-- Maintain BEV code behind feature flag until RTAB path is stable for fallback comparisons.
+- Legacy BEV code removed; RTAB stack is now the sole exploration path.
 - Use rosbag2 recordings to benchmark CPU/GPU load before/after removing BEV processing.
 - Ensure guardian can fall back to raw depth min-distance if RTAB-Map stalls.
 - Plan RKNN quantization with representative RGB-D/occupancy datasets to avoid accuracy loss.
