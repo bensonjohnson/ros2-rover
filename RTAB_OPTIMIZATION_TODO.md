@@ -10,7 +10,7 @@
 
 ## Safety Monitor
 - [x] Share occupancy/min-distance hints between observation node and `simple_safety_monitor_rtab.py`.
-- [ ] Implement adaptive safety-distance scaling tied to commanded speed.
+- [x] Implement adaptive safety-distance scaling tied to commanded speed.
 
 ## Runtime Inference
 - [ ] Lazily initialize RKNN/PyTorch contexts in `npu_exploration_rtab.py` and add TorchAO INT8 fallback.
