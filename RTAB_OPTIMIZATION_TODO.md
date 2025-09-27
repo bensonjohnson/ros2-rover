@@ -6,7 +6,7 @@
 
 ## Observation Pipeline
 - [x] Profile `rtab_observation_node.py` and cache NumPy buffers to minimize allocations; consider `float16` outputs for export paths.
-- [ ] Gate frontier/occupancy recompute to every N frames to cut CPU usage; make interval configurable.
+- [x] Gate frontier updates in `rtab_observation_node.py` to run at a configurable interval.
 
 ## Safety Monitor
 - [ ] Share occupancy/min-distance buffers between observation node and `simple_safety_monitor_rtab.py`.

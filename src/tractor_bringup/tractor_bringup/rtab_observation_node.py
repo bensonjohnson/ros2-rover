@@ -50,6 +50,7 @@ class RTABObservationNode(Node):
         self.declare_parameter('output_resolution', [128, 128])  # Height, width
         self.declare_parameter('depth_scale', 0.001)  # Depth to meters for uint16 frames
         self.declare_parameter('depth_clip_m', 6.0)
+        self.declare_parameter('frontier_update_interval', 0.3)
         self.declare_parameter('enable_sample_logging', False)
         self.declare_parameter('sample_logging_interval', 30.0)
         self.declare_parameter('sample_logging_directory', 'log/observations')
@@ -68,6 +69,7 @@ class RTABObservationNode(Node):
         self.out_w = int(output_res[1]) if isinstance(output_res, (list, tuple)) else 128
         self.depth_scale = float(self.get_parameter('depth_scale').value)
         self.depth_clip = float(self.get_parameter('depth_clip_m').value)
+        self.frontier_update_interval = float(self.get_parameter('frontier_update_interval').value)
         self.log_samples = bool(self.get_parameter('enable_sample_logging').value)
         self.sample_log_interval = float(self.get_parameter('sample_logging_interval').value)
         self.sample_log_dir = str(self.get_parameter('sample_logging_directory').value)
@@ -189,6 +191,13 @@ class RTABObservationNode(Node):
             return
 
         depth_frame = self._downsample_depth(self._latest_depth)
+
+        now = time.time()
+        throttle = getattr(self, "_next_frontier_update", 0.0)
+        if frontier_channel is not None and now < throttle:
+            frontier_channel = None
+        else:
+            self._next_frontier_update = now + max(getattr(self, "frontier_update_interval", 0.3), 0.1)
 
         # Frontier mask channel (optional)
         frontier_channel = self._build_frontier_channel(patch_bounds)
@@ -385,3 +394,4 @@ def main(args=None) -> None:
 
 if __name__ == '__main__':
     main()
+        self._next_frontier_update = 0.0
