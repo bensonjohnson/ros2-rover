@@ -10,6 +10,8 @@ DEFAULT_BAG_PATH=""
 DEFAULT_BAG_RATE="1.0"
 DEFAULT_BAG_LOOP="false"
 DEFAULT_LOG_DIR="log"
+DEFAULT_OBS_HEIGHT="128"
+DEFAULT_OBS_WIDTH="128"
 DEFAULT_PPO_UPDATE_INTERVAL="20.0"
 
 MAX_SPEED="$DEFAULT_MAX_SPEED"
@@ -21,6 +23,8 @@ BAG_RATE="$DEFAULT_BAG_RATE"
 BAG_LOOP="$DEFAULT_BAG_LOOP"
 LOG_DIR="$DEFAULT_LOG_DIR"
 PPO_UPDATE_INTERVAL="$DEFAULT_PPO_UPDATE_INTERVAL"
+OBS_HEIGHT="$DEFAULT_OBS_HEIGHT"
+OBS_WIDTH="$DEFAULT_OBS_WIDTH"
 SESSION_MODE="explore"  # explore | train
 
 ensure_workspace() {
@@ -65,15 +69,17 @@ draw_menu() {
 ==================================================
  (1) Max speed (m/s) ............... $MAX_SPEED
  (2) Safety distance (m) ........... $SAFETY_DISTANCE
- (3) PPO update interval (s) ....... $PPO_UPDATE_INTERVAL
- (4) Colcon build on start ......... ${DO_BUILD^^}
- (5) Bag replay .................... ${BAG_REPLAY^^}
+ (3) Observation height (px) ....... $OBS_HEIGHT
+ (4) Observation width (px) ........ $OBS_WIDTH
+ (5) PPO update interval (s) ....... $PPO_UPDATE_INTERVAL
+ (6) Colcon build on start ......... ${DO_BUILD^^}
+ (7) Bag replay .................... ${BAG_REPLAY^^}
 MENU
   if [ "$BAG_REPLAY" = "on" ]; then
     cat <<MENU
- (6) Bag path ..................... ${BAG_PATH:-<unset>}
- (7) Bag rate scale ................ $BAG_RATE
- (8) Bag loop playback ............ ${BAG_LOOP^^}
+ (8) Bag path ..................... ${BAG_PATH:-<unset>}
+ (9) Bag rate scale ................ $BAG_RATE
+ (A) Bag loop playback ............ ${BAG_LOOP^^}
 MENU
   fi
   cat <<MENU
@@ -158,10 +164,12 @@ launch_exploration() {
 
   echo "Launching RTAB exploration stack..."
   {
-    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s ppo_update_interval=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE" "$PPO_UPDATE_INTERVAL"
+    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s obs=%sx%s ppo_update_interval=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE" "$OBS_HEIGHT" "$OBS_WIDTH" "$PPO_UPDATE_INTERVAL"
     ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
       max_speed:=$MAX_SPEED \
       safety_distance:=$SAFETY_DISTANCE \
+      observation_height:=$OBS_HEIGHT \
+      observation_width:=$OBS_WIDTH \
       ppo_update_interval_sec:=$PPO_UPDATE_INTERVAL
   } | tee "$log_file"
 }
@@ -216,25 +224,31 @@ while true; do
       prompt_value "Enter safety distance" "$SAFETY_DISTANCE" SAFETY_DISTANCE
       ;;
     3)
-      prompt_value "Enter PPO update interval" "$PPO_UPDATE_INTERVAL" PPO_UPDATE_INTERVAL
+      prompt_value "Enter observation height (pixels)" "$OBS_HEIGHT" OBS_HEIGHT
       ;;
     4)
-      toggle_build
+      prompt_value "Enter observation width (pixels)" "$OBS_WIDTH" OBS_WIDTH
       ;;
     5)
-      toggle_bag_replay
+      prompt_value "Enter PPO update interval" "$PPO_UPDATE_INTERVAL" PPO_UPDATE_INTERVAL
       ;;
     6)
+      toggle_build
+      ;;
+    7)
+      toggle_bag_replay
+      ;;
+    8)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
       fi
       ;;
-    7)
+    9)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter rate scale" "$BAG_RATE" BAG_RATE
       fi
       ;;
-    8)
+    A)
       if [ "$BAG_REPLAY" = "on" ]; then
         BAG_LOOP=$([ "$BAG_LOOP" = "true" ] && echo "false" || echo "true")
       fi

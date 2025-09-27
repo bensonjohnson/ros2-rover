@@ -17,12 +17,15 @@ MAX_SPEED=${2:-0.15}
 EXPLORATION_TIME=${3:-300}
 SAFETY_DISTANCE=${4:-0.2}
 PPO_UPDATE_INTERVAL=${5:-20.0}
+OBS_HEIGHT=${6:-128}
+OBS_WIDTH=${7:-128}
 
 echo "Configuration:"
 echo "  Maximum Speed: ${MAX_SPEED} m/s"
 echo "  Exploration Time: ${EXPLORATION_TIME} seconds"
 echo "  Safety Distance: ${SAFETY_DISTANCE} m"
 echo "  PPO Update Interval: ${PPO_UPDATE_INTERVAL} s"
+echo "  Observation Resolution: ${OBS_HEIGHT} x ${OBS_WIDTH}"
 
 echo "Building minimal workspace..."
 colcon build --packages-select tractor_bringup tractor_control --cmake-args -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
@@ -86,10 +89,12 @@ echo "Launching PPO exploration stack..."
 mkdir -p log
 LOG_FILE="log/ppo_exploration_$(date +%Y%m%d_%H%M%S).log"
 {
-  echo "[INFO] $(date) Starting launch with max_speed=${MAX_SPEED} safety_distance=${SAFETY_DISTANCE} ppo_update_interval=${PPO_UPDATE_INTERVAL}"
+  echo "[INFO] $(date) Starting launch with max_speed=${MAX_SPEED} safety_distance=${SAFETY_DISTANCE} obs=${OBS_HEIGHT}x${OBS_WIDTH} ppo_update_interval=${PPO_UPDATE_INTERVAL}"
   ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
     max_speed:=${MAX_SPEED} \
     safety_distance:=${SAFETY_DISTANCE} \
+    observation_height:=${OBS_HEIGHT} \
+    observation_width:=${OBS_WIDTH} \
     ppo_update_interval_sec:=${PPO_UPDATE_INTERVAL}
 } | tee -a "$LOG_FILE" &
 

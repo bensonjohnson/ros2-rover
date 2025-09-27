@@ -2,7 +2,7 @@
 
 ## Launch & Operator Controls
 - [x] Add CLI/interactive toggles for `max_speed`, `safety_distance`, and PPO training cadence in `start_exploration.sh` and `start_npu_exploration_ppo.sh`.
-- [ ] Surface launch arguments for RTAB observation resolution and export them through `npu_exploration_ppo.launch.py`.
+- [x] Surface launch arguments for RTAB observation resolution and export them through `npu_exploration_ppo.launch.py`.
 
 ## Observation Pipeline
 - [ ] Profile `rtab_observation_node.py` and cache NumPy buffers to minimize allocations; consider `float16` outputs for export paths.
