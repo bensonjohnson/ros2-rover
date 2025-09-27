@@ -21,6 +21,8 @@ def generate_launch_description():
 
     declare_max_speed_cmd = DeclareLaunchArgument("max_speed", default_value="0.15")
     declare_safety_distance_cmd = DeclareLaunchArgument("safety_distance", default_value="0.2")
+    declare_obs_height_cmd = DeclareLaunchArgument("observation_height", default_value="128")
+    declare_obs_width_cmd = DeclareLaunchArgument("observation_width", default_value="128")
     declare_ppo_update_cmd = DeclareLaunchArgument("ppo_update_interval_sec", default_value="20.0")
     declare_ppo_min_export_cmd = DeclareLaunchArgument("ppo_min_export_interval_sec", default_value="120.0")
 
@@ -88,7 +90,10 @@ def generate_launch_description():
             "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "publish_rate_hz": 10.0,
             "occupancy_window_m": 12.0,
-            "output_resolution": [128, 128],
+            "output_resolution": [
+                LaunchConfiguration("observation_height"),
+                LaunchConfiguration("observation_width"),
+            ],
             "depth_clip_m": 6.0,
         }]
     )
@@ -159,6 +164,8 @@ def generate_launch_description():
     ld = LaunchDescription()
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_safety_distance_cmd)
+    ld.add_action(declare_obs_height_cmd)
+    ld.add_action(declare_obs_width_cmd)
     ld.add_action(declare_ppo_update_cmd)
     ld.add_action(declare_ppo_min_export_cmd)
 
