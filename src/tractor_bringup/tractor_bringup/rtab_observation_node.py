@@ -77,6 +77,12 @@ class RTABObservationNode(Node):
 
         self.bridge = CvBridge()
 
+        # Preallocated buffers for publishing/logging
+        self._tensor_buffer: Optional[np.ndarray] = None
+        self._flat_buffer: Optional[np.ndarray] = None
+        self._frontier_canvas: Optional[np.ndarray] = np.zeros((self.out_h, self.out_w), dtype=np.float32)
+        self._frontier_kernel: np.ndarray = np.ones((3, 3), dtype=np.uint8)
+
         # State caches
         self._latest_depth: Optional[np.ndarray] = None
         self._latest_depth_ts = None
@@ -187,32 +193,44 @@ class RTABObservationNode(Node):
         # Frontier mask channel (optional)
         frontier_channel = self._build_frontier_channel(patch_bounds)
 
-        # Stack channels: [occupancy, depth, frontier]
-        channels: List[np.ndarray] = [occ_patch.astype(np.float32), depth_frame.astype(np.float32)]
+        proprio = self._compose_proprio() or []
+        channel_count = 3 + len(proprio)
+
+        if (
+            self._tensor_buffer is None
+            or self._tensor_buffer.shape[0] != channel_count
+            or self._tensor_buffer.shape[1] != self.out_h
+            or self._tensor_buffer.shape[2] != self.out_w
+        ):
+            self._tensor_buffer = np.zeros((channel_count, self.out_h, self.out_w), dtype=np.float32)
+            self._flat_buffer = np.zeros(channel_count * self.out_h * self.out_w, dtype=np.float32)
+
+        np.copyto(self._tensor_buffer[0], occ_patch, casting='unsafe')
+        np.copyto(self._tensor_buffer[1], depth_frame, casting='unsafe')
+
         if frontier_channel is not None:
-            channels.append(frontier_channel.astype(np.float32))
+            np.copyto(self._tensor_buffer[2], frontier_channel, casting='unsafe')
         else:
-            channels.append(np.zeros((self.out_h, self.out_w), dtype=np.float32))
+            self._tensor_buffer[2].fill(0.0)
 
-        proprio = self._compose_proprio()
-        if proprio:
-            for value in proprio:
-                channels.append(np.full((self.out_h, self.out_w), value, dtype=np.float32))
-
-        tensor = np.stack(channels, axis=0)
+        for idx, value in enumerate(proprio, start=3):
+            self._tensor_buffer[idx].fill(float(value))
 
         if self.log_samples and (time.time() - self._last_sample_time) >= self.sample_log_interval:
-            self._write_sample_to_disk(tensor)
+            self._write_sample_to_disk(self._tensor_buffer.copy())
             self._last_sample_time = time.time()
+
+        flat_view = self._tensor_buffer.reshape(-1)
+        np.copyto(self._flat_buffer, flat_view, casting='unsafe')
 
         msg = Float32MultiArray()
         msg.layout.dim = [
-            MultiArrayDimension(label='channels', size=tensor.shape[0], stride=self.out_h * self.out_w),
+            MultiArrayDimension(label='channels', size=channel_count, stride=self.out_h * self.out_w),
             MultiArrayDimension(label='height', size=self.out_h, stride=self.out_w),
             MultiArrayDimension(label='width', size=self.out_w, stride=1),
         ]
         msg.layout.data_offset = 0
-        msg.data = tensor.flatten().tolist()
+        msg.data = self._flat_buffer.tolist()
         self.obs_pub.publish(msg)
 
     # --- Helpers ---
@@ -285,13 +303,19 @@ class RTABObservationNode(Node):
 
     def _build_frontier_channel(self, bounds: Tuple[float, float, float, float]) -> Optional[np.ndarray]:
         if self._frontier_points is None or self._frontier_points.size == 0:
-            return None
+            if self._frontier_canvas is not None:
+                self._frontier_canvas.fill(0.0)
+            return self._frontier_canvas
         min_x, max_x, min_y, max_y = bounds
         fx = self._frontier_points[:, 0]
         fy = self._frontier_points[:, 1]
         mask = (fx >= min_x) & (fx <= max_x) & (fy >= min_y) & (fy <= max_y)
+        if self._frontier_canvas is None or self._frontier_canvas.shape != (self.out_h, self.out_w):
+            self._frontier_canvas = np.zeros((self.out_h, self.out_w), dtype=np.float32)
+        canvas = self._frontier_canvas
+        canvas.fill(0.0)
         if not np.any(mask):
-            return np.zeros((self.out_h, self.out_w), dtype=np.float32)
+            return canvas
         fx = fx[mask]
         fy = fy[mask]
         # Normalize to [0,1] in patch coordinates
@@ -300,12 +324,10 @@ class RTABObservationNode(Node):
         # Map to pixel indices
         px = np.clip((u * (self.out_w - 1)).astype(np.int32), 0, self.out_w - 1)
         py = np.clip((v * (self.out_h - 1)).astype(np.int32), 0, self.out_h - 1)
-        channel = np.zeros((self.out_h, self.out_w), dtype=np.float32)
-        channel[py, px] = 1.0
-        # Optional dilation for visibility
-        channel = cv2.dilate(channel, np.ones((3, 3), np.uint8), iterations=1)
-        channel = np.clip(channel, 0.0, 1.0)
-        return channel
+        canvas[py, px] = 1.0
+        cv2.dilate(canvas, self._frontier_kernel, dst=canvas, iterations=1)
+        np.clip(canvas, 0.0, 1.0, out=canvas)
+        return canvas
 
     def frontier_callback(self, msg: MarkerArray) -> None:
         points: List[Tuple[float, float]] = []
