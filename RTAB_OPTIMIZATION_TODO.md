@@ -5,7 +5,7 @@
 - [x] Surface launch arguments for RTAB observation resolution and export them through `npu_exploration_ppo.launch.py`.
 
 ## Observation Pipeline
-- [ ] Profile `rtab_observation_node.py` and cache NumPy buffers to minimize allocations; consider `float16` outputs for export paths.
+- [x] Profile `rtab_observation_node.py` and cache NumPy buffers to minimize allocations; consider `float16` outputs for export paths.
 - [ ] Gate frontier/occupancy recompute to every N frames to cut CPU usage; make interval configurable.
 
 ## Safety Monitor
