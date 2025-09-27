@@ -15,6 +15,7 @@ layered in later phases.
 
 from typing import Optional, Tuple, List
 
+import math
 import os
 import time
 
@@ -26,7 +27,7 @@ from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import Image, Imu
 from visualization_msgs.msg import MarkerArray
-from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+from std_msgs.msg import Float32, Float32MultiArray, MultiArrayDimension
 
 from cv_bridge import CvBridge
 import cv2
@@ -43,6 +44,8 @@ class RTABObservationNode(Node):
         self.declare_parameter('imu_topic', '/lsm9ds1_imu_publisher/imu/data')
         self.declare_parameter('frontier_topic', '/rtabmap/frontiers')
         self.declare_parameter('output_topic', '/exploration/observation')
+        self.declare_parameter('min_distance_topic', 'rtab_observation/min_forward_distance')
+        self.declare_parameter('safety_hint_topic', 'rtab_observation/safety_hints')
 
         # Parameters for observation geometry
         self.declare_parameter('publish_rate_hz', 10.0)
@@ -51,6 +54,8 @@ class RTABObservationNode(Node):
         self.declare_parameter('depth_scale', 0.001)  # Depth to meters for uint16 frames
         self.declare_parameter('depth_clip_m', 6.0)
         self.declare_parameter('frontier_update_interval', 0.3)
+        self.declare_parameter('safety_forward_width_m', 1.0)
+        self.declare_parameter('safety_max_distance_m', 4.0)
         self.declare_parameter('enable_sample_logging', False)
         self.declare_parameter('sample_logging_interval', 30.0)
         self.declare_parameter('sample_logging_directory', 'log/observations')
@@ -61,6 +66,8 @@ class RTABObservationNode(Node):
         self.imu_topic = str(self.get_parameter('imu_topic').value)
         self.frontier_topic = str(self.get_parameter('frontier_topic').value)
         self.output_topic = str(self.get_parameter('output_topic').value)
+        self.min_distance_topic = str(self.get_parameter('min_distance_topic').value)
+        self.safety_hint_topic = str(self.get_parameter('safety_hint_topic').value)
 
         self.publish_rate = float(self.get_parameter('publish_rate_hz').value)
         self.window_m = float(self.get_parameter('occupancy_window_m').value)
@@ -70,6 +77,8 @@ class RTABObservationNode(Node):
         self.depth_scale = float(self.get_parameter('depth_scale').value)
         self.depth_clip = float(self.get_parameter('depth_clip_m').value)
         self.frontier_update_interval = float(self.get_parameter('frontier_update_interval').value)
+        self.safety_forward_width = float(self.get_parameter('safety_forward_width_m').value)
+        self.safety_max_distance = float(self.get_parameter('safety_max_distance_m').value)
         self.log_samples = bool(self.get_parameter('enable_sample_logging').value)
         self.sample_log_interval = float(self.get_parameter('sample_logging_interval').value)
         self.sample_log_dir = str(self.get_parameter('sample_logging_directory').value)
@@ -79,11 +88,19 @@ class RTABObservationNode(Node):
 
         self.bridge = CvBridge()
 
+        # Publishers for observation tensors and safety hints
+        self.obs_pub = self.create_publisher(Float32MultiArray, self.output_topic, 10)
+        self.min_distance_pub = self.create_publisher(Float32, self.min_distance_topic, 10)
+        self.safety_hint_pub = self.create_publisher(Float32MultiArray, self.safety_hint_topic, 10)
+
         # Preallocated buffers for publishing/logging
         self._tensor_buffer: Optional[np.ndarray] = None
         self._flat_buffer: Optional[np.ndarray] = None
         self._frontier_canvas: Optional[np.ndarray] = np.zeros((self.out_h, self.out_w), dtype=np.float32)
         self._frontier_kernel: np.ndarray = np.ones((3, 3), dtype=np.uint8)
+        self._pixel_u_grid: Optional[np.ndarray] = None
+        self._pixel_v_grid: Optional[np.ndarray] = None
+        self._next_frontier_update = 0.0
 
         # State caches
         self._latest_depth: Optional[np.ndarray] = None
@@ -95,9 +112,7 @@ class RTABObservationNode(Node):
         self._frontier_points: Optional[np.ndarray] = None  # Nx2 world coords
         self._last_sample_time = time.time()
 
-        # Publishers/Subscribers
-        self.obs_pub = self.create_publisher(Float32MultiArray, self.output_topic, 10)
-
+        # Subscribers
         self.depth_sub = self.create_subscription(
             Image,
             self.depth_topic,
@@ -192,15 +207,13 @@ class RTABObservationNode(Node):
 
         depth_frame = self._downsample_depth(self._latest_depth)
 
-        now = time.time()
-        throttle = getattr(self, "_next_frontier_update", 0.0)
-        if frontier_channel is not None and now < throttle:
-            frontier_channel = None
-        else:
-            self._next_frontier_update = now + max(getattr(self, "frontier_update_interval", 0.3), 0.1)
-
         # Frontier mask channel (optional)
         frontier_channel = self._build_frontier_channel(patch_bounds)
+        now = time.time()
+        if frontier_channel is not None and now < getattr(self, "_next_frontier_update", 0.0):
+            frontier_channel = None
+        else:
+            self._next_frontier_update = now + max(self.frontier_update_interval, 0.1)
 
         proprio = self._compose_proprio() or []
         channel_count = 3 + len(proprio)
@@ -213,6 +226,8 @@ class RTABObservationNode(Node):
         ):
             self._tensor_buffer = np.zeros((channel_count, self.out_h, self.out_w), dtype=np.float32)
             self._flat_buffer = np.zeros(channel_count * self.out_h * self.out_w, dtype=np.float32)
+            self._pixel_u_grid = None
+            self._pixel_v_grid = None
 
         np.copyto(self._tensor_buffer[0], occ_patch, casting='unsafe')
         np.copyto(self._tensor_buffer[1], depth_frame, casting='unsafe')
@@ -224,6 +239,16 @@ class RTABObservationNode(Node):
 
         for idx, value in enumerate(proprio, start=3):
             self._tensor_buffer[idx].fill(float(value))
+
+        min_forward, left_clear, right_clear = self._compute_safety_hints(occ_patch, patch_bounds)
+
+        self.min_distance_pub.publish(Float32(data=float(min_forward)))
+
+        hints_msg = Float32MultiArray()
+        hints_msg.layout.dim = [MultiArrayDimension(label='components', size=3, stride=3)]
+        hints_msg.layout.data_offset = 0
+        hints_msg.data = [float(min_forward), float(left_clear), float(right_clear)]
+        self.safety_hint_pub.publish(hints_msg)
 
         if self.log_samples and (time.time() - self._last_sample_time) >= self.sample_log_interval:
             self._write_sample_to_disk(self._tensor_buffer.copy())
@@ -295,6 +320,83 @@ class RTABObservationNode(Node):
         if self.depth_clip > 0:
             resized = resized / self.depth_clip
         return np.clip(resized, 0.0, 1.0)
+
+    def _ensure_pixel_grids(self) -> None:
+        if (
+            self._pixel_u_grid is None
+            or self._pixel_u_grid.shape != (self.out_h, self.out_w)
+        ):
+            width = max(self.out_w, 1)
+            height = max(self.out_h, 1)
+            u = (np.arange(width, dtype=np.float32) + 0.5) / float(width)
+            v = (np.arange(height, dtype=np.float32) + 0.5) / float(height)
+            self._pixel_u_grid, self._pixel_v_grid = np.meshgrid(u, v)
+
+    def _compute_safety_hints(
+        self,
+        occ_patch: np.ndarray,
+        bounds: Tuple[float, float, float, float],
+    ) -> Tuple[float, float, float]:
+        self._ensure_pixel_grids()
+
+        if occ_patch is None or self._pixel_u_grid is None or self._pixel_v_grid is None:
+            return 10.0, 1.0, 1.0
+
+        occupied_mask = occ_patch > 0.5
+        if not np.any(occupied_mask):
+            return 10.0, 1.0, 1.0
+
+        min_x, max_x, min_y, max_y = bounds
+        span_x = max(max_x - min_x, 1e-6)
+        span_y = max(max_y - min_y, 1e-6)
+
+        world_x = min_x + self._pixel_u_grid * span_x
+        world_y = min_y + self._pixel_v_grid * span_y
+
+        robot_x, robot_y, yaw = self._latest_pose
+        dx = world_x - robot_x
+        dy = world_y - robot_y
+
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        forward = cos_yaw * dx + sin_yaw * dy
+        lateral = -sin_yaw * dx + cos_yaw * dy
+
+        max_dist = max(self.safety_max_distance, 0.1)
+        half_width = max(self.safety_forward_width * 0.5, 0.05)
+
+        wedge_mask = (
+            occupied_mask
+            & (forward >= 0.0)
+            & (forward <= max_dist)
+            & (np.abs(lateral) <= half_width)
+        )
+
+        if np.any(wedge_mask):
+            min_forward = float(np.min(forward[wedge_mask]))
+        else:
+            min_forward = max_dist
+
+        left_mask = (
+            occupied_mask
+            & (forward >= 0.0)
+            & (forward <= max_dist)
+            & (lateral > 0.0)
+        )
+        right_mask = (
+            occupied_mask
+            & (forward >= 0.0)
+            & (forward <= max_dist)
+            & (lateral < 0.0)
+        )
+
+        left_forward = float(np.min(forward[left_mask])) if np.any(left_mask) else max_dist
+        right_forward = float(np.min(forward[right_mask])) if np.any(right_mask) else max_dist
+
+        left_clear = float(np.clip(left_forward, 0.0, max_dist) / max_dist)
+        right_clear = float(np.clip(right_forward, 0.0, max_dist) / max_dist)
+
+        return min_forward, left_clear, right_clear
 
     def _compose_proprio(self) -> Optional[List[float]]:
         if self._latest_vel is None or self._latest_imu is None:
@@ -394,4 +496,3 @@ def main(args=None) -> None:
 
 if __name__ == '__main__':
     main()
-        self._next_frontier_update = 0.0
