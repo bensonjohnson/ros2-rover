@@ -97,10 +97,49 @@ run_colcon() {
 }
 
 configure_realsense_usb() {
+  echo "Configuring USB power management..."
+  USB_DEVICE_PATH=""
+  # Find D435i device by Product ID (0B3A)
+  for device in /sys/bus/usb/devices/*/idProduct; do
+    if [ -f "$device" ] && [ "$(cat $device 2>/dev/null)" = "0b3a" ]; then
+      USB_DEVICE_PATH=$(dirname $device)
+      echo "✓ Found D435i at USB path: $USB_DEVICE_PATH"
+      break
+    fi
+  done
+
+  # Fallback to common paths if Product ID detection fails
+  if [ -z "$USB_DEVICE_PATH" ]; then
+    for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+      if [ -d "$path" ]; then
+        USB_DEVICE_PATH="$path"
+        echo "✓ Using fallback USB path: $USB_DEVICE_PATH"
+        break
+      fi
+    done
+  fi
+
+  if [ -n "$USB_DEVICE_PATH" ]; then
+    # Disable autosuspend for the device
+    echo "on" | sudo tee $USB_DEVICE_PATH/power/control > /dev/null 2>&1
+    echo "-1" | sudo tee $USB_DEVICE_PATH/power/autosuspend > /dev/null 2>&1
+    echo "✓ USB power management configured for $USB_DEVICE_PATH"
+  else
+    echo "⚠ USB device path not found, continuing anyway"
+  fi
+
   echo "Checking RealSense D435i..."
   if command -v rs-enumerate-devices &> /dev/null; then
     if timeout 10s rs-enumerate-devices 2>/dev/null | grep -q "D435I"; then
       echo "✓ RealSense D435i detected"
+      # Reset the USB device to clear any error states
+      if [ -n "$USB_DEVICE_PATH" ] && [ -w "$USB_DEVICE_PATH" ]; then
+        echo "Resetting USB device..."
+        echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+        sleep 1
+        echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+        echo "✓ USB device reset"
+      fi
     else
       echo "⚠ RealSense D435i not detected - check USB connection"
     fi
