@@ -55,6 +55,8 @@ def generate_launch_description():
             "rgb_camera.profile": "424x240x30",
             "enable_gyro": "false",
             "enable_accel": "false",
+            "initial_reset": "true",
+            "reconnect_timeout": "6.0",
         }.items()
     )
 
