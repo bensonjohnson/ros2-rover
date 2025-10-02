@@ -47,18 +47,15 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "false",
             "align_depth.enable": "true",
-            "enable_rgb_camera": "true",
-            "enable_depth_camera": "true",
+            "enable_color": "true",
+            "enable_depth": "true",
             "enable_sync": "true",
-            "device_type": "d435i",
-            "depth_module.profile": "424x240x15",
-            "rgb_camera.profile": "424x240x15",
+            "device_type": "435i",
+            "depth_module.depth_profile": "424x240x15",
+            "rgb_camera.color_profile": "424x240x15",
             "enable_gyro": "false",
             "enable_accel": "false",
-            "initial_reset": "true",
-            "reconnect_timeout": "6.0",
-            "enable_infra1": "false",
-            "enable_infra2": "false",
+            "enable_imu": "false",
         }.items()
     )
 

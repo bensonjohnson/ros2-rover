@@ -99,27 +99,46 @@ run_colcon() {
 configure_realsense_usb() {
   echo "Configuring USB power management..."
   USB_DEVICE_PATH=""
+  USB_HUB_PATH=""
+
   # Find D435i device by Product ID (0B3A)
   for device in /sys/bus/usb/devices/*/idProduct; do
     if [ -f "$device" ] && [ "$(cat $device 2>/dev/null)" = "0b3a" ]; then
       USB_DEVICE_PATH=$(dirname $device)
       echo "✓ Found D435i at USB path: $USB_DEVICE_PATH"
+      # Extract hub path (e.g., 8-1 from 8-1-4)
+      USB_HUB_PATH=$(echo "$USB_DEVICE_PATH" | grep -oP '/sys/bus/usb/devices/\d+-\d+' || echo "")
       break
     fi
   done
 
   # Fallback to common paths if Product ID detection fails
   if [ -z "$USB_DEVICE_PATH" ]; then
-    for path in "/sys/bus/usb/devices/8-1-2" "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+    for path in "/sys/bus/usb/devices/8-1-4" "/sys/bus/usb/devices/8-1-3" "/sys/bus/usb/devices/8-1-2" "/sys/bus/usb/devices/8-1"; do
       if [ -d "$path" ]; then
         USB_DEVICE_PATH="$path"
+        USB_HUB_PATH="/sys/bus/usb/devices/8-1"
         echo "✓ Using fallback USB path: $USB_DEVICE_PATH"
         break
       fi
     done
   fi
 
+  # Reset the USB hub first to clear all states
+  if [ -n "$USB_HUB_PATH" ] && [ -d "$USB_HUB_PATH" ]; then
+    echo "Resetting USB hub at $USB_HUB_PATH..."
+    echo "0" | sudo tee $USB_HUB_PATH/authorized > /dev/null 2>&1
+    sleep 1
+    echo "1" | sudo tee $USB_HUB_PATH/authorized > /dev/null 2>&1
+    sleep 3
+    echo "✓ USB hub reset complete"
+  fi
+
+  # Configure power management for the camera device
   if [ -n "$USB_DEVICE_PATH" ]; then
+    # Wait for device to re-enumerate after hub reset
+    sleep 2
+
     # Disable autosuspend for the device
     echo "on" | sudo tee $USB_DEVICE_PATH/power/control > /dev/null 2>&1
     echo "-1" | sudo tee $USB_DEVICE_PATH/power/autosuspend > /dev/null 2>&1
@@ -130,16 +149,6 @@ configure_realsense_usb() {
 
   echo "Checking RealSense D435i..."
   if command -v rs-enumerate-devices &> /dev/null; then
-    # Always reset the USB device first to clear any error states
-    if [ -n "$USB_DEVICE_PATH" ]; then
-      echo "Resetting USB device at $USB_DEVICE_PATH..."
-      echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
-      sleep 2
-      echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
-      sleep 2
-      echo "✓ USB device reset complete"
-    fi
-
     if timeout 15s rs-enumerate-devices 2>/dev/null | grep -q "D435I"; then
       echo "✓ RealSense D435i detected"
     else
