@@ -45,8 +45,6 @@ def generate_launch_description():
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "camera_name": "",
-            "camera_namespace": "camera",
             "pointcloud.enable": "false",
             "align_depth.enable": "true",
             "enable_color": "true",
@@ -85,7 +83,7 @@ def generate_launch_description():
         name="rtab_observation",
         output="screen",
         parameters=[{
-            "depth_topic": "/camera/aligned_depth_to_color/image_raw",
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
             "occupancy_topic": "/rtabmap/local_grid_map",
             "frontier_topic": "/rtabmap/frontiers",
             "odom_topic": "/odom",
