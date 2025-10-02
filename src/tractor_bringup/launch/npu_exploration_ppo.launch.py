@@ -74,6 +74,9 @@ def generate_launch_description():
             "rgb_topic": "/camera/camera/color/image_raw",
             "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
             "camera_info_topic": "/camera/camera/color/camera_info",
+            "rtabmap": "true",
+            "rtabmapviz": "false",
+            "rviz": "false",
         }.items()
     )
 
