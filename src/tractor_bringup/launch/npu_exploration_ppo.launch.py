@@ -69,7 +69,7 @@ def generate_launch_description():
             "odom_topic": "odom",
             "subscribe_depth": "true",
             "subscribe_rgb": "true",
-            "approx_sync": "false",
+            "approx_sync": "true",
             "queue_size": "30",
             "rgb_topic": "/camera/camera/color/image_raw",
             "depth_topic": "/camera/camera/depth/image_rect_raw",
