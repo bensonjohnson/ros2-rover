@@ -91,10 +91,8 @@ def generate_launch_description():
             "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "publish_rate_hz": 10.0,
             "occupancy_window_m": 12.0,
-            "output_resolution": [
-                LaunchConfiguration("observation_height"),
-                LaunchConfiguration("observation_width"),
-            ],
+            "observation_height": LaunchConfiguration("observation_height"),
+            "observation_width": LaunchConfiguration("observation_width"),
             "depth_clip_m": 6.0,
         }]
     )

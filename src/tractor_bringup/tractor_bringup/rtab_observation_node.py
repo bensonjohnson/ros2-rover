@@ -50,7 +50,8 @@ class RTABObservationNode(Node):
         # Parameters for observation geometry
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('occupancy_window_m', 12.0)  # Square window length (meters)
-        self.declare_parameter('output_resolution', [128, 128])  # Height, width
+        self.declare_parameter('observation_height', 128)  # Height
+        self.declare_parameter('observation_width', 128)  # Width
         self.declare_parameter('depth_scale', 0.001)  # Depth to meters for uint16 frames
         self.declare_parameter('depth_clip_m', 6.0)
         self.declare_parameter('frontier_update_interval', 0.3)
@@ -71,9 +72,8 @@ class RTABObservationNode(Node):
 
         self.publish_rate = float(self.get_parameter('publish_rate_hz').value)
         self.window_m = float(self.get_parameter('occupancy_window_m').value)
-        output_res = self.get_parameter('output_resolution').value
-        self.out_h = int(output_res[0]) if isinstance(output_res, (list, tuple)) else 128
-        self.out_w = int(output_res[1]) if isinstance(output_res, (list, tuple)) else 128
+        self.out_h = int(self.get_parameter('observation_height').value)
+        self.out_w = int(self.get_parameter('observation_width').value)
         self.depth_scale = float(self.get_parameter('depth_scale').value)
         self.depth_clip = float(self.get_parameter('depth_clip_m').value)
         self.frontier_update_interval = float(self.get_parameter('frontier_update_interval').value)
