@@ -24,7 +24,7 @@ rtabmap:
     subscribe_imu: true
 
     # External odom topic (from robot_localization EKF)
-    odom_topic: "/odometry/filtered"
+    odom_topic: "odometry/filtered"
 
     # Sync and queueing
     approx_sync: true
@@ -55,7 +55,7 @@ rtabmap:
 
     # IMU fusion (gravity alignment)
     Vh/Strategy: "0"
-    imu_topic: "/imu/data"
+    imu_topic: "/lsm9ds1_imu_publisher/imu/data"
     Mem/UseOdomGravity: "true"
     Mem/UseOdomFeatures: "false"
 

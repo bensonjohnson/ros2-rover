@@ -66,7 +66,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": "false",
             "frame_id": "base_link",
-            "odom_topic": "/odom",
+            "odom_topic": "odom",
             "subscribe_depth": "true",
             "subscribe_rgb": "true",
             "approx_sync": "false",
@@ -78,7 +78,7 @@ def generate_launch_description():
             "rtabmapviz": "false",
             "rviz": "false",
             "args": "--delete_db_on_start",
-            "rtabmap_args": "--Mem/IncrementalMemory true --Grid/FromDepth true --subscribe_scan false",
+            "rtabmap_args": "--Mem/IncrementalMemory true --Grid/FromDepth true --subscribe_scan false --subscribe_imu true",
         }.items()
     )
 
