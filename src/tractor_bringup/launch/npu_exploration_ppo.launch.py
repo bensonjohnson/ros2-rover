@@ -45,8 +45,8 @@ def generate_launch_description():
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "camera_name": "camera",
-            "camera_namespace": "",
+            "camera_name": "",
+            "camera_namespace": "camera",
             "pointcloud.enable": "false",
             "align_depth.enable": "true",
             "enable_color": "true",
