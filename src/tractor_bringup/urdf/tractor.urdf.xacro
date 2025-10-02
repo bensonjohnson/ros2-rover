@@ -255,6 +255,28 @@
     </inertial>
   </link>
 
+  <!-- LSM9DS1 IMU Link (mounted upside down on top of base_link, 25mm from front, centered) -->
+  <link name="imu_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.003 0.003 0.001"/>
+      </geometry>
+      <material name="red"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.003 0.003 0.001"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.001"/>
+      <inertia ixx="0.000001" ixy="0.0" ixz="0.0" iyy="0.000001" iyz="0.0" izz="0.000001"/>
+    </inertial>
+  </link>
+
   <!-- Joints -->
   
   <!-- Base Footprint to Base Link Joint -->
@@ -305,6 +327,13 @@
     <parent link="base_link"/>
     <child link="platform_link"/>
     <origin xyz="0 0 ${base_height/2 + platform_offset_z + platform_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- IMU Joint (upside down, 25mm from front, centered, on top of base_link) -->
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="${base_length/2 - 0.025} 0 ${base_height/2}" rpy="${PI} 0 0"/>
   </joint>
 
   <!-- Virtual Visualization Wheels (small, for motion display only) -->
