@@ -77,8 +77,7 @@ def generate_launch_description():
             "rtabmap": "true",
             "rtabmapviz": "false",
             "rviz": "false",
-            "args": "--delete_db_on_start",
-            "rtabmap_args": "--Mem/IncrementalMemory true --Grid/Sensor 0 --subscribe_scan false --subscribe_imu true",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --Grid/Sensor 0 --subscribe_scan false --subscribe_imu true",
         }.items()
     )
 
