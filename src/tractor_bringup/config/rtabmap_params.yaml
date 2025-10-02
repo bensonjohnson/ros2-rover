@@ -60,7 +60,7 @@ rtabmap:
     Mem/UseOdomFeatures: "false"
 
     # Grid map (2D occupancy) published on /map
-    Grid/FromDepth: "true"
+    Grid/Sensor: "0"                 # 0=depth camera, 1=scan
     Grid/DepthDecimation: "3"
     Grid/RangeMax: "6.0"
     Grid/MinClusterSize: "10"
