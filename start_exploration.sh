@@ -110,7 +110,7 @@ configure_realsense_usb() {
 
   # Fallback to common paths if Product ID detection fails
   if [ -z "$USB_DEVICE_PATH" ]; then
-    for path in "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
+    for path in "/sys/bus/usb/devices/8-1-2" "/sys/bus/usb/devices/8-1" "/sys/bus/usb/devices/2-1" "/sys/bus/usb/devices/1-1"; do
       if [ -d "$path" ]; then
         USB_DEVICE_PATH="$path"
         echo "✓ Using fallback USB path: $USB_DEVICE_PATH"
