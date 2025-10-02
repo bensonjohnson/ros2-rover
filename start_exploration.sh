@@ -130,16 +130,18 @@ configure_realsense_usb() {
 
   echo "Checking RealSense D435i..."
   if command -v rs-enumerate-devices &> /dev/null; then
-    if timeout 10s rs-enumerate-devices 2>/dev/null | grep -q "D435I"; then
+    # Always reset the USB device first to clear any error states
+    if [ -n "$USB_DEVICE_PATH" ]; then
+      echo "Resetting USB device at $USB_DEVICE_PATH..."
+      echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+      sleep 2
+      echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
+      sleep 2
+      echo "✓ USB device reset complete"
+    fi
+
+    if timeout 15s rs-enumerate-devices 2>/dev/null | grep -q "D435I"; then
       echo "✓ RealSense D435i detected"
-      # Reset the USB device to clear any error states
-      if [ -n "$USB_DEVICE_PATH" ] && [ -w "$USB_DEVICE_PATH" ]; then
-        echo "Resetting USB device..."
-        echo "0" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
-        sleep 1
-        echo "1" | sudo tee $USB_DEVICE_PATH/authorized > /dev/null 2>&1
-        echo "✓ USB device reset"
-      fi
     else
       echo "⚠ RealSense D435i not detected - check USB connection"
     fi

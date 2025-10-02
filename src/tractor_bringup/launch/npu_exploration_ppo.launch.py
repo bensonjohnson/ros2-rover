@@ -45,18 +45,20 @@ def generate_launch_description():
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            "pointcloud.enable": "true",
+            "pointcloud.enable": "false",
             "align_depth.enable": "true",
             "enable_rgb_camera": "true",
             "enable_depth_camera": "true",
             "enable_sync": "true",
             "device_type": "d435i",
-            "depth_module.profile": "424x240x30",
-            "rgb_camera.profile": "424x240x30",
+            "depth_module.profile": "424x240x15",
+            "rgb_camera.profile": "424x240x15",
             "enable_gyro": "false",
             "enable_accel": "false",
             "initial_reset": "true",
             "reconnect_timeout": "6.0",
+            "enable_infra1": "false",
+            "enable_infra2": "false",
         }.items()
     )
 
