@@ -71,9 +71,9 @@ def generate_launch_description():
             "subscribe_rgb": "true",
             "approx_sync": "true",
             "queue_size": "10",
-            "rgb_topic": "/camera/color/image_raw",
-            "depth_topic": "/camera/aligned_depth_to_color/image_raw",
-            "camera_info_topic": "/camera/color/camera_info",
+            "rgb_topic": "/camera/camera/color/image_raw",
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+            "camera_info_topic": "/camera/camera/color/camera_info",
         }.items()
     )
 
