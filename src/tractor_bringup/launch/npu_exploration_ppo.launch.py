@@ -79,8 +79,7 @@ def generate_launch_description():
             "rtabmapviz": "false",
             "rviz": "false",
             "visual_odometry": "false",
-            "rgbd_odometry": "false",
-            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05 --Odom/Strategy 0",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05",
         }.items()
     )
 
