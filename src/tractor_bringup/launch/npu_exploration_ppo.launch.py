@@ -66,7 +66,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim_time": "false",
             "frame_id": "base_link",
-            "odom_topic": "odom",
+            "odom_topic": "/odom",
             "subscribe_depth": "true",
             "subscribe_rgb": "true",
             "approx_sync": "true",
