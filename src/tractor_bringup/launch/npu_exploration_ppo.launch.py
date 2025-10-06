@@ -51,8 +51,8 @@ def generate_launch_description():
             "enable_depth": "true",
             "enable_sync": "true",
             "device_type": "435i",
-            "depth_module.depth_profile": "640x480x15",
-            "rgb_camera.color_profile": "640x480x15",
+            "depth_module.depth_profile": "480x270x30",
+            "rgb_camera.color_profile": "480x270x30",
             "enable_gyro": "false",
             "enable_accel": "false",
             "enable_imu": "false",
@@ -78,8 +78,11 @@ def generate_launch_description():
             "rtabmap": "true",
             "rtabmapviz": "false",
             "rviz": "false",
-            "visual_odometry": "false",
-            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05",
+            "visual_odometry": "true",
+            "odom_guess_frame_id": "/odom",
+            "odom_guess_min_translation": "0.01",
+            "odom_guess_min_rotation": "0.05",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05 --Vis/MinInliers 8 --Vis/CorType 0 --Odom/Strategy 0 --Odom/GuessMotion true --OdomF2M/MaxSize 1000",
         }.items()
     )
 
