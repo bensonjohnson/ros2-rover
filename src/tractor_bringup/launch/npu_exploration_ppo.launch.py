@@ -46,7 +46,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "pointcloud.enable": "false",
-            "align_depth.enable": "false",
+            "align_depth.enable": "true",
             "enable_color": "true",
             "enable_depth": "true",
             "enable_sync": "true",
@@ -69,15 +69,16 @@ def generate_launch_description():
             "odom_topic": "odom",
             "subscribe_depth": "true",
             "subscribe_rgb": "true",
-            "approx_sync": "true",
+            "approx_sync": "false",
             "queue_size": "30",
             "rgb_topic": "/camera/camera/color/image_raw",
-            "depth_topic": "/camera/camera/depth/image_rect_raw",
-            "camera_info_topic": "/camera/camera/depth/camera_info",
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+            "camera_info_topic": "/camera/camera/color/camera_info",
+            "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "rtabmap": "true",
             "rtabmapviz": "false",
             "rviz": "false",
-            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 0",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 0 --Vis/MinInliers 10 --GFTT/MinDistance 3",
         }.items()
     )
 
@@ -87,7 +88,7 @@ def generate_launch_description():
         name="rtab_observation",
         output="screen",
         parameters=[{
-            "depth_topic": "/camera/camera/depth/image_rect_raw",
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
             "occupancy_topic": "/rtabmap/local_grid_map",
             "frontier_topic": "/rtabmap/frontiers",
             "odom_topic": "/odom",
