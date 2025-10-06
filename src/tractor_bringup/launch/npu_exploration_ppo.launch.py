@@ -69,7 +69,7 @@ def generate_launch_description():
             "odom_topic": "odom",
             "subscribe_depth": "true",
             "subscribe_rgb": "true",
-            "approx_sync": "false",
+            "approx_sync": "true",
             "queue_size": "30",
             "rgb_topic": "/camera/camera/color/image_raw",
             "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
@@ -78,7 +78,9 @@ def generate_launch_description():
             "rtabmap": "true",
             "rtabmapviz": "false",
             "rviz": "false",
-            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05 --Vis/MinInliers 10 --GFTT/MinDistance 3",
+            "visual_odometry": "false",
+            "rgbd_odometry": "false",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05 --Odom/Strategy 0",
         }.items()
     )
 
