@@ -630,12 +630,21 @@ class HiwonderMotorDriver(Node):
         odom_msg.twist.twist.linear.y = 0.0
         odom_msg.twist.twist.angular.z = angular_vel
 
-        # Covariance (simplified)
-        odom_msg.pose.covariance[0] = 0.1  # x
-        odom_msg.pose.covariance[7] = 0.1  # y
-        odom_msg.pose.covariance[35] = 0.1  # theta
-        odom_msg.twist.covariance[0] = 0.1  # vx
-        odom_msg.twist.covariance[35] = 0.1  # vtheta
+        # Covariance (6x6 matrix = 36 elements, set all diagonal elements)
+        # Pose covariance: [x, y, z, rot_x, rot_y, rot_z]
+        odom_msg.pose.covariance[0] = 0.1   # x
+        odom_msg.pose.covariance[7] = 0.1   # y
+        odom_msg.pose.covariance[14] = 1e6  # z (not used, high uncertainty)
+        odom_msg.pose.covariance[21] = 1e6  # roll (not used, high uncertainty)
+        odom_msg.pose.covariance[28] = 1e6  # pitch (not used, high uncertainty)
+        odom_msg.pose.covariance[35] = 0.1  # yaw
+        # Twist covariance: [vx, vy, vz, rot_x, rot_y, rot_z]
+        odom_msg.twist.covariance[0] = 0.1   # vx
+        odom_msg.twist.covariance[7] = 1e6   # vy (not used, high uncertainty)
+        odom_msg.twist.covariance[14] = 1e6  # vz (not used, high uncertainty)
+        odom_msg.twist.covariance[21] = 1e6  # vroll (not used, high uncertainty)
+        odom_msg.twist.covariance[28] = 1e6  # vpitch (not used, high uncertainty)
+        odom_msg.twist.covariance[35] = 0.1  # vyaw
 
         try:
             self.odom_pub.publish(odom_msg)
