@@ -4,28 +4,24 @@ set -euo pipefail
 
 DEFAULT_MAX_SPEED="0.18"
 DEFAULT_SAFETY_DISTANCE="0.25"
+DEFAULT_EXPLORATION_RADIUS="10.0"
 DEFAULT_BUILD="on"
 DEFAULT_BAG_REPLAY="off"
 DEFAULT_BAG_PATH=""
 DEFAULT_BAG_RATE="1.0"
 DEFAULT_BAG_LOOP="false"
 DEFAULT_LOG_DIR="log"
-DEFAULT_OBS_HEIGHT="128"
-DEFAULT_OBS_WIDTH="128"
-DEFAULT_PPO_UPDATE_INTERVAL="20.0"
 
 MAX_SPEED="$DEFAULT_MAX_SPEED"
 SAFETY_DISTANCE="$DEFAULT_SAFETY_DISTANCE"
+EXPLORATION_RADIUS="$DEFAULT_EXPLORATION_RADIUS"
 DO_BUILD="$DEFAULT_BUILD"
 BAG_REPLAY="$DEFAULT_BAG_REPLAY"
 BAG_PATH="$DEFAULT_BAG_PATH"
 BAG_RATE="$DEFAULT_BAG_RATE"
 BAG_LOOP="$DEFAULT_BAG_LOOP"
 LOG_DIR="$DEFAULT_LOG_DIR"
-PPO_UPDATE_INTERVAL="$DEFAULT_PPO_UPDATE_INTERVAL"
-OBS_HEIGHT="$DEFAULT_OBS_HEIGHT"
-OBS_WIDTH="$DEFAULT_OBS_WIDTH"
-SESSION_MODE="explore"  # explore | train
+SESSION_MODE="explore"  # explore mode only (no training)
 
 ensure_workspace() {
   if [ ! -f "install/setup.bash" ]; then
@@ -65,29 +61,26 @@ draw_menu() {
   clear
   cat <<MENU
 ==================================================
- ROS2 Tractor - RTAB Control Menu
+ ROS2 Tractor - RTAB Frontier Exploration Menu
 ==================================================
  (1) Max speed (m/s) ............... $MAX_SPEED
  (2) Safety distance (m) ........... $SAFETY_DISTANCE
- (3) Observation height (px) ....... $OBS_HEIGHT
- (4) Observation width (px) ........ $OBS_WIDTH
- (5) PPO update interval (s) ....... $PPO_UPDATE_INTERVAL
- (6) Colcon build on start ......... ${DO_BUILD^^}
- (7) Bag replay .................... ${BAG_REPLAY^^}
+ (3) Exploration radius (m) ........ $EXPLORATION_RADIUS
+ (4) Colcon build on start ......... ${DO_BUILD^^}
+ (5) Bag replay .................... ${BAG_REPLAY^^}
 MENU
   if [ "$BAG_REPLAY" = "on" ]; then
     cat <<MENU
- (8) Bag path ..................... ${BAG_PATH:-<unset>}
- (9) Bag rate scale ................ $BAG_RATE
- (A) Bag loop playback ............ ${BAG_LOOP^^}
+ (6) Bag path ..................... ${BAG_PATH:-<unset>}
+ (7) Bag rate scale ................ $BAG_RATE
+ (8) Bag loop playback ............ ${BAG_LOOP^^}
 MENU
   fi
   cat <<MENU
- (S) Start exploration (live sensors)
- (T) Start offline training (bag replay)
+ (S) Start RTAB frontier exploration
  (Q) Quit without starting
 --------------------------------------------------
- Select option: 
+ Select option:
 MENU
 }
 
@@ -161,7 +154,7 @@ configure_realsense_usb() {
 
 launch_exploration() {
   mkdir -p "$LOG_DIR"
-  local log_file="$LOG_DIR/rtab_exploration_$(date +%Y%m%d_%H%M%S).log"
+  local log_file="$LOG_DIR/rtab_frontier_exploration_$(date +%Y%m%d_%H%M%S).log"
 
   # Configure RealSense USB before launching
   configure_realsense_usb
@@ -172,27 +165,14 @@ launch_exploration() {
   source install/setup.bash
   set -u
 
-  echo "Launching RTAB exploration stack..."
+  echo "Launching RTAB-Map + Frontier Exploration stack..."
   {
-    printf '[INFO] %s starting RTAB exploration max_speed=%s safety_distance=%s obs=%sx%s ppo_update_interval=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE" "$OBS_HEIGHT" "$OBS_WIDTH" "$PPO_UPDATE_INTERVAL"
-    ros2 launch tractor_bringup npu_exploration_ppo.launch.py \
+    printf '[INFO] %s starting RTAB frontier exploration max_speed=%s safety_distance=%s exploration_radius=%s\n' "$(date)" "$MAX_SPEED" "$SAFETY_DISTANCE" "$EXPLORATION_RADIUS"
+    ros2 launch tractor_bringup rtab_frontier_exploration.launch.py \
       max_speed:=$MAX_SPEED \
       safety_distance:=$SAFETY_DISTANCE \
-      observation_height:=$OBS_HEIGHT \
-      observation_width:=$OBS_WIDTH \
-      ppo_update_interval_sec:=$PPO_UPDATE_INTERVAL
+      exploration_radius:=$EXPLORATION_RADIUS
   } | tee "$log_file"
-}
-
-launch_training() {
-  # Temporarily disable strict error checking for ROS sourcing
-  set +u
-  source /opt/ros/jazzy/setup.bash
-  source install/setup.bash
-  set -u
-
-  echo "Launching RTAB offline training stack..."
-  ros2 launch tractor_bringup rtab_offline_training.launch.py
 }
 
 start_bag_replay() {
@@ -234,53 +214,31 @@ while true; do
       prompt_value "Enter safety distance" "$SAFETY_DISTANCE" SAFETY_DISTANCE
       ;;
     3)
-      prompt_value "Enter observation height (pixels)" "$OBS_HEIGHT" OBS_HEIGHT
+      prompt_value "Enter exploration radius (meters)" "$EXPLORATION_RADIUS" EXPLORATION_RADIUS
       ;;
     4)
-      prompt_value "Enter observation width (pixels)" "$OBS_WIDTH" OBS_WIDTH
-      ;;
-    5)
-      prompt_value "Enter PPO update interval" "$PPO_UPDATE_INTERVAL" PPO_UPDATE_INTERVAL
-      ;;
-    6)
       toggle_build
       ;;
-    7)
+    5)
       toggle_bag_replay
       ;;
-    8)
+    6)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
       fi
       ;;
-    9)
+    7)
       if [ "$BAG_REPLAY" = "on" ]; then
         prompt_value "Enter rate scale" "$BAG_RATE" BAG_RATE
       fi
       ;;
-    A)
+    8)
       if [ "$BAG_REPLAY" = "on" ]; then
         BAG_LOOP=$([ "$BAG_LOOP" = "true" ] && echo "false" || echo "true")
       fi
       ;;
     S)
       SESSION_MODE="explore"
-      break
-      ;;
-    T)
-      SESSION_MODE="train"
-      if [ "$BAG_REPLAY" = "off" ]; then
-        echo "Bag replay must be enabled for offline training."
-        BAG_REPLAY="on"
-      fi
-      if [ -z "$BAG_PATH" ]; then
-        prompt_value "Enter bag path" "$BAG_PATH" BAG_PATH
-      fi
-      if [ -z "$BAG_PATH" ]; then
-        echo "Bag path required for training."
-        sleep 1
-        continue
-      fi
       break
       ;;
     Q)
@@ -304,11 +262,8 @@ trap 'echo; echo "🛑 Stopping session..."; [ -n "$MAIN_PID" ] && kill "$MAIN_P
 
 start_bag_replay
 
-if [ "$SESSION_MODE" = "explore" ]; then
-  launch_exploration &
-else
-  launch_training &
-fi
+# Always launch exploration (training mode removed)
+launch_exploration &
 MAIN_PID=$!
 wait $MAIN_PID
 EXIT_CODE=$?
