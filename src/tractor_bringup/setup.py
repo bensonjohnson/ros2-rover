@@ -32,6 +32,7 @@ setup(
             "rtab_observation_node.py = tractor_bringup.rtab_observation_node:main",
             "npu_exploration_rtab.py = tractor_bringup.npu_exploration_rtab:main",
             "rtab_bag_replay.py = tractor_bringup.rtab_bag_replay:main",
+            "frontier_explorer.py = tractor_bringup.frontier_explorer:main",
         ],
     },
 )
