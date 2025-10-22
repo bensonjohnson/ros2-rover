@@ -1,6 +1,13 @@
 package.xml
 setup.cfg
 setup.py
+../../build/tractor_bringup/tractor_bringup.egg-info/PKG-INFO
+../../build/tractor_bringup/tractor_bringup.egg-info/SOURCES.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/dependency_links.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/entry_points.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/requires.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/top_level.txt
+../../build/tractor_bringup/tractor_bringup.egg-info/zip-safe
 config/anti_overtraining_params.yaml
 config/hiwonder_motor_params.yaml
 config/nav2_params.yaml
@@ -23,6 +30,7 @@ launch/npu_exploration_depth.launch.py
 launch/npu_exploration_ppo.launch.py
 launch/robot_description.launch.py
 launch/robot_localization.launch.py
+launch/rtab_frontier_exploration.launch.py
 launch/rtab_offline_training.launch.py
 launch/rtabmap_nav2.launch.py
 launch/xbox_teleop.launch.py
@@ -45,11 +53,4 @@ tractor_bringup/rtab_bag_replay.py
 tractor_bringup/rtab_observation_node.py
 tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_rtab.py
-tractor_bringup.egg-info/PKG-INFO
-tractor_bringup.egg-info/SOURCES.txt
-tractor_bringup.egg-info/dependency_links.txt
-tractor_bringup.egg-info/entry_points.txt
-tractor_bringup.egg-info/requires.txt
-tractor_bringup.egg-info/top_level.txt
-tractor_bringup.egg-info/zip-safe
 urdf/tractor.urdf.xacro
