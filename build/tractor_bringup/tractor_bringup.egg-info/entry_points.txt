@@ -1,4 +1,5 @@
 [console_scripts]
+frontier_explorer.py = tractor_bringup.frontier_explorer:main
 npu_exploration_rtab.py = tractor_bringup.npu_exploration_rtab:main
 ppo_manager_rtab.py = tractor_bringup.ppo_manager_rtab:main
 rtab_bag_replay.py = tractor_bringup.rtab_bag_replay:main
