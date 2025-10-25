@@ -26,7 +26,8 @@ def generate_launch_description():
 
     # Launch arguments
     use_sim_time = LaunchConfiguration("use_sim_time")
-    vlm_model_path = LaunchConfiguration("vlm_model_path")
+    rkllama_url = LaunchConfiguration("rkllama_url")
+    model_name = LaunchConfiguration("model_name")
     max_linear_speed = LaunchConfiguration("max_linear_speed")
     max_angular_speed = LaunchConfiguration("max_angular_speed")
     with_teleop = LaunchConfiguration("with_teleop")
@@ -39,10 +40,15 @@ def generate_launch_description():
     declare_use_sim_time_cmd = DeclareLaunchArgument(
         "use_sim_time", default_value="false", description="Use sim time"
     )
-    declare_vlm_model_path_cmd = DeclareLaunchArgument(
-        "vlm_model_path",
-        default_value="/home/ubuntu/models/Qwen2.5-VL-7B-Instruct-rk3588-1.2.1.rkllm",
-        description="Path to the RKLLM vision language model file"
+    declare_rkllama_url_cmd = DeclareLaunchArgument(
+        "rkllama_url",
+        default_value="https://ollama.gokickrocks.org",
+        description="URL of the Ollama server"
+    )
+    declare_model_name_cmd = DeclareLaunchArgument(
+        "model_name",
+        default_value="qwen2.5vl:7b",
+        description="Name of the VLM model to use in Ollama"
     )
     declare_max_linear_speed_cmd = DeclareLaunchArgument(
         "max_linear_speed", default_value="0.15", description="Maximum linear speed for VLM control"
@@ -63,7 +69,7 @@ def generate_launch_description():
         "with_vlm", default_value="true", description="Start VLM controller"
     )
     declare_inference_interval_cmd = DeclareLaunchArgument(
-        "inference_interval", default_value="1.5", description="Seconds between VLM inferences"
+        "inference_interval", default_value="5.0", description="Seconds between VLM inferences"
     )
 
     # 1) Robot description
@@ -112,6 +118,7 @@ def generate_launch_description():
             "align_depth": "true",
             "device_type": "435i",
             # Optimized resolution for VLM processing
+            # 640x480 = 307K pixels (balanced), 848x480 = 407K pixels (wider FOV)
             "rgb_camera.color_profile": "640x480x15",  # Lower FPS for VLM
             "depth_module.depth_profile": "640x480x15",
             # Disable camera IMU (using LSM9DS1)
@@ -153,13 +160,15 @@ def generate_launch_description():
         parameters=[
             {
                 "use_sim_time": use_sim_time,
-                "vlm_model_path": vlm_model_path,
+                "rkllama_url": rkllama_url,
+                "model_name": model_name,
                 "camera_topic": "/camera/camera/color/image_raw",
                 "max_linear_speed": max_linear_speed,
                 "max_angular_speed": max_angular_speed,
                 "inference_interval": inference_interval,
                 "command_timeout": 3.0,
-                "simulation_mode": False,  # Will auto-detect if RKLLM is available
+                "request_timeout": 10.0,
+                "simulation_mode": False,  # Will auto-detect if rkllama server is available
             }
         ],
         remappings=[("cmd_vel_vlm", "cmd_vel_vlm")],
@@ -229,7 +238,8 @@ def generate_launch_description():
 
     # Add launch arguments
     ld.add_action(declare_use_sim_time_cmd)
-    ld.add_action(declare_vlm_model_path_cmd)
+    ld.add_action(declare_rkllama_url_cmd)
+    ld.add_action(declare_model_name_cmd)
     ld.add_action(declare_max_linear_speed_cmd)
     ld.add_action(declare_max_angular_speed_cmd)
     ld.add_action(declare_with_teleop_cmd)

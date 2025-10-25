@@ -2,7 +2,7 @@
 set -e
 
 # Vision Language Model Control Startup Script
-# This script launches the rover with VLM-based control using rkllm inference
+# This script launches the rover with VLM-based control using rkllama server
 
 # Ensure ROS 2 + workspace environment is sourced
 if [ -f "/opt/ros/jazzy/setup.bash" ]; then
@@ -22,7 +22,8 @@ WITH_TELEOP=false
 WITH_MOTOR=true
 WITH_SAFETY=true
 WITH_VLM=true
-VLM_MODEL_PATH="/home/ubuntu/models/Qwen2.5-VL-7B-Instruct-rk3588-1.2.1.rkllm"
+RKLLAMA_URL="https://ollama.gokickrocks.org"
+MODEL_NAME="qwen2.5vl:7b"
 
 # Parse command line arguments
 for arg in "$@"; do
@@ -35,8 +36,10 @@ for arg in "$@"; do
       WITH_SAFETY=false ;;
     --no-vlm)
       WITH_VLM=false ;;
-    --model-path=*)
-      VLM_MODEL_PATH="${arg#*=}" ;;
+    --rkllama-url=*)
+      RKLLAMA_URL="${arg#*=}" ;;
+    --model-name=*)
+      MODEL_NAME="${arg#*=}" ;;
   esac
 done
 
@@ -45,7 +48,9 @@ echo "  Motor driver: ${WITH_MOTOR}"
 echo "  Safety monitor: ${WITH_SAFETY}"
 echo "  VLM control: ${WITH_VLM}"
 echo "  Teleop backup: ${WITH_TELEOP}"
-echo "  Model path: ${VLM_MODEL_PATH}"
+echo "  Ollama URL: ${RKLLAMA_URL}"
+echo "  Model name: ${MODEL_NAME}"
+echo ""
 
 # Launch the VLM control configuration
 ros2 launch tractor_bringup vlm_control.launch.py \
@@ -53,4 +58,5 @@ ros2 launch tractor_bringup vlm_control.launch.py \
   with_motor:=${WITH_MOTOR} \
   with_safety:=${WITH_SAFETY} \
   with_vlm:=${WITH_VLM} \
-  vlm_model_path:=${VLM_MODEL_PATH}
+  rkllama_url:=${RKLLAMA_URL} \
+  model_name:=${MODEL_NAME}
