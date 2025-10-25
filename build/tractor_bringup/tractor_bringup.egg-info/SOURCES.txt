@@ -33,6 +33,7 @@ launch/robot_localization.launch.py
 launch/rtab_frontier_exploration.launch.py
 launch/rtab_offline_training.launch.py
 launch/rtabmap_nav2.launch.py
+launch/vlm_control.launch.py
 launch/xbox_teleop.launch.py
 maps/yard_map.pgm
 maps/yard_map.yaml
@@ -51,6 +52,9 @@ tractor_bringup/ppo_manager_rtab.py
 tractor_bringup/ppo_trainer_rtab.py
 tractor_bringup/rtab_bag_replay.py
 tractor_bringup/rtab_observation_node.py
+tractor_bringup/simple_cmd_mux.py
 tractor_bringup/simple_safety_monitor.py
 tractor_bringup/simple_safety_monitor_rtab.py
+tractor_bringup/vlm_benchmark.py
+tractor_bringup/vlm_rover_controller.py
 urdf/tractor.urdf.xacro

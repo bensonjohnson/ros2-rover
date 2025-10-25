@@ -56,7 +56,7 @@ def generate_launch_description():
         "with_rtabmap", default_value="true", description="Start RTAB-Map nodes"
     )
     declare_with_safety_cmd = DeclareLaunchArgument(
-        "with_safety", default_value="true", description="Start safety monitor"
+        "with_safety", default_value="false", description="Start safety monitor"
     )
 
     # 1) Robot description
@@ -114,7 +114,7 @@ def generate_launch_description():
             "use_sim_time": use_sim_time,
             "camera_name": "camera",
             "camera_namespace": "camera",
-            # Core enablements
+            # Core enablements - enable pointcloud but disable sync
             "enable_pointcloud": "true",
             "align_depth": "true",
             "device_type": "435i",
@@ -122,8 +122,8 @@ def generate_launch_description():
             "enable_depth": "true",
             "enable_sync": "true",
             # Profiles (reduced bandwidth)
-            "depth_module.depth_profile": "424x240x30",
-            "rgb_camera.color_profile": "424x240x30",
+            "depth_module.depth_profile": "320x240x6",
+            "rgb_camera.color_profile": "320x240x6",
             # Disable camera IMU to save bandwidth (we use LSM9DS1 IMU)
             "enable_imu": "false",
             "enable_gyro": "false",
@@ -134,16 +134,35 @@ def generate_launch_description():
             "spatial_filter.enable": "true",
             "temporal_filter.enable": "true",
             "hole_filling_filter.enable": "true",
+            # Timeout protection
+            "wait_for_device_timeout": "10.0",
+            "reconnect_timeout": "5.0",
         }.items(),
     )
 
-    # 6) RTAB-Map RGBD sync
+    # 6) Pointcloud to laserscan converter (since pointcloud is disabled)
+    pointcloud_to_laserscan_node = Node(
+        package="pointcloud_to_laserscan",
+        executable="pointcloud_to_laserscan_node",
+        name="pointcloud_to_laserscan",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "pointcloud_to_laserscan.yaml"),
+            {"use_sim_time": use_sim_time},
+        ],
+        remappings=[
+            ("cloud_in", "/camera/camera/depth/color/points"),
+            ("scan", "/scan"),
+        ],
+    )
+
+    # 7) RTAB-Map RGBD sync
     rgbd_sync_node = Node(
         package="rtabmap_sync",
         executable="rgbd_sync",
         name="rgbd_sync",
         output="screen",
-        parameters=[{"approx_sync": True, "queue_size": 30, "use_sim_time": use_sim_time}],
+        parameters=[{"approx_sync": True, "queue_size": 50, "sync_queue_size": 50, "use_sim_time": use_sim_time}],
         remappings=[
             ("rgb/image", "/camera/camera/color/image_raw"),
             ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
@@ -313,6 +332,7 @@ def generate_launch_description():
 
     # Camera
     ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))
+    ld.add_action(TimerAction(period=5.0, actions=[pointcloud_to_laserscan_node]))
 
     # RTAB-Map
     ld.add_action(TimerAction(period=7.0, actions=[rgbd_sync_node]))
