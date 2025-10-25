@@ -26,6 +26,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "autonomous_mapping.py = tractor_bringup.autonomous_mapping:main",
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
             "simple_safety_monitor_rtab.py = tractor_bringup.simple_safety_monitor_rtab:main",
             "ppo_manager_rtab.py = tractor_bringup.ppo_manager_rtab:main",
@@ -33,6 +34,9 @@ setup(
             "npu_exploration_rtab.py = tractor_bringup.npu_exploration_rtab:main",
             "rtab_bag_replay.py = tractor_bringup.rtab_bag_replay:main",
             "frontier_explorer.py = tractor_bringup.frontier_explorer:main",
+            "vlm_rover_controller.py = tractor_bringup.vlm_rover_controller:main",
+            "simple_cmd_mux.py = tractor_bringup.simple_cmd_mux:main",
+            "vlm_benchmark.py = tractor_bringup.vlm_benchmark:main",
         ],
     },
 )
