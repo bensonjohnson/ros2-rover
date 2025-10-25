@@ -2,9 +2,11 @@
 """
 Vision Language Model Rover Controller
 
-This node uses RKLLM inference with the Qwen2.5-VL-7B model to control the rover
-based on visual input from the RealSense camera. The VLM analyzes the camera feed
-and generates movement commands to navigate autonomously.
+This node uses an Ollama-compatible REST API server with vision language models
+to control the rover based on visual input from the RealSense camera. The VLM
+analyzes the camera feed and generates movement commands to navigate autonomously.
+
+Compatible with: Ollama, rkllama, or any Ollama-compatible API
 """
 
 import rclpy
@@ -19,36 +21,28 @@ import time
 import threading
 from typing import Optional
 import json
-import os
-import sys
-
-# Add rkllama to Python path
-sys.path.insert(0, '/home/ubuntu/rkllama/src')
-
-try:
-    # Try to import rkllm for inference from rkllama package
-    from rkllama.api import RKLLM
-    RKLLM_AVAILABLE = True
-except ImportError as e:
-    RKLLM_AVAILABLE = False
-    print(f"Warning: RKLLM not available ({e}). VLM controller will use simulation mode.")
+import base64
+import requests
 
 
 class VLMRoverController(Node):
     def __init__(self):
         super().__init__('vlm_rover_controller')
-        
+
         # Parameters
-        self.declare_parameter('vlm_model_path', '/home/ubuntu/models/Qwen2.5-VL-7B-Instruct-rk3588-1.2.1.rkllm')
+        self.declare_parameter('rkllama_url', 'https://ollama.gokickrocks.org')  # Ollama-compatible API URL
+        self.declare_parameter('model_name', 'qwen2.5vl:7b')
         self.declare_parameter('camera_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('use_compressed', False)
         self.declare_parameter('max_linear_speed', 0.2)
         self.declare_parameter('max_angular_speed', 0.5)
         self.declare_parameter('inference_interval', 2.0)  # seconds between VLM inferences
         self.declare_parameter('command_timeout', 5.0)  # seconds before stopping if no new command
-        self.declare_parameter('simulation_mode', not RKLLM_AVAILABLE)
-        
-        self.vlm_model_path = self.get_parameter('vlm_model_path').value
+        self.declare_parameter('simulation_mode', False)
+        self.declare_parameter('request_timeout', 30.0)  # HTTP request timeout (higher for remote)
+
+        self.rkllama_url = self.get_parameter('rkllama_url').value
+        self.model_name = self.get_parameter('model_name').value
         self.camera_topic = self.get_parameter('camera_topic').value
         self.use_compressed = self.get_parameter('use_compressed').value
         self.max_linear_speed = self.get_parameter('max_linear_speed').value
@@ -56,7 +50,8 @@ class VLMRoverController(Node):
         self.inference_interval = self.get_parameter('inference_interval').value
         self.command_timeout = self.get_parameter('command_timeout').value
         self.simulation_mode = self.get_parameter('simulation_mode').value
-        
+        self.request_timeout = self.get_parameter('request_timeout').value
+
         # State
         self.bridge = CvBridge()
         self.current_image: Optional[np.ndarray] = None
@@ -64,11 +59,10 @@ class VLMRoverController(Node):
         self.last_command_time = 0.0
         self.current_command = Twist()
         self.inference_lock = threading.Lock()
-        
-        # VLM model initialization
-        self.vlm_model = None
+
+        # Test rkllama server connection
         if not self.simulation_mode:
-            self.init_vlm_model()
+            self.test_rkllama_connection()
         else:
             self.get_logger().warn("Running in simulation mode - VLM commands will be randomized")
         
@@ -91,43 +85,32 @@ class VLMRoverController(Node):
         # Publishers
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel_vlm', 10)
         self.vlm_response_pub = self.create_publisher(String, 'vlm_response', 10)
-        
+
         # Timers
         self.inference_timer = self.create_timer(0.1, self.inference_timer_callback)
         self.command_timer = self.create_timer(0.1, self.command_timer_callback)
-        
+
         self.get_logger().info(f"VLM Rover Controller initialized")
-        self.get_logger().info(f"  Model path: {self.vlm_model_path}")
+        self.get_logger().info(f"  Ollama URL: {self.rkllama_url}")
+        self.get_logger().info(f"  Model name: {self.model_name}")
         self.get_logger().info(f"  Camera topic: {self.camera_topic}")
         self.get_logger().info(f"  Simulation mode: {self.simulation_mode}")
-        
-    def init_vlm_model(self):
-        """Initialize the RKLLM model for inference"""
+
+    def test_rkllama_connection(self):
+        """Test connection to Ollama-compatible server"""
         try:
-            if not RKLLM_AVAILABLE:
-                self.get_logger().error("RKLLM library not available. Cannot initialize VLM model.")
-                self.simulation_mode = True
-                return
-
-            if not os.path.exists(self.vlm_model_path):
-                self.get_logger().error(f"VLM model file not found: {self.vlm_model_path}")
-                self.simulation_mode = True
-                return
-
-            self.get_logger().info("Loading VLM model...")
-            self.vlm_model = RKLLM()
-            
-            # Load the RKLLM model
-            ret = self.vlm_model.load_rkllm(self.vlm_model_path)
-            if ret != 0:
-                self.get_logger().error(f"Failed to load RKLLM model: {ret}")
-                self.simulation_mode = True
-                return
-                
-            self.get_logger().info("VLM model loaded successfully")
-            
-        except Exception as e:
-            self.get_logger().error(f"Failed to initialize VLM model: {e}")
+            response = requests.get(f"{self.rkllama_url}/api/tags", timeout=5.0)
+            if response.status_code == 200:
+                models = response.json()
+                self.get_logger().info(f"Successfully connected to Ollama server")
+                self.get_logger().info(f"Available models: {len(models.get('models', []))} found")
+            else:
+                self.get_logger().warn(f"Server responded with status {response.status_code}")
+                self.get_logger().warn("Continuing anyway - will retry on inference")
+        except requests.exceptions.RequestException as e:
+            self.get_logger().error(f"Failed to connect to Ollama server: {e}")
+            self.get_logger().error(f"Make sure server is accessible at {self.rkllama_url}")
+            self.get_logger().warn("Falling back to simulation mode")
             self.simulation_mode = True
     
     def image_callback(self, msg: Image):
@@ -176,40 +159,44 @@ class VLMRoverController(Node):
                     # Simulation mode - generate random but reasonable commands
                     response = self.simulate_vlm_response()
                 else:
-                    # Real VLM inference
-                    response = self.query_vlm_model(image)
-                
+                    # Real VLM inference via Ollama API
+                    response = self.query_rkllama_api(image)
+
                 # Parse the response and extract movement commands
                 command = self.parse_vlm_response(response)
-                
+
                 # Update current command
                 self.current_command = command
                 self.last_command_time = time.time()
-                
+
                 # Publish VLM response for monitoring
                 response_msg = String()
                 response_msg.data = response
                 self.vlm_response_pub.publish(response_msg)
-                
+
                 self.get_logger().info(f"VLM command: linear={command.linear.x:.2f}, angular={command.angular.z:.2f}")
-                
+
             except Exception as e:
                 self.get_logger().error(f"VLM inference failed: {e}")
     
-    def query_vlm_model(self, image: np.ndarray) -> str:
-        """Query the VLM model with the current image"""
+    def query_rkllama_api(self, image: np.ndarray) -> str:
+        """Query the Ollama-compatible VLM API with the current image"""
         try:
-            # Resize image for efficient processing
+            # Qwen2.5-VL optimal range: 200K-1M pixels
+            # Camera is configured for 640x480 (307K pixels) - perfect!
+            # Only resize if someone changes camera config to higher resolution
             height, width = image.shape[:2]
             if width > 640:
                 scale = 640.0 / width
                 new_width = 640
                 new_height = int(height * scale)
                 image = cv2.resize(image, (new_width, new_height))
-            
-            # Convert image to format expected by RKLLM
-            # Note: This may need adjustment based on actual RKLLM API
-            
+                self.get_logger().debug(f"Resized image from {width}x{height} to {new_width}x{new_height}")
+
+            # Convert image to base64 JPEG
+            _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            image_base64 = base64.b64encode(buffer).decode('utf-8')
+
             # Prepare the prompt for rover navigation
             prompt = """You are controlling a rover with a camera. Analyze this image and provide movement commands.
 
@@ -220,7 +207,7 @@ Your task:
 4. Prefer forward movement when path is clear
 5. Turn to avoid obstacles or find better paths
 
-Respond in JSON format:
+Respond ONLY in JSON format (no additional text):
 {
   "analysis": "brief description of what you see",
   "linear_speed": 0.0,
@@ -228,21 +215,57 @@ Respond in JSON format:
   "reasoning": "why you chose this command"
 }"""
 
-            # Run inference
-            # Note: This is a placeholder - actual RKLLM API calls may differ
-            inputs = [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt}
-            ]
-            
-            # This would be the actual RKLLM inference call
-            # response = self.vlm_model.chat(inputs)
-            
-            # For now, return a placeholder that will trigger simulation mode
+            # Prepare Ollama API request
+            api_url = f"{self.rkllama_url}/api/chat"
+
+            payload = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                        "images": [image_base64]
+                    }
+                ],
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "top_p": 0.9
+                }
+            }
+
+            # Make API request
+            self.get_logger().debug(f"Sending request to {api_url}")
+            response = requests.post(
+                api_url,
+                json=payload,
+                timeout=self.request_timeout
+            )
+
+            if response.status_code != 200:
+                self.get_logger().error(f"Ollama API error: {response.status_code} - {response.text[:200]}")
+                return self.simulate_vlm_response()
+
+            # Parse response
+            result = response.json()
+
+            # Extract the message content from Ollama-format response
+            if "message" in result and "content" in result["message"]:
+                content = result["message"]["content"]
+                self.get_logger().debug(f"VLM response: {content}")
+                return content
+            else:
+                self.get_logger().error(f"Unexpected API response format: {result}")
+                return self.simulate_vlm_response()
+
+        except requests.exceptions.Timeout:
+            self.get_logger().error(f"API request timed out after {self.request_timeout}s")
             return self.simulate_vlm_response()
-            
+        except requests.exceptions.RequestException as e:
+            self.get_logger().error(f"API request failed: {e}")
+            return self.simulate_vlm_response()
         except Exception as e:
-            self.get_logger().error(f"VLM model query failed: {e}")
+            self.get_logger().error(f"VLM query failed: {e}")
             return self.simulate_vlm_response()
     
     def simulate_vlm_response(self) -> str:
@@ -269,28 +292,42 @@ Respond in JSON format:
     def parse_vlm_response(self, response: str) -> Twist:
         """Parse VLM response and convert to Twist command"""
         command = Twist()
-        
+
         try:
+            # The response might have markdown code blocks, extract JSON
+            response = response.strip()
+
+            # Try to find JSON in markdown code blocks
+            if "```json" in response:
+                start = response.find("```json") + 7
+                end = response.find("```", start)
+                response = response[start:end].strip()
+            elif "```" in response:
+                start = response.find("```") + 3
+                end = response.find("```", start)
+                response = response[start:end].strip()
+
             # Try to parse JSON response
             data = json.loads(response)
-            
+
             # Extract movement commands
             linear_speed = data.get('linear_speed', 0.0)
             angular_speed = data.get('angular_speed', 0.0)
-            
+
             # Clamp speeds to safe limits
             linear_speed = max(0.0, min(self.max_linear_speed, float(linear_speed)))
             angular_speed = max(-self.max_angular_speed, min(self.max_angular_speed, float(angular_speed)))
-            
+
             command.linear.x = linear_speed
             command.angular.z = angular_speed
-            
+
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             self.get_logger().warn(f"Failed to parse VLM response: {e}")
+            self.get_logger().warn(f"Response was: {response[:200]}")
             # Default to safe stop command
             command.linear.x = 0.0
             command.angular.z = 0.0
-        
+
         return command
     
     def command_timer_callback(self):
@@ -312,15 +349,7 @@ Respond in JSON format:
         # Stop the rover
         stop_command = Twist()
         self.cmd_vel_pub.publish(stop_command)
-        
-        # Clean up VLM model
-        if self.vlm_model is not None:
-            try:
-                # Note: Add proper RKLLM cleanup if available
-                pass
-            except Exception as e:
-                self.get_logger().error(f"Error during VLM cleanup: {e}")
-        
+
         super().destroy_node()
 
 
