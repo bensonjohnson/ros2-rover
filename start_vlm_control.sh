@@ -20,10 +20,10 @@ fi
 # VLM control mode configuration
 WITH_TELEOP=false
 WITH_MOTOR=true
-WITH_SAFETY=true
+WITH_SAFETY=false
 WITH_VLM=true
 RKLLAMA_URL="https://ollama.gokickrocks.org"
-MODEL_NAME="qwen2.5vl:7b"
+MODEL_NAME="mistral-small3.2:24b"
 
 # Parse command line arguments
 for arg in "$@"; do
