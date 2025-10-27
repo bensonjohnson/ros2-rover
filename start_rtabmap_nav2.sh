@@ -23,7 +23,7 @@ MODE=${1:-mapping}
 WITH_TELEOP=false
 WITH_AUTO=true
 WITH_MOTOR=true
-WITH_SAFETY=false
+WITH_SAFETY=true
 
 for arg in "$@"; do
   case "$arg" in
