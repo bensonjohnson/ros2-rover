@@ -35,6 +35,7 @@ def generate_launch_description():
     with_safety = LaunchConfiguration("with_safety")
     with_vlm = LaunchConfiguration("with_vlm")
     inference_interval = LaunchConfiguration("inference_interval")
+    num_ctx = LaunchConfiguration("num_ctx")
 
     # Declare launch arguments
     declare_use_sim_time_cmd = DeclareLaunchArgument(
@@ -47,14 +48,14 @@ def generate_launch_description():
     )
     declare_model_name_cmd = DeclareLaunchArgument(
         "model_name",
-        default_value="qwen2.5vl:7b",
+        default_value="mistral-small3.2:24b",
         description="Name of the VLM model to use in Ollama"
     )
     declare_max_linear_speed_cmd = DeclareLaunchArgument(
         "max_linear_speed", default_value="0.15", description="Maximum linear speed for VLM control"
     )
     declare_max_angular_speed_cmd = DeclareLaunchArgument(
-        "max_angular_speed", default_value="0.4", description="Maximum angular speed for VLM control"
+        "max_angular_speed", default_value="0.3", description="Maximum angular speed for VLM control"
     )
     declare_with_teleop_cmd = DeclareLaunchArgument(
         "with_teleop", default_value="false", description="Start Xbox teleop as backup"
@@ -70,6 +71,9 @@ def generate_launch_description():
     )
     declare_inference_interval_cmd = DeclareLaunchArgument(
         "inference_interval", default_value="5.0", description="Seconds between VLM inferences"
+    )
+    declare_num_ctx_cmd = DeclareLaunchArgument(
+        "num_ctx", default_value="16384", description="Context window size for Ollama (16K for 2-frame mode)"
     )
 
     # 1) Robot description
@@ -90,7 +94,7 @@ def generate_launch_description():
             os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml"),
             {"use_sim_time": use_sim_time},
         ],
-        remappings=[("cmd_vel", "cmd_vel_safe")],
+        remappings=[("cmd_vel", "cmd_vel_mux")],
         condition=IfCondition(with_motor),
     )
 
@@ -166,9 +170,10 @@ def generate_launch_description():
                 "max_linear_speed": max_linear_speed,
                 "max_angular_speed": max_angular_speed,
                 "inference_interval": inference_interval,
-                "command_timeout": 3.0,
-                "request_timeout": 10.0,
+                "command_timeout": 6.0,
+                "request_timeout": 30.0,
                 "simulation_mode": False,  # Will auto-detect if rkllama server is available
+                "num_ctx": num_ctx,
             }
         ],
         remappings=[("cmd_vel_vlm", "cmd_vel_vlm")],
@@ -247,6 +252,7 @@ def generate_launch_description():
     ld.add_action(declare_with_safety_cmd)
     ld.add_action(declare_with_vlm_cmd)
     ld.add_action(declare_inference_interval_cmd)
+    ld.add_action(declare_num_ctx_cmd)
 
     # Core components
     ld.add_action(robot_description_launch)
