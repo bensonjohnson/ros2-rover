@@ -81,14 +81,7 @@ def generate_launch_description():
         condition=IfCondition(with_motor),
     )
 
-    # 3) Sensors
-    lc29h_gps_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lc29h_rtk.launch.py")
-        ),
-        launch_arguments={"use_sim_time": use_sim_time}.items(),
-    )
-
+    # 3) Sensors - GPS removed for indoor mapping
     lsm9ds1_imu_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
@@ -324,21 +317,20 @@ def generate_launch_description():
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
 
-    # Sensors and EKF
-    ld.add_action(TimerAction(period=1.0, actions=[lsm9ds1_imu_launch]))
-    ld.add_action(TimerAction(period=2.0, actions=[robot_localization_launch]))
-    # GPS launcher is present but not essential; start late if available
-    ld.add_action(TimerAction(period=20.0, actions=[lc29h_gps_launch]))
+    # Sensors and EKF - improved timing for better startup
+    ld.add_action(TimerAction(period=2.0, actions=[lsm9ds1_imu_launch]))
+    ld.add_action(TimerAction(period=4.0, actions=[robot_localization_launch]))
 
-    # Camera
-    ld.add_action(TimerAction(period=3.0, actions=[realsense_launch]))
-    ld.add_action(TimerAction(period=5.0, actions=[pointcloud_to_laserscan_node]))
+    # Camera - allow more time for sensor initialization
+    ld.add_action(TimerAction(period=6.0, actions=[realsense_launch]))
+    ld.add_action(TimerAction(period=10.0, actions=[pointcloud_to_laserscan_node]))
 
-    # RTAB-Map
-    ld.add_action(TimerAction(period=7.0, actions=[rgbd_sync_node]))
-    ld.add_action(TimerAction(period=8.0, actions=[rtabmap_node]))
+    # RTAB-Map - ensure camera is fully initialized
+    ld.add_action(TimerAction(period=12.0, actions=[rgbd_sync_node]))
+    ld.add_action(TimerAction(period=14.0, actions=[rtabmap_node]))
 
-    # Nav2
+    # Nav2 - start after mapping is ready
+    nav2_start_time = 18.0
     for t, node in enumerate([
         nav2_controller_node,
         nav2_planner_node,
@@ -347,12 +339,12 @@ def generate_launch_description():
         velocity_smoother_node,
         collision_monitor_node,
     ]):
-        ld.add_action(TimerAction(period=10.0 + 0.1 * t, actions=[node]))
-    ld.add_action(TimerAction(period=12.0, actions=[nav2_lifecycle_manager]))
+        ld.add_action(TimerAction(period=nav2_start_time + 0.5 * t, actions=[node]))
+    ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager]))
 
-    # Safety + exploration
-    ld.add_action(TimerAction(period=15.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=18.0, actions=[autonomous_mapper_node]))
+    # Safety + exploration - start after everything else is ready
+    ld.add_action(TimerAction(period=25.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=28.0, actions=[autonomous_mapper_node]))
 
     # Optional teleop
     xbox_teleop_launch = IncludeLaunchDescription(
@@ -362,9 +354,9 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time}.items(),
         condition=IfCondition(with_teleop),
     )
-    ld.add_action(TimerAction(period=10.0, actions=[xbox_teleop_launch]))
+    ld.add_action(TimerAction(period=20.0, actions=[xbox_teleop_launch]))
 
-    # Viz
-    ld.add_action(TimerAction(period=4.0, actions=[foxglove_bridge_node]))
+    # Viz - start early for debugging
+    ld.add_action(TimerAction(period=3.0, actions=[foxglove_bridge_node]))
 
     return ld

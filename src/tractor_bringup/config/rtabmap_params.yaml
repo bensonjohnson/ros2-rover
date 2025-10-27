@@ -1,5 +1,6 @@
-# RTAB-Map parameters tuned for outdoor RGB-D (D435i) without GPS
+# RTAB-Map parameters optimized for indoor RGB-D (D435i) mapping
 # Uses external wheel/IMU EKF odometry on /odometry/filtered as prior
+# Optimized for indoor environments with good lighting conditions
 
 rtabmap:
   ros__parameters:
@@ -26,67 +27,85 @@ rtabmap:
     # External odom topic (from robot_localization EKF)
     odom_topic: "odometry/filtered"
 
-    # Sync and queueing
+    # Sync and queueing - optimized for indoor precision
     approx_sync: true
-    queue_size: 30
+    queue_size: 20  # Reduced for better memory management
 
-    # Keyframe / update thresholds (reduce drift, keep CPU reasonable)
-    RGBD/LinearUpdate: "0.15"        # meters
-    RGBD/AngularUpdate: "0.10"       # radians
+    # Keyframe / update thresholds - more frequent for indoor detail
+    RGBD/LinearUpdate: "0.10"        # meters (reduced for more detail)
+    RGBD/AngularUpdate: "0.05"       # radians (reduced for better coverage)
     RGBD/NewMapOdomChangeDistance: "0.0"
     RGBD/OptimizeFromGraphEnd: "true"
 
-    # Visual features (use ORB only; works without xfeatures2d)
+    # Visual features - optimized for indoor textures
     Kp/DetectorStrategy: "7"         # 7 = ORB
     Vis/FeatureType: "7"            # 7 = ORB
-    Kp/MaxFeatures: "800"
-    Vis/MinInliers: "12"
+    Kp/MaxFeatures: "1000"           # Increased for indoor feature richness
+    Vis/MinInliers: "15"             # Increased for better matches
     Vis/EstimationType: "1"         # PnP
-    Vis/PnPReprojError: "3.0"
+    Vis/PnPReprojError: "2.0"        # Tighter for indoor precision
 
-    # Memory / loop closure
+    # Memory / loop closure - optimized for indoor environments
     Mem/IncrementalMemory: "true"
     Mem/InitWMWithAllNodes: "false"
-    Mem/STMSize: "30"
-    RGBD/LoopClosureReextractFeatures: "true"
-    RGBD/ProximityBySpace: "true"    # Helps in low-texture areas
-    RGBD/ProximityMaxGraphDepth: "50"
+    Mem/STMSize: "50"                # Increased for indoor complexity
+    RGBD/LoopClosureReextractFeatures: "false"  # Disabled for performance
+    RGBD/ProximityBySpace: "true"    # Essential for indoor loop closure
+    RGBD/ProximityMaxGraphDepth: "30"  # Reduced for faster processing
     RGBD/NeighborLinkRefining: "true"
 
-    # IMU fusion (gravity alignment)
+    # IMU fusion (gravity alignment) - important for indoor
     Vh/Strategy: "0"
     imu_topic: "/lsm9ds1_imu_publisher/imu/data"
     Mem/UseOdomGravity: "true"
     Mem/UseOdomFeatures: "false"
 
-    # Grid map (2D occupancy) published on /map
+    # Grid map (2D occupancy) - optimized for indoor spaces
     Grid/Sensor: "0"                 # 0=depth camera, 1=scan
-    Grid/DepthDecimation: "3"
-    Grid/RangeMax: "6.0"
-    Grid/MinClusterSize: "10"
-    Grid/MaxGroundAngle: "15"
-    Grid/NormalK: "20"
+    Grid/DepthDecimation: "2"        # Reduced for better resolution
+    Grid/RangeMax: "4.0"             # Reduced for indoor spaces
+    Grid/MinClusterSize: "5"          # Reduced for small indoor obstacles
+    Grid/MaxGroundAngle: "10"         # Reduced for indoor floor detection
+    Grid/NormalK: "15"               # Reduced for faster processing
     Grid/FlatObstaclesDetected: "true"
-    Grid/NoiseFilteringRadius: "0.08"
+    Grid/NoiseFilteringRadius: "0.05" # Reduced for indoor precision
     Grid/NoiseFilteringMinNeighbors: "2"
-    Grid/FootprintLength: "0.40"     # adjust to robot footprint
+    Grid/FootprintLength: "0.40"     # Robot footprint
     Grid/FootprintWidth: "0.30"
-    Grid/MaxObstacleHeight: "0.80"
-    Grid/ClusterRadius: "0.2"
+    Grid/MaxObstacleHeight: "0.80"    # Standard indoor obstacle height
+    Grid/ClusterRadius: "0.15"       # Reduced for indoor clustering
     Grid/Scan2dUnknownSpaceFilled: "true"
     Grid/PreVoxelFiltering: "true"
-    Grid/PreVoxelSize: "0.05"
+    Grid/PreVoxelSize: "0.03"        # Higher resolution for indoor
 
-    # Database
+    # Database - will be set by map manager
     Rtabmap/TimeThr: "0"
-    Rtabmap/DetectionRate: "5.0"      # Hz
+    Rtabmap/DetectionRate: "3.0"      # Reduced for indoor processing
     Rtabmap/StartNewMapOnLoopClosure: "false"
     Rtabmap/CreateIntermediateNodes: "true"
-    Database/Path: "~/.ros/rtabmap.db"
+    Database/Path: "~/.ros/rtabmap.db"  # Default, will be overridden
 
-    # Performance
+    # Performance - optimized for indoor environments
     Reg/Strategy: "1"                 # ICP+Vis
-    Icp/MaxCorrespondenceDistance: "0.2"
+    Icp/MaxCorrespondenceDistance: "0.15"  # Reduced for indoor precision
     Icp/PointToPlane: "true"
-    Icp/VoxelSize: "0.07"
+    Icp/VoxelSize: "0.05"             # Higher resolution for indoor
     Odom/ResetCountdown: "0"
+
+    # Loop closure detection - optimized for indoor
+    Kp/DetectorStrategy: "7"         # ORB
+    Kp/MaxFeatures: "1000"
+    Kp/BadSignRatio: "0.3"
+    Vis/MaxFeatures: "400"
+    Vis/MinInliers: "15"
+    Vis/EstimationType: "1"
+    Vis/PnPReprojError: "2.0"
+    Vis/ForwardDistOnly: "true"
+    Vis/RefineIterations: "5"
+
+    # Memory management for indoor environments
+    Mem/RehearsalSimilarity: "0.6"
+    Mem/RecentWmRatio: "0.2"
+    Mem/LinkingWithInvertedSignature: "true"
+    Mem/RawDescriptorsKept: "false"
+    Mem/MapLabelsAdded: "true"
