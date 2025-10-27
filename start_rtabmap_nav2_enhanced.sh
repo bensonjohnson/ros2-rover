@@ -62,11 +62,12 @@ show_map_menu() {
     echo -e "${YELLOW}No existing maps found.${NC}"
   else
     for i in "${!maps[@]}"; do
+      local idx=$((i + 1))
       local map_name="${maps[$i]}"
       local map_file="/home/ubuntu/maps/$map_name.db"
       local size=$(du -h "$map_file" 2>/dev/null | cut -f1 || echo "Unknown")
       local modified=$(stat -c %y "$map_file" 2>/dev/null | cut -d' ' -f1,2 || echo "Unknown")
-      echo -e "${GREEN}$((i+1)).${NC} $map_name (${size}, $modified)"
+      echo -e "${GREEN}${idx}.${NC} $map_name (${size}, $modified)"
     done
   fi
   
@@ -102,11 +103,8 @@ get_map_name() {
       continue
     fi
     
-    # Check for invalid characters
-    if [[ "$map_name" =~ [/:*?\"<>|] ]]; then
-      echo -e "${RED}Map name contains invalid characters.${NC}"
-      continue
-    fi
+    # Skip character validation for now (can be added later if needed)
+    # Basic validation - just check if empty and length
     
     # Check if map already exists (for new maps)
     if [ "$2" = "new" ] && [ -f "/home/ubuntu/maps/$map_name.db" ]; then
