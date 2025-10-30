@@ -36,6 +36,8 @@ def generate_launch_description():
     with_vlm = LaunchConfiguration("with_vlm")
     inference_interval = LaunchConfiguration("inference_interval")
     num_ctx = LaunchConfiguration("num_ctx")
+    control_mode = LaunchConfiguration("control_mode")
+    control_duration = LaunchConfiguration("control_duration")
 
     # Declare launch arguments
     declare_use_sim_time_cmd = DeclareLaunchArgument(
@@ -74,6 +76,12 @@ def generate_launch_description():
     )
     declare_num_ctx_cmd = DeclareLaunchArgument(
         "num_ctx", default_value="16384", description="Context window size for Ollama (16K for 2-frame mode)"
+    )
+    declare_control_mode_cmd = DeclareLaunchArgument(
+        "control_mode", default_value="synchronized", description="Control loop mode: 'time_based' or 'synchronized'"
+    )
+    declare_control_duration_cmd = DeclareLaunchArgument(
+        "control_duration", default_value="1.0", description="Duration to apply control before capturing next frame (synchronized mode)"
     )
 
     # 1) Robot description
@@ -174,6 +182,8 @@ def generate_launch_description():
                 "request_timeout": 30.0,
                 "simulation_mode": False,  # Will auto-detect if rkllama server is available
                 "num_ctx": num_ctx,
+                "control_mode": control_mode,
+                "control_duration": control_duration,
             }
         ],
         remappings=[("cmd_vel_vlm", "cmd_vel_vlm")],
@@ -253,6 +263,8 @@ def generate_launch_description():
     ld.add_action(declare_with_vlm_cmd)
     ld.add_action(declare_inference_interval_cmd)
     ld.add_action(declare_num_ctx_cmd)
+    ld.add_action(declare_control_mode_cmd)
+    ld.add_action(declare_control_duration_cmd)
 
     # Core components
     ld.add_action(robot_description_launch)
