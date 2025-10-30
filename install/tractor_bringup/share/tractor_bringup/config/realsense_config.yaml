@@ -1,63 +1,87 @@
-# Intel RealSense D435i Optimized Configuration
-# This configuration is optimized for outdoor agricultural use
-# with stable power supply and autonomous navigation
+# Intel RealSense D435i Optimized Configuration for RTAB-Map
+# Resolution: 424x240@15Hz (minimum supported framerate, reduced bandwidth)
+# Optimized for autonomous navigation with point cloud enabled
 
-# Camera naming and namespacing
-camera_name: "camera"
-camera_namespace: "camera"
+/camera/camera:
+  ros__parameters:
+    # Device configuration
+    camera_name: "camera"
+    camera_namespace: "camera"
 
-# Core features
-enable_sync: true
-enable_pointcloud: true
-pointcloud.enable: true
-align_depth.enable: true
+    # Stream profiles - minimal bandwidth configuration
+    depth_module:
+      depth_profile: "424x240x15"  # 15Hz minimum for RealSense
+      enable_auto_exposure: true
+      auto_exposure_limit: 100000
+      emitter_enabled: 0  # Disabled to reduce USB bandwidth (0=off, 1=on, 2=auto)
+      laser_power: 150.0
+      accuracy: 2
 
-# Depth camera settings - minimal bandwidth configuration
-depth_module.enable: true
-depth_module.profile: "320x240x30"  # Valid profile format: widthxheightxfps
-depth_module.enable_auto_exposure: true
-depth_module.auto_exposure_limit: 100000
-depth_module.emitter_enabled: 0 # Disabled to reduce USB bandwidth (0=off, 1=on, 2=auto)
-depth_module.laser_power: 150.0
-depth_module.accuracy: 2
+    rgb_camera:
+      color_profile: "424x240x15"  # Match depth resolution and framerate
+      enable_auto_exposure: true
+      auto_exposure_limit: 100000
+      brightness: 0
+      contrast: 50
+      gamma: 300
+      saturation: 64
 
-# RGB camera settings - ENABLED for NPU exploration (needed for color pointcloud)
-rgb_camera.enable: true
-rgb_camera.profile: "424x240x15"  # Match depth resolution and framerate
-rgb_camera.enable_auto_exposure: true
-rgb_camera.auto_exposure_limit: 100000
-rgb_camera.brightness: 0
-rgb_camera.contrast: 50
-rgb_camera.gamma: 300
-rgb_camera.saturation: 64
+    # Enable required streams
+    enable_color: true
+    enable_depth: true
+    enable_sync: true
 
-# IMU settings - enabled for NPU exploration  
-enable_gyro: true
-enable_accel: true
-gyro_fps: 200  # Valid value for D435i
-accel_fps: 250  # Valid value for D435i
-unite_imu_method: "linear_interpolation"
-hold_back_imu_for_frames: true
+    # Pointcloud configuration - CRITICAL for RTAB-Map
+    pointcloud:
+      enable: true
+      stream_filter: 2  # Use color stream for texture
+      allow_no_texture_points: false
+      ordered_pc: false
 
-# Disable infrared cameras to reduce USB bandwidth and avoid issues
-enable_infra1: false
-enable_infra2: false
+    # Depth alignment - critical for proper pointcloud
+    align_depth:
+      enable: true
 
-# Clip distance for outdoor use
-clip_distance: 6.0
+    # Disable camera IMU to save bandwidth (we use LSM9DS1 IMU)
+    enable_imu: false
+    enable_gyro: false
+    enable_accel: false
+    enable_infra1: false
+    enable_infra2: false
 
-# IMU covariance settings
-linear_accel_cov: 0.01
-angular_velocity_cov: 0.01
+    # Filters - enable decimation to reduce point count
+    decimation_filter:
+      enable: true
+      filter_magnitude: 3  # Reduce point cloud density for performance
 
-# Quality settings - enable decimation to reduce point count
-decimation_filter.enable: true
-decimation_filter.magnitude: 3  # Reduce point cloud density for performance
-temporal_filter.enable: true
-spatial_filter.enable: true
-hole_filling_filter.enable: true
-disparity_filter.enable: false
+    temporal_filter:
+      enable: true
+      smooth_alpha: 0.4
+      smooth_delta: 20
+      persistence_control: 3
 
-# Performance settings
-publish_tf: true
-tf_publish_rate: 15.0
+    spatial_filter:
+      enable: true
+      smooth_alpha: 0.5
+      smooth_delta: 20
+      magnitude: 2
+      holes_fill: 0
+
+    hole_filling_filter:
+      enable: true
+      holes_fill: 1
+
+    disparity_filter:
+      enable: false
+
+    # TF and performance settings
+    publish_tf: true
+    tf_publish_rate: 15.0
+
+    # Clip distance for outdoor/indoor use
+    clip_distance: 6.0
+
+    # USB stability
+    initial_reset: false
+    wait_for_device_timeout: 10.0
+    reconnect_timeout: 5.0
