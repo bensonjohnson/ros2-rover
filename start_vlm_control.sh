@@ -23,7 +23,7 @@ WITH_MOTOR=true
 WITH_SAFETY=false
 WITH_VLM=true
 RKLLAMA_URL="https://ollama.gokickrocks.org"
-MODEL_NAME="mistral-small3.2:24b"
+MODEL_NAME="qwen3-vl:30b-a3b-instruct"
 
 # Parse command line arguments
 for arg in "$@"; do
