@@ -97,39 +97,17 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time, "use_gps": "false"}.items(),
     )
 
-    # 5) RealSense
+    # 5) RealSense - using config file for proper parameter loading
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
         ),
         launch_arguments={
-            # Keep name+namespace as "camera" to match existing topics (/camera/camera/...)
             "use_sim_time": use_sim_time,
             "camera_name": "camera",
             "camera_namespace": "camera",
-            # Core enablements - enable pointcloud but disable sync
-            "enable_pointcloud": "true",
-            "align_depth": "true",
             "device_type": "435i",
-            "enable_color": "true",
-            "enable_depth": "true",
-            "enable_sync": "true",
-            # Profiles (reduced bandwidth)
-            "depth_module.depth_profile": "320x240x6",
-            "rgb_camera.color_profile": "320x240x6",
-            # Disable camera IMU to save bandwidth (we use LSM9DS1 IMU)
-            "enable_imu": "false",
-            "enable_gyro": "false",
-            "enable_accel": "false",
-            # Filters
-            "decimation_filter.enable": "true",
-            "decimation_filter.filter_magnitude": "3",
-            "spatial_filter.enable": "true",
-            "temporal_filter.enable": "true",
-            "hole_filling_filter.enable": "true",
-            # Timeout protection
-            "wait_for_device_timeout": "10.0",
-            "reconnect_timeout": "5.0",
+            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_config.yaml"),
         }.items(),
     )
 

@@ -6,7 +6,11 @@
       "mcp__context7__resolve-library-id",
       "mcp__context7__get-library-docs",
       "WebFetch(domain:wiki.ros.org)",
-      "Bash(timeout 3 ros2 topic echo:*)"
+      "Bash(timeout 3 ros2 topic echo:*)",
+      "Bash(ros2 topic:*)",
+      "Bash(ros2 param list:*)",
+      "Bash(ros2 param get:*)",
+      "Bash(ros2 param set:*)"
     ],
     "deny": [],
     "ask": []

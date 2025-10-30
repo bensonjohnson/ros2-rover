@@ -47,6 +47,7 @@ tractor_bringup/bayesian_sensor_fusion_optimizer.py
 tractor_bringup/example_usage.py
 tractor_bringup/frontier_explorer.py
 tractor_bringup/improved_reward_system.py
+tractor_bringup/map_manager.py
 tractor_bringup/npu_exploration_rtab.py
 tractor_bringup/ppo_manager_rtab.py
 tractor_bringup/ppo_trainer_rtab.py
