@@ -24,6 +24,8 @@ WITH_SAFETY=false
 WITH_VLM=true
 RKLLAMA_URL="https://ollama.gokickrocks.org"
 MODEL_NAME="qwen3-vl:30b-a3b-instruct"
+CONTROL_MODE="synchronized"  # synchronized (closed-loop) or time_based (periodic)
+CONTROL_DURATION="1.0"  # seconds to apply control before capturing next frame (synchronized mode)
 
 # Parse command line arguments
 for arg in "$@"; do
@@ -40,6 +42,10 @@ for arg in "$@"; do
       RKLLAMA_URL="${arg#*=}" ;;
     --model-name=*)
       MODEL_NAME="${arg#*=}" ;;
+    --control-mode=*)
+      CONTROL_MODE="${arg#*=}" ;;
+    --control-duration=*)
+      CONTROL_DURATION="${arg#*=}" ;;
   esac
 done
 
@@ -50,6 +56,8 @@ echo "  VLM control: ${WITH_VLM}"
 echo "  Teleop backup: ${WITH_TELEOP}"
 echo "  Ollama URL: ${RKLLAMA_URL}"
 echo "  Model name: ${MODEL_NAME}"
+echo "  Control mode: ${CONTROL_MODE}"
+echo "  Control duration: ${CONTROL_DURATION}s"
 echo ""
 
 # Launch the VLM control configuration
@@ -59,4 +67,6 @@ ros2 launch tractor_bringup vlm_control.launch.py \
   with_safety:=${WITH_SAFETY} \
   with_vlm:=${WITH_VLM} \
   rkllama_url:=${RKLLAMA_URL} \
-  model_name:=${MODEL_NAME}
+  model_name:=${MODEL_NAME} \
+  control_mode:=${CONTROL_MODE} \
+  control_duration:=${CONTROL_DURATION}

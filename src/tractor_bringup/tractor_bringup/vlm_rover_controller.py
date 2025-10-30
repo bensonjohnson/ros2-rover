@@ -27,6 +27,13 @@ import base64
 import requests
 import tempfile
 import os
+from enum import Enum
+
+
+class ControlMode(Enum):
+    """Control loop modes"""
+    TIME_BASED = "time_based"  # Original: inference every N seconds
+    SYNCHRONIZED = "synchronized"  # New: inference triggered by control response
 
 
 class VLMRoverController(Node):
@@ -40,7 +47,7 @@ class VLMRoverController(Node):
         self.declare_parameter('use_compressed', False)
         self.declare_parameter('max_linear_speed', 0.2)
         self.declare_parameter('max_angular_speed', 0.5)
-        self.declare_parameter('inference_interval', 2.0)  # seconds between VLM inferences
+        self.declare_parameter('inference_interval', 2.0)  # seconds between VLM inferences (time_based mode)
         self.declare_parameter('command_timeout', 5.0)  # seconds before stopping if no new command
         self.declare_parameter('simulation_mode', False)
         self.declare_parameter('request_timeout', 30.0)  # HTTP request timeout (higher for remote)
@@ -48,6 +55,8 @@ class VLMRoverController(Node):
         self.declare_parameter('video_duration', 0.5)  # Duration of video clips in seconds (2 frames @ 4 FPS)
         self.declare_parameter('video_fps', 4)  # FPS for video clips (Cosmos trained on 4 FPS)
         self.declare_parameter('num_ctx', 16384)  # Context window size for Ollama (16K for 2-frame mode)
+        self.declare_parameter('control_mode', 'synchronized')  # 'time_based' or 'synchronized'
+        self.declare_parameter('control_duration', 1.0)  # seconds to apply control before next inference (synchronized mode)
 
         self.rkllama_url = self.get_parameter('rkllama_url').value
         self.model_name = self.get_parameter('model_name').value
@@ -64,6 +73,16 @@ class VLMRoverController(Node):
         self.video_fps = self.get_parameter('video_fps').value
         self.num_ctx = self.get_parameter('num_ctx').value
 
+        # Parse control mode
+        control_mode_str = self.get_parameter('control_mode').value
+        try:
+            self.control_mode = ControlMode(control_mode_str)
+        except ValueError:
+            self.get_logger().warn(f"Invalid control_mode '{control_mode_str}', defaulting to 'synchronized'")
+            self.control_mode = ControlMode.SYNCHRONIZED
+
+        self.control_duration = self.get_parameter('control_duration').value
+
         # State
         self.bridge = CvBridge()
         self.current_image: Optional[np.ndarray] = None
@@ -78,6 +97,11 @@ class VLMRoverController(Node):
         max_buffer_size = int(self.video_duration * self.video_fps * 4)  # 4x buffer
         self.frame_buffer: deque = deque(maxlen=max_buffer_size)
         self.frame_lock = threading.Lock()
+
+        # Synchronized control mode state
+        self.control_cycle_start_time = 0.0  # When control command started being applied
+        self.frame_for_next_inference: Optional[np.ndarray] = None  # Frame captured after control response
+        self.waiting_for_control_completion = False  # True when applying control commands
 
         # Test rkllama server connection
         if not self.simulation_mode:
@@ -113,6 +137,11 @@ class VLMRoverController(Node):
         self.get_logger().info(f"  Ollama URL: {self.rkllama_url}")
         self.get_logger().info(f"  Model name: {self.model_name}")
         self.get_logger().info(f"  Camera topic: {self.camera_topic}")
+        self.get_logger().info(f"  Control mode: {self.control_mode.value}")
+        if self.control_mode == ControlMode.SYNCHRONIZED:
+            self.get_logger().info(f"  Control duration: {self.control_duration}s (apply control then capture next frame)")
+        else:
+            self.get_logger().info(f"  Inference interval: {self.inference_interval}s (time-based triggering)")
         self.get_logger().info(f"  Video mode: {self.use_video_mode} ({self.video_fps} FPS, {self.video_duration}s clips)")
         self.get_logger().info(f"  Context window: {self.num_ctx} tokens")
         self.get_logger().info(f"  Simulation mode: {self.simulation_mode}")
@@ -260,7 +289,7 @@ class VLMRoverController(Node):
             return None
 
     def inference_timer_callback(self):
-        """Timer callback for VLM inference"""
+        """Timer callback for VLM inference - handles both time_based and synchronized modes"""
         # Check if inference is already running - wait for it to complete
         if self.inference_in_progress:
             self.get_logger().debug("Inference already in progress, waiting...")
@@ -268,37 +297,77 @@ class VLMRoverController(Node):
 
         current_time = time.time()
 
-        # Check if it's time for a new inference (minimum interval)
-        if current_time - self.last_inference_time < self.inference_interval:
-            return
+        if self.control_mode == ControlMode.SYNCHRONIZED:
+            # Synchronized mode: wait for control completion before next inference
+            if self.waiting_for_control_completion:
+                # Check if control duration has elapsed
+                if current_time - self.control_cycle_start_time < self.control_duration:
+                    return
 
-        if self.use_video_mode:
-            # Check if we have enough frames in buffer
-            with self.frame_lock:
-                buffer_size = len(self.frame_buffer)
+                # Control duration complete - capture current live frame for next inference
+                self.get_logger().info("Control duration elapsed, capturing frame for next inference")
+                if self.current_image is not None:
+                    self.frame_for_next_inference = self.current_image.copy()
+                    self.waiting_for_control_completion = False
+                else:
+                    self.get_logger().warn("No camera frame available after control completion")
+                    return
 
-            min_frames = int(self.video_duration * self.video_fps)
-            if buffer_size < min_frames:
-                self.get_logger().debug(f"Waiting for frames: {buffer_size}/{min_frames}")
-                return
+            # Ready for next inference if we have a frame
+            if self.frame_for_next_inference is None:
+                # First iteration - use current frame to start
+                if self.current_image is not None:
+                    self.frame_for_next_inference = self.current_image.copy()
+                    self.get_logger().info("Starting synchronized control loop with initial frame")
+                else:
+                    return
 
-            # Mark inference as in progress and run in a separate thread
+            # Start inference with the captured frame
             self.inference_in_progress = True
-            inference_thread = threading.Thread(target=self.run_vlm_inference_video)
+            if self.use_video_mode:
+                inference_thread = threading.Thread(target=self.run_vlm_inference_video)
+            else:
+                inference_thread = threading.Thread(
+                    target=self.run_vlm_inference,
+                    args=(self.frame_for_next_inference.copy(),)
+                )
             inference_thread.daemon = True
             inference_thread.start()
+            self.frame_for_next_inference = None  # Clear after use
+
         else:
-            # Single image mode
-            if self.current_image is None:
+            # TIME_BASED mode: original behavior - inference at regular intervals
+            # Check if it's time for a new inference (minimum interval)
+            if current_time - self.last_inference_time < self.inference_interval:
                 return
 
-            # Mark inference as in progress and run in a separate thread
-            self.inference_in_progress = True
-            inference_thread = threading.Thread(target=self.run_vlm_inference, args=(self.current_image.copy(),))
-            inference_thread.daemon = True
-            inference_thread.start()
+            if self.use_video_mode:
+                # Check if we have enough frames in buffer
+                with self.frame_lock:
+                    buffer_size = len(self.frame_buffer)
 
-        self.last_inference_time = current_time
+                min_frames = int(self.video_duration * self.video_fps)
+                if buffer_size < min_frames:
+                    self.get_logger().debug(f"Waiting for frames: {buffer_size}/{min_frames}")
+                    return
+
+                # Mark inference as in progress and run in a separate thread
+                self.inference_in_progress = True
+                inference_thread = threading.Thread(target=self.run_vlm_inference_video)
+                inference_thread.daemon = True
+                inference_thread.start()
+            else:
+                # Single image mode
+                if self.current_image is None:
+                    return
+
+                # Mark inference as in progress and run in a separate thread
+                self.inference_in_progress = True
+                inference_thread = threading.Thread(target=self.run_vlm_inference, args=(self.current_image.copy(),))
+                inference_thread.daemon = True
+                inference_thread.start()
+
+            self.last_inference_time = current_time
     
     def run_vlm_inference_video(self):
         """Run VLM inference on multiple frames (temporal context)"""
@@ -325,6 +394,12 @@ class VLMRoverController(Node):
                 self.vlm_response_pub.publish(response_msg)
 
                 self.get_logger().info(f"VLM command (multi-frame): linear={command.linear.x:.2f}, angular={command.angular.z:.2f}")
+
+                # If in synchronized mode, start control cycle
+                if self.control_mode == ControlMode.SYNCHRONIZED:
+                    self.control_cycle_start_time = time.time()
+                    self.waiting_for_control_completion = True
+                    self.get_logger().info(f"Starting control cycle, will capture next frame in {self.control_duration}s")
 
         except Exception as e:
             self.get_logger().error(f"VLM multi-frame inference failed: {e}")
@@ -359,6 +434,12 @@ class VLMRoverController(Node):
 
                 inference_time = time.time() - inference_start
                 self.get_logger().info(f"VLM command: linear={command.linear.x:.2f}, angular={command.angular.z:.2f} (took {inference_time:.2f}s)")
+
+                # If in synchronized mode, start control cycle
+                if self.control_mode == ControlMode.SYNCHRONIZED:
+                    self.control_cycle_start_time = time.time()
+                    self.waiting_for_control_completion = True
+                    self.get_logger().info(f"Starting control cycle, will capture next frame in {self.control_duration}s")
 
         except Exception as e:
             self.get_logger().error(f"VLM inference failed: {e}")
@@ -667,16 +748,31 @@ In your <answer> section, provide ONLY this exact JSON format (no markdown):
     def command_timer_callback(self):
         """Timer callback for publishing movement commands"""
         current_time = time.time()
-        
-        # Check if command has timed out
-        if current_time - self.last_command_time > self.command_timeout:
-            # Stop the rover if no recent commands
-            stop_command = Twist()
-            self.cmd_vel_pub.publish(stop_command)
-            return
-        
-        # Publish current command
-        self.cmd_vel_pub.publish(self.current_command)
+
+        if self.control_mode == ControlMode.SYNCHRONIZED:
+            # In synchronized mode, publish commands during control cycle
+            if self.waiting_for_control_completion:
+                # We're in the control application phase - publish the command
+                self.cmd_vel_pub.publish(self.current_command)
+            else:
+                # Not in control phase - could be during inference
+                # Publish current command (or stop if timeout exceeded)
+                if current_time - self.last_command_time > self.command_timeout:
+                    stop_command = Twist()
+                    self.cmd_vel_pub.publish(stop_command)
+                else:
+                    self.cmd_vel_pub.publish(self.current_command)
+        else:
+            # TIME_BASED mode: original behavior
+            # Check if command has timed out
+            if current_time - self.last_command_time > self.command_timeout:
+                # Stop the rover if no recent commands
+                stop_command = Twist()
+                self.cmd_vel_pub.publish(stop_command)
+                return
+
+            # Publish current command
+            self.cmd_vel_pub.publish(self.current_command)
     
     def destroy_node(self):
         """Clean shutdown"""
