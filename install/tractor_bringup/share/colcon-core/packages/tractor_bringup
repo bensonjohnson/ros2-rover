@@ -1,1 +1,0 @@
-depthimage_to_laserscan:diagnostic_msgs:geometry_msgs:joint_state_publisher:nav2_bringup:nav2_common:nav2_map_server:nav_msgs:navigation2:rclpy:rknn:robot_localization:robot_state_publisher:rosbag2_py:rosidl_runtime_py:sensor_msgs:slam_toolbox:std_msgs:std_srvs:tf2_ros:tf_transformations:urdf:visualization_msgs:xacro
