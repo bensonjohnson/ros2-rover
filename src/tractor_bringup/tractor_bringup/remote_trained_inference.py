@@ -222,9 +222,9 @@ class RemoteTrainedInference(Node):
         if self._rknn_runtime is None:
             return
 
-        # Check for required inputs
+        # Check for required inputs (IMU is optional)
         if (self._latest_rgb is None or self._latest_depth is None or
-            self._latest_imu is None or self._latest_vel is None):
+            self._latest_vel is None):
             return
 
         try:
@@ -238,7 +238,13 @@ class RemoteTrainedInference(Node):
 
             # Proprioception: [lin_vel, ang_vel, roll, pitch, accel_mag, min_dist]
             lin_vel, ang_vel = self._latest_vel
-            roll, pitch, accel_mag = self._latest_imu
+
+            # IMU is optional - use zeros if not available
+            if self._latest_imu is not None:
+                roll, pitch, accel_mag = self._latest_imu
+            else:
+                roll, pitch, accel_mag = 0.0, 0.0, 0.0
+
             proprio = np.array([
                 lin_vel, ang_vel, roll, pitch, accel_mag, self._min_forward_dist
             ], dtype=np.float32)
