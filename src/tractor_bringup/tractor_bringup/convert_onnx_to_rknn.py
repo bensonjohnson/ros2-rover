@@ -22,25 +22,72 @@ except ImportError:
     print("Install with: pip3 install rknn_toolkit_lite2-*-cp310-cp310-linux_aarch64.whl")
     sys.exit(1)
 
+import numpy as np
+
+
+def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
+    """Load calibration dataset from .npz files.
+
+    Args:
+        calibration_dir: Directory containing calibration_XXXX.npz files
+        max_samples: Maximum number of samples to load
+
+    Returns:
+        Generator function that yields batches of [rgb, depth, proprio]
+    """
+    calibration_files = sorted([
+        os.path.join(calibration_dir, f)
+        for f in os.listdir(calibration_dir)
+        if f.endswith('.npz')
+    ])[:max_samples]
+
+    print(f"Loading {len(calibration_files)} calibration samples...")
+
+    dataset = []
+    for i, file_path in enumerate(calibration_files):
+        try:
+            data = np.load(file_path)
+            rgb = data['rgb']  # (H, W, 3) uint8
+            depth = data['depth']  # (H, W) float32
+            proprio = data['proprio']  # (6,) float32
+
+            # Expand depth to (H, W, 1)
+            depth = np.expand_dims(depth, axis=-1)
+
+            dataset.append([rgb, depth, proprio])
+
+            if (i + 1) % 10 == 0:
+                print(f"  Loaded {i + 1}/{len(calibration_files)} samples")
+
+        except Exception as exc:
+            print(f"⚠ Warning: Failed to load {file_path}: {exc}")
+            continue
+
+    print(f"✓ Loaded {len(dataset)} calibration samples")
+
+    # Create generator function
+    def data_generator():
+        for sample in dataset:
+            yield sample
+
+    return data_generator
+
 
 def convert_onnx_to_rknn(
     onnx_path: str,
     output_path: str,
     target_platform: str = 'rk3588',
-    quantize: bool = False
+    quantize: bool = False,
+    calibration_dir: str = None
 ):
     """Convert ONNX to RKNN using RKNNLite on the rover.
-
-    Note: On-device conversion with RKNNLite has limitations:
-    - Cannot do quantization (use float16 mode)
-    - Slower conversion than RKNN-Toolkit2
-    - But works directly on RK3588 without x86_64 machine
 
     Args:
         onnx_path: Path to ONNX model
         output_path: Output RKNN path
         target_platform: Target platform (default: rk3588)
-        quantize: Enable quantization (NOT SUPPORTED on RKNNLite)
+        quantize: Enable INT8 quantization (requires calibration_dir)
+        calibration_dir: Directory with calibration .npz files for quantization
     """
 
     if not os.path.exists(onnx_path):
@@ -50,17 +97,41 @@ def convert_onnx_to_rknn(
     print(f"Converting {onnx_path} to RKNN...")
     print(f"Target platform: {target_platform}")
 
-    # Note: RKNNLite on device has limited conversion capabilities
-    # For full features, use RKNN-Toolkit2 on x86_64
-
-    if quantize:
-        print("⚠ Warning: Quantization not supported with RKNNLite on-device conversion")
-        print("  Model will be converted to float16 mode")
-        print("  For INT8 quantization, use RKNN-Toolkit2 on x86_64 Linux")
+    # Check for calibration data
+    if quantize and calibration_dir:
+        if not os.path.exists(calibration_dir):
+            print(f"⚠ Warning: Calibration directory not found: {calibration_dir}")
+            print("  Falling back to float16 mode")
+            quantize = False
+        else:
+            calibration_files = [f for f in os.listdir(calibration_dir) if f.endswith('.npz')]
+            if not calibration_files:
+                print(f"⚠ Warning: No calibration files found in {calibration_dir}")
+                print("  Falling back to float16 mode")
+                quantize = False
+            else:
+                print(f"✓ Found {len(calibration_files)} calibration samples")
+    elif quantize and not calibration_dir:
+        print("⚠ Warning: Quantization requested but no calibration data provided")
+        print("  Falling back to float16 mode")
+        quantize = False
 
     try:
         # Initialize RKNNLite
         rknn = RKNNLite(verbose=True)
+
+        # Configure RKNN
+        print("Configuring RKNN...")
+        ret = rknn.config(
+            mean_values=[[127.5, 127.5, 127.5], [0], [0, 0, 0, 0, 0, 0]],  # RGB, Depth, Proprio
+            std_values=[[127.5, 127.5, 127.5], [1], [1, 1, 1, 1, 1, 1]],
+            target_platform=target_platform,
+            quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
+            optimization_level=3
+        )
+        if ret != 0:
+            print(f"❌ Failed to configure RKNN: {ret}")
+            return False
 
         # Load ONNX
         print("Loading ONNX model...")
@@ -69,9 +140,16 @@ def convert_onnx_to_rknn(
             print(f"❌ Failed to load ONNX: {ret}")
             return False
 
-        # Build (float16 mode - quantization not available on-device)
-        print("Building RKNN model (float16 mode)...")
-        ret = rknn.build(do_quantization=False)
+        # Build
+        if quantize and calibration_dir:
+            print("Building RKNN model with INT8 quantization...")
+            # Load calibration dataset
+            dataset = _load_calibration_dataset(calibration_dir)
+            ret = rknn.build(do_quantization=True, dataset=dataset)
+        else:
+            print("Building RKNN model (float16 mode)...")
+            ret = rknn.build(do_quantization=False)
+
         if ret != 0:
             print(f"❌ Failed to build RKNN: {ret}")
             return False
@@ -109,6 +187,14 @@ def main():
         '--target', type=str, default='rk3588',
         help='Target platform (default: rk3588)'
     )
+    parser.add_argument(
+        '--quantize', action='store_true',
+        help='Enable INT8 quantization (requires --calibration-dir)'
+    )
+    parser.add_argument(
+        '--calibration-dir', type=str,
+        help='Directory containing calibration .npz files for quantization'
+    )
     args = parser.parse_args()
 
     # Determine output path
@@ -121,8 +207,12 @@ def main():
     print("ONNX to RKNN Converter (On-Device)")
     print("=" * 60)
     print()
-    print("Note: On-device conversion uses float16 mode (no quantization)")
-    print("For INT8 quantization, use RKNN-Toolkit2 on x86_64 Linux")
+    if args.quantize and args.calibration_dir:
+        print("Mode: INT8 quantization with calibration data")
+    else:
+        print("Mode: Float16 (no quantization)")
+        if args.quantize:
+            print("Note: --quantize requires --calibration-dir")
     print()
 
     # Convert
@@ -130,7 +220,8 @@ def main():
         onnx_path=args.onnx_path,
         output_path=output_path,
         target_platform=args.target,
-        quantize=False  # Not supported on-device
+        quantize=args.quantize,
+        calibration_dir=args.calibration_dir
     )
 
     if success:

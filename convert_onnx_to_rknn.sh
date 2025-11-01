@@ -10,12 +10,18 @@ echo "ONNX → RKNN Converter (RK3588)"
 echo "=================================================="
 
 ONNX_PATH=${1:-""}
+CALIBRATION_DIR=${2:-"calibration_data"}
 
 if [ -z "$ONNX_PATH" ]; then
-  echo "Usage: $0 <onnx_file>"
+  echo "Usage: $0 <onnx_file> [calibration_dir]"
   echo ""
-  echo "Example:"
+  echo "Examples:"
   echo "  $0 models/ppo_v620_update_50.onnx"
+  echo "  $0 models/ppo_v620_update_50.onnx calibration_data  # With INT8 quantization"
+  echo ""
+  echo "Arguments:"
+  echo "  onnx_file        Path to ONNX model"
+  echo "  calibration_dir  Directory with .npz calibration files (optional, for INT8 quantization)"
   exit 1
 fi
 
@@ -67,16 +73,38 @@ else
   echo "⚠ NPU version not found (may not be RK3588)"
 fi
 
+# Check for calibration data
+USE_QUANTIZATION=false
+if [ -d "$CALIBRATION_DIR" ]; then
+  NUM_SAMPLES=$(find "$CALIBRATION_DIR" -name "*.npz" 2>/dev/null | wc -l)
+  if [ "$NUM_SAMPLES" -gt 0 ]; then
+    echo "✓ Found calibration data: $NUM_SAMPLES samples in $CALIBRATION_DIR"
+    USE_QUANTIZATION=true
+  else
+    echo "⚠ No calibration samples found in $CALIBRATION_DIR"
+  fi
+else
+  echo "⚠ Calibration directory not found: $CALIBRATION_DIR"
+fi
+
 # Convert using Python script
 echo ""
 echo "Converting ONNX → RKNN..."
-echo "Note: On-device conversion uses float16 (quantization requires calibration data)"
-echo ""
-
-python3 src/tractor_bringup/tractor_bringup/convert_onnx_to_rknn.py \
-  "${ONNX_PATH}" \
-  --output "${RKNN_PATH}" \
-  --target rk3588
+if [ "$USE_QUANTIZATION" = true ]; then
+  echo "Mode: INT8 quantization with calibration data"
+  python3 src/tractor_bringup/tractor_bringup/convert_onnx_to_rknn.py \
+    "${ONNX_PATH}" \
+    --output "${RKNN_PATH}" \
+    --target rk3588 \
+    --quantize \
+    --calibration-dir "${CALIBRATION_DIR}"
+else
+  echo "Mode: Float16 (no quantization)"
+  python3 src/tractor_bringup/tractor_bringup/convert_onnx_to_rknn.py \
+    "${ONNX_PATH}" \
+    --output "${RKNN_PATH}" \
+    --target rk3588
+fi
 
 if [ $? -ne 0 ]; then
   echo ""
