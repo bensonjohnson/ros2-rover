@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Model Deployment Script (Run on V620 Server)
-# Converts trained model to RKNN and deploys to rover
+# Exports ONNX and deploys to rover for conversion
 
 set -e
 
@@ -28,11 +28,10 @@ echo ""
 # Extract checkpoint name for output files
 CHECKPOINT_NAME=$(basename ${CHECKPOINT} .pt)
 ONNX_PATH="./export/${CHECKPOINT_NAME}.onnx"
-RKNN_PATH="./export/${CHECKPOINT_NAME}.rknn"
 
 mkdir -p export
 
-# Step 1: Export to ONNX (already done by training server)
+# Step 1: Export to ONNX
 if [ ! -f "${CHECKPOINT%.pt}.onnx" ]; then
   echo "Step 1: Exporting PyTorch → ONNX..."
   python3 -c "
@@ -49,59 +48,53 @@ else
   echo "✓ Using existing ONNX: ${ONNX_PATH}"
 fi
 
-# Step 2: Convert ONNX → RKNN
+echo "  Size: $(du -h ${ONNX_PATH} | cut -f1)"
+
+# Step 2: Deploy ONNX to rover
 echo ""
-echo "Step 2: Converting ONNX → RKNN (with quantization)..."
-echo "This step requires RKNN-Toolkit2 (x86_64 Linux only)"
-
-if ! python3 -c "from rknn.api import RKNN" 2>/dev/null; then
-  echo "❌ RKNN-Toolkit2 not installed!"
-  echo ""
-  echo "Install from: https://github.com/rockchip-linux/rknn-toolkit2"
-  echo ""
-  echo "Alternative: Convert on a machine with RKNN-Toolkit2 installed,"
-  echo "then copy the .rknn file to the rover manually."
-  exit 1
-fi
-
-python3 export_to_rknn.py \
-  "${ONNX_PATH}" \
-  --output "${RKNN_PATH}" \
-  --target rk3588 \
-  --optimization-level 3
-
-if [ ! -f "${RKNN_PATH}" ]; then
-  echo "❌ RKNN conversion failed"
-  exit 1
-fi
-
-echo "✓ RKNN model created: ${RKNN_PATH}"
-echo "  Size: $(du -h ${RKNN_PATH} | cut -f1)"
-
-# Step 3: Deploy to rover
-echo ""
-echo "Step 3: Deploying to rover..."
+echo "Step 2: Deploying ONNX to rover..."
 echo "Testing SSH connection to rover..."
 
 if ! ssh -o ConnectTimeout=5 ${ROVER_USER}@${ROVER_IP} "echo '✓ Connected to rover'" 2>/dev/null; then
   echo "❌ Cannot connect to rover at ${ROVER_USER}@${ROVER_IP}"
   echo ""
   echo "Manual deployment:"
-  echo "  scp ${RKNN_PATH} ${ROVER_USER}@${ROVER_IP}:~/Documents/ros2-rover/models/"
+  echo "  scp ${ONNX_PATH} ${ROVER_USER}@${ROVER_IP}:~/Documents/ros2-rover/models/"
+  echo "  ssh ${ROVER_USER}@${ROVER_IP}"
+  echo "  cd ~/Documents/ros2-rover"
+  echo "  ./convert_onnx_to_rknn.sh models/$(basename ${ONNX_PATH})"
   exit 1
 fi
 
 # Create models directory on rover
 ssh ${ROVER_USER}@${ROVER_IP} "mkdir -p ~/Documents/ros2-rover/models"
 
-# Copy RKNN model
-echo "Copying model to rover..."
-scp ${RKNN_PATH} ${ROVER_USER}@${ROVER_IP}:~/Documents/ros2-rover/models/
+# Copy ONNX model
+echo "Copying ONNX to rover..."
+scp ${ONNX_PATH} ${ROVER_USER}@${ROVER_IP}:~/Documents/ros2-rover/models/
 
-# Create symlink to latest model
-ssh ${ROVER_USER}@${ROVER_IP} "cd ~/Documents/ros2-rover/models && ln -sf $(basename ${RKNN_PATH}) remote_trained.rknn"
+echo "✓ ONNX deployed to rover"
 
-echo "✓ Model deployed to rover!"
+# Step 3: Convert ONNX → RKNN on rover
+echo ""
+echo "Step 3: Converting ONNX → RKNN on rover..."
+echo "(RKNN conversion must happen on the RK3588)"
+
+ssh ${ROVER_USER}@${ROVER_IP} "cd ~/Documents/ros2-rover && ./convert_onnx_to_rknn.sh models/$(basename ${ONNX_PATH})"
+
+if [ $? -ne 0 ]; then
+  echo "❌ RKNN conversion failed on rover"
+  echo ""
+  echo "Manual conversion on rover:"
+  echo "  ssh ${ROVER_USER}@${ROVER_IP}"
+  echo "  cd ~/Documents/ros2-rover"
+  echo "  ./convert_onnx_to_rknn.sh models/$(basename ${ONNX_PATH})"
+  exit 1
+fi
+
+echo "✓ Model converted to RKNN on rover"
+
+# Check deployed files
 echo ""
 echo "Deployed files:"
 ssh ${ROVER_USER}@${ROVER_IP} "ls -lh ~/Documents/ros2-rover/models/"
