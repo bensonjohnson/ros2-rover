@@ -13,7 +13,7 @@ if [ ! -f "install/setup.bash" ]; then
 fi
 
 # Configuration
-MODEL_PATH=${1:-"/home/benson/Documents/ros2-rover/models/remote_trained.rknn"}
+MODEL_PATH=${1:-"./models/remote_trained.rknn"}
 MAX_SPEED=${2:-0.18}
 SAFETY_DISTANCE=${3:-0.25}
 INFERENCE_RATE=${4:-10.0}
