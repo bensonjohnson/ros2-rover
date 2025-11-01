@@ -573,9 +573,15 @@ def main():
 
             episode_reward += packet['reward']
 
+            # Debug: Print every 1000 steps
+            if trainer.total_steps % 1000 == 0 and trainer.total_steps > 0:
+                import sys
+                print(f"DEBUG: Step {trainer.total_steps}, Buffer size: {trainer.buffer.size}, Minibatch size: {trainer.minibatch_size}")
+                sys.stdout.flush()
+
             if packet['done']:
                 episode_rewards.append(episode_reward)
-                print(f"Episode finished | Reward: {episode_reward:.2f} | Avg (100): {np.mean(episode_rewards):.2f}")
+                print(f"Episode finished | Reward: {episode_reward:.2f} | Avg (100): {np.mean(episode_rewards):.2f} | Total steps: {trainer.total_steps}", flush=True)
                 writer.add_scalar('train/episode_reward', episode_reward, trainer.total_steps)
                 episode_reward = 0.0
 
