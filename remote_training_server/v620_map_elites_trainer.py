@@ -204,14 +204,17 @@ class MAPElitesTrainer:
         # Mutation parameters
         self.mutation_std = 0.02  # Gaussian noise std for weight perturbation
 
-        # ZeroMQ for receiving episode results from rover
+        # ZeroMQ REP socket for bidirectional communication with rover
         self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PULL)
+        self.socket = self.context.socket(zmq.REP)
         self.socket.bind(f"tcp://*:{port}")
-        self.socket.setsockopt(zmq.RCVHWM, 1000)
+
+        # Model ID tracking
+        self.next_model_id = 0
+        self.pending_evaluations = {}  # model_id -> (model_state, generation_type)
 
         print(f"✓ MAP-Elites trainer initialized on {self.device}")
-        print(f"✓ Listening for episode results on port {port}")
+        print(f"✓ REP socket listening on port {port}")
 
     def generate_random_model(self) -> dict:
         """Generate random model (for initial population)."""
@@ -266,7 +269,7 @@ class MAPElitesTrainer:
         return fitness
 
     def run(self, num_evaluations: int = 1000):
-        """Run MAP-Elites training."""
+        """Run MAP-Elites training with REQ-REP protocol."""
         print("=" * 60)
         print("Starting MAP-Elites Training")
         print("=" * 60)
@@ -274,63 +277,107 @@ class MAPElitesTrainer:
         print(f"Target evaluations: {num_evaluations}")
         print(f"Archive dimensions: {len(self.archive.speed_bins)-1} × {len(self.archive.clearance_bins)-1}")
         print()
+        print("Waiting for rover to connect...")
+        print()
 
         evaluation_count = 0
 
         while evaluation_count < num_evaluations:
-            # Wait for episode result from rover
             try:
-                # Receive with timeout
-                if self.socket.poll(timeout=60000):  # 60 second timeout
-                    episode_data = self.socket.recv_pyobj()
+                # Wait for request from rover (either model request or episode result)
+                message = self.socket.recv_pyobj()
+
+                if message['type'] == 'request_model':
+                    # Rover is requesting a new model to evaluate
+                    model_state, gen_type = self.generate_model_for_evaluation()
+                    model_id = self.next_model_id
+                    self.next_model_id += 1
+
+                    # Store for later when we get results
+                    self.pending_evaluations[model_id] = (model_state, gen_type)
+
+                    # Send model to rover
+                    response = {
+                        'type': 'model',
+                        'model_id': model_id,
+                        'model_state': model_state,
+                        'generation_type': gen_type
+                    }
+                    self.socket.send_pyobj(response)
+
+                    print(f"→ Sent model #{model_id} ({gen_type}) to rover", flush=True)
+
+                elif message['type'] == 'episode_result':
+                    # Rover is sending back episode results
+                    model_id = message['model_id']
+                    total_distance = message['total_distance']
+                    collision_count = message['collision_count']
+                    avg_speed = message['avg_speed']
+                    avg_clearance = message['avg_clearance']
+                    episode_duration = message['duration']
+
+                    # Get the model state we sent earlier
+                    if model_id not in self.pending_evaluations:
+                        print(f"⚠ Received result for unknown model ID {model_id}")
+                        self.socket.send_pyobj({'type': 'ack'})
+                        continue
+
+                    model_state, gen_type = self.pending_evaluations.pop(model_id)
+
+                    evaluation_count += 1
+
+                    # Compute fitness
+                    fitness = self.compute_fitness(message)
+
+                    # Try to add to archive
+                    added = self.archive.add(
+                        model_state=model_state,
+                        fitness=fitness,
+                        avg_speed=avg_speed,
+                        avg_clearance=avg_clearance,
+                        metrics={
+                            'distance': total_distance,
+                            'collisions': collision_count,
+                            'duration': episode_duration,
+                        }
+                    )
+
+                    # Send acknowledgment
+                    self.socket.send_pyobj({'type': 'ack'})
+
+                    # Log progress
+                    print(f"← Eval {evaluation_count}/{num_evaluations} | "
+                          f"Model #{model_id} ({gen_type}) | "
+                          f"Fitness: {fitness:.2f} | "
+                          f"Speed: {avg_speed:.3f} m/s | "
+                          f"Clear: {avg_clearance:.2f} m | "
+                          f"{'✓ ADDED' if added else 'rejected'}",
+                          flush=True)
+
+                    # Checkpoint every 50 evaluations
+                    if evaluation_count % 50 == 0:
+                        self.save_checkpoint(evaluation_count)
+                        stats = self.archive.get_stats()
+                        print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)",
+                              flush=True)
+
                 else:
-                    print("⚠ Timeout waiting for episode data")
-                    continue
+                    print(f"⚠ Unknown message type: {message.get('type')}")
+                    self.socket.send_pyobj({'type': 'error', 'message': 'Unknown type'})
 
+            except KeyboardInterrupt:
+                print("\n🛑 Training interrupted by user")
+                break
             except Exception as e:
-                print(f"❌ Error receiving data: {e}")
+                print(f"❌ Error in training loop: {e}")
+                import traceback
+                traceback.print_exc()
+                # Try to send error response
+                try:
+                    self.socket.send_pyobj({'type': 'error', 'message': str(e)})
+                except:
+                    pass
                 continue
-
-            evaluation_count += 1
-
-            # Extract episode results
-            model_state = episode_data['model_state']
-            total_distance = episode_data['total_distance']
-            collision_count = episode_data['collision_count']
-            avg_speed = episode_data['avg_speed']
-            avg_clearance = episode_data['avg_clearance']
-            episode_duration = episode_data['duration']
-
-            # Compute fitness
-            fitness = self.compute_fitness(episode_data)
-
-            # Try to add to archive
-            added = self.archive.add(
-                model_state=model_state,
-                fitness=fitness,
-                avg_speed=avg_speed,
-                avg_clearance=avg_clearance,
-                metrics={
-                    'distance': total_distance,
-                    'collisions': collision_count,
-                    'duration': episode_duration,
-                }
-            )
-
-            # Log progress
-            if evaluation_count % 10 == 0:
-                stats = self.archive.get_stats()
-                print(f"Eval {evaluation_count}/{num_evaluations} | "
-                      f"Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']}) | "
-                      f"Fitness: {stats.get('fitness_max', 0):.2f} | "
-                      f"Speed: {avg_speed:.3f} m/s | "
-                      f"Clear: {avg_clearance:.2f} m | "
-                      f"{'✓ ADDED' if added else 'rejected'}",
-                      flush=True)
-
-            # Checkpoint every 50 evaluations
-            if evaluation_count % 50 == 0:
-                self.save_checkpoint(evaluation_count)
 
         print()
         print("=" * 60)
