@@ -108,19 +108,32 @@ echo "✓ All required packages installed"
 # Check network port availability
 echo ""
 echo "Checking port availability..."
+
+# Kill any old v620_ppo_trainer processes
+if pgrep -f v620_ppo_trainer > /dev/null; then
+  echo "⚠ Found old v620_ppo_trainer process(es), killing..."
+  pkill -f v620_ppo_trainer
+  sleep 2
+fi
+
 if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
-  echo "⚠ Warning: Port ${PORT} already in use"
+  echo "⚠ Warning: Port ${PORT} still in use after cleanup"
   echo "Running processes:"
   lsof -i :${PORT} 2>/dev/null || netstat -tuln | grep ":${PORT}"
   echo ""
-  read -p "Continue anyway? (y/n) " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+  echo "Attempting to free port..."
+  if command -v lsof &> /dev/null; then
+    lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true
+    sleep 1
+  fi
+
+  if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
+    echo "❌ Failed to free port ${PORT}"
     exit 1
   fi
-else
-  echo "✓ Port ${PORT} available"
 fi
+
+echo "✓ Port ${PORT} available"
 
 # Start TensorBoard in background
 echo ""
