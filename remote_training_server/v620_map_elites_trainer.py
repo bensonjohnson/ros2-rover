@@ -297,10 +297,16 @@ class MAPElitesTrainer:
                     self.pending_evaluations[model_id] = (model_state, gen_type)
 
                     # Send model to rover
+                    # Serialize model_state to bytes using torch.save
+                    import io
+                    buffer = io.BytesIO()
+                    torch.save(model_state, buffer)
+                    model_bytes = buffer.getvalue()
+
                     response = {
                         'type': 'model',
                         'model_id': model_id,
-                        'model_state': model_state,
+                        'model_bytes': model_bytes,  # Send as bytes, not pickled object
                         'generation_type': gen_type
                     }
                     self.socket.send_pyobj(response)
