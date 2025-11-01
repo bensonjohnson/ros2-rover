@@ -127,15 +127,15 @@ class SimpleDepthSafetyMonitor(Node):
         # Safety gating - only apply to forward motion
         if msg.linear.x > 0.01:  # Moving forward
             if self._min_forward_dist < self.hard_stop_distance:
-                # Hard stop - zero all motion
+                # Hard stop - stop forward motion, allow rotation and reverse to escape
                 out_cmd.linear.x = 0.0
                 out_cmd.linear.y = 0.0
-                out_cmd.angular.z = 0.0
+                # Keep angular.z to allow rotation
                 self._commands_blocked += 1
                 self._emergency_stops += 1
                 self.estop_pub.publish(Bool(data=True))
                 self.get_logger().warn(
-                    f'HARD STOP: Obstacle at {self._min_forward_dist:.2f}m (threshold: {self.hard_stop_distance}m)'
+                    f'HARD STOP: Obstacle at {self._min_forward_dist:.2f}m (threshold: {self.hard_stop_distance}m) - rotate or reverse to escape'
                 )
             elif self._min_forward_dist < self.emergency_distance:
                 # Soft stop - allow rotation but stop forward motion
@@ -145,6 +145,8 @@ class SimpleDepthSafetyMonitor(Node):
                 self.get_logger().warn(
                     f'SOFT STOP: Obstacle at {self._min_forward_dist:.2f}m (threshold: {self.emergency_distance}m)'
                 )
+
+        # Allow reverse motion always (negative linear.x passes through)
 
         # Publish gated command
         self.cmd_pub.publish(out_cmd)
