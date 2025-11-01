@@ -14,9 +14,9 @@ fi
 
 # Configuration
 SERVER_ADDR=${1:-"tcp://10.0.0.200:5556"}
-EPISODE_DURATION=${2:-60.0}
-MAX_SPEED=${3:-0.18}
-COLLISION_DIST=${4:-0.12}
+EPISODE_DURATION=${2:-"60.0"}
+MAX_SPEED=${3:-"0.18"}
+COLLISION_DIST=${4:-"0.12"}
 
 echo "Configuration:"
 echo "  V620 Server: ${SERVER_ADDR}"
