@@ -288,8 +288,12 @@ class V620PPOTrainer:
         if self.buffer.size < self.minibatch_size:
             return {'updated': False, 'reason': 'insufficient_data'}
 
+        print(f"[UPDATE] Starting update with buffer size: {self.buffer.size}", flush=True)
+
         # Get all data
+        print(f"[UPDATE] Getting data from buffer...", flush=True)
         data = self.buffer.get(self.device)
+        print(f"[UPDATE] Data retrieved, preparing tensors...", flush=True)
         rgb = data['rgb'].permute(0, 3, 1, 2)  # (B, H, W, C) → (B, C, H, W)
         depth = data['depth']
         proprio = data['proprio']
@@ -313,8 +317,13 @@ class V620PPOTrainer:
 
         metrics = {'policy_loss': [], 'value_loss': [], 'entropy': []}
 
+        print(f"[UPDATE] Starting {self.update_epochs} epochs of training...", flush=True)
+
         for epoch in range(self.update_epochs):
             np.random.shuffle(indices)
+
+            if epoch == 0:
+                print(f"[UPDATE] Epoch {epoch+1}/{self.update_epochs}, processing {dataset_size} samples in batches of {self.minibatch_size}...", flush=True)
 
             for start in range(0, dataset_size, self.minibatch_size):
                 end = min(start + self.minibatch_size, dataset_size)
@@ -330,7 +339,11 @@ class V620PPOTrainer:
                 batch_returns = returns[batch_idx]
 
                 # Forward pass
+                if epoch == 0 and start == 0:
+                    print(f"[UPDATE] Running first forward pass through encoder (this may take a while for ROCm kernel compilation)...", flush=True)
                 features = self.encoder(batch_rgb, batch_depth)
+                if epoch == 0 and start == 0:
+                    print(f"[UPDATE] Encoder forward pass complete!", flush=True)
                 action_mean = self.policy_head(features, batch_proprio)
                 values_pred = self.value_head(features, batch_proprio)
 
@@ -587,8 +600,10 @@ def main():
 
             # Update policy
             if trainer.total_steps % args.update_interval == 0 and trainer.buffer.size >= trainer.minibatch_size:
-                print(f"Performing PPO update at step {trainer.total_steps}...")
+                print(f"Performing PPO update at step {trainer.total_steps}...", flush=True)
+                print(f"Buffer size: {trainer.buffer.size}, Starting update...", flush=True)
                 metrics = trainer.update()
+                print(f"Update complete! Metrics: {metrics}", flush=True)
 
                 if metrics['updated']:
                     print(f"Update {metrics['update_count']}: "
