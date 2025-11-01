@@ -197,6 +197,22 @@ class RemoteTrainingCollector(Node):
         if (self._latest_rgb is None or self._latest_depth is None or
             self._latest_imu is None or self._latest_vel is None or
             self._latest_action is None):
+            # Log what's missing (throttled to avoid spam)
+            missing = []
+            if self._latest_rgb is None:
+                missing.append('RGB')
+            if self._latest_depth is None:
+                missing.append('Depth')
+            if self._latest_imu is None:
+                missing.append('IMU')
+            if self._latest_vel is None:
+                missing.append('Velocity')
+            if self._latest_action is None:
+                missing.append('Action')
+
+            self.get_logger().info_throttle(
+                5.0, f'Waiting for data: missing {", ".join(missing)}'
+            )
             return
 
         # Compute reward based on forward progress

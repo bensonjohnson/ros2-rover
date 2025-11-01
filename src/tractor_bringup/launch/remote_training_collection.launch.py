@@ -79,6 +79,28 @@ def generate_launch_description():
         )
     )
 
+    # Xbox controller teleop (Bluetooth)
+    joy_node = Node(
+        package="joy",
+        executable="joy_node",
+        name="joy_node",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "xbox_teleop.yaml"),
+        ],
+    )
+
+    teleop_node = Node(
+        package="teleop_twist_joy",
+        executable="teleop_node",
+        name="teleop_twist_joy",
+        output="screen",
+        parameters=[
+            os.path.join(pkg_tractor_bringup, "config", "xbox_teleop.yaml"),
+        ],
+        remappings=[("cmd_vel", "cmd_vel_teleop")],  # Publish to cmd_vel_teleop
+    )
+
     # Simple depth-based safety monitor (no RTAB-Map needed)
     # Directly processes depth image to detect obstacles and compute min_forward_distance
     safety_monitor_node = Node(
@@ -112,7 +134,7 @@ def generate_launch_description():
             "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
             "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
             "odom_topic": "/odom",
-            "cmd_vel_topic": "cmd_vel_ai",
+            "cmd_vel_topic": "cmd_vel_teleop",  # Record teleop commands as actions
             "min_distance_topic": "/min_forward_distance",
             "enable_compression": True,
             "jpeg_quality": 85,
@@ -143,6 +165,10 @@ def generate_launch_description():
     # Sensors
     ld.add_action(TimerAction(period=2.0, actions=[lsm9ds1_launch]))
     ld.add_action(TimerAction(period=5.0, actions=[realsense_launch]))
+
+    # Teleop (Xbox controller)
+    ld.add_action(joy_node)
+    ld.add_action(teleop_node)
 
     # Control and safety
     ld.add_action(TimerAction(period=8.0, actions=[vfc_node]))
