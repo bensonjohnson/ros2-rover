@@ -61,6 +61,7 @@ class RemoteTrainingCollector(Node):
         self.declare_parameter('calibration_sample_interval', 10.0)  # seconds
         self.declare_parameter('calibration_sample_count', 100)
         self.declare_parameter('calibration_data_dir', 'calibration_data')
+        self.declare_parameter('require_imu', False)  # Make IMU optional
 
         self.server_addr = str(self.get_parameter('server_address').value)
         self.rgb_topic = str(self.get_parameter('rgb_topic').value)
@@ -78,6 +79,7 @@ class RemoteTrainingCollector(Node):
         self.calibration_interval = float(self.get_parameter('calibration_sample_interval').value)
         self.calibration_count = int(self.get_parameter('calibration_sample_count').value)
         self.calibration_dir = str(self.get_parameter('calibration_data_dir').value)
+        self.require_imu = bool(self.get_parameter('require_imu').value)
 
         # Create calibration directory
         if self.save_calibration:
@@ -194,16 +196,21 @@ class RemoteTrainingCollector(Node):
     def collect_and_send(self) -> None:
         """Collect current state and send to training server."""
         # Check if we have all required data
-        if (self._latest_rgb is None or self._latest_depth is None or
-            self._latest_imu is None or self._latest_vel is None or
-            self._latest_action is None):
+        required_check = (self._latest_rgb is None or self._latest_depth is None or
+                         self._latest_vel is None or self._latest_action is None)
+
+        # Add IMU check only if required
+        if self.require_imu:
+            required_check = required_check or self._latest_imu is None
+
+        if required_check:
             # Log what's missing (throttled to avoid spam)
             missing = []
             if self._latest_rgb is None:
                 missing.append('RGB')
             if self._latest_depth is None:
                 missing.append('Depth')
-            if self._latest_imu is None:
+            if self.require_imu and self._latest_imu is None:
                 missing.append('IMU')
             if self._latest_vel is None:
                 missing.append('Velocity')
@@ -223,7 +230,13 @@ class RemoteTrainingCollector(Node):
 
         # Build proprioception vector
         lin_vel, ang_vel = self._latest_vel
-        roll, pitch, accel_mag = self._latest_imu
+
+        # Use IMU data if available, otherwise use zeros
+        if self._latest_imu is not None:
+            roll, pitch, accel_mag = self._latest_imu
+        else:
+            roll, pitch, accel_mag = 0.0, 0.0, 0.0
+
         proprio = np.array([
             lin_vel, ang_vel, roll, pitch, accel_mag, self._min_forward_dist
         ], dtype=np.float32)
