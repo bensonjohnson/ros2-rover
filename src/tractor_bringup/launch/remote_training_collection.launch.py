@@ -79,21 +79,49 @@ def generate_launch_description():
         )
     )
 
-    # Safety monitor (computes min forward distance)
+    # RTAB-Map for occupancy grid generation (used by safety monitor)
+    rtabmap_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("rtabmap_launch"), "launch", "rtabmap.launch.py")
+        ),
+        launch_arguments={
+            "use_sim_time": "false",
+            "frame_id": "base_link",
+            "odom_topic": "/odom",
+            "subscribe_depth": "true",
+            "subscribe_rgb": "true",
+            "approx_sync": "true",
+            "queue_size": "30",
+            "rgb_topic": "/camera/camera/color/image_raw",
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+            "camera_info_topic": "/camera/camera/color/camera_info",
+            "imu_topic": "/lsm9ds1_imu_publisher/imu/data",
+            "rtabmap": "true",
+            "rtabmapviz": "false",
+            "rviz": "false",
+            "visual_odometry": "true",
+            "odom_guess_frame_id": "/odom",
+            "odom_guess_min_translation": "0.01",
+            "odom_guess_min_rotation": "0.05",
+            "args": "--delete_db_on_start --Mem/IncrementalMemory true --subscribe_scan false --subscribe_imu true --RGBD/CreateOccupancyGrid true --Grid/Sensor 1 --Grid/RangeMax 5.0 --Grid/CellSize 0.05 --Vis/MinInliers 8 --Vis/CorType 0 --Odom/Strategy 0 --Odom/GuessMotion true --OdomF2M/MaxSize 1000",
+        }.items()
+    )
+
+    # RTAB-based safety monitor (uses occupancy grid from depth)
+    # Publishes min_forward_distance for data collection
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor.py",
-        name="safety_monitor",
+        executable="simple_safety_monitor_rtab.py",
+        name="simple_safety_monitor_rtab",
         output="screen",
         parameters=[{
-            "max_speed_limit": LaunchConfiguration("max_speed"),
-            "emergency_stop_distance": 0.15,
-            "warning_distance": 0.3,
-        }],
-        remappings=[
-            ("cmd_vel_in", "cmd_vel_teleop"),
-            ("cmd_vel_out", "cmd_vel_raw"),
-        ],
+            "occupancy_topic": "/rtabmap/local_grid_map",
+            "input_cmd_topic": "cmd_vel_teleop",
+            "output_cmd_topic": "cmd_vel_raw",
+            "emergency_stop_distance": 0.25,
+            "hard_stop_distance": 0.12,
+            "forward_width_m": 1.2,
+        }]
     )
 
     # Remote training data collector
@@ -141,11 +169,14 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=2.0, actions=[lsm9ds1_launch]))
     ld.add_action(TimerAction(period=5.0, actions=[realsense_launch]))
 
+    # RTAB-Map (for occupancy grid)
+    ld.add_action(TimerAction(period=8.0, actions=[rtabmap_launch]))
+
     # Control and safety
-    ld.add_action(TimerAction(period=8.0, actions=[vfc_node]))
-    ld.add_action(TimerAction(period=9.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[vfc_node]))
+    ld.add_action(TimerAction(period=11.0, actions=[safety_monitor_node]))
 
     # Data collector
-    ld.add_action(TimerAction(period=10.0, actions=[remote_collector_node]))
+    ld.add_action(TimerAction(period=12.0, actions=[remote_collector_node]))
 
     return ld
