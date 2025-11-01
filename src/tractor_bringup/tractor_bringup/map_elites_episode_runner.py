@@ -82,6 +82,13 @@ class MAPElitesEpisodeRunner(Node):
         self._speed_samples = []
         self._clearance_samples = []
 
+        # Trajectory collection (for gradient refinement)
+        self._collect_trajectory = False
+        self._trajectory_rgb = []
+        self._trajectory_depth = []
+        self._trajectory_proprio = []
+        self._trajectory_actions = []
+
         self.bridge = CvBridge()
 
         # ZeroMQ REQ socket for bidirectional communication with V620
@@ -349,7 +356,15 @@ class MAPElitesEpisodeRunner(Node):
         self._speed_samples = []
         self._clearance_samples = []
 
-        self.get_logger().info('🚀 Episode started')
+        # Clear trajectory buffers if collecting
+        if self._collect_trajectory:
+            self._trajectory_rgb = []
+            self._trajectory_depth = []
+            self._trajectory_proprio = []
+            self._trajectory_actions = []
+            self.get_logger().info('🚀 Episode started (COLLECTING TRAJECTORY DATA)')
+        else:
+            self.get_logger().info('🚀 Episode started')
 
     def end_episode(self) -> None:
         """End episode and send results to server."""
@@ -371,6 +386,17 @@ class MAPElitesEpisodeRunner(Node):
         # Compute averages
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
+
+        # If we were collecting trajectory data, send it now
+        if self._collect_trajectory:
+            self.send_trajectory_data()
+            self._collect_trajectory = False  # Reset flag
+
+            # Request next model after sending trajectory
+            self.get_logger().info('Waiting 3s before next episode...')
+            time.sleep(3.0)
+            self.request_new_model()
+            return
 
         # Package episode results
         episode_result = {
@@ -400,6 +426,17 @@ class MAPElitesEpisodeRunner(Node):
                 ack = self.zmq_socket.recv_pyobj()
                 if ack.get('type') == 'ack':
                     self.get_logger().info('✓ Results acknowledged by V620')
+
+                    # Check if server wants trajectory data for gradient refinement
+                    if ack.get('collect_trajectory', False):
+                        self.get_logger().info('→ Server requested trajectory data')
+                        self.get_logger().info('  Re-running episode with data collection...')
+
+                        # Re-run same model with trajectory collection enabled
+                        self._collect_trajectory = True
+                        self.start_episode()
+                        return  # Don't request new model yet
+
                 else:
                     self.get_logger().warn(f'Unexpected ack: {ack}')
             else:
@@ -412,6 +449,50 @@ class MAPElitesEpisodeRunner(Node):
         self.get_logger().info('Waiting 3s before next episode...')
         time.sleep(3.0)
         self.request_new_model()
+
+    def send_trajectory_data(self) -> None:
+        """Send collected trajectory data to V620 server."""
+        try:
+            # Convert lists to numpy arrays
+            rgb_array = np.array(self._trajectory_rgb, dtype=np.uint8)  # (N, H, W, 3)
+            depth_array = np.array(self._trajectory_depth, dtype=np.float32)  # (N, H, W)
+            proprio_array = np.array(self._trajectory_proprio, dtype=np.float32)  # (N, 6)
+            actions_array = np.array(self._trajectory_actions, dtype=np.float32)  # (N, 2)
+
+            # Prepare message
+            trajectory_message = {
+                'type': 'trajectory_data',
+                'model_id': self._current_model_id,
+                'trajectory': {
+                    'rgb': rgb_array,
+                    'depth': depth_array,
+                    'proprio': proprio_array,
+                    'actions': actions_array,
+                }
+            }
+
+            self.get_logger().info(
+                f'→ Sending trajectory data: {len(actions_array)} samples, '
+                f'{rgb_array.nbytes / 1024 / 1024:.1f} MB'
+            )
+
+            # Send to server
+            self.zmq_socket.send_pyobj(trajectory_message)
+
+            # Wait for acknowledgment
+            if self.zmq_socket.poll(timeout=60000):  # 60 second timeout for processing
+                ack = self.zmq_socket.recv_pyobj()
+                if ack.get('type') == 'ack':
+                    self.get_logger().info('✓ Trajectory data acknowledged by V620')
+                else:
+                    self.get_logger().warn(f'Unexpected ack: {ack}')
+            else:
+                self.get_logger().error('Timeout waiting for trajectory ack')
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to send trajectory data: {e}')
+            import traceback
+            traceback.print_exc()
 
     def inference_callback(self) -> None:
         """Run inference and publish commands."""
@@ -473,6 +554,20 @@ class MAPElitesEpisodeRunner(Node):
             current_speed = abs(self._latest_odom[2])  # Linear velocity
             self._speed_samples.append(current_speed)
             self._clearance_samples.append(self._min_forward_dist)
+
+            # Collect trajectory data if requested (subsample to avoid too much data)
+            if self._collect_trajectory and len(self._trajectory_rgb) < 600:  # Max 600 samples (~60s at 10Hz)
+                # Store observation data
+                self._trajectory_rgb.append(self._latest_rgb.copy())
+                self._trajectory_depth.append(self._latest_depth.copy())
+
+                # Store proprioception
+                lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
+                proprio_vec = [lin_vel, ang_vel, 0.0, 0.0, 0.0, self._min_forward_dist]
+                self._trajectory_proprio.append(proprio_vec)
+
+                # Store action taken
+                self._trajectory_actions.append([linear_cmd / self.max_linear, angular_cmd / self.max_angular])
 
         except Exception as e:
             self.get_logger().error(f'Inference failed: {e}')
