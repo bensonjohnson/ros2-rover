@@ -212,6 +212,7 @@ class MAPElitesTrainer:
         # Model ID tracking
         self.next_model_id = 0
         self.pending_evaluations = {}  # model_id -> (model_state, generation_type)
+        self.refinement_pending = {}  # model_id -> (cell_idx, model_state) for models waiting refinement
 
         print(f"✓ MAP-Elites trainer initialized on {self.device}")
         print(f"✓ REP socket listening on port {port}")
@@ -235,6 +236,85 @@ class MAPElitesTrainer:
                 param.add_(noise)
 
         return child_model.state_dict()
+
+    def refine_model_with_gradients(
+        self,
+        model_state: dict,
+        trajectory_data: dict,
+        learning_rate: float = 1e-4,
+        num_epochs: int = 10,
+        batch_size: int = 32
+    ) -> dict:
+        """Refine model using gradient descent on trajectory data (behavioral cloning).
+
+        Args:
+            model_state: Model state dict to refine
+            trajectory_data: Dictionary with 'rgb', 'depth', 'proprio', 'actions'
+            learning_rate: Learning rate for optimizer
+            num_epochs: Number of training epochs
+            batch_size: Batch size for training
+
+        Returns:
+            Refined model state dict
+        """
+        # Load model
+        model = ActorNetwork().to(self.device)
+        model.load_state_dict(model_state)
+        model.train()
+
+        # Setup optimizer
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+        # Prepare data
+        rgb = torch.from_numpy(trajectory_data['rgb']).to(self.device).float() / 255.0
+        depth = torch.from_numpy(trajectory_data['depth']).to(self.device).float()
+        proprio = torch.from_numpy(trajectory_data['proprio']).to(self.device).float()
+        actions = torch.from_numpy(trajectory_data['actions']).to(self.device).float()
+
+        num_samples = rgb.shape[0]
+
+        # Training loop
+        total_loss = 0.0
+        for epoch in range(num_epochs):
+            # Shuffle indices
+            indices = torch.randperm(num_samples)
+            epoch_loss = 0.0
+            num_batches = 0
+
+            for i in range(0, num_samples, batch_size):
+                batch_indices = indices[i:min(i+batch_size, num_samples)]
+
+                # Get batch
+                rgb_batch = rgb[batch_indices]
+                depth_batch = depth[batch_indices]
+                proprio_batch = proprio[batch_indices]
+                actions_batch = actions[batch_indices]
+
+                # Forward pass
+                pred_actions = model(rgb_batch, depth_batch, proprio_batch)
+
+                # Behavioral cloning loss (MSE)
+                loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
+
+                # Backward pass
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                epoch_loss += loss.item()
+                num_batches += 1
+
+            avg_loss = epoch_loss / num_batches
+            total_loss += avg_loss
+
+            if (epoch + 1) % 5 == 0:
+                print(f"    Refinement epoch {epoch+1}/{num_epochs}, loss: {avg_loss:.6f}")
+
+        avg_total_loss = total_loss / num_epochs
+        print(f"  ✓ Gradient refinement complete, avg loss: {avg_total_loss:.6f}")
+
+        # Return refined model
+        return model.state_dict()
 
     def generate_model_for_evaluation(self) -> Tuple[dict, str]:
         """Generate next model to evaluate.
@@ -348,8 +428,24 @@ class MAPElitesTrainer:
                         }
                     )
 
-                    # Send acknowledgment
-                    self.socket.send_pyobj({'type': 'ack'})
+                    # If added to archive, request trajectory data for gradient refinement
+                    if added:
+                        # Get the cell index where this model was added
+                        cell_idx = self.archive.get_cell_index(avg_speed, avg_clearance)
+
+                        # Store for refinement when trajectory data arrives
+                        self.refinement_pending[model_id] = (cell_idx, model_state)
+
+                        # Send acknowledgment with trajectory request
+                        self.socket.send_pyobj({
+                            'type': 'ack',
+                            'collect_trajectory': True,
+                            'model_id': model_id  # Re-run same model
+                        })
+                        print(f"  → Requesting trajectory data for refinement...", flush=True)
+                    else:
+                        # Normal acknowledgment
+                        self.socket.send_pyobj({'type': 'ack'})
 
                     # Log progress
                     print(f"← Eval {evaluation_count}/{num_evaluations} | "
@@ -366,6 +462,43 @@ class MAPElitesTrainer:
                         stats = self.archive.get_stats()
                         print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)",
                               flush=True)
+
+                elif message['type'] == 'trajectory_data':
+                    # Rover is sending trajectory data for gradient refinement
+                    model_id = message['model_id']
+                    trajectory_data = message['trajectory']
+
+                    print(f"← Received trajectory data for model #{model_id} "
+                          f"({len(trajectory_data['actions'])} samples)", flush=True)
+
+                    # Get the cell and model from refinement tracking
+                    if model_id not in self.refinement_pending:
+                        print(f"  ⚠ Model #{model_id} not pending refinement", flush=True)
+                        self.socket.send_pyobj({'type': 'ack'})
+                        continue
+
+                    cell_idx, original_model_state = self.refinement_pending.pop(model_id)
+
+                    print(f"  Refining model #{model_id} (cell {cell_idx}) with gradient descent...", flush=True)
+
+                    # Refine the model
+                    refined_model_state = self.refine_model_with_gradients(
+                        model_state=original_model_state,
+                        trajectory_data=trajectory_data,
+                        learning_rate=1e-4,
+                        num_epochs=10,
+                        batch_size=32
+                    )
+
+                    # Update the archive with refined model
+                    if cell_idx in self.archive.archive:
+                        self.archive.archive[cell_idx]['model'] = refined_model_state
+                        print(f"  ✓ Archive cell {cell_idx} updated with refined model", flush=True)
+                    else:
+                        print(f"  ⚠ Cell {cell_idx} not found in archive", flush=True)
+
+                    # Send acknowledgment
+                    self.socket.send_pyobj({'type': 'ack'})
 
                 else:
                     print(f"⚠ Unknown message type: {message.get('type')}")
