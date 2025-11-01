@@ -485,6 +485,10 @@ class MAPElitesTrainer:
 
                     cell_idx, original_model_state = self.refinement_pending.pop(model_id)
 
+                    # Send acknowledgment IMMEDIATELY so rover can continue
+                    # (refinement happens asynchronously to the rover)
+                    self.socket.send_pyobj({'type': 'ack'})
+
                     print(f"  Refining model #{model_id} (cell {cell_idx}) with gradient descent...", flush=True)
 
                     # Refine the model
@@ -502,9 +506,6 @@ class MAPElitesTrainer:
                         print(f"  ✓ Archive cell {cell_idx} updated with refined model", flush=True)
                     else:
                         print(f"  ⚠ Cell {cell_idx} not found in archive", flush=True)
-
-                    # Send acknowledgment
-                    self.socket.send_pyobj({'type': 'ack'})
 
                 else:
                     print(f"⚠ Unknown message type: {message.get('type')}")
