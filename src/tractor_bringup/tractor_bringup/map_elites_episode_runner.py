@@ -146,47 +146,10 @@ class MAPElitesEpisodeRunner(Node):
 
             self.get_logger().info('  Exporting to ONNX...')
             result = subprocess.run([
-                'python3', '-c',
-                f"""
-import torch
-import torch.nn as nn
-import sys
-sys.path.append('/home/ubuntu/ros2-rover/remote_training_server')
-from v620_ppo_trainer import RGBDEncoder, PolicyHead
-
-class ActorNetwork(nn.Module):
-    def __init__(self, proprio_dim=6):
-        super().__init__()
-        self.encoder = RGBDEncoder()
-        self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim)
-
-    def forward(self, rgb, depth, proprio):
-        features = self.encoder(rgb, depth)
-        action = self.policy_head(features, proprio)
-        return action
-
-# Load model
-model = ActorNetwork()
-model.load_state_dict(torch.load('{pt_path}'))
-model.eval()
-
-# Dummy inputs
-rgb = torch.randn(1, 3, 240, 424)
-depth = torch.randn(1, 1, 240, 424)
-proprio = torch.randn(1, 6)
-
-# Export
-torch.onnx.export(
-    model,
-    (rgb, depth, proprio),
-    '{onnx_path}',
-    input_names=['rgb', 'depth', 'proprio'],
-    output_names=['action'],
-    opset_version=11,
-    do_constant_folding=True
-)
-print('ONNX export complete')
-"""
+                'python3',
+                '/home/ubuntu/ros2-rover/src/tractor_bringup/tractor_bringup/export_actor_to_onnx.py',
+                str(pt_path),
+                str(onnx_path)
             ], capture_output=True, text=True, timeout=60)
 
             if result.returncode != 0:
