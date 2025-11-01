@@ -141,7 +141,12 @@ def convert_onnx_to_rknn(
 
         # Load ONNX
         print("Loading ONNX model...")
-        ret = rknn.load_onnx(model=onnx_path)
+        # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
+        ret = rknn.load_onnx(
+            model=onnx_path,
+            inputs=['rgb', 'depth', 'proprio'],
+            input_size_list=[[1, 3, 240, 424], [1, 1, 240, 424], [1, 6]]
+        )
         if ret != 0:
             print(f"❌ Failed to load ONNX: {ret}")
             return False

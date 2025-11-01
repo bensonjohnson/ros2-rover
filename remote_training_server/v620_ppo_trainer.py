@@ -473,7 +473,11 @@ class V620PPOTrainer:
                 'proprio': {0: 'batch'},
                 'action': {0: 'batch'}
             },
-            opset_version=11
+            opset_version=11,
+            do_constant_folding=True,
+            export_params=True,
+            # Don't use external data format - embed everything in one file
+            # This makes deployment easier
         )
         print(f"ONNX model exported: {path}")
 
