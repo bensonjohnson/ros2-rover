@@ -39,7 +39,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
         max_samples: Maximum number of samples to load
 
     Returns:
-        Path to a text file listing calibration image files, or None for in-memory dataset
+        Generator function that yields calibration samples
     """
     calibration_files = sorted([
         os.path.join(calibration_dir, f)
@@ -49,10 +49,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
 
     print(f"Loading {len(calibration_files)} calibration samples...")
 
-    # RKNN expects a dataset as a list of lists
-    # Each sample is a list of inputs in the order specified in load_onnx
-    # For multi-input models: [[input1_sample1, input2_sample1, ...], [input1_sample2, ...], ...]
-    dataset = []
+    # RKNN expects a generator function for multi-input models
+    # The generator should yield tuples of (input1, input2, input3, ...)
+    loaded_samples = []
     for i, file_path in enumerate(calibration_files):
         try:
             data = np.load(file_path)
@@ -60,9 +59,8 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             depth = data['depth']  # (H, W) float32
             proprio = data['proprio']  # (6,) float32
 
-            # RKNN expects inputs in the order specified in load_onnx: ['rgb', 'depth', 'proprio']
-            # Each sample is a list: [rgb_array, depth_array, proprio_array]
-            dataset.append([rgb, depth, proprio])
+            # Store samples in order: rgb, depth, proprio
+            loaded_samples.append((rgb, depth, proprio))
 
             if (i + 1) % 10 == 0:
                 print(f"  Loaded {i + 1}/{len(calibration_files)} samples")
@@ -71,8 +69,14 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             print(f"⚠ Warning: Failed to load {file_path}: {exc}")
             continue
 
-    print(f"✓ Loaded {len(dataset)} calibration samples")
-    return dataset
+    print(f"✓ Loaded {len(loaded_samples)} calibration samples")
+
+    # Return a generator function that RKNN will call
+    def dataset_generator():
+        for sample in loaded_samples:
+            yield sample
+
+    return dataset_generator
 
 
 def convert_onnx_to_rknn(
