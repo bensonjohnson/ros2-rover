@@ -62,15 +62,17 @@ GPU-accelerated PPO training with ROCm:
   - Configurable hyperparameters
 
 ### 3. Model Conversion Pipeline
-**File:** `export_to_rknn.py`
+**File (Rover):** `convert_onnx_to_rknn.py` and `convert_onnx_to_rknn.sh`
 
-Converts trained models for NPU deployment:
+Converts trained models for NPU deployment on the rover:
 - **Input**: ONNX model from V620
-- **Output**: Quantized RKNN model for RK3588
+- **Output**: RKNN model for RK3588
+- **Platform**: Runs on RK3588 (ARM) using RKNN-Toolkit-Lite2
+- **Note**: RKNN conversion tools are ARM-only, not available on x86_64
 - **Features**:
-  - INT8 quantization (optional calibration dataset)
-  - Optimization levels 0-3
-  - Platform-specific compilation
+  - Float16 mode (quantization requires calibration data)
+  - RK3588-specific optimization
+  - On-device conversion
 
 ### 4. Rover-Side Inference
 **File:** `src/tractor_bringup/tractor_bringup/remote_trained_inference.py`
@@ -97,11 +99,11 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6
 pip install pyzmq tensorboard opencv-python numpy
 ```
 
-3. **Install RKNN-Toolkit2 (x86_64 Linux only)**
+3. **Note: RKNN conversion on rover, not V620**
 ```bash
-git clone https://github.com/rockchip-linux/rknn-toolkit2
-cd rknn-toolkit2/rknn-toolkit2/packages
-pip install rknn_toolkit2-*-cp310-cp310-linux_x86_64.whl
+# RKNN-Toolkit2 is ARM-only (not x86_64)
+# V620 only exports ONNX - conversion to RKNN happens on the rover
+echo "No RKNN tools needed on V620"
 ```
 
 4. **Verify GPU**

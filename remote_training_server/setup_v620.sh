@@ -123,46 +123,21 @@ else:
     print('WARNING: GPU not detected!')
 "
 
-# Step 5: Install RKNN-Toolkit2
+# Step 5: Note about RKNN conversion
 echo ""
 echo "=================================================="
-echo "Step 5: Installing RKNN-Toolkit2"
+echo "Step 5: RKNN Model Conversion"
 echo "=================================================="
-
-RKNN_DIR="/tmp/rknn-toolkit2"
-
-if python3 -c "from rknn.api import RKNN" 2>/dev/null; then
-  echo "✓ RKNN-Toolkit2 already installed"
-else
-  echo "Downloading RKNN-Toolkit2..."
-
-  if [ -d "$RKNN_DIR" ]; then
-    rm -rf "$RKNN_DIR"
-  fi
-
-  git clone https://github.com/rockchip-linux/rknn-toolkit2 "$RKNN_DIR"
-
-  echo "Installing RKNN-Toolkit2..."
-  cd "$RKNN_DIR/rknn-toolkit2/packages"
-
-  # Find the correct wheel for Python version
-  WHEEL=$(ls rknn_toolkit2-*-cp310-cp310-linux_x86_64.whl 2>/dev/null | head -1)
-
-  if [ -z "$WHEEL" ]; then
-    echo "⚠ Warning: Could not find RKNN-Toolkit2 wheel for Python 3.10"
-    echo "Available wheels:"
-    ls rknn_toolkit2-*.whl
-    echo ""
-    echo "Install manually with:"
-    echo "  cd $RKNN_DIR/rknn-toolkit2/packages"
-    echo "  pip3 install rknn_toolkit2-<version>-cp3XX-cp3XX-linux_x86_64.whl"
-  else
-    python3 -m pip install "$WHEEL"
-    echo "✓ RKNN-Toolkit2 installed"
-  fi
-
-  cd -
-fi
+echo ""
+echo "Note: RKNN-Toolkit2 (for ONNX→RKNN conversion) only runs on ARM (RK3588)."
+echo "The V620 server exports ONNX models, which are converted to RKNN on the rover."
+echo ""
+echo "Conversion workflow:"
+echo "  1. V620: Train model → Export ONNX"
+echo "  2. Deploy: SCP ONNX to rover"
+echo "  3. Rover: Convert ONNX → RKNN using RKNN-Toolkit-Lite2"
+echo ""
+echo "✓ No additional tools needed on V620"
 
 # Step 6: Configure firewall
 echo ""
@@ -245,12 +220,7 @@ except ImportError as e:
     print(f"✗ TensorBoard: {e}")
     errors.append("tensorboard")
 
-try:
-    from rknn.api import RKNN
-    print(f"✓ RKNN-Toolkit2")
-except ImportError as e:
-    print(f"✗ RKNN-Toolkit2: {e}")
-    errors.append("rknn-toolkit2")
+print("⚠ RKNN-Toolkit2: Not needed on V620 (conversion happens on rover)")
 
 if errors:
     print(f"\n❌ Missing packages: {', '.join(errors)}")
@@ -277,9 +247,10 @@ echo "  ✓ System packages"
 echo "  ✓ ROCm (GPU driver)"
 echo "  ✓ PyTorch with ROCm"
 echo "  ✓ ZeroMQ, NumPy, OpenCV, TensorBoard"
-echo "  ✓ RKNN-Toolkit2"
 echo "  ✓ Firewall configured"
 echo "  ✓ Directory structure created"
+echo ""
+echo "Note: RKNN conversion happens on the rover (RK3588), not V620"
 echo ""
 echo "Next steps:"
 echo "  1. Copy training code to this machine"
