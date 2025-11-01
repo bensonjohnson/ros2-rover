@@ -39,7 +39,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
         max_samples: Maximum number of samples to load
 
     Returns:
-        Generator function that yields batches of [rgb, depth, proprio]
+        Path to a text file listing calibration image files, or None for in-memory dataset
     """
     calibration_files = sorted([
         os.path.join(calibration_dir, f)
@@ -49,6 +49,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
 
     print(f"Loading {len(calibration_files)} calibration samples...")
 
+    # RKNN expects a dataset as a list of lists
+    # Each sample is a list of inputs in the order specified in load_onnx
+    # For multi-input models: [[input1_sample1, input2_sample1, ...], [input1_sample2, ...], ...]
     dataset = []
     for i, file_path in enumerate(calibration_files):
         try:
@@ -57,9 +60,8 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             depth = data['depth']  # (H, W) float32
             proprio = data['proprio']  # (6,) float32
 
-            # Expand depth to (H, W, 1)
-            depth = np.expand_dims(depth, axis=-1)
-
+            # RKNN expects inputs in the order specified in load_onnx: ['rgb', 'depth', 'proprio']
+            # Each sample is a list: [rgb_array, depth_array, proprio_array]
             dataset.append([rgb, depth, proprio])
 
             if (i + 1) % 10 == 0:
@@ -70,13 +72,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             continue
 
     print(f"✓ Loaded {len(dataset)} calibration samples")
-
-    # Create generator function
-    def data_generator():
-        for sample in dataset:
-            yield sample
-
-    return data_generator
+    return dataset
 
 
 def convert_onnx_to_rknn(
