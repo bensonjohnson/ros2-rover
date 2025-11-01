@@ -91,21 +91,23 @@ def generate_launch_description():
         )
     )
 
-    # Safety monitor
+    # Safety monitor (depth-based, no point cloud required)
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor.py",
-        name="safety_monitor",
+        executable="simple_depth_safety_monitor.py",
+        name="simple_depth_safety_monitor",
         output="screen",
         parameters=[{
-            "max_speed_limit": LaunchConfiguration("max_speed"),
+            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+            "input_cmd_topic": "cmd_vel_ai",
+            "output_cmd_topic": "cmd_vel_raw",
             "emergency_stop_distance": LaunchConfiguration("safety_distance"),
-            "warning_distance": 0.5,
+            "hard_stop_distance": 0.12,
+            "depth_scale": 0.001,
+            "forward_roi_width_ratio": 0.6,
+            "forward_roi_height_ratio": 0.5,
+            "max_eval_distance": 5.0,
         }],
-        remappings=[
-            ("cmd_vel_in", "cmd_vel_ai"),
-            ("cmd_vel_out", "cmd_vel_raw"),
-        ],
     )
 
     # Remote trained inference node
