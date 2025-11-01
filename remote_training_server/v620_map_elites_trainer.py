@@ -18,7 +18,31 @@ import torch
 import torch.nn as nn
 import zmq
 
-from v620_ppo_trainer import ActorNetwork  # Reuse your existing network architecture
+from v620_ppo_trainer import RGBDEncoder, PolicyHead  # Reuse PPO network components
+
+
+class ActorNetwork(nn.Module):
+    """Actor-only network for MAP-Elites (no value head needed)."""
+
+    def __init__(self, proprio_dim: int = 6):
+        super().__init__()
+        self.encoder = RGBDEncoder()
+        self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim)
+
+    def forward(self, rgb, depth, proprio):
+        """Forward pass.
+
+        Args:
+            rgb: (B, 3, H, W) RGB image
+            depth: (B, 1, H, W) Depth image
+            proprio: (B, 6) Proprioception
+
+        Returns:
+            action: (B, 2) [linear_vel, angular_vel]
+        """
+        features = self.encoder(rgb, depth)
+        action = self.policy_head(features, proprio)
+        return action
 
 
 class MAPElitesArchive:
