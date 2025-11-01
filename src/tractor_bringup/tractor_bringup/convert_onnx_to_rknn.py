@@ -14,13 +14,19 @@ import sys
 from pathlib import Path
 
 try:
-    from rknnlite.api import RKNNLite
+    from rknn.api import RKNN
     HAS_RKNN = True
 except ImportError:
-    HAS_RKNN = False
-    print("ERROR: rknnlite not installed!")
-    print("Install with: pip3 install rknn_toolkit_lite2-*-cp310-cp310-linux_aarch64.whl")
-    sys.exit(1)
+    try:
+        from rknnlite.api import RKNNLite
+        HAS_RKNN = False
+        print("ERROR: Full RKNN toolkit not available, only RKNNLite found")
+        print("RKNNLite cannot convert models, only run inference")
+        sys.exit(1)
+    except ImportError:
+        HAS_RKNN = False
+        print("ERROR: RKNN toolkit not installed!")
+        sys.exit(1)
 
 import numpy as np
 
@@ -117,8 +123,8 @@ def convert_onnx_to_rknn(
         quantize = False
 
     try:
-        # Initialize RKNNLite
-        rknn = RKNNLite(verbose=True)
+        # Initialize RKNN (full toolkit, not RKNNLite)
+        rknn = RKNN(verbose=True)
 
         # Configure RKNN
         print("Configuring RKNN...")
