@@ -229,14 +229,17 @@ class RemoteTrainedInference(Node):
 
         try:
             # Prepare inputs
-            # RGB: (H, W, 3) uint8
+            # RGB: (H, W, 3) -> (1, 3, H, W) uint8
             rgb = self._latest_rgb.astype(np.uint8)
+            rgb = np.transpose(rgb, (2, 0, 1))  # (3, H, W)
+            rgb = np.expand_dims(rgb, axis=0)  # (1, 3, H, W)
 
-            # Depth: (H, W) float32 normalized to [0, 1]
+            # Depth: (H, W) -> (1, 1, H, W) float32 normalized to [0, 1]
             depth = (self._latest_depth / self.depth_clip).astype(np.float32)
-            depth = np.expand_dims(depth, axis=-1)  # (H, W, 1)
+            depth = np.expand_dims(depth, axis=0)  # (1, H, W)
+            depth = np.expand_dims(depth, axis=0)  # (1, 1, H, W)
 
-            # Proprioception: [lin_vel, ang_vel, roll, pitch, accel_mag, min_dist]
+            # Proprioception: [lin_vel, ang_vel, roll, pitch, accel_mag, min_dist] -> (1, 6)
             lin_vel, ang_vel = self._latest_vel
 
             # IMU is optional - use zeros if not available
@@ -245,9 +248,9 @@ class RemoteTrainedInference(Node):
             else:
                 roll, pitch, accel_mag = 0.0, 0.0, 0.0
 
-            proprio = np.array([
+            proprio = np.array([[
                 lin_vel, ang_vel, roll, pitch, accel_mag, self._min_forward_dist
-            ], dtype=np.float32)
+            ]], dtype=np.float32)  # (1, 6)
 
             # Run inference
             start_time = time.time()
