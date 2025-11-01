@@ -10,7 +10,8 @@
       "Bash(ros2 topic:*)",
       "Bash(ros2 param list:*)",
       "Bash(ros2 param get:*)",
-      "Bash(ros2 param set:*)"
+      "Bash(ros2 param set:*)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
