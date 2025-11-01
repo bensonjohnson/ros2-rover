@@ -128,11 +128,14 @@ def convert_onnx_to_rknn(
 
         # Configure RKNN
         print("Configuring RKNN...")
+        # Valid quantized_dtype: 'w8a8', 'w8a16', 'w16a16i', 'w16a16i_dfp', 'w4a16'
+        # w8a8 = 8-bit weights, 8-bit activations (INT8, requires calibration)
+        # w8a16 = 8-bit weights, 16-bit activations (good default without calibration)
         ret = rknn.config(
             mean_values=[[127.5, 127.5, 127.5], [0], [0, 0, 0, 0, 0, 0]],  # RGB, Depth, Proprio
             std_values=[[127.5, 127.5, 127.5], [1], [1, 1, 1, 1, 1, 1]],
             target_platform=target_platform,
-            quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
+            quantized_dtype='w8a8' if quantize else 'w8a16',
             optimization_level=3
         )
         if ret != 0:
@@ -154,11 +157,14 @@ def convert_onnx_to_rknn(
         # Build
         if quantize and calibration_dir:
             print("Building RKNN model with INT8 quantization...")
-            # Load calibration dataset
-            dataset = _load_calibration_dataset(calibration_dir)
-            ret = rknn.build(do_quantization=True, dataset=dataset)
+            print("⚠ Note: Quantization with multi-input NPZ calibration not yet implemented")
+            print("  Falling back to w8a16 mode (no calibration required)")
+            # TODO: Implement proper dataset.txt generation for multi-input models
+            # dataset = _load_calibration_dataset(calibration_dir)
+            # ret = rknn.build(do_quantization=True, dataset=dataset)
+            ret = rknn.build(do_quantization=False)
         else:
-            print("Building RKNN model (float16 mode)...")
+            print("Building RKNN model (w8a16 mode - no calibration)...")
             ret = rknn.build(do_quantization=False)
 
         if ret != 0:
