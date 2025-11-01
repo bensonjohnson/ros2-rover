@@ -14,6 +14,7 @@ Data format sent to V620:
 """
 
 import time
+import os
 from typing import Optional, Tuple
 import json
 
@@ -56,6 +57,10 @@ class RemoteTrainingCollector(Node):
         self.declare_parameter('depth_clip_m', 6.0)
         self.declare_parameter('enable_compression', True)
         self.declare_parameter('jpeg_quality', 85)
+        self.declare_parameter('save_calibration_samples', True)
+        self.declare_parameter('calibration_sample_interval', 10.0)  # seconds
+        self.declare_parameter('calibration_sample_count', 100)
+        self.declare_parameter('calibration_data_dir', 'calibration_data')
 
         self.server_addr = str(self.get_parameter('server_address').value)
         self.rgb_topic = str(self.get_parameter('rgb_topic').value)
@@ -69,6 +74,15 @@ class RemoteTrainingCollector(Node):
         self.depth_clip = float(self.get_parameter('depth_clip_m').value)
         self.enable_compression = bool(self.get_parameter('enable_compression').value)
         self.jpeg_quality = int(self.get_parameter('jpeg_quality').value)
+        self.save_calibration = bool(self.get_parameter('save_calibration_samples').value)
+        self.calibration_interval = float(self.get_parameter('calibration_sample_interval').value)
+        self.calibration_count = int(self.get_parameter('calibration_sample_count').value)
+        self.calibration_dir = str(self.get_parameter('calibration_data_dir').value)
+
+        # Create calibration directory
+        if self.save_calibration:
+            os.makedirs(self.calibration_dir, exist_ok=True)
+            self.get_logger().info(f'Saving calibration samples to: {self.calibration_dir}')
 
         if not HAS_ZMQ:
             self.get_logger().error('ZeroMQ not installed! Install: pip install pyzmq')
@@ -93,6 +107,8 @@ class RemoteTrainingCollector(Node):
         self._prev_position: Optional[Tuple[float, float]] = None
         self._episode_step = 0
         self._total_samples_sent = 0
+        self._last_calibration_save = time.time()
+        self._calibration_samples_saved = 0
 
         # Subscribers
         self.rgb_sub = self.create_subscription(
@@ -224,6 +240,13 @@ class RemoteTrainingCollector(Node):
                 self.get_logger().info(f'Episode finished at step {self._episode_step}')
                 self._episode_step = 0
 
+            # Save calibration samples periodically
+            if self.save_calibration and self._calibration_samples_saved < self.calibration_count:
+                now = time.time()
+                if (now - self._last_calibration_save) >= self.calibration_interval:
+                    self._save_calibration_sample(self._latest_rgb, self._latest_depth, proprio)
+                    self._last_calibration_save = now
+
         except zmq.error.Again:
             self.get_logger().warn_throttle(5.0, 'Training server buffer full, dropping sample')
         except Exception as exc:
@@ -320,6 +343,37 @@ class RemoteTrainingCollector(Node):
             return True
 
         return False
+
+    def _save_calibration_sample(self, rgb: np.ndarray, depth: np.ndarray, proprio: np.ndarray) -> None:
+        """Save calibration sample for RKNN quantization."""
+        try:
+            sample_path = os.path.join(
+                self.calibration_dir,
+                f'calibration_{self._calibration_samples_saved:04d}.npz'
+            )
+
+            # Save RGB, depth, and proprioception
+            np.savez_compressed(
+                sample_path,
+                rgb=rgb,
+                depth=depth,
+                proprio=proprio
+            )
+
+            self._calibration_samples_saved += 1
+
+            if self._calibration_samples_saved % 10 == 0:
+                self.get_logger().info(
+                    f'Saved {self._calibration_samples_saved}/{self.calibration_count} calibration samples'
+                )
+
+            if self._calibration_samples_saved >= self.calibration_count:
+                self.get_logger().info(
+                    f'✓ Calibration dataset complete: {self._calibration_samples_saved} samples saved'
+                )
+
+        except Exception as exc:
+            self.get_logger().error(f'Failed to save calibration sample: {exc}')
 
     @staticmethod
     def _roll_pitch_from_quaternion(x: float, y: float, z: float, w: float) -> Tuple[float, float]:
