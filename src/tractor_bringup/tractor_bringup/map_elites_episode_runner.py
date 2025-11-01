@@ -5,7 +5,11 @@ Runs autonomous episodes and reports results back to V620 server.
 No teleoperation required - rover explores autonomously!
 """
 
+import os
+import subprocess
+import tempfile
 import time
+from pathlib import Path
 from typing import Tuple, Optional
 
 import numpy as np
@@ -108,12 +112,160 @@ class MAPElitesEpisodeRunner(Node):
             self.inference_callback
         )
 
+        # Create temp directory for model conversions
+        self.temp_dir = Path(tempfile.mkdtemp(prefix='map_elites_'))
+        self.get_logger().info(f'Temp directory: {self.temp_dir}')
+
         self.get_logger().info('MAP-Elites episode runner initialized')
         self.get_logger().info(f'Server: {self.server_addr}')
         self.get_logger().info(f'Episode duration: {self.episode_duration}s')
 
         # Request first model from server
         self.request_new_model()
+
+    def convert_pytorch_to_rknn(self, model_state: dict, model_id: int) -> Optional[str]:
+        """Convert PyTorch state_dict to RKNN model.
+
+        Args:
+            model_state: PyTorch state_dict
+            model_id: Model ID for naming
+
+        Returns:
+            Path to RKNN model file, or None if conversion failed
+        """
+        try:
+            import torch
+
+            # Save PyTorch model
+            pt_path = self.temp_dir / f'model_{model_id}.pt'
+            torch.save(model_state, pt_path)
+            self.get_logger().info(f'  Saved PyTorch model: {pt_path}')
+
+            # Export to ONNX
+            onnx_path = self.temp_dir / f'model_{model_id}.onnx'
+
+            self.get_logger().info('  Exporting to ONNX...')
+            result = subprocess.run([
+                'python3', '-c',
+                f"""
+import torch
+import torch.nn as nn
+import sys
+sys.path.append('/home/ubuntu/ros2-rover/remote_training_server')
+from v620_ppo_trainer import RGBDEncoder, PolicyHead
+
+class ActorNetwork(nn.Module):
+    def __init__(self, proprio_dim=6):
+        super().__init__()
+        self.encoder = RGBDEncoder()
+        self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim)
+
+    def forward(self, rgb, depth, proprio):
+        features = self.encoder(rgb, depth)
+        action = self.policy_head(features, proprio)
+        return action
+
+# Load model
+model = ActorNetwork()
+model.load_state_dict(torch.load('{pt_path}'))
+model.eval()
+
+# Dummy inputs
+rgb = torch.randn(1, 3, 240, 424)
+depth = torch.randn(1, 1, 240, 424)
+proprio = torch.randn(1, 6)
+
+# Export
+torch.onnx.export(
+    model,
+    (rgb, depth, proprio),
+    '{onnx_path}',
+    input_names=['rgb', 'depth', 'proprio'],
+    output_names=['action'],
+    opset_version=11,
+    do_constant_folding=True
+)
+print('ONNX export complete')
+"""
+            ], capture_output=True, text=True, timeout=60)
+
+            if result.returncode != 0:
+                self.get_logger().error(f'ONNX export failed: {result.stderr}')
+                return None
+
+            self.get_logger().info(f'  ✓ ONNX exported: {onnx_path}')
+
+            # Convert ONNX to RKNN
+            rknn_path = self.temp_dir / f'model_{model_id}.rknn'
+
+            self.get_logger().info('  Converting to RKNN...')
+            result = subprocess.run([
+                'python3',
+                '/home/ubuntu/ros2-rover/src/tractor_bringup/tractor_bringup/convert_onnx_to_rknn.py',
+                str(onnx_path),
+                '--output', str(rknn_path)
+            ], capture_output=True, text=True, timeout=120)
+
+            if result.returncode != 0:
+                self.get_logger().error(f'RKNN conversion failed: {result.stderr}')
+                return None
+
+            if not rknn_path.exists():
+                self.get_logger().error('RKNN file not created')
+                return None
+
+            self.get_logger().info(f'  ✓ RKNN converted: {rknn_path} ({rknn_path.stat().st_size / 1024:.1f} KB)')
+
+            return str(rknn_path)
+
+        except Exception as e:
+            self.get_logger().error(f'Model conversion failed: {e}')
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def load_rknn_model(self, rknn_path: str) -> bool:
+        """Load RKNN model into runtime.
+
+        Args:
+            rknn_path: Path to RKNN model file
+
+        Returns:
+            True if successful
+        """
+        if not HAS_RKNN or not self.use_npu:
+            self.get_logger().warn('RKNN not available, will use random actions')
+            return False
+
+        try:
+            # Release old runtime if exists
+            if self._rknn_runtime is not None:
+                self._rknn_runtime.release()
+
+            # Create new runtime
+            self._rknn_runtime = RKNNLite()
+
+            # Load model
+            ret = self._rknn_runtime.load_rknn(rknn_path)
+            if ret != 0:
+                self.get_logger().error(f'Failed to load RKNN model: {ret}')
+                self._rknn_runtime = None
+                return False
+
+            # Init runtime
+            ret = self._rknn_runtime.init_runtime()
+            if ret != 0:
+                self.get_logger().error(f'Failed to init RKNN runtime: {ret}')
+                self._rknn_runtime = None
+                return False
+
+            self.get_logger().info('✓ RKNN model loaded and ready')
+            return True
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to load RKNN model: {e}')
+            self._rknn_runtime = None
+            return False
 
     def rgb_callback(self, msg: Image) -> None:
         """Store latest RGB image."""
@@ -172,8 +324,22 @@ class MAPElitesEpisodeRunner(Node):
                         f'({response["generation_type"]})'
                     )
 
-                    # TODO: Load model into RKNN runtime
-                    # For now, we'll use random actions
+                    # Convert PyTorch → ONNX → RKNN
+                    self.get_logger().info('Converting model to RKNN...')
+                    rknn_path = self.convert_pytorch_to_rknn(
+                        self._current_model_state,
+                        self._current_model_id
+                    )
+
+                    if rknn_path:
+                        # Load into RKNN runtime
+                        success = self.load_rknn_model(rknn_path)
+                        if success:
+                            self.get_logger().info('🚀 Model ready for inference!')
+                        else:
+                            self.get_logger().warn('⚠ Using random actions (RKNN load failed)')
+                    else:
+                        self.get_logger().warn('⚠ Using random actions (conversion failed)')
 
                     # Start new episode
                     self.start_episode()
@@ -291,10 +457,34 @@ class MAPElitesEpisodeRunner(Node):
             return
 
         try:
-            # For now, use simple random policy
-            # In full implementation, this would use RKNN model
-            linear_cmd = np.random.uniform(-0.5, 1.0) * self.max_linear
-            angular_cmd = np.random.uniform(-1.0, 1.0) * self.max_angular
+            # Use RKNN model if available, otherwise random actions
+            if self._rknn_runtime is not None:
+                # Prepare inputs for RKNN
+                rgb = self._latest_rgb.astype(np.uint8)
+                rgb = np.transpose(rgb, (2, 0, 1))  # (3, H, W)
+                rgb = np.expand_dims(rgb, axis=0)  # (1, 3, H, W)
+
+                depth = self._latest_depth.astype(np.float32) / 5.0  # Normalize
+                depth = np.expand_dims(depth, axis=0)  # (1, H, W)
+                depth = np.expand_dims(depth, axis=0)  # (1, 1, H, W)
+
+                lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
+                proprio = np.array([[
+                    lin_vel, ang_vel, 0.0, 0.0, 0.0, self._min_forward_dist
+                ]], dtype=np.float32)  # (1, 6)
+
+                # Run RKNN inference
+                outputs = self._rknn_runtime.inference(inputs=[rgb, depth, proprio])
+
+                # Parse output
+                action = outputs[0][0]  # (2,)
+                linear_cmd = float(np.clip(action[0], -1.0, 1.0) * self.max_linear)
+                angular_cmd = float(np.clip(action[1], -1.0, 1.0) * self.max_angular)
+
+            else:
+                # Fallback to random policy
+                linear_cmd = np.random.uniform(-0.5, 1.0) * self.max_linear
+                angular_cmd = np.random.uniform(-1.0, 1.0) * self.max_angular
 
             # Safety: stop if too close to obstacle
             if self._min_forward_dist < self.collision_dist * 2:
@@ -313,6 +503,8 @@ class MAPElitesEpisodeRunner(Node):
 
         except Exception as e:
             self.get_logger().error(f'Inference failed: {e}')
+            import traceback
+            traceback.print_exc()
 
 
 def main(args=None) -> None:
