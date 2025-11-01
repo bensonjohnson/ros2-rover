@@ -210,9 +210,9 @@ class RemoteTrainingCollector(Node):
             if self._latest_action is None:
                 missing.append('Action')
 
-            self.get_logger().info_throttle(
-                5.0, f'Waiting for data: missing {", ".join(missing)}'
-            )
+            if not hasattr(self, '_last_missing_log') or (time.time() - self._last_missing_log) > 5.0:
+                self.get_logger().info(f'Waiting for data: missing {", ".join(missing)}')
+                self._last_missing_log = time.time()
             return
 
         # Compute reward based on forward progress
