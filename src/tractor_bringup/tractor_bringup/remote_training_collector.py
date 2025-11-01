@@ -93,7 +93,8 @@ class RemoteTrainingCollector(Node):
         # Initialize ZeroMQ
         self.zmq_context = zmq.Context()
         self.zmq_socket = self.zmq_context.socket(zmq.PUSH)
-        self.zmq_socket.setsockopt(zmq.SNDHWM, 10)  # High water mark - drop old data if buffer full
+        self.zmq_socket.setsockopt(zmq.SNDHWM, 1000)  # High water mark - buffer up to 1000 messages
+        self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Don't wait on close
         self.zmq_socket.connect(self.server_addr)
         self.get_logger().info(f'Connected to training server: {self.server_addr}')
 
@@ -368,8 +369,8 @@ class RemoteTrainingCollector(Node):
             self.get_logger().warn('Episode terminated: Collision detected')
             return True
 
-        # Episode timeout (300 steps at 10Hz = 30 seconds)
-        if self._episode_step >= 300:
+        # Episode timeout (600 steps at 10Hz = 60 seconds)
+        if self._episode_step >= 600:
             self.get_logger().info('Episode terminated: Timeout')
             return True
 
