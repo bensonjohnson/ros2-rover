@@ -72,12 +72,14 @@ class MAPElitesEpisodeRunner(Node):
 
         self.bridge = CvBridge()
 
-        # ZeroMQ - send episode results to V620
+        # ZeroMQ REQ socket for bidirectional communication with V620
         self.zmq_context = zmq.Context()
-        self.zmq_socket = self.zmq_context.socket(zmq.PUSH)
+        self.zmq_socket = self.zmq_context.socket(zmq.REQ)
         self.zmq_socket.connect(self.server_addr)
-        self.zmq_socket.setsockopt(zmq.SNDHWM, 100)
         self.zmq_socket.setsockopt(zmq.LINGER, 0)
+
+        # Current model being evaluated
+        self._current_model_id = None
 
         # Subscribers
         self.rgb_sub = self.create_subscription(
@@ -149,19 +151,49 @@ class MAPElitesEpisodeRunner(Node):
             self.get_logger().warn(f'Collision detected! ({self._min_forward_dist:.2f}m)')
 
     def request_new_model(self) -> None:
-        """Request new model from V620 server (placeholder).
+        """Request new model from V620 server."""
+        try:
+            # Send model request
+            request = {'type': 'request_model'}
+            self.zmq_socket.send_pyobj(request)
 
-        In full implementation, server would send model weights.
-        For now, we'll use a random model.
-        """
-        # TODO: Implement model request protocol
-        # For now, initialize with random weights
-        if self._rknn_runtime is None and HAS_RKNN and self.use_npu:
-            # Load a model (would come from server)
-            pass
+            self.get_logger().info('Requesting new model from V620...')
 
-        # Start new episode
-        self.start_episode()
+            # Wait for response (with timeout)
+            if self.zmq_socket.poll(timeout=30000):  # 30 second timeout
+                response = self.zmq_socket.recv_pyobj()
+
+                if response['type'] == 'model':
+                    self._current_model_id = response['model_id']
+                    self._current_model_state = response['model_state']
+
+                    self.get_logger().info(
+                        f'✓ Received model #{self._current_model_id} '
+                        f'({response["generation_type"]})'
+                    )
+
+                    # TODO: Load model into RKNN runtime
+                    # For now, we'll use random actions
+
+                    # Start new episode
+                    self.start_episode()
+
+                else:
+                    self.get_logger().error(f'Unexpected response type: {response.get("type")}')
+                    # Try again after delay
+                    time.sleep(5.0)
+                    self.request_new_model()
+
+            else:
+                self.get_logger().error('Timeout waiting for model from V620')
+                # Try again
+                time.sleep(5.0)
+                self.request_new_model()
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to request model: {e}')
+            time.sleep(5.0)
+            self.request_new_model()
 
     def start_episode(self) -> None:
         """Start new autonomous episode."""
@@ -201,9 +233,10 @@ class MAPElitesEpisodeRunner(Node):
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
 
-        # Package episode data
-        episode_data = {
-            'model_state': self._current_model_state,  # Would be actual model state
+        # Package episode results
+        episode_result = {
+            'type': 'episode_result',
+            'model_id': self._current_model_id,
             'total_distance': float(self._total_distance),
             'collision_count': int(self._collision_count),
             'avg_speed': float(avg_speed),
@@ -211,21 +244,34 @@ class MAPElitesEpisodeRunner(Node):
             'duration': float(duration),
         }
 
-        # Send to server
+        # Send results to server and wait for acknowledgment
         try:
-            self.zmq_socket.send_pyobj(episode_data, flags=zmq.NOBLOCK)
+            self.zmq_socket.send_pyobj(episode_result)
+
             self.get_logger().info(
-                f'✓ Episode complete: dist={self._total_distance:.2f}m, '
+                f'✓ Episode #{self._current_model_id} complete: '
+                f'dist={self._total_distance:.2f}m, '
                 f'collisions={self._collision_count}, '
                 f'avg_speed={avg_speed:.3f}m/s, '
                 f'avg_clearance={avg_clearance:.2f}m'
             )
-        except zmq.error.Again:
-            self.get_logger().warn('Failed to send episode data (buffer full)')
+
+            # Wait for acknowledgment
+            if self.zmq_socket.poll(timeout=10000):  # 10 second timeout
+                ack = self.zmq_socket.recv_pyobj()
+                if ack.get('type') == 'ack':
+                    self.get_logger().info('✓ Results acknowledged by V620')
+                else:
+                    self.get_logger().warn(f'Unexpected ack: {ack}')
+            else:
+                self.get_logger().error('Timeout waiting for acknowledgment')
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to send episode results: {e}')
 
         # Request next model
-        self.get_logger().info('Waiting 5s before next episode...')
-        time.sleep(5.0)
+        self.get_logger().info('Waiting 3s before next episode...')
+        time.sleep(3.0)
         self.request_new_model()
 
     def inference_callback(self) -> None:
