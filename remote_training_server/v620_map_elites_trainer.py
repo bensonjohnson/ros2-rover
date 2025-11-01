@@ -472,7 +472,28 @@ class MAPElitesTrainer:
                 elif message['type'] == 'trajectory_data':
                     # Rover is sending trajectory data for gradient refinement
                     model_id = message['model_id']
-                    trajectory_data = message['trajectory']
+                    trajectory_raw = message['trajectory']
+                    compressed = message.get('compressed', False)
+
+                    # Decompress if needed
+                    if compressed:
+                        import lz4.frame
+                        # Decompress RGB and depth
+                        rgb_bytes = lz4.frame.decompress(trajectory_raw['rgb'])
+                        depth_bytes = lz4.frame.decompress(trajectory_raw['depth'])
+
+                        # Reconstruct numpy arrays
+                        rgb_array = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(trajectory_raw['rgb_shape'])
+                        depth_array = np.frombuffer(depth_bytes, dtype=np.float32).reshape(trajectory_raw['depth_shape'])
+
+                        trajectory_data = {
+                            'rgb': rgb_array,
+                            'depth': depth_array,
+                            'proprio': trajectory_raw['proprio'],
+                            'actions': trajectory_raw['actions'],
+                        }
+                    else:
+                        trajectory_data = trajectory_raw
 
                     print(f"← Received trajectory data for model #{model_id} "
                           f"({len(trajectory_data['actions'])} samples)", flush=True)
