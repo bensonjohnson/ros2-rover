@@ -89,10 +89,10 @@ class RemoteTrainingCollector(Node):
             raise RuntimeError('ZeroMQ required for remote training')
 
         # Initialize ZeroMQ
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PUSH)
-        self.socket.setsockopt(zmq.SNDHWM, 10)  # High water mark - drop old data if buffer full
-        self.socket.connect(self.server_addr)
+        self.zmq_context = zmq.Context()
+        self.zmq_socket = self.zmq_context.socket(zmq.PUSH)
+        self.zmq_socket.setsockopt(zmq.SNDHWM, 10)  # High water mark - drop old data if buffer full
+        self.zmq_socket.connect(self.server_addr)
         self.get_logger().info(f'Connected to training server: {self.server_addr}')
 
         self.bridge = CvBridge()
@@ -227,7 +227,7 @@ class RemoteTrainingCollector(Node):
             )
 
             # Send via ZeroMQ (non-blocking)
-            self.socket.send(packet, zmq.NOBLOCK)
+            self.zmq_socket.send(packet, zmq.NOBLOCK)
             self._total_samples_sent += 1
             self._episode_step += 1
 
@@ -388,10 +388,10 @@ class RemoteTrainingCollector(Node):
 
     def __del__(self):
         """Cleanup ZeroMQ resources."""
-        if hasattr(self, 'socket'):
-            self.socket.close()
-        if hasattr(self, 'context'):
-            self.context.term()
+        if hasattr(self, 'zmq_socket'):
+            self.zmq_socket.close()
+        if hasattr(self, 'zmq_context'):
+            self.zmq_context.term()
 
 
 def main(args=None) -> None:
