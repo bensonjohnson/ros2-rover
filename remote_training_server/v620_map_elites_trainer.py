@@ -266,8 +266,14 @@ class MAPElitesTrainer:
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
         # Prepare data
-        rgb = torch.from_numpy(trajectory_data['rgb']).to(self.device).float() / 255.0
-        depth = torch.from_numpy(trajectory_data['depth']).to(self.device).float()
+        # RGB comes as (N, H, W, 3), need to transpose to (N, 3, H, W)
+        rgb_np = trajectory_data['rgb']  # (N, H, W, 3)
+        rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0  # (N, 3, H, W)
+
+        # Depth comes as (N, H, W), need to add channel dim: (N, 1, H, W)
+        depth_np = trajectory_data['depth']  # (N, H, W)
+        depth = torch.from_numpy(depth_np).unsqueeze(1).to(self.device).float()  # (N, 1, H, W)
+
         proprio = torch.from_numpy(trajectory_data['proprio']).to(self.device).float()
         actions = torch.from_numpy(trajectory_data['actions']).to(self.device).float()
 
