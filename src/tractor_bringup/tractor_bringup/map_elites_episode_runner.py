@@ -19,6 +19,14 @@ from rclpy.qos import qos_profile_sensor_data
 
 import zmq
 
+# Import torch for deserializing PyTorch models
+try:
+    import torch
+    HAS_PYTORCH = True
+except ImportError:
+    HAS_PYTORCH = False
+    print("⚠ PyTorch not available - cannot receive models from V620")
+
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32
@@ -123,23 +131,18 @@ class MAPElitesEpisodeRunner(Node):
         # Request first model from server
         self.request_new_model()
 
-    def convert_pytorch_to_rknn(self, model_state: dict, model_id: int) -> Optional[str]:
-        """Convert PyTorch state_dict to RKNN model.
+    def convert_pytorch_from_file(self, pt_path: str, model_id: int) -> Optional[str]:
+        """Convert PyTorch .pt file to RKNN model.
 
         Args:
-            model_state: PyTorch state_dict
+            pt_path: Path to PyTorch .pt file
             model_id: Model ID for naming
 
         Returns:
             Path to RKNN model file, or None if conversion failed
         """
         try:
-            import torch
-
-            # Save PyTorch model
-            pt_path = self.temp_dir / f'model_{model_id}.pt'
-            torch.save(model_state, pt_path)
-            self.get_logger().info(f'  Saved PyTorch model: {pt_path}')
+            self.get_logger().info(f'  PyTorch model: {pt_path}')
 
             # Export to ONNX
             onnx_path = self.temp_dir / f'model_{model_id}.onnx'
@@ -280,17 +283,24 @@ class MAPElitesEpisodeRunner(Node):
 
                 if response['type'] == 'model':
                     self._current_model_id = response['model_id']
-                    self._current_model_state = response['model_state']
+                    model_bytes = response['model_bytes']
 
                     self.get_logger().info(
                         f'✓ Received model #{self._current_model_id} '
-                        f'({response["generation_type"]})'
+                        f'({response["generation_type"]}) - {len(model_bytes)/1024:.1f} KB'
                     )
+
+                    # Save model bytes directly to file (no torch needed)
+                    pt_path = self.temp_dir / f'model_{self._current_model_id}.pt'
+                    with open(pt_path, 'wb') as f:
+                        f.write(model_bytes)
+
+                    self._current_model_state = str(pt_path)  # Store path instead of dict
 
                     # Convert PyTorch → ONNX → RKNN
                     self.get_logger().info('Converting model to RKNN...')
-                    rknn_path = self.convert_pytorch_to_rknn(
-                        self._current_model_state,
+                    rknn_path = self.convert_pytorch_from_file(
+                        str(pt_path),
                         self._current_model_id
                     )
 
