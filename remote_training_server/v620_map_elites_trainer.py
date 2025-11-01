@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 import zmq
 
-from v620_ppo_trainer import RGBDEncoder, PolicyHead  # Reuse PPO network components
+from model_architectures import RGBDEncoder, PolicyHead  # Reuse network components
 
 
 class ActorNetwork(nn.Module):

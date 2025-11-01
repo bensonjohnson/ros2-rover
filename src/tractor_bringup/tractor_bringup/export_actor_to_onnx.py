@@ -11,7 +11,7 @@ import torch.nn as nn
 # Add remote_training_server to path
 sys.path.append('/home/ubuntu/ros2-rover/remote_training_server')
 
-from v620_ppo_trainer import RGBDEncoder, PolicyHead
+from model_architectures import RGBDEncoder, PolicyHead
 
 
 class ActorNetwork(nn.Module):
