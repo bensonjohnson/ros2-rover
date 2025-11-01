@@ -277,7 +277,9 @@ class RemoteTrainingCollector(Node):
                     self._last_calibration_save = now
 
         except zmq.error.Again:
-            self.get_logger().warn_throttle(5.0, 'Training server buffer full, dropping sample')
+            if not hasattr(self, '_last_zmq_warn') or (time.time() - self._last_zmq_warn) > 5.0:
+                self.get_logger().warn('Training server buffer full, dropping sample')
+                self._last_zmq_warn = time.time()
         except Exception as exc:
             self.get_logger().error(f'Failed to send packet: {exc}')
 
