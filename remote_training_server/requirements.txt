@@ -1,0 +1,28 @@
+# V620 Training Server Requirements
+# Python 3.10 recommended
+
+# PyTorch with ROCm support
+# Install separately with: pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Networking
+pyzmq>=25.0.0
+
+# Data processing
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# Monitoring
+tensorboard>=2.13.0
+
+# RKNN model conversion (x86_64 Linux only)
+# Download from: https://github.com/rockchip-linux/rknn-toolkit2
+# Install with: pip install rknn-toolkit2/rknn-toolkit2/packages/rknn_toolkit2-*-cp310-cp310-linux_x86_64.whl
+# rknn-toolkit2
+
+# Optional: for better performance monitoring
+psutil>=5.9.0
+
+# Optional: for advanced visualization
+matplotlib>=3.7.0
