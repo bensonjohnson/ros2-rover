@@ -49,6 +49,7 @@ class SimpleDepthSafetyMonitor(Node):
         self._commands_received = 0
         self._commands_blocked = 0
         self._emergency_stops = 0
+        self._last_estop_state = False
 
         self.bridge = CvBridge()
 
@@ -124,6 +125,8 @@ class SimpleDepthSafetyMonitor(Node):
         out_cmd.angular.y = msg.angular.y
         out_cmd.angular.z = msg.angular.z
 
+        estop_active = False
+
         # Safety gating - only apply to forward motion
         if msg.linear.x > 0.01:  # Moving forward
             if self._min_forward_dist < self.hard_stop_distance:
@@ -133,7 +136,7 @@ class SimpleDepthSafetyMonitor(Node):
                 # Keep angular.z to allow rotation
                 self._commands_blocked += 1
                 self._emergency_stops += 1
-                self.estop_pub.publish(Bool(data=True))
+                estop_active = True
                 self.get_logger().warn(
                     f'HARD STOP: Obstacle at {self._min_forward_dist:.2f}m (threshold: {self.hard_stop_distance}m) - rotate or reverse to escape'
                 )
@@ -148,8 +151,23 @@ class SimpleDepthSafetyMonitor(Node):
 
         # Allow reverse motion always (negative linear.x passes through)
 
-        # Publish gated command
+        # Publish estop state changes only (not continuously)
+        if estop_active != self._last_estop_state:
+            self.estop_pub.publish(Bool(data=estop_active))
+            self._last_estop_state = estop_active
+            if not estop_active:
+                self.get_logger().info('Emergency stop cleared - safe to proceed')
+
+        # Always publish gated command (even if zero) to keep motor driver alive
         self.cmd_pub.publish(out_cmd)
+
+        # Debug: log what we're outputting when blocked
+        if self._commands_blocked > 0 and self._commands_blocked % 10 == 0:
+            self.get_logger().info(
+                f'Commands blocked: {self._commands_blocked} | '
+                f'In: lin={msg.linear.x:.2f} ang={msg.angular.z:.2f} | '
+                f'Out: lin={out_cmd.linear.x:.2f} ang={out_cmd.angular.z:.2f}'
+            )
 
     def _publish_status(self) -> None:
         """Publish status and diagnostics."""
