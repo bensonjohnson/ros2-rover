@@ -453,41 +453,64 @@ class MAPElitesEpisodeRunner(Node):
     def send_trajectory_data(self) -> None:
         """Send collected trajectory data to V620 server."""
         try:
+            import time
+            import lz4.frame
+            start_time = time.time()
+
             # Convert lists to numpy arrays
             rgb_array = np.array(self._trajectory_rgb, dtype=np.uint8)  # (N, H, W, 3)
             depth_array = np.array(self._trajectory_depth, dtype=np.float32)  # (N, H, W)
             proprio_array = np.array(self._trajectory_proprio, dtype=np.float32)  # (N, 6)
             actions_array = np.array(self._trajectory_actions, dtype=np.float32)  # (N, 2)
 
-            # Prepare message
+            self.get_logger().info(
+                f'→ Preparing trajectory data: {len(actions_array)} samples'
+            )
+
+            # Compress large arrays with LZ4 (fast compression)
+            rgb_compressed = lz4.frame.compress(rgb_array.tobytes())
+            depth_compressed = lz4.frame.compress(depth_array.tobytes())
+
+            # Calculate sizes
+            original_mb = (rgb_array.nbytes + depth_array.nbytes) / 1024 / 1024
+            compressed_mb = (len(rgb_compressed) + len(depth_compressed)) / 1024 / 1024
+            ratio = original_mb / compressed_mb if compressed_mb > 0 else 1.0
+
+            self.get_logger().info(
+                f'  Compressed: {original_mb:.1f} MB → {compressed_mb:.1f} MB '
+                f'({ratio:.1f}x ratio)'
+            )
+
+            # Prepare message with compressed data and metadata
             trajectory_message = {
                 'type': 'trajectory_data',
                 'model_id': self._current_model_id,
+                'compressed': True,
                 'trajectory': {
-                    'rgb': rgb_array,
-                    'depth': depth_array,
-                    'proprio': proprio_array,
-                    'actions': actions_array,
+                    'rgb': rgb_compressed,
+                    'rgb_shape': rgb_array.shape,
+                    'depth': depth_compressed,
+                    'depth_shape': depth_array.shape,
+                    'proprio': proprio_array,  # Small, no need to compress
+                    'actions': actions_array,  # Small, no need to compress
                 }
             }
 
-            self.get_logger().info(
-                f'→ Sending trajectory data: {len(actions_array)} samples, '
-                f'{rgb_array.nbytes / 1024 / 1024:.1f} MB'
-            )
-
             # Send to server
             self.zmq_socket.send_pyobj(trajectory_message)
+            send_time = time.time() - start_time
+            self.get_logger().info(f'  Sent in {send_time:.1f}s, waiting for ack...')
 
             # Wait for acknowledgment
-            if self.zmq_socket.poll(timeout=60000):  # 60 second timeout for processing
+            if self.zmq_socket.poll(timeout=120000):  # 2 minute timeout
                 ack = self.zmq_socket.recv_pyobj()
+                total_time = time.time() - start_time
                 if ack.get('type') == 'ack':
-                    self.get_logger().info('✓ Trajectory data acknowledged by V620')
+                    self.get_logger().info(f'✓ Trajectory data acknowledged ({total_time:.1f}s total)')
                 else:
                     self.get_logger().warn(f'Unexpected ack: {ack}')
             else:
-                self.get_logger().error('Timeout waiting for trajectory ack')
+                self.get_logger().error('Timeout waiting for trajectory ack (2 min)')
 
         except Exception as e:
             self.get_logger().error(f'Failed to send trajectory data: {e}')
