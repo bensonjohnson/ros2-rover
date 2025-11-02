@@ -391,12 +391,19 @@ class MAPElitesEpisodeRunner(Node):
 
         # Compute action smoothness (lower is better = smoother turning)
         action_smoothness = 0.0
+        avg_linear_action = 0.0
+        avg_angular_action = 0.0
         if len(self._trajectory_actions) > 1:
             actions = np.array(self._trajectory_actions)  # (N, 2) - [linear, angular]
             # Measure angular velocity changes (jerkiness in turning)
             angular_actions = actions[:, 1]  # Extract angular component
             angular_diffs = np.diff(angular_actions)  # Changes between timesteps
             action_smoothness = float(np.std(angular_diffs))  # Standard deviation of changes
+
+            # Measure forward vs rotation bias (for tank steering)
+            linear_actions = actions[:, 0]  # Extract linear component
+            avg_linear_action = float(np.mean(np.abs(linear_actions)))  # Average forward intent
+            avg_angular_action = float(np.mean(np.abs(angular_actions)))  # Average rotation intent
 
         # Cache trajectory data for this model (if we collected any)
         if len(self._trajectory_rgb) > 0:
@@ -416,6 +423,8 @@ class MAPElitesEpisodeRunner(Node):
             'avg_clearance': float(avg_clearance),
             'duration': float(duration),
             'action_smoothness': float(action_smoothness),
+            'avg_linear_action': float(avg_linear_action),
+            'avg_angular_action': float(avg_angular_action),
         }
 
         # Send results to server and wait for acknowledgment
