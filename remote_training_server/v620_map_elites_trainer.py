@@ -175,17 +175,27 @@ class MAPElitesArchive:
 
     def save(self, filepath: str):
         """Save archive to disk."""
-        archive_data = {
+        import json
+
+        # Prepare archive metadata (without model weights)
+        archive_metadata = {}
+        for cell_idx, entry in self.archive.items():
+            archive_metadata[str(cell_idx)] = {
+                'fitness': entry['fitness'],
+                'avg_speed': entry['avg_speed'],
+                'avg_clearance': entry['avg_clearance'],
+                'metrics': entry['metrics']
+            }
+
+        metadata = {
             'speed_bins': self.speed_bins,
             'clearance_bins': self.clearance_bins,
-            'archive': {str(k): v for k, v in self.archive.items()},
+            'archive': archive_metadata,  # Include archive metadata
             'total_evaluations': self.total_evaluations,
             'archive_additions': self.archive_additions,
         }
 
         with open(filepath, 'w') as f:
-            # Save metadata as JSON
-            metadata = {k: v for k, v in archive_data.items() if k != 'archive'}
             json.dump(metadata, f, indent=2)
 
         # Save models separately
@@ -903,8 +913,17 @@ class MAPElitesTrainer:
             print(f"⚠ Models directory not found: {models_dir}")
             return
 
+        # Debug: Check what's in the archive metadata
+        archive_metadata = metadata.get('archive', {})
+        archive_keys = list(archive_metadata.keys())
+        print(f"  Archive metadata has {len(archive_keys)} entries")
+
         # Reconstruct archive
-        for model_file in models_dir.glob('cell_*.pt'):
+        model_files = list(models_dir.glob('cell_*.pt'))
+        print(f"  Found {len(model_files)} model files in {models_dir}")
+
+        loaded_count = 0
+        for model_file in model_files:
             # Parse cell indices from filename: cell_0_1.pt
             parts = model_file.stem.split('_')
             speed_idx = int(parts[1])
@@ -915,8 +934,10 @@ class MAPElitesTrainer:
 
             # Get metadata from the archive dict stored in JSON
             cell_key = f"({speed_idx}, {clearance_idx})"
-            if cell_key in metadata.get('archive', {}):
-                cell_data = metadata['archive'][cell_key]
+
+            if cell_key in archive_metadata:
+                # New checkpoint format with metadata
+                cell_data = archive_metadata[cell_key]
                 self.archive.archive[(speed_idx, clearance_idx)] = {
                     'model': model_state,
                     'fitness': cell_data['fitness'],
@@ -924,8 +945,20 @@ class MAPElitesTrainer:
                     'avg_clearance': cell_data['avg_clearance'],
                     'metrics': cell_data['metrics'],
                 }
+                loaded_count += 1
+            else:
+                # Old checkpoint format without metadata - use defaults
+                print(f"  ⚠ No metadata for cell {cell_key}, using defaults")
+                self.archive.archive[(speed_idx, clearance_idx)] = {
+                    'model': model_state,
+                    'fitness': 0.0,  # Will be re-evaluated
+                    'avg_speed': 0.0,
+                    'avg_clearance': 0.0,
+                    'metrics': {},
+                }
+                loaded_count += 1
 
-        print(f"  Loaded {len(self.archive.archive)} models from checkpoint")
+        print(f"  Loaded {loaded_count}/{len(model_files)} models from checkpoint")
 
     def export_best_models(self, suffix: str):
         """Export best models for different behavior profiles."""
