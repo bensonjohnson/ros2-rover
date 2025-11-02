@@ -288,8 +288,8 @@ class MAPElitesEpisodeRunner(Node):
 
             self.get_logger().info('Requesting new model from V620...')
 
-            # Wait for response (with timeout - may be delayed if server is refining a model)
-            if self.zmq_socket.poll(timeout=60000):  # 60 second timeout
+            # Wait for response (infinite timeout - may be delayed by refinement/tournament)
+            if self.zmq_socket.poll(timeout=-1):  # Infinite timeout
                 response = self.zmq_socket.recv_pyobj()
 
                 if response['type'] == 'model':
