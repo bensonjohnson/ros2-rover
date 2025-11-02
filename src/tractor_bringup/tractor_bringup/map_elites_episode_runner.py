@@ -83,11 +83,15 @@ class MAPElitesEpisodeRunner(Node):
         self._clearance_samples = []
 
         # Trajectory collection (for gradient refinement)
-        self._collect_trajectory = False
+        self._collect_trajectory = True  # Always collect by default (uses RAM but saves episode time)
         self._trajectory_rgb = []
         self._trajectory_depth = []
         self._trajectory_proprio = []
         self._trajectory_actions = []
+
+        # Trajectory cache per model (32GB RAM on rover)
+        self._trajectory_cache = {}  # model_id -> trajectory_data
+        self._max_cache_size = 10  # Keep last 10 model trajectories (~1.5GB each = 15GB total)
 
         self.bridge = CvBridge()
 
@@ -356,15 +360,13 @@ class MAPElitesEpisodeRunner(Node):
         self._speed_samples = []
         self._clearance_samples = []
 
-        # Clear trajectory buffers if collecting
-        if self._collect_trajectory:
-            self._trajectory_rgb = []
-            self._trajectory_depth = []
-            self._trajectory_proprio = []
-            self._trajectory_actions = []
-            self.get_logger().info('🚀 Episode started (COLLECTING TRAJECTORY DATA)')
-        else:
-            self.get_logger().info('🚀 Episode started')
+        # Always clear trajectory buffers (we collect for every episode now)
+        self._trajectory_rgb = []
+        self._trajectory_depth = []
+        self._trajectory_proprio = []
+        self._trajectory_actions = []
+
+        self.get_logger().info('🚀 Episode started')
 
     def end_episode(self) -> None:
         """End episode and send results to server."""
@@ -387,16 +389,13 @@ class MAPElitesEpisodeRunner(Node):
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
 
-        # If we were collecting trajectory data, send it now
-        if self._collect_trajectory:
-            self.send_trajectory_data()
-            self._collect_trajectory = False  # Reset flag
-
-            # Request next model after sending trajectory
-            self.get_logger().info('Waiting 3s before next episode...')
-            time.sleep(3.0)
-            self.request_new_model()
-            return
+        # Cache trajectory data for this model (if we collected any)
+        if len(self._trajectory_rgb) > 0:
+            self.cache_trajectory_data()
+            self.get_logger().info(
+                f'  Cached trajectory: {len(self._trajectory_rgb)} samples, '
+                f'{len(self._trajectory_cache)} models in cache'
+            )
 
         # Package episode results
         episode_result = {
@@ -429,13 +428,22 @@ class MAPElitesEpisodeRunner(Node):
 
                     # Check if server wants trajectory data for gradient refinement
                     if ack.get('collect_trajectory', False):
-                        self.get_logger().info('→ Server requested trajectory data')
-                        self.get_logger().info('  Re-running episode with data collection...')
+                        model_id = ack.get('model_id', self._current_model_id)
+                        self.get_logger().info(f'→ Server requested trajectory for model #{model_id}')
 
-                        # Re-run same model with trajectory collection enabled
-                        self._collect_trajectory = True
-                        self.start_episode()
-                        return  # Don't request new model yet
+                        # Check if we have cached trajectory
+                        if model_id in self._trajectory_cache:
+                            self.get_logger().info('  ✓ Sending cached trajectory (instant replay!)')
+                            self.send_cached_trajectory_data(model_id)
+                        else:
+                            self.get_logger().warn(f'  ⚠ No cached trajectory for model #{model_id}')
+                            # Fall back to sending empty or skip
+                            self.zmq_socket.send_pyobj({'type': 'trajectory_data_unavailable', 'model_id': model_id})
+                            if self.zmq_socket.poll(timeout=10000):
+                                self.zmq_socket.recv_pyobj()  # Consume ack
+
+                        # Continue to next model (no re-run needed!)
+                        return
 
                 else:
                     self.get_logger().warn(f'Unexpected ack: {ack}')
@@ -449,6 +457,97 @@ class MAPElitesEpisodeRunner(Node):
         self.get_logger().info('Waiting 3s before next episode...')
         time.sleep(3.0)
         self.request_new_model()
+
+    def cache_trajectory_data(self) -> None:
+        """Cache trajectory data for current model."""
+        if len(self._trajectory_rgb) == 0:
+            return  # Nothing to cache
+
+        # Convert to numpy arrays
+        trajectory_data = {
+            'rgb': np.array(self._trajectory_rgb, dtype=np.uint8),
+            'depth': np.array(self._trajectory_depth, dtype=np.float32),
+            'proprio': np.array(self._trajectory_proprio, dtype=np.float32),
+            'actions': np.array(self._trajectory_actions, dtype=np.float32),
+        }
+
+        # Cache for this model
+        self._trajectory_cache[self._current_model_id] = trajectory_data
+
+        # Manage cache size (FIFO)
+        if len(self._trajectory_cache) > self._max_cache_size:
+            # Remove oldest entry
+            oldest_model_id = min(self._trajectory_cache.keys())
+            del self._trajectory_cache[oldest_model_id]
+            self.get_logger().debug(f'  Evicted trajectory for model #{oldest_model_id} from cache')
+
+    def send_cached_trajectory_data(self, model_id: int) -> None:
+        """Send cached trajectory data to V620 server.
+
+        Args:
+            model_id: Model ID to send trajectory for
+        """
+        if model_id not in self._trajectory_cache:
+            self.get_logger().error(f'Model #{model_id} not in cache!')
+            return
+
+        try:
+            import time
+            import lz4.frame
+            start_time = time.time()
+
+            trajectory_data = self._trajectory_cache[model_id]
+
+            # Compress
+            rgb_compressed = lz4.frame.compress(trajectory_data['rgb'].tobytes())
+            depth_compressed = lz4.frame.compress(trajectory_data['depth'].tobytes())
+
+            original_mb = (trajectory_data['rgb'].nbytes + trajectory_data['depth'].nbytes) / 1024 / 1024
+            compressed_mb = (len(rgb_compressed) + len(depth_compressed)) / 1024 / 1024
+
+            self.get_logger().info(
+                f'  Compressed: {original_mb:.1f} MB → {compressed_mb:.1f} MB '
+                f'({original_mb/compressed_mb:.1f}x)'
+            )
+
+            # Prepare message
+            trajectory_message = {
+                'type': 'trajectory_data',
+                'model_id': model_id,
+                'compressed': True,
+                'trajectory': {
+                    'rgb': rgb_compressed,
+                    'rgb_shape': trajectory_data['rgb'].shape,
+                    'depth': depth_compressed,
+                    'depth_shape': trajectory_data['depth'].shape,
+                    'proprio': trajectory_data['proprio'],
+                    'actions': trajectory_data['actions'],
+                }
+            }
+
+            # Send
+            self.zmq_socket.send_pyobj(trajectory_message)
+            send_time = time.time() - start_time
+            self.get_logger().info(f'  Sent in {send_time:.1f}s, waiting for ack...')
+
+            # Wait for acknowledgment
+            if self.zmq_socket.poll(timeout=300000):  # 5 minute timeout
+                ack = self.zmq_socket.recv_pyobj()
+                total_time = time.time() - start_time
+                if ack.get('type') == 'ack':
+                    if ack.get('refined'):
+                        self.get_logger().info(f'✓ Model refined by V620 ({total_time:.1f}s total)')
+                    else:
+                        self.get_logger().info(f'✓ Trajectory acknowledged ({total_time:.1f}s total)')
+                else:
+                    self.get_logger().warn(f'Unexpected ack: {ack}')
+            else:
+                self.get_logger().error('Timeout waiting for trajectory ack (5 min)')
+
+        except Exception as e:
+            self.get_logger().error(f'Failed to send cached trajectory: {e}')
+            import traceback
+            traceback.print_exc()
 
     def send_trajectory_data(self) -> None:
         """Send collected trajectory data to V620 server."""
