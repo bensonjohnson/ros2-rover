@@ -284,8 +284,8 @@ class MAPElitesEpisodeRunner(Node):
 
             self.get_logger().info('Requesting new model from V620...')
 
-            # Wait for response (with timeout)
-            if self.zmq_socket.poll(timeout=30000):  # 30 second timeout
+            # Wait for response (with timeout - may be delayed if server is refining a model)
+            if self.zmq_socket.poll(timeout=60000):  # 60 second timeout
                 response = self.zmq_socket.recv_pyobj()
 
                 if response['type'] == 'model':
@@ -501,16 +501,19 @@ class MAPElitesEpisodeRunner(Node):
             send_time = time.time() - start_time
             self.get_logger().info(f'  Sent in {send_time:.1f}s, waiting for ack...')
 
-            # Wait for acknowledgment
-            if self.zmq_socket.poll(timeout=120000):  # 2 minute timeout
+            # Wait for acknowledgment (server is doing gradient descent, this takes time)
+            if self.zmq_socket.poll(timeout=300000):  # 5 minute timeout for gradient refinement
                 ack = self.zmq_socket.recv_pyobj()
                 total_time = time.time() - start_time
                 if ack.get('type') == 'ack':
-                    self.get_logger().info(f'✓ Trajectory data acknowledged ({total_time:.1f}s total)')
+                    if ack.get('refined'):
+                        self.get_logger().info(f'✓ Model refined by V620 ({total_time:.1f}s total)')
+                    else:
+                        self.get_logger().info(f'✓ Trajectory data acknowledged ({total_time:.1f}s total)')
                 else:
                     self.get_logger().warn(f'Unexpected ack: {ack}')
             else:
-                self.get_logger().error('Timeout waiting for trajectory ack (2 min)')
+                self.get_logger().error('Timeout waiting for trajectory ack (5 min)')
 
         except Exception as e:
             self.get_logger().error(f'Failed to send trajectory data: {e}')
