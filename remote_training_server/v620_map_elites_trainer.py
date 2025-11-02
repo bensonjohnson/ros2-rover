@@ -87,18 +87,21 @@ class MAPElitesArchive:
         avg_speed: float,
         avg_clearance: float,
         metrics: dict
-    ) -> bool:
+    ) -> Tuple[bool, bool, float]:
         """Try to add model to archive.
 
         Returns:
-            True if model was added (either new cell or better fitness)
+            (was_added, is_new_cell, fitness_improvement_ratio)
         """
         self.total_evaluations += 1
 
         cell_idx = self.get_cell_index(avg_speed, avg_clearance)
 
+        is_new_cell = cell_idx not in self.archive
+        fitness_improvement = 0.0
+
         # Check if this cell is empty or if new model is better
-        if cell_idx not in self.archive or fitness > self.archive[cell_idx]['fitness']:
+        if is_new_cell:
             self.archive[cell_idx] = {
                 'model': copy.deepcopy(model_state),
                 'fitness': fitness,
@@ -107,9 +110,22 @@ class MAPElitesArchive:
                 'metrics': metrics,
             }
             self.archive_additions += 1
-            return True
+            return True, True, float('inf')  # New cell = infinite improvement
+        elif fitness > self.archive[cell_idx]['fitness']:
+            old_fitness = self.archive[cell_idx]['fitness']
+            fitness_improvement = (fitness - old_fitness) / max(abs(old_fitness), 1e-6)
 
-        return False
+            self.archive[cell_idx] = {
+                'model': copy.deepcopy(model_state),
+                'fitness': fitness,
+                'avg_speed': avg_speed,
+                'avg_clearance': avg_clearance,
+                'metrics': metrics,
+            }
+            self.archive_additions += 1
+            return True, False, fitness_improvement
+
+        return False, False, 0.0
 
     def get_random_elite(self) -> Optional[dict]:
         """Sample random model from archive."""
@@ -216,7 +232,16 @@ class MAPElitesTrainer:
 
         # Tournament selection cache
         self.last_refined_model = None  # (model_state, trajectory_data) for tournament selection
-        self.tournament_candidates = 5  # Number of mutations to test
+        self.tournament_candidates = 50  # Number of mutations to test (V620 has 32GB VRAM)
+
+        # Prioritized refinement parameters
+        self.refinement_fitness_threshold = 0.10  # Only refine if >10% improvement
+        self.always_refine_new_cells = True  # Always refine new behavior discoveries
+
+        # Archive-based replay buffer
+        self.trajectory_buffer = {}  # cell_idx -> trajectory_data (keep trajectories for refinement)
+        self.max_buffer_size = 20  # Keep last 20 trajectories
+        self.replay_buffer_mix_ratio = 0.2  # Mix 20% from buffer during refinement
 
         print(f"✓ MAP-Elites trainer initialized on {self.device}")
         print(f"✓ REP socket listening on port {port}")
@@ -227,8 +252,35 @@ class MAPElitesTrainer:
         # Random initialization is already done by PyTorch
         return model.state_dict()
 
-    def mutate_model(self, parent_state: dict) -> dict:
-        """Create mutated copy of model."""
+    def get_adaptive_mutation_std(self) -> float:
+        """Compute adaptive mutation strength based on archive density.
+
+        Returns:
+            Mutation standard deviation
+        """
+        coverage = self.archive.coverage()
+
+        # Early exploration (< 30% coverage): larger mutations
+        if coverage < 0.3:
+            return 0.03
+        # Mid exploration (30-70% coverage): medium mutations
+        elif coverage < 0.7:
+            return 0.02
+        # Dense archive (> 70% coverage): smaller fine-tuning mutations
+        else:
+            return 0.01
+
+    def mutate_model(self, parent_state: dict, mutation_std: Optional[float] = None) -> dict:
+        """Create mutated copy of model.
+
+        Args:
+            parent_state: Parent model to mutate
+            mutation_std: Optional override for mutation strength (uses adaptive if None)
+        """
+        # Use adaptive mutation if not specified
+        if mutation_std is None:
+            mutation_std = self.get_adaptive_mutation_std()
+
         # Load parent weights
         child_model = ActorNetwork().to(self.device)
         child_model.load_state_dict(parent_state)
@@ -236,7 +288,7 @@ class MAPElitesTrainer:
         # Add Gaussian noise to all parameters
         with torch.no_grad():
             for param in child_model.parameters():
-                noise = torch.randn_like(param) * self.mutation_std
+                noise = torch.randn_like(param) * mutation_std
                 param.add_(noise)
 
         return child_model.state_dict()
@@ -288,30 +340,49 @@ class MAPElitesTrainer:
 
             candidates.append((candidate, mutation_std))
 
-        # Evaluate each candidate on the trajectory
+        # Evaluate all candidates in parallel batches (GPU efficient)
+        batch_eval_size = 10  # Evaluate 10 models simultaneously
+        fitness_scores = []
+
         with torch.no_grad():
-            for i, (candidate, mutation_std) in enumerate(candidates):
-                candidate.eval()
+            for batch_start in range(0, num_candidates, batch_eval_size):
+                batch_end = min(batch_start + batch_eval_size, num_candidates)
+                batch_candidates = candidates[batch_start:batch_end]
 
-                # Run model on trajectory
-                pred_actions = candidate(rgb, depth, proprio)
+                # Collect predictions from all models in batch
+                batch_predictions = []
+                for candidate, _ in batch_candidates:
+                    candidate.eval()
+                    pred_actions = candidate(rgb, depth, proprio)
+                    batch_predictions.append(pred_actions)
 
-                # Fitness = negative MSE (higher is better)
-                mse_loss = torch.nn.functional.mse_loss(pred_actions, actions)
-                fitness = -mse_loss.item()
+                # Compute fitness for all in batch
+                for i, (pred_actions, (_, mutation_std)) in enumerate(zip(batch_predictions, batch_candidates)):
+                    # Fitness = negative MSE (higher is better)
+                    mse_loss = torch.nn.functional.mse_loss(pred_actions, actions)
+                    fitness = -mse_loss.item()
 
-                # Also penalize extreme actions (encourage stability)
-                action_magnitude = torch.abs(pred_actions).mean().item()
-                fitness -= action_magnitude * 0.1  # Small penalty for large actions
+                    # Also penalize extreme actions (encourage stability)
+                    action_magnitude = torch.abs(pred_actions).mean().item()
+                    fitness -= action_magnitude * 0.1  # Small penalty for large actions
 
-                if fitness > best_fitness:
-                    best_fitness = fitness
-                    best_mutation = candidate.state_dict()
-                    best_std = mutation_std
+                    fitness_scores.append((fitness, mutation_std, batch_start + i))
 
-                # Log progress every few candidates
-                if (i + 1) % max(1, num_candidates // 5) == 0 or i == num_candidates - 1:
-                    print(f"    Candidate {i+1}/{num_candidates}: fitness={fitness:.6f} (std={mutation_std:.4f})", flush=True)
+                    if fitness > best_fitness:
+                        best_fitness = fitness
+                        best_mutation = batch_candidates[i][0].state_dict()
+                        best_std = mutation_std
+
+                # Log batch progress
+                if batch_end % max(10, num_candidates // 5) == 0 or batch_end == num_candidates:
+                    print(f"    Evaluated {batch_end}/{num_candidates} candidates...", flush=True)
+
+        # Show top 5 candidates
+        fitness_scores.sort(reverse=True, key=lambda x: x[0])
+        print(f"    Top 5 mutations:", flush=True)
+        for rank, (fitness, std, idx) in enumerate(fitness_scores[:5], 1):
+            marker = "★" if rank == 1 else " "
+            print(f"      {marker} #{idx+1}: fitness={fitness:.6f} (std={std:.4f})", flush=True)
 
         print(f"  ✓ Best mutation selected: fitness={best_fitness:.6f} (std={best_std:.4f})", flush=True)
 
@@ -323,7 +394,8 @@ class MAPElitesTrainer:
         trajectory_data: dict,
         learning_rate: float = 1e-4,
         num_epochs: int = 10,
-        batch_size: int = 32
+        batch_size: int = 32,
+        use_replay_buffer: bool = True
     ) -> dict:
         """Refine model using gradient descent on trajectory data (behavioral cloning).
 
@@ -333,6 +405,7 @@ class MAPElitesTrainer:
             learning_rate: Learning rate for optimizer
             num_epochs: Number of training epochs
             batch_size: Batch size for training
+            use_replay_buffer: Mix in data from trajectory buffer
 
         Returns:
             Refined model state dict
@@ -345,17 +418,41 @@ class MAPElitesTrainer:
         # Setup optimizer
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-        # Prepare data
-        # RGB comes as (N, H, W, 3), need to transpose to (N, 3, H, W)
-        rgb_np = trajectory_data['rgb'].copy()  # Copy to make writable
-        rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0  # (N, 3, H, W)
+        # Prepare current trajectory data
+        rgb_list = [trajectory_data['rgb'].copy()]
+        depth_list = [trajectory_data['depth'].copy()]
+        proprio_list = [trajectory_data['proprio']]
+        actions_list = [trajectory_data['actions']]
 
-        # Depth comes as (N, H, W), need to add channel dim: (N, 1, H, W)
-        depth_np = trajectory_data['depth'].copy()  # Copy to make writable
-        depth = torch.from_numpy(depth_np).unsqueeze(1).to(self.device).float()  # (N, 1, H, W)
+        # Mix in replay buffer data (prevents catastrophic forgetting)
+        if use_replay_buffer and self.trajectory_buffer:
+            num_replay_samples = int(len(self.trajectory_buffer) * self.replay_buffer_mix_ratio)
+            num_replay_samples = max(1, min(num_replay_samples, len(self.trajectory_buffer)))
 
-        proprio = torch.from_numpy(trajectory_data['proprio']).to(self.device).float()
-        actions = torch.from_numpy(trajectory_data['actions']).to(self.device).float()
+            # Sample random trajectories from buffer
+            buffer_cells = list(self.trajectory_buffer.keys())
+            replay_cells = np.random.choice(buffer_cells, size=num_replay_samples, replace=False)
+
+            for cell in replay_cells:
+                replay_traj = self.trajectory_buffer[cell]
+                rgb_list.append(replay_traj['rgb'])
+                depth_list.append(replay_traj['depth'])
+                proprio_list.append(replay_traj['proprio'])
+                actions_list.append(replay_traj['actions'])
+
+            print(f"    Mixed in {num_replay_samples} trajectories from buffer", flush=True)
+
+        # Concatenate all data
+        rgb_combined = np.concatenate(rgb_list, axis=0)
+        depth_combined = np.concatenate(depth_list, axis=0)
+        proprio_combined = np.concatenate(proprio_list, axis=0)
+        actions_combined = np.concatenate(actions_list, axis=0)
+
+        # Convert to tensors
+        rgb = torch.from_numpy(rgb_combined).permute(0, 3, 1, 2).to(self.device).float() / 255.0  # (N, 3, H, W)
+        depth = torch.from_numpy(depth_combined).unsqueeze(1).to(self.device).float()  # (N, 1, H, W)
+        proprio = torch.from_numpy(proprio_combined).to(self.device).float()
+        actions = torch.from_numpy(actions_combined).to(self.device).float()
 
         num_samples = rgb.shape[0]
 
@@ -518,7 +615,7 @@ class MAPElitesTrainer:
                     fitness = self.compute_fitness(message)
 
                     # Try to add to archive
-                    added = self.archive.add(
+                    added, is_new_cell, improvement_ratio = self.archive.add(
                         model_state=model_state,
                         fitness=fitness,
                         avg_speed=avg_speed,
@@ -530,8 +627,22 @@ class MAPElitesTrainer:
                         }
                     )
 
-                    # If added to archive, request trajectory data for gradient refinement
+                    # Prioritized refinement: only refine if significant improvement or new cell
+                    should_refine = False
+                    refinement_reason = ""
+
                     if added:
+                        if is_new_cell and self.always_refine_new_cells:
+                            should_refine = True
+                            refinement_reason = "new behavior cell"
+                        elif improvement_ratio >= self.refinement_fitness_threshold:
+                            should_refine = True
+                            refinement_reason = f"{improvement_ratio*100:.1f}% fitness improvement"
+                        else:
+                            refinement_reason = f"skipped (only {improvement_ratio*100:.1f}% improvement)"
+
+                    # If added and should refine, request trajectory data for gradient refinement
+                    if added and should_refine:
                         # Get the cell index where this model was added
                         cell_idx = self.archive.get_cell_index(avg_speed, avg_clearance)
 
@@ -544,18 +655,19 @@ class MAPElitesTrainer:
                             'collect_trajectory': True,
                             'model_id': model_id  # Re-run same model
                         })
-                        print(f"  → Requesting trajectory data for refinement...", flush=True)
+                        print(f"  → Requesting trajectory data ({refinement_reason})...", flush=True)
                     else:
                         # Normal acknowledgment
                         self.socket.send_pyobj({'type': 'ack'})
 
                     # Log progress
+                    status = f"✓ ADDED ({refinement_reason})" if added else "rejected"
                     print(f"← Eval {evaluation_count}/{num_evaluations} | "
                           f"Model #{model_id} ({gen_type}) | "
                           f"Fitness: {fitness:.2f} | "
                           f"Speed: {avg_speed:.3f} m/s | "
                           f"Clear: {avg_clearance:.2f} m | "
-                          f"{'✓ ADDED' if added else 'rejected'}",
+                          f"{status}",
                           flush=True)
 
                     # Checkpoint every 50 evaluations
@@ -622,7 +734,22 @@ class MAPElitesTrainer:
 
                     # Cache refined model + trajectory for tournament selection
                     self.last_refined_model = (refined_model_state, trajectory_data)
-                    print(f"  📦 Cached refined model for tournament selection", flush=True)
+
+                    # Add trajectory to replay buffer
+                    self.trajectory_buffer[cell_idx] = {
+                        'rgb': trajectory_data['rgb'],
+                        'depth': trajectory_data['depth'],
+                        'proprio': trajectory_data['proprio'],
+                        'actions': trajectory_data['actions'],
+                    }
+
+                    # Manage buffer size (FIFO)
+                    if len(self.trajectory_buffer) > self.max_buffer_size:
+                        # Remove oldest entry
+                        oldest_cell = list(self.trajectory_buffer.keys())[0]
+                        del self.trajectory_buffer[oldest_cell]
+
+                    print(f"  📦 Cached for tournament + buffer ({len(self.trajectory_buffer)} trajectories stored)", flush=True)
 
                     # NOW send acknowledgment (after refinement complete)
                     self.socket.send_pyobj({'type': 'ack', 'refined': True})
@@ -760,6 +887,8 @@ def main():
                         help='Resume from specific checkpoint (e.g., "eval_100" or "final")')
     parser.add_argument('--fresh', action='store_true',
                         help='Start fresh, ignore existing checkpoints')
+    parser.add_argument('--tournament-size', type=int, default=50,
+                        help='Number of mutations to test in tournament selection (default: 50)')
     args = parser.parse_args()
 
     # Check ROCm
@@ -776,6 +905,11 @@ def main():
         port=args.port,
         checkpoint_dir=args.checkpoint_dir,
     )
+
+    # Set tournament size from args
+    trainer.tournament_candidates = args.tournament_size
+    print(f"  Tournament selection: {args.tournament_size} candidates")
+    print()
 
     # Auto-resume from latest checkpoint (or explicit resume)
     checkpoint_to_load = None
