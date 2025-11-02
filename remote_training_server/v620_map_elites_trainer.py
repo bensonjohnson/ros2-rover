@@ -537,15 +537,73 @@ class MAPElitesTrainer:
             return self.mutate_model(parent_state), 'mutation'
 
     def compute_fitness(self, episode_data: dict) -> float:
-        """Compute fitness from episode results.
+        """Compute fitness encouraging safe exploration with smooth, confident motion.
 
-        Fitness = distance traveled - collision penalty
+        Goals:
+        - Explore via open paths (high clearance preferred)
+        - Increase speed with confidence (reward fast + safe combinations)
+        - Smooth, efficient motion (penalize erratic behavior)
+        - Discover optimal paths regardless of indoor/outdoor
         """
         distance = episode_data['total_distance']
         collisions = episode_data['collision_count']
+        avg_speed = episode_data['avg_speed']
+        avg_clearance = episode_data['avg_clearance']
+        duration = max(episode_data['duration'], 1.0)
+        action_smoothness = episode_data.get('action_smoothness', 0.0)
 
-        # Heavy penalty for collisions
-        fitness = distance - (collisions * 5.0)
+        # Base fitness: exploration distance (primary goal)
+        fitness = distance
+
+        # 1. Collision penalty: Catastrophic for safety
+        #    Exponential penalty - multiple collisions indicate poor behavior
+        if collisions > 0:
+            collision_penalty = 10.0 * (collisions ** 1.5)  # 1→10, 2→28, 3→52
+            fitness -= collision_penalty
+
+        # 2. Open path exploration bonus
+        #    Reward finding and using open spaces (clearance > 1m is good)
+        if avg_clearance > 0.5:
+            # Scale bonus with clearance: 0.5m→0, 1.0m→0.5, 2.0m→2.0, 5.0m→4.5
+            openness_bonus = min((avg_clearance - 0.5) * 1.0, 5.0)
+            fitness += openness_bonus
+
+        # 3. Confident speed bonus (speed is good when combined with safety)
+        #    Reward high speed ONLY when clearance is also high
+        #    This encourages "speed up in open areas, slow down in tight spaces"
+        if collisions == 0 and avg_clearance > 0.8:
+            # Confidence factor: higher clearance allows higher speed bonus
+            confidence_multiplier = min(avg_clearance / 2.0, 1.5)  # 0.8m→0.4x, 2m→1.0x, 4m+→1.5x
+            speed_bonus = avg_speed * 5.0 * confidence_multiplier  # 0.2m/s @ 2m clear → +1.0
+            fitness += speed_bonus
+
+        # 4. Smooth motion reward (low action jerkiness)
+        #    Reward smooth turns and steady motion
+        #    action_smoothness is std of angular velocity changes (lower = smoother)
+        if action_smoothness > 0:
+            # Typical smoothness range: 0.01 (very smooth) to 0.3+ (jerky)
+            if action_smoothness < 0.1:  # Very smooth
+                smoothness_bonus = (0.1 - action_smoothness) * 10.0  # Up to +1.0 bonus
+                fitness += smoothness_bonus
+            elif action_smoothness > 0.3:  # Very jerky
+                jerkiness_penalty = (action_smoothness - 0.3) * 5.0  # Increasing penalty
+                fitness -= jerkiness_penalty
+
+        # 5. Efficiency reward (distance/time)
+        #    Penalize if robot took too long (indicates erratic motion, spinning, backtracking)
+        #    Expected: ~0.08 m/s = reasonable exploration speed
+        expected_speed = 0.08  # m/s baseline for exploration
+        actual_speed = distance / duration
+
+        if actual_speed < expected_speed * 0.5:  # Very slow = likely stuck/spinning
+            fitness *= 0.7  # 30% penalty for inefficient motion
+        elif actual_speed > expected_speed * 1.5:  # Fast and smooth
+            fitness *= 1.1  # 10% bonus for efficient exploration
+
+        # 6. Stagnation penalty
+        #    If barely moving, heavily penalize (robot gave up or stuck)
+        if avg_speed < 0.02 and collisions == 0:  # Nearly stationary without collisions
+            fitness *= 0.3  # Harsh penalty - robot is doing nothing useful
 
         return fitness
 
@@ -602,6 +660,7 @@ class MAPElitesTrainer:
                     avg_speed = message['avg_speed']
                     avg_clearance = message['avg_clearance']
                     episode_duration = message['duration']
+                    action_smoothness = message.get('action_smoothness', 0.0)
 
                     # Get the model state we sent earlier
                     if model_id not in self.pending_evaluations:
