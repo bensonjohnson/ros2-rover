@@ -267,11 +267,11 @@ class MAPElitesTrainer:
 
         # Prepare data
         # RGB comes as (N, H, W, 3), need to transpose to (N, 3, H, W)
-        rgb_np = trajectory_data['rgb']  # (N, H, W, 3)
+        rgb_np = trajectory_data['rgb'].copy()  # Copy to make writable
         rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0  # (N, 3, H, W)
 
         # Depth comes as (N, H, W), need to add channel dim: (N, 1, H, W)
-        depth_np = trajectory_data['depth']  # (N, H, W)
+        depth_np = trajectory_data['depth'].copy()  # Copy to make writable
         depth = torch.from_numpy(depth_np).unsqueeze(1).to(self.device).float()  # (N, 1, H, W)
 
         proprio = torch.from_numpy(trajectory_data['proprio']).to(self.device).float()
@@ -475,7 +475,17 @@ class MAPElitesTrainer:
                     trajectory_raw = message['trajectory']
                     compressed = message.get('compressed', False)
 
-                    # Decompress if needed
+                    print(f"← Received trajectory data for model #{model_id}", flush=True)
+
+                    # Get the cell and model from refinement tracking
+                    if model_id not in self.refinement_pending:
+                        print(f"  ⚠ Model #{model_id} not pending refinement", flush=True)
+                        self.socket.send_pyobj({'type': 'ack'})
+                        continue
+
+                    cell_idx, original_model_state = self.refinement_pending.pop(model_id)
+
+                    # Decompress trajectory data
                     if compressed:
                         import lz4.frame
                         # Decompress RGB and depth
@@ -495,29 +505,15 @@ class MAPElitesTrainer:
                     else:
                         trajectory_data = trajectory_raw
 
-                    print(f"← Received trajectory data for model #{model_id} "
-                          f"({len(trajectory_data['actions'])} samples)", flush=True)
+                    print(f"  Refining model #{model_id} (cell {cell_idx}, {len(trajectory_data['actions'])} samples)...", flush=True)
+                    print(f"  🎓 Running gradient descent (20 epochs)... rover will wait", flush=True)
 
-                    # Get the cell and model from refinement tracking
-                    if model_id not in self.refinement_pending:
-                        print(f"  ⚠ Model #{model_id} not pending refinement", flush=True)
-                        self.socket.send_pyobj({'type': 'ack'})
-                        continue
-
-                    cell_idx, original_model_state = self.refinement_pending.pop(model_id)
-
-                    # Send acknowledgment IMMEDIATELY so rover can continue
-                    # (refinement happens asynchronously to the rover)
-                    self.socket.send_pyobj({'type': 'ack'})
-
-                    print(f"  Refining model #{model_id} (cell {cell_idx}) with gradient descent...", flush=True)
-
-                    # Refine the model
+                    # Refine the model with proper training (rover will wait)
                     refined_model_state = self.refine_model_with_gradients(
                         model_state=original_model_state,
                         trajectory_data=trajectory_data,
                         learning_rate=1e-4,
-                        num_epochs=10,
+                        num_epochs=20,  # Quality over speed - proper refinement
                         batch_size=32
                     )
 
@@ -527,6 +523,9 @@ class MAPElitesTrainer:
                         print(f"  ✓ Archive cell {cell_idx} updated with refined model", flush=True)
                     else:
                         print(f"  ⚠ Cell {cell_idx} not found in archive", flush=True)
+
+                    # NOW send acknowledgment (after refinement complete)
+                    self.socket.send_pyobj({'type': 'ack', 'refined': True})
 
                 else:
                     print(f"⚠ Unknown message type: {message.get('type')}")
