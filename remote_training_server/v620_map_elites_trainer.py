@@ -565,6 +565,54 @@ class MAPElitesTrainer:
 
         print(f"✓ Checkpoint saved: {archive_path}")
 
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load archive from checkpoint."""
+        import json
+
+        checkpoint_path = Path(checkpoint_path)
+
+        # Load metadata
+        with open(checkpoint_path, 'r') as f:
+            metadata = json.load(f)
+
+        # Create new archive with same bins
+        self.archive = MAPElitesArchive(
+            speed_bins=metadata['speed_bins'],
+            clearance_bins=metadata['clearance_bins']
+        )
+        self.archive.total_evaluations = metadata['total_evaluations']
+        self.archive.archive_additions = metadata['archive_additions']
+
+        # Load models
+        models_dir = checkpoint_path.parent / 'map_elites_models'
+        if not models_dir.exists():
+            print(f"⚠ Models directory not found: {models_dir}")
+            return
+
+        # Reconstruct archive
+        for model_file in models_dir.glob('cell_*.pt'):
+            # Parse cell indices from filename: cell_0_1.pt
+            parts = model_file.stem.split('_')
+            speed_idx = int(parts[1])
+            clearance_idx = int(parts[2])
+
+            # Load model
+            model_state = torch.load(model_file, map_location='cpu')
+
+            # Get metadata from the archive dict stored in JSON
+            cell_key = f"({speed_idx}, {clearance_idx})"
+            if cell_key in metadata.get('archive', {}):
+                cell_data = metadata['archive'][cell_key]
+                self.archive.archive[(speed_idx, clearance_idx)] = {
+                    'model': model_state,
+                    'fitness': cell_data['fitness'],
+                    'avg_speed': cell_data['avg_speed'],
+                    'avg_clearance': cell_data['avg_clearance'],
+                    'metrics': cell_data['metrics'],
+                }
+
+        print(f"  Loaded {len(self.archive.archive)} models from checkpoint")
+
     def export_best_models(self, suffix: str):
         """Export best models for different behavior profiles."""
         export_dir = self.checkpoint_dir / 'map_elites_exports'
@@ -609,6 +657,10 @@ def main():
                         help='Number of episodes to evaluate')
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
                         help='Directory for checkpoints')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Resume from specific checkpoint (e.g., "eval_100" or "final")')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Start fresh, ignore existing checkpoints')
     args = parser.parse_args()
 
     # Check ROCm
@@ -625,6 +677,47 @@ def main():
         port=args.port,
         checkpoint_dir=args.checkpoint_dir,
     )
+
+    # Auto-resume from latest checkpoint (or explicit resume)
+    checkpoint_to_load = None
+
+    if args.fresh:
+        # User explicitly wants to start fresh
+        print("🆕 Starting fresh (--fresh flag)")
+        print()
+    elif args.resume:
+        # Explicit resume request
+        checkpoint_to_load = Path(args.checkpoint_dir) / f'map_elites_{args.resume}.json'
+    else:
+        # Auto-resume: find latest checkpoint
+        checkpoint_dir = Path(args.checkpoint_dir)
+        if checkpoint_dir.exists():
+            # Look for checkpoints in order: final, then highest eval_N
+            final_checkpoint = checkpoint_dir / 'map_elites_final.json'
+            if final_checkpoint.exists():
+                checkpoint_to_load = final_checkpoint
+            else:
+                # Find highest eval_N checkpoint
+                eval_checkpoints = list(checkpoint_dir.glob('map_elites_eval_*.json'))
+                if eval_checkpoints:
+                    # Extract numbers and find max
+                    def get_eval_num(path):
+                        try:
+                            return int(path.stem.split('_')[-1])
+                        except:
+                            return 0
+                    latest = max(eval_checkpoints, key=get_eval_num)
+                    checkpoint_to_load = latest
+
+    if checkpoint_to_load and checkpoint_to_load.exists():
+        print(f"🔄 Resuming from checkpoint: {checkpoint_to_load.name}")
+        trainer.load_checkpoint(str(checkpoint_to_load))
+        print(f"✓ Checkpoint loaded")
+        trainer.print_archive_summary()
+        print()
+    else:
+        print("Starting fresh (no checkpoint found)")
+        print()
 
     # Run training
     trainer.run(num_evaluations=args.num_evaluations)
