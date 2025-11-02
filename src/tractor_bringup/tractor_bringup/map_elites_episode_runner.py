@@ -533,8 +533,8 @@ class MAPElitesEpisodeRunner(Node):
             send_time = time.time() - start_time
             self.get_logger().info(f'  Sent in {send_time:.1f}s, waiting for ack...')
 
-            # Wait for acknowledgment
-            if self.zmq_socket.poll(timeout=300000):  # 5 minute timeout
+            # Wait for acknowledgment (infinite timeout - wait for refinement to complete)
+            if self.zmq_socket.poll(timeout=-1):  # Infinite timeout
                 ack = self.zmq_socket.recv_pyobj()
                 total_time = time.time() - start_time
                 if ack.get('type') == 'ack':
@@ -545,7 +545,7 @@ class MAPElitesEpisodeRunner(Node):
                 else:
                     self.get_logger().warn(f'Unexpected ack: {ack}')
             else:
-                self.get_logger().error('Timeout waiting for trajectory ack (5 min)')
+                self.get_logger().error('Timeout waiting for trajectory ack (infinite wait)')
 
         except Exception as e:
             self.get_logger().error(f'Failed to send cached trajectory: {e}')
