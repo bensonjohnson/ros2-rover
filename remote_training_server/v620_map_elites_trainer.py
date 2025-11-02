@@ -214,6 +214,10 @@ class MAPElitesTrainer:
         self.pending_evaluations = {}  # model_id -> (model_state, generation_type)
         self.refinement_pending = {}  # model_id -> (cell_idx, model_state) for models waiting refinement
 
+        # Tournament selection cache
+        self.last_refined_model = None  # (model_state, trajectory_data) for tournament selection
+        self.tournament_candidates = 5  # Number of mutations to test
+
         print(f"✓ MAP-Elites trainer initialized on {self.device}")
         print(f"✓ REP socket listening on port {port}")
 
@@ -236,6 +240,82 @@ class MAPElitesTrainer:
                 param.add_(noise)
 
         return child_model.state_dict()
+
+    def tournament_selection(
+        self,
+        parent_state: dict,
+        trajectory_data: dict,
+        num_candidates: int = 5,
+        mutation_std_range: Tuple[float, float] = (0.01, 0.05)
+    ) -> Tuple[dict, float]:
+        """Create multiple mutations and select best via fitness test on trajectory data.
+
+        Args:
+            parent_state: Refined model to mutate
+            trajectory_data: Trajectory data to test mutations on
+            num_candidates: Number of mutations to test
+            mutation_std_range: Range of mutation strengths to try
+
+        Returns:
+            (best_mutation_state, fitness_score)
+        """
+        print(f"  🏆 Running tournament selection ({num_candidates} candidates)...", flush=True)
+
+        # Prepare trajectory data for evaluation
+        rgb = torch.from_numpy(trajectory_data['rgb'].copy()).permute(0, 3, 1, 2).to(self.device).float() / 255.0
+        depth = torch.from_numpy(trajectory_data['depth'].copy()).unsqueeze(1).to(self.device).float()
+        proprio = torch.from_numpy(trajectory_data['proprio']).to(self.device).float()
+        actions = torch.from_numpy(trajectory_data['actions']).to(self.device).float()
+
+        best_fitness = float('-inf')
+        best_mutation = None
+
+        candidates = []
+
+        # Generate candidate mutations with varying mutation strengths
+        for i in range(num_candidates):
+            # Vary mutation strength across candidates
+            mutation_std = np.random.uniform(*mutation_std_range)
+
+            # Create mutation
+            candidate = ActorNetwork().to(self.device)
+            candidate.load_state_dict(parent_state)
+
+            with torch.no_grad():
+                for param in candidate.parameters():
+                    noise = torch.randn_like(param) * mutation_std
+                    param.add_(noise)
+
+            candidates.append((candidate, mutation_std))
+
+        # Evaluate each candidate on the trajectory
+        with torch.no_grad():
+            for i, (candidate, mutation_std) in enumerate(candidates):
+                candidate.eval()
+
+                # Run model on trajectory
+                pred_actions = candidate(rgb, depth, proprio)
+
+                # Fitness = negative MSE (higher is better)
+                mse_loss = torch.nn.functional.mse_loss(pred_actions, actions)
+                fitness = -mse_loss.item()
+
+                # Also penalize extreme actions (encourage stability)
+                action_magnitude = torch.abs(pred_actions).mean().item()
+                fitness -= action_magnitude * 0.1  # Small penalty for large actions
+
+                if fitness > best_fitness:
+                    best_fitness = fitness
+                    best_mutation = candidate.state_dict()
+                    best_std = mutation_std
+
+                # Log progress every few candidates
+                if (i + 1) % max(1, num_candidates // 5) == 0 or i == num_candidates - 1:
+                    print(f"    Candidate {i+1}/{num_candidates}: fitness={fitness:.6f} (std={mutation_std:.4f})", flush=True)
+
+        print(f"  ✓ Best mutation selected: fitness={best_fitness:.6f} (std={best_std:.4f})", flush=True)
+
+        return best_mutation, best_fitness
 
     def refine_model_with_gradients(
         self,
@@ -331,6 +411,22 @@ class MAPElitesTrainer:
         # First 20 evaluations: random initialization
         if self.archive.total_evaluations < 20:
             return self.generate_random_model(), 'random'
+
+        # If we have a recently refined model, use tournament selection
+        if self.last_refined_model is not None:
+            refined_state, trajectory_data = self.last_refined_model
+            print(f"  🎯 Using tournament selection on refined model", flush=True)
+
+            best_mutation, fitness = self.tournament_selection(
+                parent_state=refined_state,
+                trajectory_data=trajectory_data,
+                num_candidates=self.tournament_candidates
+            )
+
+            # Clear cache after use
+            self.last_refined_model = None
+
+            return best_mutation, 'tournament'
 
         # 30% random, 70% mutation of archive elite
         if np.random.random() < 0.3:
@@ -523,6 +619,10 @@ class MAPElitesTrainer:
                         print(f"  ✓ Archive cell {cell_idx} updated with refined model", flush=True)
                     else:
                         print(f"  ⚠ Cell {cell_idx} not found in archive", flush=True)
+
+                    # Cache refined model + trajectory for tournament selection
+                    self.last_refined_model = (refined_model_state, trajectory_data)
+                    print(f"  📦 Cached refined model for tournament selection", flush=True)
 
                     # NOW send acknowledgment (after refinement complete)
                     self.socket.send_pyobj({'type': 'ack', 'refined': True})
