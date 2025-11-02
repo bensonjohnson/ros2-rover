@@ -442,7 +442,10 @@ class MAPElitesEpisodeRunner(Node):
                             if self.zmq_socket.poll(timeout=10000):
                                 self.zmq_socket.recv_pyobj()  # Consume ack
 
-                        # Continue to next model (no re-run needed!)
+                        # Request next model after trajectory refinement completes
+                        self.get_logger().info('Waiting 3s before next episode...')
+                        time.sleep(3.0)
+                        self.request_new_model()
                         return
 
                 else:
