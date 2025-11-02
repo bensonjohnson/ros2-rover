@@ -544,6 +544,7 @@ class MAPElitesTrainer:
         - Increase speed with confidence (reward fast + safe combinations)
         - Smooth, efficient motion (penalize erratic behavior)
         - Discover optimal paths regardless of indoor/outdoor
+        - Encourage forward movement (tank steering = turning in place wastes time)
         """
         distance = episode_data['total_distance']
         collisions = episode_data['collision_count']
@@ -551,9 +552,12 @@ class MAPElitesTrainer:
         avg_clearance = episode_data['avg_clearance']
         duration = max(episode_data['duration'], 1.0)
         action_smoothness = episode_data.get('action_smoothness', 0.0)
+        avg_linear_action = episode_data.get('avg_linear_action', 0.0)
+        avg_angular_action = episode_data.get('avg_angular_action', 0.0)
 
         # Base fitness: exploration distance (primary goal)
-        fitness = distance
+        # For tank steering, forward progress is everything
+        fitness = distance * 2.0  # Double weight on actual distance covered
 
         # 1. Collision penalty: Catastrophic for safety
         #    Exponential penalty - multiple collisions indicate poor behavior
@@ -604,6 +608,27 @@ class MAPElitesTrainer:
         #    If barely moving, heavily penalize (robot gave up or stuck)
         if avg_speed < 0.02 and collisions == 0:  # Nearly stationary without collisions
             fitness *= 0.3  # Harsh penalty - robot is doing nothing useful
+
+        # 7. Forward movement bias (CRITICAL for tank steering)
+        #    Tank steering means turning in place = zero progress but wastes time
+        #    Heavily penalize spinning, strongly reward forward movement
+        if avg_linear_action > 0 or avg_angular_action > 0:
+            # Forward bias ratio: linear_action / (linear_action + angular_action)
+            # 1.0 = pure forward, 0.5 = equal mix, 0.0 = pure spinning
+            total_action = avg_linear_action + avg_angular_action + 1e-6  # Avoid divide by zero
+            forward_bias = avg_linear_action / total_action
+
+            if forward_bias > 0.6:  # Mostly forward movement (good!)
+                forward_bonus = (forward_bias - 0.6) * 15.0  # Up to +6.0 bonus
+                fitness += forward_bonus
+            elif forward_bias < 0.3:  # Mostly spinning in place (bad!)
+                spinning_penalty = (0.3 - forward_bias) * 20.0  # Up to -6.0 penalty
+                fitness -= spinning_penalty
+
+            # Extra harsh penalty if lots of rotation but little distance
+            if avg_angular_action > 0.5 and distance < 2.0:
+                # High rotation, low distance = spinning in place
+                fitness -= 10.0  # Severe penalty
 
         return fitness
 
@@ -661,6 +686,8 @@ class MAPElitesTrainer:
                     avg_clearance = message['avg_clearance']
                     episode_duration = message['duration']
                     action_smoothness = message.get('action_smoothness', 0.0)
+                    avg_linear_action = message.get('avg_linear_action', 0.0)
+                    avg_angular_action = message.get('avg_angular_action', 0.0)
 
                     # Get the model state we sent earlier
                     if model_id not in self.pending_evaluations:
