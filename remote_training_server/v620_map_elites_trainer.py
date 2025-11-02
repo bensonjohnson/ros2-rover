@@ -430,8 +430,9 @@ class MAPElitesTrainer:
             num_replay_samples = max(1, min(num_replay_samples, len(self.trajectory_buffer)))
 
             # Sample random trajectories from buffer
+            import random
             buffer_cells = list(self.trajectory_buffer.keys())
-            replay_cells = np.random.choice(buffer_cells, size=num_replay_samples, replace=False)
+            replay_cells = random.sample(buffer_cells, num_replay_samples)
 
             for cell in replay_cells:
                 replay_traj = self.trajectory_buffer[cell]
