@@ -132,7 +132,8 @@ class MAPElitesArchive:
         if not self.archive:
             return None
 
-        cell_idx = np.random.choice(list(self.archive.keys()))
+        import random
+        cell_idx = random.choice(list(self.archive.keys()))
         return self.archive[cell_idx]['model']
 
     def get_best_in_cell(self, speed_idx: int, clearance_idx: int) -> Optional[dict]:
@@ -506,8 +507,8 @@ class MAPElitesTrainer:
         Returns:
             (model_state_dict, generation_type)
         """
-        # First 20 evaluations: random initialization
-        if self.archive.total_evaluations < 20:
+        # First 10 evaluations: random initialization
+        if self.archive.total_evaluations < 10:
             return self.generate_random_model(), 'random'
 
         # If we have a recently refined model, use tournament selection
@@ -671,8 +672,8 @@ class MAPElitesTrainer:
                           f"{status}",
                           flush=True)
 
-                    # Checkpoint every 50 evaluations
-                    if evaluation_count % 50 == 0:
+                    # Checkpoint every 10 evaluations
+                    if evaluation_count % 10 == 0:
                         self.save_checkpoint(evaluation_count)
                         stats = self.archive.get_stats()
                         print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)",
