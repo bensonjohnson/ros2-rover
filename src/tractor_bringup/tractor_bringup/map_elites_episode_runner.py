@@ -389,6 +389,15 @@ class MAPElitesEpisodeRunner(Node):
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
 
+        # Compute action smoothness (lower is better = smoother turning)
+        action_smoothness = 0.0
+        if len(self._trajectory_actions) > 1:
+            actions = np.array(self._trajectory_actions)  # (N, 2) - [linear, angular]
+            # Measure angular velocity changes (jerkiness in turning)
+            angular_actions = actions[:, 1]  # Extract angular component
+            angular_diffs = np.diff(angular_actions)  # Changes between timesteps
+            action_smoothness = float(np.std(angular_diffs))  # Standard deviation of changes
+
         # Cache trajectory data for this model (if we collected any)
         if len(self._trajectory_rgb) > 0:
             self.cache_trajectory_data()
@@ -406,6 +415,7 @@ class MAPElitesEpisodeRunner(Node):
             'avg_speed': float(avg_speed),
             'avg_clearance': float(avg_clearance),
             'duration': float(duration),
+            'action_smoothness': float(action_smoothness),
         }
 
         # Send results to server and wait for acknowledgment
