@@ -603,8 +603,9 @@ class MAPElitesTrainer:
         Returns:
             (model_state_dict, generation_type)
         """
-        # First 10 evaluations: random initialization
-        if self.archive.total_evaluations < 10:
+        # Quick warmup: first 3 evaluations are random for initial diversity
+        # With goal-oriented tournament, we don't need long warmup like gradient descent did
+        if self.archive.total_evaluations < 3:
             return self.generate_random_model(), 'random'
 
         # If we have a recently cached model with trajectory, use goal-oriented tournament
