@@ -156,22 +156,30 @@ class MAPElitesArchive:
                 'archive_additions': self.archive_additions,
             }
 
-        fitnesses = [entry['fitness'] for entry in self.archive.values()]
+        # Filter out -inf fitness values (from models awaiting re-evaluation)
+        fitnesses = [entry['fitness'] for entry in self.archive.values() if np.isfinite(entry['fitness'])]
         speeds = [entry['avg_speed'] for entry in self.archive.values()]
         clearances = [entry['avg_clearance'] for entry in self.archive.values()]
 
-        return {
+        stats = {
             'coverage': self.coverage(),
             'filled_cells': len(self.archive),
             'total_cells': (len(self.speed_bins) - 1) * (len(self.clearance_bins) - 1),
             'total_evaluations': self.total_evaluations,
             'archive_additions': self.archive_additions,
-            'fitness_mean': np.mean(fitnesses),
-            'fitness_max': np.max(fitnesses),
-            'fitness_min': np.min(fitnesses),
-            'speed_mean': np.mean(speeds),
-            'clearance_mean': np.mean(clearances),
+            'speed_mean': np.mean(speeds) if speeds else 0.0,
+            'clearance_mean': np.mean(clearances) if clearances else 0.0,
         }
+
+        # Only include fitness stats if we have valid fitness values
+        if fitnesses:
+            stats.update({
+                'fitness_mean': np.mean(fitnesses),
+                'fitness_max': np.max(fitnesses),
+                'fitness_min': np.min(fitnesses),
+            })
+
+        return stats
 
     def save(self, filepath: str):
         """Save archive to disk."""
@@ -194,6 +202,9 @@ class MAPElitesArchive:
             'total_evaluations': self.total_evaluations,
             'archive_additions': self.archive_additions,
         }
+
+        # Debug: verify archive is being saved
+        print(f"  💾 Saving archive with {len(archive_metadata)} cells of metadata", flush=True)
 
         with open(filepath, 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -947,11 +958,11 @@ class MAPElitesTrainer:
                 }
                 loaded_count += 1
             else:
-                # Old checkpoint format without metadata - use defaults
-                print(f"  ⚠ No metadata for cell {cell_key}, using defaults")
+                # Old checkpoint format without metadata - use -inf fitness so it gets replaced
+                print(f"  ⚠ No metadata for cell {cell_key}, will be re-evaluated")
                 self.archive.archive[(speed_idx, clearance_idx)] = {
                     'model': model_state,
-                    'fitness': 0.0,  # Will be re-evaluated
+                    'fitness': float('-inf'),  # Ensures any real evaluation replaces this
                     'avg_speed': 0.0,
                     'avg_clearance': 0.0,
                     'metrics': {},
@@ -989,9 +1000,14 @@ class MAPElitesTrainer:
         print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)")
         print(f"  Total evaluations: {stats['total_evaluations']}")
         print(f"  Archive additions: {stats['archive_additions']}")
-        print(f"  Fitness - Max: {stats.get('fitness_max', 0):.2f}, "
-              f"Mean: {stats.get('fitness_mean', 0):.2f}, "
-              f"Min: {stats.get('fitness_min', 0):.2f}")
+
+        if 'fitness_max' in stats:
+            print(f"  Fitness - Max: {stats['fitness_max']:.2f}, "
+                  f"Mean: {stats['fitness_mean']:.2f}, "
+                  f"Min: {stats['fitness_min']:.2f}")
+        else:
+            print(f"  Fitness - (no valid fitness values yet)")
+
         print(f"  Avg speed: {stats.get('speed_mean', 0):.3f} m/s")
         print(f"  Avg clearance: {stats.get('clearance_mean', 0):.2f} m")
 
