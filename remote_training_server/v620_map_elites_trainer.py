@@ -38,11 +38,11 @@ class ActorNetwork(nn.Module):
             proprio: (B, 6) Proprioception
 
         Returns:
-            action: (B, 2) [linear_vel, angular_vel]
+            action: (B, 2) [linear_vel, angular_vel] in [-1, 1] range
         """
         features = self.encoder(rgb, depth)
         action = self.policy_head(features, proprio)
-        return action
+        return torch.tanh(action)  # Squash to [-1, 1] range
 
 
 class MAPElitesArchive:
