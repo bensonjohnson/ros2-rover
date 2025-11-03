@@ -254,16 +254,11 @@ class MAPElitesTrainer:
 
         # Tournament selection cache
         self.last_refined_model = None  # (model_state, trajectory_data) for tournament selection
-        self.tournament_candidates = 50  # Number of mutations to test (V620 has 32GB VRAM)
+        self.tournament_candidates = 400  # Number of mutations to test (V620 has 32GB VRAM, no gradient descent)
 
-        # Prioritized refinement parameters
-        self.refinement_fitness_threshold = 0.10  # Only refine if >10% improvement
-        self.always_refine_new_cells = True  # Always refine new behavior discoveries
-
-        # Archive-based replay buffer
-        self.trajectory_buffer = {}  # cell_idx -> trajectory_data (keep trajectories for refinement)
-        self.max_buffer_size = 20  # Keep last 20 trajectories
-        self.replay_buffer_mix_ratio = 0.2  # Mix 20% from buffer during refinement
+        # Tournament trigger parameters (no gradient descent)
+        self.refinement_fitness_threshold = 0.10  # Collect trajectory if >10% improvement
+        self.always_refine_new_cells = True  # Always collect trajectory for new cells
 
         print(f"✓ MAP-Elites trainer initialized on {self.device}")
         print(f"✓ REP socket listening on port {port}")
@@ -612,13 +607,13 @@ class MAPElitesTrainer:
         if self.archive.total_evaluations < 10:
             return self.generate_random_model(), 'random'
 
-        # If we have a recently refined model, use tournament selection
+        # If we have a recently cached model with trajectory, use goal-oriented tournament
         if self.last_refined_model is not None:
-            refined_state, trajectory_data = self.last_refined_model
-            print(f"  🎯 Using tournament selection on refined model", flush=True)
+            parent_state, trajectory_data = self.last_refined_model
+            print(f"  🏆 Running goal-oriented tournament ({self.tournament_candidates} candidates)", flush=True)
 
             best_mutation, fitness = self.tournament_selection(
-                parent_state=refined_state,
+                parent_state=parent_state,
                 trajectory_data=trajectory_data,
                 num_candidates=self.tournament_candidates
             )
@@ -816,26 +811,26 @@ class MAPElitesTrainer:
                         }
                     )
 
-                    # Prioritized refinement: only refine if significant improvement or new cell
-                    should_refine = False
-                    refinement_reason = ""
+                    # Request trajectory for tournament selection if significant improvement or new cell
+                    should_collect = False
+                    collection_reason = ""
 
                     if added:
                         if is_new_cell and self.always_refine_new_cells:
-                            should_refine = True
-                            refinement_reason = "new behavior cell"
+                            should_collect = True
+                            collection_reason = "new behavior cell"
                         elif improvement_ratio >= self.refinement_fitness_threshold:
-                            should_refine = True
-                            refinement_reason = f"{improvement_ratio*100:.1f}% fitness improvement"
+                            should_collect = True
+                            collection_reason = f"{improvement_ratio*100:.1f}% fitness improvement"
                         else:
-                            refinement_reason = f"skipped (only {improvement_ratio*100:.1f}% improvement)"
+                            collection_reason = f"skipped (only {improvement_ratio*100:.1f}% improvement)"
 
-                    # If added and should refine, request trajectory data for gradient refinement
-                    if added and should_refine:
+                    # If added and should collect, request trajectory data for tournament selection
+                    if added and should_collect:
                         # Get the cell index where this model was added
                         cell_idx = self.archive.get_cell_index(avg_speed, avg_clearance)
 
-                        # Store for refinement when trajectory data arrives
+                        # Store for tournament when trajectory data arrives
                         self.refinement_pending[model_id] = (cell_idx, model_state)
 
                         # Send acknowledgment with trajectory request
@@ -844,13 +839,13 @@ class MAPElitesTrainer:
                             'collect_trajectory': True,
                             'model_id': model_id  # Re-run same model
                         })
-                        print(f"  → Requesting trajectory data ({refinement_reason})...", flush=True)
+                        print(f"  → Requesting trajectory for tournament ({collection_reason})...", flush=True)
                     else:
                         # Normal acknowledgment
                         self.socket.send_pyobj({'type': 'ack'})
 
                     # Log progress
-                    status = f"✓ ADDED ({refinement_reason})" if added else "rejected"
+                    status = f"✓ ADDED ({collection_reason})" if added else "rejected"
                     print(f"← Eval {evaluation_count}/{num_evaluations} | "
                           f"Model #{model_id} ({gen_type}) | "
                           f"Fitness: {fitness:.2f} | "
@@ -867,16 +862,16 @@ class MAPElitesTrainer:
                               flush=True)
 
                 elif message['type'] == 'trajectory_data':
-                    # Rover is sending trajectory data for gradient refinement
+                    # Rover is sending trajectory data for tournament selection
                     model_id = message['model_id']
                     trajectory_raw = message['trajectory']
                     compressed = message.get('compressed', False)
 
                     print(f"← Received trajectory data for model #{model_id}", flush=True)
 
-                    # Get the cell and model from refinement tracking
+                    # Get the cell and model from pending tracking
                     if model_id not in self.refinement_pending:
-                        print(f"  ⚠ Model #{model_id} not pending refinement", flush=True)
+                        print(f"  ⚠ Model #{model_id} not pending tournament", flush=True)
                         self.socket.send_pyobj({'type': 'ack'})
                         continue
 
@@ -902,46 +897,16 @@ class MAPElitesTrainer:
                     else:
                         trajectory_data = trajectory_raw
 
-                    print(f"  Refining model #{model_id} (cell {cell_idx}, {len(trajectory_data['actions'])} samples)...", flush=True)
-                    print(f"  🎓 Running gradient descent (20 epochs)... rover will wait", flush=True)
+                    print(f"  📦 Caching model #{model_id} (cell {cell_idx}, {len(trajectory_data['actions'])} samples) for tournament", flush=True)
 
-                    # Refine the model with proper training (rover will wait)
-                    refined_model_state = self.refine_model_with_gradients(
-                        model_state=original_model_state,
-                        trajectory_data=trajectory_data,
-                        learning_rate=1e-4,
-                        num_epochs=20,  # Quality over speed - proper refinement
-                        batch_size=32
-                    )
+                    # Cache original model + trajectory for goal-oriented tournament selection
+                    # NO gradient descent - tournament will directly optimize for goals!
+                    self.last_refined_model = (original_model_state, trajectory_data)
 
-                    # Update the archive with refined model
-                    if cell_idx in self.archive.archive:
-                        self.archive.archive[cell_idx]['model'] = refined_model_state
-                        print(f"  ✓ Archive cell {cell_idx} updated with refined model", flush=True)
-                    else:
-                        print(f"  ⚠ Cell {cell_idx} not found in archive", flush=True)
+                    print(f"  ✓ Ready for tournament selection ({self.tournament_candidates} candidates)", flush=True)
 
-                    # Cache refined model + trajectory for tournament selection
-                    self.last_refined_model = (refined_model_state, trajectory_data)
-
-                    # Add trajectory to replay buffer
-                    self.trajectory_buffer[cell_idx] = {
-                        'rgb': trajectory_data['rgb'],
-                        'depth': trajectory_data['depth'],
-                        'proprio': trajectory_data['proprio'],
-                        'actions': trajectory_data['actions'],
-                    }
-
-                    # Manage buffer size (FIFO)
-                    if len(self.trajectory_buffer) > self.max_buffer_size:
-                        # Remove oldest entry
-                        oldest_cell = list(self.trajectory_buffer.keys())[0]
-                        del self.trajectory_buffer[oldest_cell]
-
-                    print(f"  📦 Cached for tournament + buffer ({len(self.trajectory_buffer)} trajectories stored)", flush=True)
-
-                    # NOW send acknowledgment (after refinement complete)
-                    self.socket.send_pyobj({'type': 'ack', 'refined': True})
+                    # Send acknowledgment (instant - no gradient descent wait!)
+                    self.socket.send_pyobj({'type': 'ack'})
 
                 else:
                     print(f"⚠ Unknown message type: {message.get('type')}")
@@ -1104,8 +1069,8 @@ def main():
                         help='Resume from specific checkpoint (e.g., "eval_100" or "final")')
     parser.add_argument('--fresh', action='store_true',
                         help='Start fresh, ignore existing checkpoints')
-    parser.add_argument('--tournament-size', type=int, default=50,
-                        help='Number of mutations to test in tournament selection (default: 50)')
+    parser.add_argument('--tournament-size', type=int, default=400,
+                        help='Number of mutations to test in goal-oriented tournament (default: 400, no gradient descent)')
     args = parser.parse_args()
 
     # Check ROCm
