@@ -380,13 +380,12 @@ class MAPElitesTrainer:
 
                 # Compute fitness for all in batch
                 for i, (pred_actions, (_, mutation_std)) in enumerate(zip(batch_predictions, batch_candidates)):
-                    # Fitness = negative MSE (higher is better)
-                    mse_loss = torch.nn.functional.mse_loss(pred_actions, actions)
-                    fitness = -mse_loss.item()
-
-                    # Also penalize extreme actions (encourage stability)
-                    action_magnitude = torch.abs(pred_actions).mean().item()
-                    fitness -= action_magnitude * 0.1  # Small penalty for large actions
+                    # Goal-oriented fitness: test if mutation achieves fitness objectives
+                    fitness = self.compute_tournament_fitness(
+                        pred_actions=pred_actions,
+                        target_actions=actions,
+                        proprio=proprio
+                    )
 
                     fitness_scores.append((fitness, mutation_std, batch_start + i))
 
@@ -409,6 +408,87 @@ class MAPElitesTrainer:
         print(f"  ✓ Best mutation selected: fitness={best_fitness:.6f} (std={best_std:.4f})", flush=True)
 
         return best_mutation, best_fitness
+
+    def compute_tournament_fitness(
+        self,
+        pred_actions: torch.Tensor,
+        target_actions: torch.Tensor,
+        proprio: torch.Tensor
+    ) -> float:
+        """Compute goal-oriented tournament fitness.
+
+        Instead of just measuring action imitation (MSE), test if mutation
+        achieves the actual fitness objectives:
+        - High speed when clearance is high
+        - Low speed when clearance is low
+        - Prefer forward motion over spinning
+        - Smooth action transitions
+
+        Args:
+            pred_actions: Predicted actions (N, 2) [linear, angular]
+            target_actions: Original actions from trajectory (N, 2)
+            proprio: Proprioception data (N, 6) [lin_vel, ang_vel, roll, pitch, accel, clearance]
+
+        Returns:
+            Fitness score (higher is better)
+        """
+        fitness = 0.0
+
+        # Extract clearance from proprioception (index 5)
+        clearance = proprio[:, 5]  # (N,)
+
+        # 1. IMITATION BASELINE (30% weight)
+        #    Still reward staying close to successful behavior, but not as dominant
+        mse_loss = torch.nn.functional.mse_loss(pred_actions, target_actions)
+        imitation_score = -mse_loss.item()
+        fitness += imitation_score * 0.3
+
+        # 2. SPEED-CLEARANCE CORRELATION (30% weight)
+        #    Reward high forward velocity when safe, low velocity when risky
+        high_clearance_mask = clearance > 2.0
+        low_clearance_mask = clearance < 0.5
+
+        if high_clearance_mask.any():
+            # When clearance is high (>2m), should go forward confidently
+            safe_linear = pred_actions[high_clearance_mask, 0].mean().item()
+            fitness += safe_linear * 15.0  # Strongly reward forward motion when safe
+
+        if low_clearance_mask.any():
+            # When clearance is low (<0.5m), should be cautious (low linear)
+            risky_linear = pred_actions[low_clearance_mask, 0].mean().item()
+            fitness -= abs(risky_linear) * 10.0  # Penalize fast motion when risky
+
+        # 3. FORWARD BIAS (25% weight)
+        #    Tank steering: forward motion is good, spinning is bad
+        linear_magnitude = torch.abs(pred_actions[:, 0]).mean().item()
+        angular_magnitude = torch.abs(pred_actions[:, 1]).mean().item()
+        total_action = linear_magnitude + angular_magnitude + 1e-6
+        forward_ratio = linear_magnitude / total_action
+
+        # Reward forward-biased actions
+        if forward_ratio > 0.6:
+            fitness += (forward_ratio - 0.6) * 25.0  # Strong reward
+        elif forward_ratio < 0.3:
+            fitness -= (0.3 - forward_ratio) * 30.0  # Strong penalty for spinning
+
+        # 4. ACTION SMOOTHNESS (15% weight)
+        #    Smooth actions indicate stable, confident behavior
+        if pred_actions.shape[0] > 1:
+            action_diffs = torch.diff(pred_actions, dim=0)
+            angular_smoothness = torch.std(action_diffs[:, 1]).item()
+
+            if angular_smoothness < 0.1:
+                fitness += (0.1 - angular_smoothness) * 20.0  # Reward smooth
+            elif angular_smoothness > 0.3:
+                fitness -= (angular_smoothness - 0.3) * 15.0  # Penalize jerky
+
+        # 5. AVOID EXTREME ACTIONS (bonus)
+        #    Penalize saturation at action limits
+        action_magnitude = torch.abs(pred_actions).mean().item()
+        if action_magnitude > 0.9:
+            fitness -= (action_magnitude - 0.9) * 10.0  # Saturated actions are risky
+
+        return fitness
 
     def refine_model_with_gradients(
         self,
