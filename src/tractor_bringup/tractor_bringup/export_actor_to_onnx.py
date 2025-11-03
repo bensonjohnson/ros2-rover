@@ -25,7 +25,7 @@ class ActorNetwork(nn.Module):
     def forward(self, rgb, depth, proprio):
         features = self.encoder(rgb, depth)
         action = self.policy_head(features, proprio)
-        return action
+        return torch.tanh(action)  # Squash to [-1, 1] range
 
 
 def export_to_onnx(pt_path: str, onnx_path: str):
