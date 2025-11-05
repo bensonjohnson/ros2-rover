@@ -1,0 +1,429 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 400 candidates
+
+🔄 Resuming from checkpoint: map_elites_eval_40.json
+  Archive metadata has 4 entries
+  Found 4 model files in checkpoints/map_elites_models
+  Loaded 4/4 models from checkpoint
+✓ Checkpoint loaded
+
+Archive Summary:
+  Coverage: 25.0% (4/16 cells)
+  Total evaluations: 40
+  Archive additions: 9
+  Fitness - Max: 9223.25, Mean: 2311.99, Min: 5.80
+  Avg speed: 0.108 m/s
+  Avg clearance: 0.39 m
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Resuming from evaluation 40
+Target evaluations: 1000 (need 960 more)
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (mutation) to rover
+← Eval 41/1000 | Model #0 (mutation) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.23 m | rejected
+→ Sent model #1 (random) to rover
+← Eval 42/1000 | Model #1 (random) | Fitness: 0.72 | Speed: 0.054 m/s | Clear: 0.36 m | rejected
+→ Sent model #2 (random) to rover
+← Eval 43/1000 | Model #2 (random) | Fitness: 0.70 | Speed: 0.065 m/s | Clear: 0.37 m | rejected
+→ Sent model #3 (mutation) to rover
+← Eval 44/1000 | Model #3 (mutation) | Fitness: 4.74 | Speed: 0.000 m/s | Clear: 0.34 m | rejected
+→ Sent model #4 (mutation) to rover
+← Eval 45/1000 | Model #4 (mutation) | Fitness: 0.40 | Speed: 0.012 m/s | Clear: 0.24 m | rejected
+→ Sent model #5 (mutation) to rover
+← Eval 46/1000 | Model #5 (mutation) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.24 m | rejected
+→ Sent model #6 (random) to rover
+← Eval 47/1000 | Model #6 (random) | Fitness: 0.47 | Speed: 0.053 m/s | Clear: 0.37 m | rejected
+→ Sent model #7 (random) to rover
+← Eval 48/1000 | Model #7 (random) | Fitness: 0.70 | Speed: 0.046 m/s | Clear: 0.36 m | rejected
+→ Sent model #8 (random) to rover
+← Eval 49/1000 | Model #8 (random) | Fitness: -4.88 | Speed: 0.060 m/s | Clear: 0.35 m | rejected
+→ Sent model #9 (random) to rover
+← Eval 50/1000 | Model #9 (random) | Fitness: -1.76 | Speed: 0.094 m/s | Clear: 0.41 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_50.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #10 (mutation) to rover
+  → Requesting trajectory for tournament (28.6% fitness improvement)...
+← Eval 51/1000 | Model #10 (mutation) | Fitness: 10.64 | Speed: 0.159 m/s | Clear: 0.31 m | ✓ ADDED (28.6% fitness improvement)
+← Received trajectory data for model #10
+  📦 Caching model #10 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #113: fitness=8.422870 (std=0.0199)
+        #326: fitness=8.267066 (std=0.0291)
+        #31: fitness=7.903726 (std=0.0134)
+        #94: fitness=7.797843 (std=0.0202)
+        #364: fitness=7.693561 (std=0.0165)
+  ✓ Best mutation selected: fitness=8.422870 (std=0.0199)
+→ Sent model #11 (tournament) to rover
+← Eval 52/1000 | Model #11 (tournament) | Fitness: -2.11 | Speed: 0.000 m/s | Clear: 0.24 m | rejected
+→ Sent model #12 (mutation) to rover
+← Eval 53/1000 | Model #12 (mutation) | Fitness: -2.38 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #13 (mutation) to rover
+  → Requesting trajectory for tournament (55.7% fitness improvement)...
+← Eval 54/1000 | Model #13 (mutation) | Fitness: 16.57 | Speed: 0.199 m/s | Clear: 0.33 m | ✓ ADDED (55.7% fitness improvement)
+← Received trajectory data for model #13
+  📦 Caching model #13 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #213: fitness=7.756443 (std=0.0190)
+        #371: fitness=7.577041 (std=0.0394)
+        #318: fitness=7.346984 (std=0.0139)
+        #34: fitness=7.274145 (std=0.0123)
+        #112: fitness=7.247526 (std=0.0237)
+  ✓ Best mutation selected: fitness=7.756443 (std=0.0190)
+→ Sent model #14 (tournament) to rover
+← Eval 55/1000 | Model #14 (tournament) | Fitness: 14.36 | Speed: 0.402 m/s | Clear: 0.38 m | rejected
+→ Sent model #15 (random) to rover
+← Eval 56/1000 | Model #15 (random) | Fitness: 0.74 | Speed: 0.084 m/s | Clear: 0.33 m | rejected
+→ Sent model #16 (mutation) to rover
+← Eval 57/1000 | Model #16 (mutation) | Fitness: 1.21 | Speed: 0.440 m/s | Clear: 0.40 m | rejected
+→ Sent model #17 (random) to rover
+← Eval 58/1000 | Model #17 (random) | Fitness: 0.76 | Speed: 0.069 m/s | Clear: 0.40 m | rejected
+→ Sent model #18 (mutation) to rover
+← Eval 59/1000 | Model #18 (mutation) | Fitness: 4.32 | Speed: 0.000 m/s | Clear: 0.40 m | rejected
+→ Sent model #19 (random) to rover
+← Eval 60/1000 | Model #19 (random) | Fitness: 0.62 | Speed: 0.064 m/s | Clear: 0.40 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_60.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #20 (random) to rover
+← Eval 61/1000 | Model #20 (random) | Fitness: -4.83 | Speed: 0.075 m/s | Clear: 0.40 m | rejected
+→ Sent model #21 (mutation) to rover
+  → Requesting trajectory for tournament (67.2% fitness improvement)...
+← Eval 62/1000 | Model #21 (mutation) | Fitness: 27.71 | Speed: 0.308 m/s | Clear: 0.39 m | ✓ ADDED (67.2% fitness improvement)
+← Received trajectory data for model #21
+  📦 Caching model #21 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #352: fitness=6.873127 (std=0.0144)
+        #368: fitness=6.707734 (std=0.0114)
+        #156: fitness=6.690980 (std=0.0205)
+        #358: fitness=6.640674 (std=0.0114)
+        #253: fitness=6.613824 (std=0.0129)
+  ✓ Best mutation selected: fitness=6.873127 (std=0.0144)
+→ Sent model #22 (tournament) to rover
+← Eval 63/1000 | Model #22 (tournament) | Fitness: 3.84 | Speed: 0.360 m/s | Clear: 0.42 m | rejected
+→ Sent model #23 (mutation) to rover
+← Eval 64/1000 | Model #23 (mutation) | Fitness: 4.06 | Speed: 0.001 m/s | Clear: 0.42 m | rejected
+→ Sent model #24 (random) to rover
+← Eval 65/1000 | Model #24 (random) | Fitness: 0.73 | Speed: 0.041 m/s | Clear: 0.42 m | rejected
+→ Sent model #25 (mutation) to rover
+  → Requesting trajectory for tournament (52.2% fitness improvement)...
+← Eval 66/1000 | Model #25 (mutation) | Fitness: 42.17 | Speed: 0.430 m/s | Clear: 0.42 m | ✓ ADDED (52.2% fitness improvement)
+← Received trajectory data for model #25
+  📦 Caching model #25 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #195: fitness=5.938241 (std=0.0395)
+        #370: fitness=5.809471 (std=0.0222)
+        #87: fitness=5.716159 (std=0.0141)
+        #192: fitness=5.590174 (std=0.0226)
+        #275: fitness=5.577100 (std=0.0155)
+  ✓ Best mutation selected: fitness=5.938241 (std=0.0395)
+→ Sent model #26 (tournament) to rover
+← Eval 67/1000 | Model #26 (tournament) | Fitness: 22.81 | Speed: 0.223 m/s | Clear: 0.31 m | rejected
+→ Sent model #27 (mutation) to rover
+← Eval 68/1000 | Model #27 (mutation) | Fitness: 3.95 | Speed: 0.001 m/s | Clear: 0.43 m | rejected
+→ Sent model #28 (mutation) to rover
+← Eval 69/1000 | Model #28 (mutation) | Fitness: 3.90 | Speed: 0.384 m/s | Clear: 0.42 m | rejected
+→ Sent model #29 (random) to rover
+← Eval 70/1000 | Model #29 (random) | Fitness: 4.64 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_70.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #30 (mutation) to rover
+← Eval 71/1000 | Model #30 (mutation) | Fitness: 5.96 | Speed: 0.000 m/s | Clear: 0.41 m | ✓ ADDED (skipped (only 2.8% improvement))
+→ Sent model #31 (mutation) to rover
+← Eval 72/1000 | Model #31 (mutation) | Fitness: 4.49 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #32 (mutation) to rover
+← Eval 73/1000 | Model #32 (mutation) | Fitness: 4.62 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #33 (random) to rover
+← Eval 74/1000 | Model #33 (random) | Fitness: 19.38 | Speed: 1.678 m/s | Clear: 0.42 m | rejected
+→ Sent model #34 (mutation) to rover
+← Eval 75/1000 | Model #34 (mutation) | Fitness: 2.86 | Speed: 0.361 m/s | Clear: 0.43 m | rejected
+→ Sent model #35 (random) to rover
+← Eval 76/1000 | Model #35 (random) | Fitness: 5.87 | Speed: 0.001 m/s | Clear: 0.41 m | rejected
+→ Sent model #36 (mutation) to rover
+← Eval 77/1000 | Model #36 (mutation) | Fitness: 42.65 | Speed: 0.357 m/s | Clear: 0.42 m | ✓ ADDED (skipped (only 1.1% improvement))
+→ Sent model #37 (mutation) to rover
+← Eval 78/1000 | Model #37 (mutation) | Fitness: 2.53 | Speed: 0.052 m/s | Clear: 0.41 m | rejected
+→ Sent model #38 (random) to rover
+← Eval 79/1000 | Model #38 (random) | Fitness: 0.70 | Speed: 0.073 m/s | Clear: 0.41 m | rejected
+→ Sent model #39 (mutation) to rover
+← Eval 80/1000 | Model #39 (mutation) | Fitness: 4.00 | Speed: 0.475 m/s | Clear: 0.41 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_80.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #40 (mutation) to rover
+← Eval 81/1000 | Model #40 (mutation) | Fitness: 3.12 | Speed: 0.001 m/s | Clear: 0.42 m | rejected
+→ Sent model #41 (mutation) to rover
+← Eval 82/1000 | Model #41 (mutation) | Fitness: -214.97 | Speed: 0.350 m/s | Clear: 0.35 m | rejected
+→ Sent model #42 (mutation) to rover
+← Eval 83/1000 | Model #42 (mutation) | Fitness: -54.91 | Speed: 0.494 m/s | Clear: 0.37 m | rejected
+→ Sent model #43 (mutation) to rover
+← Eval 84/1000 | Model #43 (mutation) | Fitness: 0.58 | Speed: 0.445 m/s | Clear: 0.42 m | rejected
+→ Sent model #44 (mutation) to rover
+← Eval 85/1000 | Model #44 (mutation) | Fitness: 4.03 | Speed: 0.021 m/s | Clear: 0.42 m | rejected
+→ Sent model #45 (mutation) to rover
+← Eval 86/1000 | Model #45 (mutation) | Fitness: 4.08 | Speed: 0.477 m/s | Clear: 0.42 m | rejected
+→ Sent model #46 (mutation) to rover
+← Eval 87/1000 | Model #46 (mutation) | Fitness: 5.06 | Speed: 0.001 m/s | Clear: 0.40 m | rejected
+→ Sent model #47 (mutation) to rover
+← Eval 88/1000 | Model #47 (mutation) | Fitness: 4.58 | Speed: 0.000 m/s | Clear: 0.40 m | rejected
+→ Sent model #48 (mutation) to rover
+← Eval 89/1000 | Model #48 (mutation) | Fitness: 5.96 | Speed: 0.289 m/s | Clear: 0.43 m | rejected
+→ Sent model #49 (mutation) to rover
+← Eval 90/1000 | Model #49 (mutation) | Fitness: 4.60 | Speed: 0.083 m/s | Clear: 0.27 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_90.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #50 (random) to rover
+← Eval 91/1000 | Model #50 (random) | Fitness: -5.10 | Speed: 0.062 m/s | Clear: 0.35 m | rejected
+→ Sent model #51 (mutation) to rover
+← Eval 92/1000 | Model #51 (mutation) | Fitness: 1.60 | Speed: 0.311 m/s | Clear: 0.33 m | rejected
+→ Sent model #52 (random) to rover
+← Eval 93/1000 | Model #52 (random) | Fitness: 0.85 | Speed: 0.059 m/s | Clear: 0.40 m | rejected
+→ Sent model #53 (mutation) to rover
+← Eval 94/1000 | Model #53 (mutation) | Fitness: 2.33 | Speed: 0.304 m/s | Clear: 0.42 m | rejected
+→ Sent model #54 (mutation) to rover
+  → Requesting trajectory for tournament (32.7% fitness improvement)...
+← Eval 95/1000 | Model #54 (mutation) | Fitness: 56.61 | Speed: 0.305 m/s | Clear: 0.43 m | ✓ ADDED (32.7% fitness improvement)
+← Received trajectory data for model #54
+  📦 Caching model #54 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #273: fitness=7.138086 (std=0.0217)
+        #83: fitness=7.101250 (std=0.0371)
+        #90: fitness=6.900638 (std=0.0129)
+        #288: fitness=6.892162 (std=0.0161)
+        #42: fitness=6.715294 (std=0.0170)
+  ✓ Best mutation selected: fitness=7.138086 (std=0.0217)
+→ Sent model #55 (tournament) to rover
+← Eval 96/1000 | Model #55 (tournament) | Fitness: 12.70 | Speed: 0.274 m/s | Clear: 0.35 m | rejected
+→ Sent model #56 (mutation) to rover
+← Eval 97/1000 | Model #56 (mutation) | Fitness: 14.70 | Speed: 0.205 m/s | Clear: 0.39 m | rejected
+→ Sent model #57 (random) to rover
+← Eval 98/1000 | Model #57 (random) | Fitness: -0.41 | Speed: 0.040 m/s | Clear: 0.39 m | rejected
+→ Sent model #58 (random) to rover
+← Eval 99/1000 | Model #58 (random) | Fitness: 1.22 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #59 (mutation) to rover
+← Eval 100/1000 | Model #59 (mutation) | Fitness: 10.15 | Speed: 0.255 m/s | Clear: 0.35 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_100.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #60 (mutation) to rover
+← Eval 101/1000 | Model #60 (mutation) | Fitness: 3.20 | Speed: 0.239 m/s | Clear: 0.38 m | rejected
+→ Sent model #61 (mutation) to rover
+← Eval 102/1000 | Model #61 (mutation) | Fitness: 1.98 | Speed: 0.023 m/s | Clear: 0.24 m | rejected
+→ Sent model #62 (mutation) to rover
+← Eval 103/1000 | Model #62 (mutation) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.23 m | rejected
+→ Sent model #63 (mutation) to rover
+← Eval 104/1000 | Model #63 (mutation) | Fitness: 0.13 | Speed: 0.122 m/s | Clear: 0.35 m | rejected
+→ Sent model #64 (mutation) to rover
+← Eval 105/1000 | Model #64 (mutation) | Fitness: -1023.49 | Speed: 0.236 m/s | Clear: 0.45 m | rejected
+→ Sent model #65 (mutation) to rover
+← Eval 106/1000 | Model #65 (mutation) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.23 m | rejected
+→ Sent model #66 (mutation) to rover
+← Eval 107/1000 | Model #66 (mutation) | Fitness: 1.99 | Speed: 0.034 m/s | Clear: 0.23 m | rejected
+→ Sent model #67 (mutation) to rover
+← Eval 108/1000 | Model #67 (mutation) | Fitness: -5.77 | Speed: 0.008 m/s | Clear: 0.20 m | rejected
+→ Sent model #68 (random) to rover
+← Eval 109/1000 | Model #68 (random) | Fitness: -3.26 | Speed: 0.072 m/s | Clear: 0.29 m | rejected
+→ Sent model #69 (random) to rover
+← Eval 110/1000 | Model #69 (random) | Fitness: -2.40 | Speed: 0.041 m/s | Clear: 0.29 m | rejected
+  💾 Saving archive with 4 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_110.json
+  Coverage: 25.0% (4/16 cells)
+→ Sent model #70 (random) to rover
+← Eval 111/1000 | Model #70 (random) | Fitness: -11.91 | Speed: 0.085 m/s | Clear: 0.28 m | rejected
+→ Sent model #71 (random) to rover
+← Eval 112/1000 | Model #71 (random) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.13 m | rejected
+→ Sent model #72 (random) to rover
+← Eval 113/1000 | Model #72 (random) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.13 m | rejected
+→ Sent model #73 (random) to rover
+← Eval 114/1000 | Model #73 (random) | Fitness: -1038.93 | Speed: 0.064 m/s | Clear: 0.27 m | rejected
+→ Sent model #74 (random) to rover
+← Eval 115/1000 | Model #74 (random) | Fitness: -7426.55 | Speed: 0.081 m/s | Clear: 0.26 m | rejected
+→ Sent model #75 (random) to rover
+← Eval 116/1000 | Model #75 (random) | Fitness: -7857.81 | Speed: 0.078 m/s | Clear: 0.25 m | rejected
+→ Sent model #76 (random) to rover
+← Eval 117/1000 | Model #76 (random) | Fitness: -17044.99 | Speed: 0.039 m/s | Clear: 0.34 m | rejected
+→ Sent model #77 (random) to rover
+  → Requesting trajectory for tournament (new behavior cell)...
+← Eval 118/1000 | Model #77 (random) | Fitness: 1.16 | Speed: 0.000 m/s | Clear: 5.00 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #77
+  📦 Caching model #77 (cell (0, 3), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...
+    Evaluated 80/400 candidates...
+    Evaluated 160/400 candidates...
+    Evaluated 240/400 candidates...
+    Evaluated 320/400 candidates...
+    Evaluated 400/400 candidates...
+    Top 5 mutations:
+      ★ #139: fitness=11.863432 (std=0.0373)
+        #235: fitness=10.789292 (std=0.0219)
+        #93: fitness=10.778830 (std=0.0379)
+        #258: fitness=10.338624 (std=0.0444)
+        #85: fitness=10.051679 (std=0.0128)
+  ✓ Best mutation selected: fitness=11.863432 (std=0.0373)
+→ Sent model #78 (tournament) to rover
+← Eval 119/1000 | Model #78 (tournament) | Fitness: 4.80 | Speed: 0.000 m/s | Clear: 0.44 m | rejected
+→ Sent model #79 (mutation) to rover
+← Eval 120/1000 | Model #79 (mutation) | Fitness: 0.21 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+  💾 Saving archive with 5 cells of metadata
+  ✓ Exported 'cautious' model: fitness=1.16
+✓ Checkpoint saved: checkpoints/map_elites_eval_120.json
+  Coverage: 31.2% (5/16 cells)
+→ Sent model #80 (mutation) to rover
+← Eval 121/1000 | Model #80 (mutation) | Fitness: 6.03 | Speed: 0.014 m/s | Clear: 0.37 m | ✓ ADDED (skipped (only 1.2% improvement))
+→ Sent model #81 (random) to rover
+← Eval 122/1000 | Model #81 (random) | Fitness: -2.53 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #82 (mutation) to rover
+← Eval 123/1000 | Model #82 (mutation) | Fitness: 1.10 | Speed: 0.303 m/s | Clear: 0.40 m | rejected
+→ Sent model #83 (mutation) to rover
+← Eval 124/1000 | Model #83 (mutation) | Fitness: 5.76 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #84 (mutation) to rover
+← Eval 125/1000 | Model #84 (mutation) | Fitness: 7.59 | Speed: 0.209 m/s | Clear: 0.37 m | rejected
+→ Sent model #85 (mutation) to rover
+← Eval 126/1000 | Model #85 (mutation) | Fitness: 1.09 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #86 (mutation) to rover
+← Eval 127/1000 | Model #86 (mutation) | Fitness: 3.58 | Speed: 0.034 m/s | Clear: 0.42 m | rejected
+→ Sent model #87 (random) to rover
+← Eval 128/1000 | Model #87 (random) | Fitness: 0.74 | Speed: 0.023 m/s | Clear: 0.42 m | rejected
+→ Sent model #88 (random) to rover
+← Eval 129/1000 | Model #88 (random) | Fitness: -1.41 | Speed: 0.065 m/s | Clear: 0.36 m | rejected
+→ Sent model #89 (mutation) to rover
+← Eval 130/1000 | Model #89 (mutation) | Fitness: -2.56 | Speed: 0.000 m/s | Clear: 0.32 m | rejected
+  💾 Saving archive with 5 cells of metadata
+  ✓ Exported 'cautious' model: fitness=1.16
+✓ Checkpoint saved: checkpoints/map_elites_eval_130.json
+  Coverage: 31.2% (5/16 cells)
+→ Sent model #90 (mutation) to rover
+← Eval 131/1000 | Model #90 (mutation) | Fitness: 4.68 | Speed: 0.140 m/s | Clear: 0.39 m | rejected
+→ Sent model #91 (mutation) to rover
+← Eval 132/1000 | Model #91 (mutation) | Fitness: 23.19 | Speed: 0.290 m/s | Clear: 0.41 m | rejected
+→ Sent model #92 (mutation) to rover
+← Eval 133/1000 | Model #92 (mutation) | Fitness: 25.26 | Speed: 0.296 m/s | Clear: 0.41 m | rejected
+→ Sent model #93 (mutation) to rover
+← Eval 134/1000 | Model #93 (mutation) | Fitness: -129.20 | Speed: 0.097 m/s | Clear: 0.32 m | rejected
+→ Sent model #94 (mutation) to rover
+← Eval 135/1000 | Model #94 (mutation) | Fitness: 0.21 | Speed: 0.000 m/s | Clear: 0.25 m | rejected
+→ Sent model #95 (random) to rover
+← Eval 136/1000 | Model #95 (random) | Fitness: -35.67 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #96 (mutation) to rover
+← Eval 137/1000 | Model #96 (mutation) | Fitness: 46.91 | Speed: 0.218 m/s | Clear: 0.42 m | rejected
+→ Sent model #97 (mutation) to rover
+← Eval 138/1000 | Model #97 (mutation) | Fitness: 2.25 | Speed: 0.230 m/s | Clear: 0.42 m | rejected
+→ Sent model #98 (mutation) to rover
+← Eval 139/1000 | Model #98 (mutation) | Fitness: 15.76 | Speed: 0.194 m/s | Clear: 0.36 m | rejected
+→ Sent model #99 (mutation) to rover
+← Eval 140/1000 | Model #99 (mutation) | Fitness: -5.79 | Speed: 0.000 m/s | Clear: 0.19 m | rejected
+  💾 Saving archive with 5 cells of metadata
+  ✓ Exported 'cautious' model: fitness=1.16
+✓ Checkpoint saved: checkpoints/map_elites_eval_140.json
+  Coverage: 31.2% (5/16 cells)
+→ Sent model #100 (random) to rover
+← Eval 141/1000 | Model #100 (random) | Fitness: 0.74 | Speed: 0.050 m/s | Clear: 0.32 m | rejected
+→ Sent model #101 (mutation) to rover
+← Eval 142/1000 | Model #101 (mutation) | Fitness: 4.60 | Speed: 0.181 m/s | Clear: 0.31 m | rejected
+→ Sent model #102 (mutation) to rover
+← Eval 143/1000 | Model #102 (mutation) | Fitness: 4.53 | Speed: 0.000 m/s | Clear: 0.25 m | rejected
+→ Sent model #103 (mutation) to rover
+← Eval 144/1000 | Model #103 (mutation) | Fitness: 2.02 | Speed: 0.004 m/s | Clear: 0.23 m | rejected
+→ Sent model #104 (mutation) to rover
+← Eval 145/1000 | Model #104 (mutation) | Fitness: 2.06 | Speed: 0.195 m/s | Clear: 0.35 m | rejected
+→ Sent model #105 (mutation) to rover
+← Eval 146/1000 | Model #105 (mutation) | Fitness: 9.05 | Speed: 0.281 m/s | Clear: 0.43 m | rejected
+→ Sent model #106 (mutation) to rover
+← Eval 147/1000 | Model #106 (mutation) | Fitness: 6.09 | Speed: 0.000 m/s | Clear: 0.43 m | ✓ ADDED (skipped (only 1.1% improvement))
+→ Sent model #107 (mutation) to rover
+← Eval 148/1000 | Model #107 (mutation) | Fitness: 5.33 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+→ Sent model #108 (mutation) to rover
+← Eval 149/1000 | Model #108 (mutation) | Fitness: 1.05 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+→ Sent model #109 (random) to rover
+← Eval 150/1000 | Model #109 (random) | Fitness: 1.52 | Speed: 0.061 m/s | Clear: 0.42 m | rejected
+  💾 Saving archive with 5 cells of metadata
+  ✓ Exported 'cautious' model: fitness=1.16
+✓ Checkpoint saved: checkpoints/map_elites_eval_150.json
+  Coverage: 31.2% (5/16 cells)
+→ Sent model #110 (mutation) to rover
+← Eval 151/1000 | Model #110 (mutation) | Fitness: 16.69 | Speed: 0.210 m/s | Clear: 0.35 m | rejected
+→ Sent model #111 (random) to rover
+← Eval 152/1000 | Model #111 (random) | Fitness: 0.23 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+→ Sent model #112 (mutation) to rover
+← Eval 153/1000 | Model #112 (mutation) | Fitness: 2.04 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+→ Sent model #113 (mutation) to rover
+← Eval 154/1000 | Model #113 (mutation) | Fitness: 0.42 | Speed: 0.000 m/s | Clear: 0.43 m | rejected
+→ Sent model #114 (mutation) to rover
+← Eval 155/1000 | Model #114 (mutation) | Fitness: 6.07 | Speed: 0.158 m/s | Clear: 0.41 m | rejected
+→ Sent model #115 (mutation) to rover
+← Eval 156/1000 | Model #115 (mutation) | Fitness: 4.51 | Speed: 0.440 m/s | Clear: 0.40 m | rejected
+→ Sent model #116 (mutation) to rover
+← Eval 157/1000 | Model #116 (mutation) | Fitness: 3.86 | Speed: 0.048 m/s | Clear: 0.42 m | rejected
+→ Sent model #117 (mutation) to rover
+← Eval 158/1000 | Model #117 (mutation) | Fitness: 39.25 | Speed: 0.364 m/s | Clear: 0.41 m | rejected
+→ Sent model #118 (mutation) to rover
+← Eval 159/1000 | Model #118 (mutation) | Fitness: 2.71 | Speed: 0.265 m/s | Clear: 0.42 m | rejected
+→ Sent model #119 (mutation) to rover
+← Eval 160/1000 | Model #119 (mutation) | Fitness: 3.41 | Speed: 0.001 m/s | Clear: 0.43 m | rejected
+  💾 Saving archive with 5 cells of metadata
+  ✓ Exported 'cautious' model: fitness=1.16
+✓ Checkpoint saved: checkpoints/map_elites_eval_160.json
+  Coverage: 31.2% (5/16 cells)
+→ Sent model #120 (mutation) to rover
+← Eval 161/1000 | Model #120 (mutation) | Fitness: 3.91 | Speed: 0.001 m/s | Clear: 0.43 m | rejected
+→ Sent model #121 (mutation) to rover
+← Eval 162/1000 | Model #121 (mutation) | Fitness: 15.79 | Speed: 0.243 m/s | Clear: 0.39 m | rejected
+→ Sent model #122 (random) to rover
+← Eval 163/1000 | Model #122 (random) | Fitness: 0.75 | Speed: 0.086 m/s | Clear: 0.39 m | rejected
+→ Sent model #123 (mutation) to rover
+← Eval 164/1000 | Model #123 (mutation) | Fitness: -0.90 | Speed: 0.046 m/s | Clear: 0.36 m | rejected
+→ Sent model #124 (mutation) to rover
