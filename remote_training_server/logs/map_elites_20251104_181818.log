@@ -30,3 +30,22 @@ Waiting for rover to connect...
 
 → Sent model #0 (random) to rover
 → Sent model #1 (random) to rover
+← Eval 1/1000 | Model #1 (random) | Fitness: 42.68 | Speed: 0.065 m/s | Clear: 0.42 m | rejected
+→ Sent model #2 (random) to rover
+← Eval 2/1000 | Model #2 (random) | Fitness: -0.31 | Speed: 0.081 m/s | Clear: 0.42 m | rejected
+→ Sent model #3 (mutation) to rover
+← Eval 3/1000 | Model #3 (mutation) | Fitness: 0.21 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #4 (random) to rover
+← Eval 4/1000 | Model #4 (random) | Fitness: 0.06 | Speed: 0.051 m/s | Clear: 0.42 m | rejected
+→ Sent model #5 (mutation) to rover
+← Eval 5/1000 | Model #5 (mutation) | Fitness: 1.94 | Speed: 0.401 m/s | Clear: 0.42 m | rejected
+→ Sent model #6 (mutation) to rover
+← Eval 6/1000 | Model #6 (mutation) | Fitness: -6.03 | Speed: 0.217 m/s | Clear: 0.40 m | rejected
+→ Sent model #7 (mutation) to rover
+  → Requesting trajectory for tournament (66.0% fitness improvement)...
+← Eval 7/1000 | Model #7 (mutation) | Fitness: 13.74 | Speed: 0.301 m/s | Clear: 0.34 m | ✓ ADDED (66.0% fitness improvement)
+← Received trajectory data for model #7
+  📦 Caching model #7 (cell (3, 0), 600 samples) for tournament
+  ✓ Ready for tournament selection (400 candidates)
+  🏆 Running goal-oriented tournament (400 candidates)
+  🏆 Running tournament selection (400 candidates)...

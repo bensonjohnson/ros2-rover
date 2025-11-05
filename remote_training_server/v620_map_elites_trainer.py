@@ -736,13 +736,20 @@ class MAPElitesTrainer:
         print("Starting MAP-Elites Training")
         print("=" * 60)
         print()
-        print(f"Target evaluations: {num_evaluations}")
+
+        # Resume from checkpoint if loaded
+        evaluation_count = self.archive.total_evaluations
+
+        if evaluation_count > 0:
+            print(f"Resuming from evaluation {evaluation_count}")
+            print(f"Target evaluations: {num_evaluations} (need {num_evaluations - evaluation_count} more)")
+        else:
+            print(f"Target evaluations: {num_evaluations}")
+
         print(f"Archive dimensions: {len(self.archive.speed_bins)-1} × {len(self.archive.clearance_bins)-1}")
         print()
         print("Waiting for rover to connect...")
         print()
-
-        evaluation_count = 0
 
         while evaluation_count < num_evaluations:
             try:
