@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import zmq
+import zstandard as zstd
 
 from model_architectures import RGBDEncoder, PolicyHead  # Reuse network components
 
@@ -329,20 +330,22 @@ class MAPElitesTrainer:
                 param.data *= 0.1  # Scale down random init
 
         # Inject bias into policy head output layer
-        # policy_head.fc_out is the final layer that outputs [linear_vel, angular_vel]
+        # policy_head.policy is a Sequential, last layer (-1) outputs [linear_vel, angular_vel]
+        final_layer = model.policy_head.policy[-1]  # Last Linear layer
+
         with torch.no_grad():
             if policy_type == 'cautious':
                 # Bias: slow forward, moderate turning
-                model.policy_head.fc_out.bias[0] = 0.2  # linear: slow
-                model.policy_head.fc_out.bias[1] = 0.0  # angular: neutral
+                final_layer.bias[0] = 0.2  # linear: slow
+                final_layer.bias[1] = 0.0  # angular: neutral
             elif policy_type == 'forward':
                 # Bias: fast forward, minimal turning
-                model.policy_head.fc_out.bias[0] = 0.6  # linear: fast
-                model.policy_head.fc_out.bias[1] = 0.0  # angular: neutral
+                final_layer.bias[0] = 0.6  # linear: fast
+                final_layer.bias[1] = 0.0  # angular: neutral
             elif policy_type == 'explorer':
                 # Bias: moderate forward, slight turning tendency
-                model.policy_head.fc_out.bias[0] = 0.4  # linear: moderate
-                model.policy_head.fc_out.bias[1] = 0.1  # angular: slight turn
+                final_layer.bias[0] = 0.4  # linear: moderate
+                final_layer.bias[1] = 0.1  # angular: slight turn
 
         return model.state_dict()
 
@@ -1010,10 +1013,10 @@ class MAPElitesTrainer:
 
                     # Decompress trajectory data
                     if compressed:
-                        import lz4.frame
-                        # Decompress RGB and depth
-                        rgb_bytes = lz4.frame.decompress(trajectory_raw['rgb'])
-                        depth_bytes = lz4.frame.decompress(trajectory_raw['depth'])
+                        # Decompress RGB and depth using Zstandard
+                        dctx = zstd.ZstdDecompressor()
+                        rgb_bytes = dctx.decompress(trajectory_raw['rgb'])
+                        depth_bytes = dctx.decompress(trajectory_raw['depth'])
 
                         # Reconstruct numpy arrays
                         rgb_array = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(trajectory_raw['rgb_shape'])
