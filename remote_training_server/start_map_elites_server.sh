@@ -1,23 +1,26 @@
 #!/bin/bash
 
-# MAP-Elites Server Startup Script for V620
-# Trains rover driving policies using quality-diversity evolution
+# Single-Population Evolution Server Startup Script for V620
+# Trains a single adaptive rover driving policy using evolutionary algorithms
 
 set -e
 
 echo "=================================================="
-echo "MAP-Elites Training Server (V620)"
+echo "Evolution Training Server (V620)"
 echo "=================================================="
 
 # Configuration
 PORT=${1:-5556}
 NUM_EVALUATIONS=${2:-1000}
 CHECKPOINT_DIR=${3:-./checkpoints}
+INITIAL_POP=${4:-10}
+MAX_POP=${5:-25}
 
 echo "Configuration:"
 echo "  ZeroMQ Port: ${PORT}"
 echo "  Target Evaluations: ${NUM_EVALUATIONS}"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
+echo "  Population Size: ${INITIAL_POP} → ${MAX_POP} (adaptive)"
 echo ""
 
 # Check we're in the right directory
@@ -101,7 +104,7 @@ echo "✓ Port ${PORT} available"
 # Set up signal handling
 cleanup() {
   echo ""
-  echo "🛑 Shutting down MAP-Elites server..."
+  echo "🛑 Shutting down Evolution server..."
   kill $TRAINER_PID 2>/dev/null || true
   echo "✅ Shutdown complete"
   exit 0
@@ -109,39 +112,50 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# Start MAP-Elites server
+# Start Evolution server
 echo ""
 echo "=================================================="
-echo "Starting MAP-Elites Trainer"
+echo "Starting Evolution Trainer"
 echo "=================================================="
 echo ""
 echo "Listening for episode results on port ${PORT}"
 echo "Target: ${NUM_EVALUATIONS} episode evaluations"
+echo "Population size: ${POPULATION_SIZE} models"
 echo ""
 echo "Press Ctrl+C to stop"
 echo ""
 
-LOG_FILE="logs/map_elites_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="logs/evolution_$(date +%Y%m%d_%H%M%S).log"
 
 python3 v620_map_elites_trainer.py \
   --port ${PORT} \
   --num-evaluations ${NUM_EVALUATIONS} \
   --checkpoint-dir ${CHECKPOINT_DIR} \
+  --initial-population ${INITIAL_POP} \
+  --max-population ${MAX_POP} \
   2>&1 | tee "${LOG_FILE}" &
 
 TRAINER_PID=$!
 
-echo "MAP-Elites server PID: ${TRAINER_PID}"
+echo "Evolution server PID: ${TRAINER_PID}"
 echo "Log file: ${LOG_FILE}"
 echo ""
-echo "Archive will contain diverse driving behaviors:"
-echo "  - Cautious: slow + safe"
-echo "  - Balanced: medium speed + medium clearance"
-echo "  - Aggressive: fast + risky"
-echo "  - Explorer: medium speed + safe"
+echo "Advanced features enabled:"
+echo "  ✓ Adaptive population (10→25 models)"
+echo "  ✓ Adaptive tournament sizes (75-500 candidates)"
+echo "  ✓ Multi-tournament for champions (3x parallel)"
+echo "  ✓ Diversity bonus (explores novel behaviors)"
+echo "  ✓ Warmup acceleration (heuristic seeding)"
+echo "  ✓ Variable episode duration (30-75s)"
 echo ""
-echo "Visualize archive with:"
-echo "  python3 visualize_map_elites.py checkpoints/map_elites_final.json"
+echo "The model will learn to:"
+echo "  - Navigate collision-free through obstacles"
+echo "  - Adapt speed based on clearance (fast when safe, slow when risky)"
+echo "  - Use smooth, efficient motion patterns"
+echo "  - Prefer forward movement over spinning"
+echo ""
+echo "Best model will be exported to:"
+echo "  checkpoints/best_models/best_final.pt"
 echo ""
 
 # Wait for trainer
