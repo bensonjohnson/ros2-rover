@@ -1013,10 +1013,19 @@ class MAPElitesTrainer:
 
                     # Decompress trajectory data
                     if compressed:
-                        # Decompress RGB and depth using Zstandard
-                        dctx = zstd.ZstdDecompressor()
-                        rgb_bytes = dctx.decompress(trajectory_raw['rgb'])
-                        depth_bytes = dctx.decompress(trajectory_raw['depth'])
+                        # Support both Zstandard (new) and LZ4 (old) for backward compatibility
+                        compression_type = message.get('compression', 'lz4')  # Default to lz4 for old clients
+
+                        if compression_type == 'zstd':
+                            # Zstandard decompression
+                            dctx = zstd.ZstdDecompressor()
+                            rgb_bytes = dctx.decompress(trajectory_raw['rgb'])
+                            depth_bytes = dctx.decompress(trajectory_raw['depth'])
+                        else:
+                            # LZ4 decompression (backward compatibility)
+                            import lz4.frame
+                            rgb_bytes = lz4.frame.decompress(trajectory_raw['rgb'])
+                            depth_bytes = lz4.frame.decompress(trajectory_raw['depth'])
 
                         # Reconstruct numpy arrays
                         rgb_array = np.frombuffer(rgb_bytes, dtype=np.uint8).reshape(trajectory_raw['rgb_shape'])

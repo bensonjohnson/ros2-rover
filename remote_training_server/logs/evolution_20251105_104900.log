@@ -1,0 +1,34 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Target evaluations: 1000
+Population size: 10
+
+Waiting for rover to connect...
+
+→ Sent model #0 (heuristic_cautious) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 30s)...
+← Eval 1/1000 | Model #0 (heuristic_cautious) | Fitness: 2.39 | Speed: 0.000 m/s | Clear: 0.43 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+← Received trajectory data for model #0
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 1018, in run
+    rgb_bytes = dctx.decompress(trajectory_raw['rgb'])
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+zstandard.backend_c.ZstdError: error determining content size from frame header
+❌ Error in training loop: error determining content size from frame header
+→ Sent model #1 (heuristic_forward) to rover
