@@ -1,0 +1,201 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 50 candidates
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 1/1000 | Model #0 (random) | Fitness: 0.04 | Speed: 0.062 m/s | Clear: 0.41 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #0
+  Refining model #0 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000001
+    Refinement epoch 10/20, loss: 0.000001
+    Refinement epoch 15/20, loss: 0.000000
+    Refinement epoch 20/20, loss: 0.000000
+  ✓ Gradient refinement complete, avg loss: 0.000001
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+  📦 Cached for tournament + buffer (1 trajectories stored)
+→ Sent model #1 (random) to rover
+← Eval 2/1000 | Model #1 (random) | Fitness: -164.98 | Speed: 0.078 m/s | Clear: 0.36 m | rejected
+→ Sent model #2 (random) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 3/1000 | Model #2 (random) | Fitness: 0.00 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #2
+  Refining model #2 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000054
+    Refinement epoch 10/20, loss: 0.000024
+    Refinement epoch 15/20, loss: 0.000021
+    Refinement epoch 20/20, loss: 0.000010
+  ✓ Gradient refinement complete, avg loss: 0.000050
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #3 (random) to rover
+  → Requesting trajectory data (139.1% fitness improvement)...
+← Eval 4/1000 | Model #3 (random) | Fitness: 0.01 | Speed: 0.033 m/s | Clear: 0.41 m | ✓ ADDED (139.1% fitness improvement)
+← Received trajectory data for model #3
+  Refining model #3 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000177
+    Refinement epoch 10/20, loss: 0.000151
+    Refinement epoch 15/20, loss: 0.000062
+    Refinement epoch 20/20, loss: 0.000008
+  ✓ Gradient refinement complete, avg loss: 0.000134
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #4 (random) to rover
+  → Requesting trajectory data (109.1% fitness improvement)...
+← Eval 5/1000 | Model #4 (random) | Fitness: 0.02 | Speed: 0.049 m/s | Clear: 0.42 m | ✓ ADDED (109.1% fitness improvement)
+← Received trajectory data for model #4
+  Refining model #4 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.001572
+    Refinement epoch 10/20, loss: 0.001062
+    Refinement epoch 15/20, loss: 0.000993
+    Refinement epoch 20/20, loss: 0.000903
+  ✓ Gradient refinement complete, avg loss: 0.001285
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #5 (random) to rover
+← Eval 6/1000 | Model #5 (random) | Fitness: 0.02 | Speed: 0.056 m/s | Clear: 0.42 m | rejected
+→ Sent model #6 (random) to rover
+← Eval 7/1000 | Model #6 (random) | Fitness: 0.00 | Speed: 0.046 m/s | Clear: 0.41 m | rejected
+→ Sent model #7 (random) to rover
+← Eval 8/1000 | Model #7 (random) | Fitness: 0.01 | Speed: 0.046 m/s | Clear: 0.41 m | rejected
+→ Sent model #8 (random) to rover
+← Eval 9/1000 | Model #8 (random) | Fitness: 0.01 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #9 (random) to rover
+  → Requesting trajectory data (12.6% fitness improvement)...
+← Eval 10/1000 | Model #9 (random) | Fitness: 0.03 | Speed: 0.040 m/s | Clear: 0.40 m | ✓ ADDED (12.6% fitness improvement)
+← Received trajectory data for model #9
+  Refining model #9 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.001402
+    Refinement epoch 10/20, loss: 0.001049
+    Refinement epoch 15/20, loss: 0.000978
+    Refinement epoch 20/20, loss: 0.000823
+  ✓ Gradient refinement complete, avg loss: 0.001211
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #10 (random) to rover
+  → Requesting trajectory data (5142905.2% fitness improvement)...
+← Eval 11/1000 | Model #10 (random) | Fitness: 2003.64 | Speed: 0.087 m/s | Clear: 0.40 m | ✓ ADDED (5142905.2% fitness improvement)
+← Received trajectory data for model #10
+  Refining model #10 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.002137
+    Refinement epoch 10/20, loss: 0.001376
+    Refinement epoch 15/20, loss: 0.001352
+    Refinement epoch 20/20, loss: 0.001301
+  ✓ Gradient refinement complete, avg loss: 0.001744
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #11 (random) to rover
+← Eval 12/1000 | Model #11 (random) | Fitness: 0.01 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #12 (random) to rover
+← Eval 13/1000 | Model #12 (random) | Fitness: 0.06 | Speed: 0.052 m/s | Clear: 0.40 m | rejected
+→ Sent model #13 (random) to rover
+← Eval 14/1000 | Model #13 (random) | Fitness: 0.02 | Speed: 0.051 m/s | Clear: 0.40 m | rejected
+→ Sent model #14 (random) to rover
+← Eval 15/1000 | Model #14 (random) | Fitness: 111.04 | Speed: 0.067 m/s | Clear: 0.39 m | rejected
+→ Sent model #15 (random) to rover
+← Eval 16/1000 | Model #15 (random) | Fitness: 0.03 | Speed: 0.080 m/s | Clear: 0.38 m | rejected
+→ Sent model #16 (random) to rover
+← Eval 17/1000 | Model #16 (random) | Fitness: 0.00 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #17 (random) to rover
+← Eval 18/1000 | Model #17 (random) | Fitness: 0.03 | Speed: 0.083 m/s | Clear: 0.37 m | rejected
+→ Sent model #18 (random) to rover
+← Eval 19/1000 | Model #18 (random) | Fitness: 0.08 | Speed: 0.073 m/s | Clear: 0.38 m | rejected
+→ Sent model #19 (random) to rover
+  → Requesting trajectory data (23.7% fitness improvement)...
+← Eval 20/1000 | Model #19 (random) | Fitness: 0.03 | Speed: 0.043 m/s | Clear: 0.37 m | ✓ ADDED (23.7% fitness improvement)
+← Received trajectory data for model #19
+  Refining model #19 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000820
+    Refinement epoch 10/20, loss: 0.000551
+    Refinement epoch 15/20, loss: 0.000292
+    Refinement epoch 20/20, loss: 0.000090
+  ✓ Gradient refinement complete, avg loss: 0.000522
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+  🎯 Using tournament selection on refined model
+  🏆 Running tournament selection (50 candidates)...
+    Evaluated 10/50 candidates...
+    Evaluated 20/50 candidates...
+    Evaluated 30/50 candidates...
+    Evaluated 40/50 candidates...
+    Evaluated 50/50 candidates...
+    Top 5 mutations:
+      ★ #15: fitness=-0.003325 (std=0.0219)
+        #13: fitness=-0.004299 (std=0.0161)
+        #5: fitness=-0.004301 (std=0.0153)
+        #24: fitness=-0.004666 (std=0.0108)
+        #29: fitness=-0.004734 (std=0.0136)
+  ✓ Best mutation selected: fitness=-0.003325 (std=0.0219)
+→ Sent model #20 (tournament) to rover
+→ Sent model #21 (random) to rover
+→ Sent model #22 (random) to rover
+← Eval 21/1000 | Model #22 (random) | Fitness: -10.00 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 572, in run
+    model_state, gen_type = self.generate_model_for_evaluation()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 533, in generate_model_for_evaluation
+    parent_state = self.archive.get_random_elite()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 135, in get_random_elite
+    cell_idx = np.random.choice(list(self.archive.keys()))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "numpy/random/mtrand.pyx", line 966, in numpy.random.mtrand.RandomState.choice
+ValueError: a must be 1-dimensional
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 572, in run
+    model_state, gen_type = self.generate_model_for_evaluation()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 533, in generate_model_for_evaluation
+    parent_state = self.archive.get_random_elite()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 135, in get_random_elite
+    cell_idx = np.random.choice(list(self.archive.keys()))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "numpy/random/mtrand.pyx", line 966, in numpy.random.mtrand.RandomState.choice
+ValueError: a must be 1-dimensional
+❌ Error in training loop: a must be 1-dimensional
+❌ Error in training loop: a must be 1-dimensional
+→ Sent model #23 (random) to rover
+← Eval 22/1000 | Model #23 (random) | Fitness: 0.00 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 572, in run
+    model_state, gen_type = self.generate_model_for_evaluation()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 533, in generate_model_for_evaluation
+    parent_state = self.archive.get_random_elite()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 135, in get_random_elite
+    cell_idx = np.random.choice(list(self.archive.keys()))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "numpy/random/mtrand.pyx", line 966, in numpy.random.mtrand.RandomState.choice
+ValueError: a must be 1-dimensional
+❌ Error in training loop: a must be 1-dimensional
+→ Sent model #24 (random) to rover

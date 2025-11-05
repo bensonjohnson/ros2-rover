@@ -78,7 +78,8 @@ class MAPElitesArchive:
         speed_idx = max(0, min(len(self.speed_bins) - 2, speed_idx))
         clearance_idx = max(0, min(len(self.clearance_bins) - 2, clearance_idx))
 
-        return (speed_idx, clearance_idx)
+        # Convert to Python int to avoid numpy types in string keys
+        return (int(speed_idx), int(clearance_idx))
 
     def add(
         self,
@@ -990,11 +991,24 @@ class MAPElitesTrainer:
             model_state = torch.load(model_file, map_location='cpu')
 
             # Get metadata from the archive dict stored in JSON
-            cell_key = f"({speed_idx}, {clearance_idx})"
+            # Try multiple key formats for compatibility with old checkpoints
+            cell_key_formats = [
+                f"({speed_idx}, {clearance_idx})",  # Standard format
+                f"(np.int64({speed_idx}), {clearance_idx})",  # Old format with numpy type
+                f"({speed_idx}, np.int64({clearance_idx}))",  # Old format (rare)
+                f"(np.int64({speed_idx}), np.int64({clearance_idx}))",  # Old format both
+            ]
 
-            if cell_key in archive_metadata:
-                # New checkpoint format with metadata
-                cell_data = archive_metadata[cell_key]
+            cell_data = None
+            found_key = None
+            for key_format in cell_key_formats:
+                if key_format in archive_metadata:
+                    cell_data = archive_metadata[key_format]
+                    found_key = key_format
+                    break
+
+            if cell_data is not None:
+                # Found metadata in checkpoint
                 self.archive.archive[(speed_idx, clearance_idx)] = {
                     'model': model_state,
                     'fitness': cell_data['fitness'],
@@ -1005,7 +1019,7 @@ class MAPElitesTrainer:
                 loaded_count += 1
             else:
                 # Old checkpoint format without metadata - use -inf fitness so it gets replaced
-                print(f"  ⚠ No metadata for cell {cell_key}, will be re-evaluated")
+                print(f"  ⚠ No metadata for cell ({speed_idx}, {clearance_idx}), will be re-evaluated")
                 self.archive.archive[(speed_idx, clearance_idx)] = {
                     'model': model_state,
                     'fitness': float('-inf'),  # Ensures any real evaluation replaces this

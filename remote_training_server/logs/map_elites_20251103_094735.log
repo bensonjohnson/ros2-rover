@@ -1,0 +1,171 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 50 candidates
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 1/1000 | Model #0 (random) | Fitness: -0.41 | Speed: 0.069 m/s | Clear: 0.40 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #0
+  Refining model #0 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000000
+    Refinement epoch 10/20, loss: 0.000000
+    Refinement epoch 15/20, loss: 0.000000
+    Refinement epoch 20/20, loss: 0.000000
+  ✓ Gradient refinement complete, avg loss: 0.000000
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+  📦 Cached for tournament + buffer (1 trajectories stored)
+→ Sent model #1 (random) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 2/1000 | Model #1 (random) | Fitness: 2.20 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #1
+  Refining model #1 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000244
+    Refinement epoch 10/20, loss: 0.000067
+    Refinement epoch 15/20, loss: 0.000020
+    Refinement epoch 20/20, loss: 0.000015
+  ✓ Gradient refinement complete, avg loss: 0.000354
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #2 (random) to rover
+← Eval 3/1000 | Model #2 (random) | Fitness: 1.71 | Speed: 0.041 m/s | Clear: 0.39 m | rejected
+→ Sent model #3 (random) to rover
+  → Requesting trajectory data (280.2% fitness improvement)...
+← Eval 4/1000 | Model #3 (random) | Fitness: 0.75 | Speed: 0.071 m/s | Clear: 0.39 m | ✓ ADDED (280.2% fitness improvement)
+← Received trajectory data for model #3
+  Refining model #3 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000992
+    Refinement epoch 10/20, loss: 0.000646
+    Refinement epoch 15/20, loss: 0.000457
+    Refinement epoch 20/20, loss: 0.000394
+  ✓ Gradient refinement complete, avg loss: 0.001019
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+→ Sent model #4 (random) to rover
+← Eval 5/1000 | Model #4 (random) | Fitness: 0.73 | Speed: 0.040 m/s | Clear: 0.39 m | rejected
+→ Sent model #5 (random) to rover
+← Eval 6/1000 | Model #5 (random) | Fitness: 0.73 | Speed: 0.072 m/s | Clear: 0.38 m | rejected
+→ Sent model #6 (random) to rover
+← Eval 7/1000 | Model #6 (random) | Fitness: 0.71 | Speed: 0.041 m/s | Clear: 0.36 m | rejected
+→ Sent model #7 (random) to rover
+← Eval 8/1000 | Model #7 (random) | Fitness: 0.69 | Speed: 0.042 m/s | Clear: 0.38 m | rejected
+→ Sent model #8 (random) to rover
+← Eval 9/1000 | Model #8 (random) | Fitness: 0.68 | Speed: 0.087 m/s | Clear: 0.36 m | rejected
+→ Sent model #9 (random) to rover
+  → Requesting trajectory data (95.9% fitness improvement)...
+← Eval 10/1000 | Model #9 (random) | Fitness: 4.31 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED (95.9% fitness improvement)
+  💾 Saving archive with 2 cells of metadata
+✓ Checkpoint saved: checkpoints/map_elites_eval_10.json
+  Coverage: 12.5% (2/16 cells)
+← Received trajectory data for model #9
+  Refining model #9 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000001
+    Refinement epoch 10/20, loss: 0.000000
+    Refinement epoch 15/20, loss: 0.000000
+    Refinement epoch 20/20, loss: 0.000000
+  ✓ Gradient refinement complete, avg loss: 0.000005
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (2 trajectories stored)
+  🎯 Using tournament selection on refined model
+  🏆 Running tournament selection (50 candidates)...
+    Evaluated 10/50 candidates...
+    Evaluated 20/50 candidates...
+    Evaluated 30/50 candidates...
+    Evaluated 40/50 candidates...
+    Evaluated 50/50 candidates...
+    Top 5 mutations:
+      ★ #45: fitness=-0.003964 (std=0.0177)
+        #33: fitness=-0.004318 (std=0.0110)
+        #31: fitness=-0.004520 (std=0.0202)
+        #9: fitness=-0.004602 (std=0.0144)
+        #50: fitness=-0.004947 (std=0.0113)
+  ✓ Best mutation selected: fitness=-0.003964 (std=0.0177)
+→ Sent model #10 (tournament) to rover
+← Eval 11/1000 | Model #10 (tournament) | Fitness: 4.62 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED (skipped (only 7.0% improvement))
+→ Sent model #11 (mutation) to rover
+← Eval 12/1000 | Model #11 (mutation) | Fitness: 1.45 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #12 (mutation) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 13/1000 | Model #12 (mutation) | Fitness: -4.85 | Speed: 0.111 m/s | Clear: 0.35 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #12
+  Refining model #12 (cell (np.int64(2), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000091
+    Refinement epoch 10/20, loss: 0.000060
+    Refinement epoch 15/20, loss: 0.000056
+    Refinement epoch 20/20, loss: 0.000052
+  ✓ Gradient refinement complete, avg loss: 0.000170
+  ✓ Archive cell (np.int64(2), 0) updated with refined model
+  📦 Cached for tournament + buffer (3 trajectories stored)
+  🎯 Using tournament selection on refined model
+  🏆 Running tournament selection (50 candidates)...
+    Evaluated 10/50 candidates...
+    Evaluated 20/50 candidates...
+    Evaluated 30/50 candidates...
+    Evaluated 40/50 candidates...
+    Evaluated 50/50 candidates...
+    Top 5 mutations:
+      ★ #29: fitness=-0.009416 (std=0.0133)
+        #43: fitness=-0.009581 (std=0.0130)
+        #19: fitness=-0.010180 (std=0.0188)
+        #36: fitness=-0.010282 (std=0.0161)
+        #11: fitness=-0.010402 (std=0.0101)
+  ✓ Best mutation selected: fitness=-0.009416 (std=0.0133)
+→ Sent model #13 (tournament) to rover
+← Eval 14/1000 | Model #13 (tournament) | Fitness: 4.78 | Speed: 0.000 m/s | Clear: 0.29 m | ✓ ADDED (skipped (only 3.6% improvement))
+→ Sent model #14 (mutation) to rover
+  → Requesting trajectory data (76.3% fitness improvement)...
+← Eval 15/1000 | Model #14 (mutation) | Fitness: -1.15 | Speed: 0.135 m/s | Clear: 0.35 m | ✓ ADDED (76.3% fitness improvement)
+← Received trajectory data for model #14
+  Refining model #14 (cell (np.int64(2), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Mixed in 1 trajectories from buffer
+    Refinement epoch 5/20, loss: 0.000301
+    Refinement epoch 10/20, loss: 0.000230
+    Refinement epoch 15/20, loss: 0.000191
+    Refinement epoch 20/20, loss: 0.000183
+  ✓ Gradient refinement complete, avg loss: 0.000330
+  ✓ Archive cell (np.int64(2), 0) updated with refined model
+  📦 Cached for tournament + buffer (3 trajectories stored)
+  🎯 Using tournament selection on refined model
+  🏆 Running tournament selection (50 candidates)...
+    Evaluated 10/50 candidates...
+    Evaluated 20/50 candidates...
+    Evaluated 30/50 candidates...
+    Evaluated 40/50 candidates...
+    Evaluated 50/50 candidates...
+    Top 5 mutations:
+      ★ #48: fitness=-0.017700 (std=0.0187)
+        #22: fitness=-0.018226 (std=0.0106)
+        #29: fitness=-0.018342 (std=0.0263)
+        #27: fitness=-0.018894 (std=0.0130)
+        #47: fitness=-0.018897 (std=0.0176)
+  ✓ Best mutation selected: fitness=-0.017700 (std=0.0187)
+→ Sent model #15 (tournament) to rover
+← Eval 16/1000 | Model #15 (tournament) | Fitness: -133.20 | Speed: 0.085 m/s | Clear: 0.34 m | rejected
+→ Sent model #16 (mutation) to rover
+← Eval 17/1000 | Model #16 (mutation) | Fitness: -2403.28 | Speed: 0.111 m/s | Clear: 0.33 m | rejected
+→ Sent model #17 (mutation) to rover
+← Eval 18/1000 | Model #17 (mutation) | Fitness: -4280.32 | Speed: 0.134 m/s | Clear: 0.30 m | rejected
+→ Sent model #18 (mutation) to rover

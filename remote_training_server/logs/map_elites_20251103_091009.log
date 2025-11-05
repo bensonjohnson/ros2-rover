@@ -1,0 +1,55 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 50 candidates
+
+🔄 Resuming from checkpoint: map_elites_eval_20.json
+  Archive metadata has 0 entries
+  Found 4 model files in checkpoints/map_elites_models
+  ⚠ No metadata for cell (1, 0), using defaults
+  ⚠ No metadata for cell (0, 0), using defaults
+  ⚠ No metadata for cell (2, 0), using defaults
+  ⚠ No metadata for cell (3, 0), using defaults
+  Loaded 4/4 models from checkpoint
+✓ Checkpoint loaded
+
+Archive Summary:
+  Coverage: 25.0% (4/16 cells)
+  Total evaluations: 20
+  Archive additions: 8
+  Fitness - Max: 0.00, Mean: 0.00, Min: 0.00
+  Avg speed: 0.000 m/s
+  Avg clearance: 0.00 m
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (mutation) to rover
+← Eval 1/1000 | Model #0 (mutation) | Fitness: -339.42 | Speed: 0.401 m/s | Clear: 0.38 m | rejected
+→ Sent model #1 (mutation) to rover
+  → Requesting trajectory data (20931534.9% fitness improvement)...
+← Eval 2/1000 | Model #1 (mutation) | Fitness: 0.21 | Speed: 0.000 m/s | Clear: 0.46 m | ✓ ADDED (20931534.9% fitness improvement)
+← Received trajectory data for model #1
+  Refining model #1 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000000
+    Refinement epoch 10/20, loss: 0.000000
+    Refinement epoch 15/20, loss: 0.000000
+    Refinement epoch 20/20, loss: 0.000000
+  ✓ Gradient refinement complete, avg loss: 0.000110
+  ✓ Archive cell (0, 0) updated with refined model
+  📦 Cached for tournament + buffer (1 trajectories stored)
+  🎯 Using tournament selection on refined model
+  🏆 Running tournament selection (50 candidates)...
+    Evaluated 10/50 candidates...
+    Evaluated 20/50 candidates...
+    Evaluated 30/50 candidates...
+    Evaluated 40/50 candidates...

@@ -1,0 +1,51 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory data for refinement...
+← Eval 1/1000 | Model #0 (random) | Fitness: 15.51 | Speed: 0.073 m/s | Clear: 0.37 m | ✓ ADDED
+← Received trajectory data for model #0
+  Refining model #0 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000109
+    Refinement epoch 10/20, loss: 0.000107
+    Refinement epoch 15/20, loss: 0.000106
+    Refinement epoch 20/20, loss: 0.000111
+  ✓ Gradient refinement complete, avg loss: 0.000110
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+→ Sent model #1 (random) to rover
+  → Requesting trajectory data for refinement...
+← Eval 2/1000 | Model #1 (random) | Fitness: 0.05 | Speed: 0.032 m/s | Clear: 0.36 m | ✓ ADDED
+← Received trajectory data for model #1
+  Refining model #1 (cell (0, 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000015
+    Refinement epoch 10/20, loss: 0.000008
+    Refinement epoch 15/20, loss: 0.000005
+    Refinement epoch 20/20, loss: 0.000005
+  ✓ Gradient refinement complete, avg loss: 0.000010
+  ✓ Archive cell (0, 0) updated with refined model
+→ Sent model #2 (random) to rover
+← Eval 3/1000 | Model #2 (random) | Fitness: 0.05 | Speed: 0.064 m/s | Clear: 0.34 m | rejected
+→ Sent model #3 (random) to rover
+← Eval 4/1000 | Model #3 (random) | Fitness: 0.03 | Speed: 0.082 m/s | Clear: 0.40 m | rejected
+→ Sent model #4 (random) to rover
+← Eval 5/1000 | Model #4 (random) | Fitness: 0.01 | Speed: 0.000 m/s | Clear: 0.41 m | rejected
+→ Sent model #5 (random) to rover
+← Eval 6/1000 | Model #5 (random) | Fitness: 0.02 | Speed: 0.041 m/s | Clear: 0.41 m | rejected
+→ Sent model #6 (random) to rover
+← Eval 7/1000 | Model #6 (random) | Fitness: 0.02 | Speed: 0.000 m/s | Clear: 0.42 m | rejected
+→ Sent model #7 (random) to rover
