@@ -1,0 +1,32 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 400 candidates
+
+🔄 Resuming from checkpoint: map_elites_eval_40.json
+  Archive metadata has 4 entries
+  Found 4 model files in checkpoints/map_elites_models
+  Loaded 4/4 models from checkpoint
+✓ Checkpoint loaded
+
+Archive Summary:
+  Coverage: 25.0% (4/16 cells)
+  Total evaluations: 40
+  Archive additions: 9
+  Fitness - Max: 9223.25, Mean: 2311.99, Min: 5.80
+  Avg speed: 0.108 m/s
+  Avg clearance: 0.39 m
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+→ Sent model #1 (random) to rover

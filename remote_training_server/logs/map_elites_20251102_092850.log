@@ -1,0 +1,28 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory data for refinement...
+← Eval 1/1000 | Model #0 (random) | Fitness: 0.00 | Speed: 0.000 m/s | Clear: 0.43 m | ✓ ADDED
+← Received trajectory data for model #0 (600 samples)
+  Refining model #0 (cell (0, 0)) with gradient descent...
+/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py:271: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:213.)
+  rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0  # (N, 3, H, W)
+    Refinement epoch 5/10, loss: 0.000000
+    Refinement epoch 10/10, loss: 0.000000
+  ✓ Gradient refinement complete, avg loss: 0.000000
+  ✓ Archive cell (0, 0) updated with refined model
+→ Sent model #1 (random) to rover

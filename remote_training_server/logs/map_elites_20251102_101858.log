@@ -1,0 +1,31 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+  Tournament selection: 50 candidates
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory data (new behavior cell)...
+← Eval 1/1000 | Model #0 (random) | Fitness: 0.01 | Speed: 0.081 m/s | Clear: 0.41 m | ✓ ADDED (new behavior cell)
+← Received trajectory data for model #0
+  Refining model #0 (cell (np.int64(1), 0), 600 samples)...
+  🎓 Running gradient descent (20 epochs)... rover will wait
+    Refinement epoch 5/20, loss: 0.000009
+    Refinement epoch 10/20, loss: 0.000009
+    Refinement epoch 15/20, loss: 0.000009
+    Refinement epoch 20/20, loss: 0.000008
+  ✓ Gradient refinement complete, avg loss: 0.000009
+  ✓ Archive cell (np.int64(1), 0) updated with refined model
+  📦 Cached for tournament + buffer (1 trajectories stored)

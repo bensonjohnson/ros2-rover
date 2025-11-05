@@ -1,0 +1,37 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ MAP-Elites trainer initialized on cuda
+✓ REP socket listening on port 5556
+============================================================
+Starting MAP-Elites Training
+============================================================
+
+Target evaluations: 1000
+Archive dimensions: 4 × 4
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+→ Sent model #1 (random) to rover
+→ Sent model #2 (random) to rover
+→ Sent model #3 (random) to rover
+→ Sent model #4 (random) to rover
+→ Sent model #5 (random) to rover
+→ Sent model #6 (random) to rover
+→ Sent model #7 (random) to rover
+→ Sent model #8 (random) to rover
+→ Sent model #9 (random) to rover
+→ Sent model #10 (random) to rover
+→ Sent model #11 (random) to rover
+→ Sent model #12 (random) to rover
+→ Sent model #13 (random) to rover
+→ Sent model #14 (random) to rover
+→ Sent model #15 (random) to rover
+→ Sent model #16 (random) to rover
+→ Sent model #17 (random) to rover
+→ Sent model #18 (random) to rover
+→ Sent model #19 (random) to rover
+→ Sent model #20 (random) to rover
+→ Sent model #21 (random) to rover
+→ Sent model #22 (random) to rover
