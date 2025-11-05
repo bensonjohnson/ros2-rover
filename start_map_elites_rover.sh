@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# MAP-Elites Autonomous Episode Runner for Rover
+# Evolution Training Autonomous Episode Runner for Rover
 # Runs autonomous episodes and sends results to V620 server
 
 echo "=================================================="
-echo "ROS2 Rover - MAP-Elites Autonomous Episodes"
+echo "ROS2 Rover - Evolution Training Episodes"
 echo "=================================================="
 
 if [ ! -f "install/setup.bash" ]; then
@@ -65,9 +65,9 @@ if [ -n "$USB_DEVICE_PATH" ]; then
 fi
 
 # Launch
-echo "Launching MAP-Elites autonomous episodes..."
+echo "Launching evolution training autonomous episodes..."
 mkdir -p log
-LOG_FILE="log/map_elites_rover_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="log/evolution_rover_$(date +%Y%m%d_%H%M%S).log"
 
 ros2 launch tractor_bringup map_elites_autonomous.launch.py \
   server_addr:=${SERVER_ADDR} \
@@ -81,14 +81,15 @@ LAUNCH_PID=$!
 trap 'echo; echo "🛑 Stopping autonomous episodes..."; kill $LAUNCH_PID 2>/dev/null; sleep 2; echo "✅ Stopped"; exit 0' SIGINT SIGTERM
 
 echo ""
-echo "MAP-Elites autonomous episodes running (PID: $LAUNCH_PID)"
+echo "Evolution training autonomous episodes running (PID: $LAUNCH_PID)"
 echo "Log file: $LOG_FILE"
 echo ""
 echo "What's happening:"
 echo "  1. Rover runs ${EPISODE_DURATION}s episodes autonomously"
 echo "  2. Episode results sent to V620 server"
-echo "  3. V620 evolves better driving behaviors"
-echo "  4. Rover receives new model for next episode"
+echo "  3. V620 evolves a single adaptive driving policy"
+echo "  4. Rover receives improved model for next episode"
+echo "  5. Model learns to adapt speed based on obstacles"
 echo ""
 echo "Monitor:"
 echo "  - ros2 topic echo /cmd_vel_ai"

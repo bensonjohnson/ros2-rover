@@ -45,41 +45,43 @@ class ActorNetwork(nn.Module):
         return torch.tanh(action)  # Squash to [-1, 1] range
 
 
-class MAPElitesArchive:
-    """Archive maintaining best models for each behavior cell."""
+class PopulationTracker:
+    """Simple population tracker for single-population evolution with adaptive sizing."""
 
-    def __init__(
-        self,
-        speed_bins: List[float] = [0.0, 0.05, 0.10, 0.15, 0.20],
-        clearance_bins: List[float] = [0.2, 0.5, 1.0, 2.0, 5.0],
-    ):
-        """Initialize archive.
+    def __init__(self, initial_population_size: int = 10, max_population_size: int = 25):
+        """Initialize population tracker.
 
         Args:
-            speed_bins: Bin edges for average speed (m/s)
-            clearance_bins: Bin edges for average obstacle clearance (m)
+            initial_population_size: Starting population size (for aggressive early culling)
+            max_population_size: Maximum population size (reached as training progresses)
         """
-        self.speed_bins = speed_bins
-        self.clearance_bins = clearance_bins
+        self.initial_population_size = initial_population_size
+        self.max_population_size = max_population_size
+        self.population_size = initial_population_size  # Will grow adaptively
 
-        # Archive: (speed_idx, clearance_idx) -> {'model': state_dict, 'fitness': float, 'metrics': dict}
-        self.archive = {}
+        # Population: list of {'model': state_dict, 'fitness': float, 'metrics': dict}
+        # Sorted by fitness (best first)
+        self.population = []
 
         # Statistics
         self.total_evaluations = 0
-        self.archive_additions = 0
+        self.improvements = 0
 
-    def get_cell_index(self, avg_speed: float, avg_clearance: float) -> Tuple[int, int]:
-        """Map behavior to archive cell indices."""
-        speed_idx = np.digitize(avg_speed, self.speed_bins) - 1
-        clearance_idx = np.digitize(avg_clearance, self.clearance_bins) - 1
+    def get_adaptive_population_size(self) -> int:
+        """Compute adaptive population size based on training progress.
 
-        # Clamp to valid range
-        speed_idx = max(0, min(len(self.speed_bins) - 2, speed_idx))
-        clearance_idx = max(0, min(len(self.clearance_bins) - 2, clearance_idx))
+        Start small (10) for frequent tournaments, grow to preserve diversity.
+        """
+        if self.total_evaluations < 50:
+            return self.initial_population_size  # 10: aggressive early culling
+        elif self.total_evaluations < 200:
+            return (self.initial_population_size + self.max_population_size) // 2  # 15-17: mid-stage
+        else:
+            return self.max_population_size  # 25: preserve diversity
 
-        # Convert to Python int to avoid numpy types in string keys
-        return (int(speed_idx), int(clearance_idx))
+    def update_population_size(self):
+        """Update population size based on training progress."""
+        self.population_size = self.get_adaptive_population_size()
 
     def add(
         self,
@@ -88,145 +90,171 @@ class MAPElitesArchive:
         avg_speed: float,
         avg_clearance: float,
         metrics: dict
-    ) -> Tuple[bool, bool, float]:
-        """Try to add model to archive.
+    ) -> Tuple[bool, float, int]:
+        """Try to add model to population.
 
         Returns:
-            (was_added, is_new_cell, fitness_improvement_ratio)
+            (was_added, fitness_improvement, rank)
         """
         self.total_evaluations += 1
 
-        cell_idx = self.get_cell_index(avg_speed, avg_clearance)
+        # Update adaptive population size
+        self.update_population_size()
 
-        is_new_cell = cell_idx not in self.archive
-        fitness_improvement = 0.0
+        entry = {
+            'model': copy.deepcopy(model_state),
+            'fitness': fitness,
+            'avg_speed': avg_speed,
+            'avg_clearance': avg_clearance,
+            'metrics': metrics,
+        }
 
-        # Check if this cell is empty or if new model is better
-        if is_new_cell:
-            self.archive[cell_idx] = {
-                'model': copy.deepcopy(model_state),
-                'fitness': fitness,
-                'avg_speed': avg_speed,
-                'avg_clearance': avg_clearance,
-                'metrics': metrics,
-            }
-            self.archive_additions += 1
-            return True, True, float('inf')  # New cell = infinite improvement
-        elif fitness > self.archive[cell_idx]['fitness']:
-            old_fitness = self.archive[cell_idx]['fitness']
-            fitness_improvement = (fitness - old_fitness) / max(abs(old_fitness), 1e-6)
+        # If population not full, always add
+        if len(self.population) < self.population_size:
+            self.population.append(entry)
+            self.population.sort(key=lambda x: x['fitness'], reverse=True)
+            self.improvements += 1
+            rank = self.population.index(entry) + 1
+            return True, float('inf'), rank
 
-            self.archive[cell_idx] = {
-                'model': copy.deepcopy(model_state),
-                'fitness': fitness,
-                'avg_speed': avg_speed,
-                'avg_clearance': avg_clearance,
-                'metrics': metrics,
-            }
-            self.archive_additions += 1
-            return True, False, fitness_improvement
+        # Check if better than worst in population
+        worst_fitness = self.population[-1]['fitness']
 
-        return False, False, 0.0
+        if fitness > worst_fitness:
+            improvement = (fitness - worst_fitness) / max(abs(worst_fitness), 1e-6)
+
+            # Replace worst model
+            self.population[-1] = entry
+            self.population.sort(key=lambda x: x['fitness'], reverse=True)
+            self.improvements += 1
+            rank = self.population.index(entry) + 1
+            return True, improvement, rank
+
+        return False, 0.0, -1
 
     def get_random_elite(self) -> Optional[dict]:
-        """Sample random model from archive."""
-        if not self.archive:
+        """Sample random model from top half of population."""
+        if not self.population:
             return None
 
         import random
-        cell_idx = random.choice(list(self.archive.keys()))
-        return self.archive[cell_idx]['model']
+        # Sample from top 50% (elites)
+        elite_size = max(1, len(self.population) // 2)
+        elite = random.choice(self.population[:elite_size])
+        return elite['model']
 
-    def get_best_in_cell(self, speed_idx: int, clearance_idx: int) -> Optional[dict]:
-        """Get best model for specific behavior cell."""
-        return self.archive.get((speed_idx, clearance_idx))
+    def get_best(self) -> Optional[dict]:
+        """Get the best model."""
+        if not self.population:
+            return None
+        return self.population[0]
 
-    def coverage(self) -> float:
-        """Fraction of archive cells filled."""
-        total_cells = (len(self.speed_bins) - 1) * (len(self.clearance_bins) - 1)
-        return len(self.archive) / total_cells
+    def calculate_behavior_novelty(self, avg_speed: float, avg_clearance: float) -> float:
+        """Calculate how novel this behavior is compared to population.
+
+        Returns novelty score in [0, 1] where 1 = very novel, 0 = common.
+        """
+        if len(self.population) < 3:
+            return 0.5  # Not enough data, neutral novelty
+
+        # Get existing behaviors
+        speeds = [entry['avg_speed'] for entry in self.population]
+        clearances = [entry['avg_clearance'] for entry in self.population]
+
+        # Calculate minimum distance to existing behaviors (k-nearest neighbor style)
+        distances = []
+        for i in range(len(self.population)):
+            # Normalize speed (0-0.3 m/s typical) and clearance (0-5m typical)
+            speed_dist = abs(avg_speed - speeds[i]) / 0.3
+            clearance_dist = abs(avg_clearance - clearances[i]) / 5.0
+            euclidean_dist = np.sqrt(speed_dist**2 + clearance_dist**2)
+            distances.append(euclidean_dist)
+
+        # Use 3-nearest neighbor average distance as novelty
+        distances.sort()
+        k = min(3, len(distances))
+        novelty = np.mean(distances[:k])
+
+        # Clamp to [0, 1]
+        return min(1.0, novelty)
 
     def get_stats(self) -> dict:
-        """Get archive statistics."""
-        if not self.archive:
+        """Get population statistics."""
+        if not self.population:
             return {
-                'coverage': 0.0,
-                'filled_cells': 0,
-                'total_cells': (len(self.speed_bins) - 1) * (len(self.clearance_bins) - 1),
+                'population_size': 0,
                 'total_evaluations': self.total_evaluations,
-                'archive_additions': self.archive_additions,
+                'improvements': self.improvements,
             }
 
-        # Filter out -inf fitness values (from models awaiting re-evaluation)
-        fitnesses = [entry['fitness'] for entry in self.archive.values() if np.isfinite(entry['fitness'])]
-        speeds = [entry['avg_speed'] for entry in self.archive.values()]
-        clearances = [entry['avg_clearance'] for entry in self.archive.values()]
+        fitnesses = [entry['fitness'] for entry in self.population if np.isfinite(entry['fitness'])]
+        speeds = [entry['avg_speed'] for entry in self.population]
+        clearances = [entry['avg_clearance'] for entry in self.population]
 
         stats = {
-            'coverage': self.coverage(),
-            'filled_cells': len(self.archive),
-            'total_cells': (len(self.speed_bins) - 1) * (len(self.clearance_bins) - 1),
+            'population_size': len(self.population),
             'total_evaluations': self.total_evaluations,
-            'archive_additions': self.archive_additions,
+            'improvements': self.improvements,
             'speed_mean': np.mean(speeds) if speeds else 0.0,
             'clearance_mean': np.mean(clearances) if clearances else 0.0,
         }
 
-        # Only include fitness stats if we have valid fitness values
         if fitnesses:
             stats.update({
                 'fitness_mean': np.mean(fitnesses),
                 'fitness_max': np.max(fitnesses),
                 'fitness_min': np.min(fitnesses),
+                'fitness_best': self.population[0]['fitness'],
             })
 
         return stats
 
     def save(self, filepath: str):
-        """Save archive to disk."""
+        """Save population to disk."""
         import json
 
-        # Prepare archive metadata (without model weights)
-        archive_metadata = {}
-        for cell_idx, entry in self.archive.items():
-            archive_metadata[str(cell_idx)] = {
+        # Prepare metadata (without model weights)
+        population_metadata = []
+        for idx, entry in enumerate(self.population):
+            population_metadata.append({
+                'rank': idx + 1,
                 'fitness': entry['fitness'],
                 'avg_speed': entry['avg_speed'],
                 'avg_clearance': entry['avg_clearance'],
                 'metrics': entry['metrics']
-            }
+            })
 
         metadata = {
-            'speed_bins': self.speed_bins,
-            'clearance_bins': self.clearance_bins,
-            'archive': archive_metadata,  # Include archive metadata
+            'population_size': self.population_size,
+            'population': population_metadata,
             'total_evaluations': self.total_evaluations,
-            'archive_additions': self.archive_additions,
+            'improvements': self.improvements,
         }
 
-        # Debug: verify archive is being saved
-        print(f"  💾 Saving archive with {len(archive_metadata)} cells of metadata", flush=True)
+        print(f"  💾 Saving population with {len(population_metadata)} models", flush=True)
 
         with open(filepath, 'w') as f:
             json.dump(metadata, f, indent=2)
 
         # Save models separately
-        models_dir = Path(filepath).parent / 'map_elites_models'
+        models_dir = Path(filepath).parent / 'evolution_models'
         models_dir.mkdir(exist_ok=True)
 
-        for cell_idx, entry in self.archive.items():
-            model_path = models_dir / f'cell_{cell_idx[0]}_{cell_idx[1]}.pt'
+        for idx, entry in enumerate(self.population):
+            model_path = models_dir / f'rank_{idx+1}.pt'
             torch.save(entry['model'], model_path)
 
 
 class MAPElitesTrainer:
-    """MAP-Elites trainer for rover navigation."""
+    """Single-population evolution trainer with adaptive strategies."""
 
     def __init__(
         self,
         port: int = 5556,
         checkpoint_dir: str = './checkpoints',
         device: str = 'cuda',
+        initial_population_size: int = 10,
+        max_population_size: int = 25,
     ):
         self.port = port
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -234,8 +262,11 @@ class MAPElitesTrainer:
 
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
 
-        # Initialize archive
-        self.archive = MAPElitesArchive()
+        # Initialize adaptive population tracker
+        self.population = PopulationTracker(
+            initial_population_size=initial_population_size,
+            max_population_size=max_population_size
+        )
 
         # Create template model
         self.template_model = ActorNetwork().to(self.device)
@@ -251,17 +282,28 @@ class MAPElitesTrainer:
         # Model ID tracking
         self.next_model_id = 0
         self.pending_evaluations = {}  # model_id -> (model_state, generation_type)
-        self.refinement_pending = {}  # model_id -> (cell_idx, model_state) for models waiting refinement
+        self.refinement_pending = {}  # model_id -> model_state for models waiting refinement
+        self.multi_tournament_pending = []  # Queue for multi-tournament candidates
 
         # Tournament selection cache
         self.last_refined_model = None  # (model_state, trajectory_data) for tournament selection
-        self.tournament_candidates = 400  # Number of mutations to test (V620 has 32GB VRAM, no gradient descent)
 
-        # Tournament trigger parameters (no gradient descent)
-        self.refinement_fitness_threshold = 0.10  # Collect trajectory if >10% improvement
-        self.always_refine_new_cells = True  # Always collect trajectory for new cells
+        # Adaptive tournament parameters
+        self.tournament_sizes = {
+            'champion': 500,  # New best model
+            'elite': 300,     # Top 5
+            'good': 150,      # Top 10
+            'marginal': 75    # Made it in
+        }
 
-        print(f"✓ MAP-Elites trainer initialized on {self.device}")
+        # Feature flags
+        self.enable_diversity_bonus = True
+        self.enable_multi_tournament = True
+        self.enable_warmup_acceleration = True
+
+        print(f"✓ Adaptive evolution trainer initialized on {self.device}")
+        print(f"✓ Population: {initial_population_size} → {max_population_size} (adaptive)")
+        print(f"✓ Tournament sizes: 75-500 (adaptive)")
         print(f"✓ REP socket listening on port {port}")
 
     def generate_random_model(self) -> dict:
@@ -270,23 +312,58 @@ class MAPElitesTrainer:
         # Random initialization is already done by PyTorch
         return model.state_dict()
 
+    def generate_heuristic_model(self, policy_type: str) -> dict:
+        """Generate model with heuristic behavior injected.
+
+        Args:
+            policy_type: One of 'cautious', 'forward', 'explorer'
+
+        Returns:
+            Model state dict biased toward the heuristic behavior
+        """
+        model = ActorNetwork().to(self.device)
+
+        # Start with small random weights
+        with torch.no_grad():
+            for param in model.parameters():
+                param.data *= 0.1  # Scale down random init
+
+        # Inject bias into policy head output layer
+        # policy_head.fc_out is the final layer that outputs [linear_vel, angular_vel]
+        with torch.no_grad():
+            if policy_type == 'cautious':
+                # Bias: slow forward, moderate turning
+                model.policy_head.fc_out.bias[0] = 0.2  # linear: slow
+                model.policy_head.fc_out.bias[1] = 0.0  # angular: neutral
+            elif policy_type == 'forward':
+                # Bias: fast forward, minimal turning
+                model.policy_head.fc_out.bias[0] = 0.6  # linear: fast
+                model.policy_head.fc_out.bias[1] = 0.0  # angular: neutral
+            elif policy_type == 'explorer':
+                # Bias: moderate forward, slight turning tendency
+                model.policy_head.fc_out.bias[0] = 0.4  # linear: moderate
+                model.policy_head.fc_out.bias[1] = 0.1  # angular: slight turn
+
+        return model.state_dict()
+
     def get_adaptive_mutation_std(self) -> float:
-        """Compute adaptive mutation strength based on archive density.
+        """Compute adaptive mutation strength based on population maturity.
 
         Returns:
             Mutation standard deviation
         """
-        coverage = self.archive.coverage()
+        pop_size = len(self.population.population)
+        target_size = self.population.population_size
 
-        # Early exploration (< 30% coverage): larger mutations
-        if coverage < 0.3:
+        # Early exploration (population not full): larger mutations
+        if pop_size < target_size * 0.5:
             return 0.03
-        # Mid exploration (30-70% coverage): medium mutations
-        elif coverage < 0.7:
+        # Mid exploration (population growing): medium mutations
+        elif pop_size < target_size:
             return 0.02
-        # Dense archive (> 70% coverage): smaller fine-tuning mutations
+        # Mature population (full): smaller fine-tuning mutations
         else:
-            return 0.01
+            return 0.015
 
     def mutate_model(self, parent_state: dict, mutation_std: Optional[float] = None) -> dict:
         """Create mutated copy of model.
@@ -599,25 +676,40 @@ class MAPElitesTrainer:
         return model.state_dict()
 
     def generate_model_for_evaluation(self) -> Tuple[dict, str]:
-        """Generate next model to evaluate.
+        """Generate next model to evaluate with adaptive strategies.
 
         Returns:
             (model_state_dict, generation_type)
         """
-        # Quick warmup: first 3 evaluations are random for initial diversity
-        # With goal-oriented tournament, we don't need long warmup like gradient descent did
-        if self.archive.total_evaluations < 3:
-            return self.generate_random_model(), 'random'
+        # Warmup acceleration: first 10 evaluations use heuristic-seeded models
+        if self.enable_warmup_acceleration and self.population.total_evaluations < 10:
+            heuristic_types = ['cautious', 'forward', 'explorer']
+            # Cycle through heuristics, with some random
+            if self.population.total_evaluations < 6:
+                policy_type = heuristic_types[self.population.total_evaluations % 3]
+                return self.generate_heuristic_model(policy_type), f'heuristic_{policy_type}'
+            else:
+                # Last few: mix of random and heuristic
+                if np.random.random() < 0.5:
+                    return self.generate_random_model(), 'random'
+                else:
+                    policy_type = np.random.choice(heuristic_types)
+                    return self.generate_heuristic_model(policy_type), f'heuristic_{policy_type}'
 
-        # If we have a recently cached model with trajectory, use goal-oriented tournament
+        # Multi-tournament queue: if we have pending tournament candidates, send those first
+        if self.multi_tournament_pending:
+            candidate = self.multi_tournament_pending.pop(0)
+            return candidate, 'multi_tournament'
+
+        # Single tournament: if we have a cached model with trajectory
         if self.last_refined_model is not None:
-            parent_state, trajectory_data = self.last_refined_model
-            print(f"  🏆 Running goal-oriented tournament ({self.tournament_candidates} candidates)", flush=True)
+            parent_state, trajectory_data, tournament_size = self.last_refined_model
+            print(f"  🏆 Running tournament ({tournament_size} candidates)", flush=True)
 
             best_mutation, fitness = self.tournament_selection(
                 parent_state=parent_state,
                 trajectory_data=trajectory_data,
-                num_candidates=self.tournament_candidates
+                num_candidates=tournament_size
             )
 
             # Clear cache after use
@@ -625,120 +717,114 @@ class MAPElitesTrainer:
 
             return best_mutation, 'tournament'
 
-        # 30% random, 70% mutation of archive elite
+        # Standard generation: 30% random, 70% mutation of population elite
         if np.random.random() < 0.3:
             return self.generate_random_model(), 'random'
         else:
-            parent_state = self.archive.get_random_elite()
+            parent_state = self.population.get_random_elite()
             if parent_state is None:
                 return self.generate_random_model(), 'random'
             return self.mutate_model(parent_state), 'mutation'
 
     def compute_fitness(self, episode_data: dict) -> float:
-        """Compute fitness encouraging safe exploration with smooth, confident motion.
+        """Compute behavior-neutral fitness with optional diversity bonus.
 
         Goals:
-        - Explore via open paths (high clearance preferred)
-        - Increase speed with confidence (reward fast + safe combinations)
-        - Smooth, efficient motion (penalize erratic behavior)
-        - Discover optimal paths regardless of indoor/outdoor
-        - Encourage forward movement (tank steering = turning in place wastes time)
+        - Maximize collision-free exploration distance
+        - Reward smooth, efficient motion
+        - Reward forward bias (tank steering)
+        - BE NEUTRAL to speed (let model decide when to be fast/cautious)
+        - Reward path quality and obstacle clearance
+        - (Optional) Bonus for exploring novel behaviors
         """
         distance = episode_data['total_distance']
         collisions = episode_data['collision_count']
-        avg_speed = episode_data['avg_speed']
+        avg_speed = episode_data.get('avg_speed', 0.0)
         avg_clearance = episode_data['avg_clearance']
         duration = max(episode_data['duration'], 1.0)
         action_smoothness = episode_data.get('action_smoothness', 0.0)
         avg_linear_action = episode_data.get('avg_linear_action', 0.0)
         avg_angular_action = episode_data.get('avg_angular_action', 0.0)
 
-        # Base fitness: exploration distance (primary goal)
-        # For tank steering, forward progress is everything
-        fitness = distance * 2.0  # Double weight on actual distance covered
+        # Base fitness: exploration distance (PRIMARY goal)
+        # This is speed-neutral - slow+safe and fast+aggressive both maximize distance
+        fitness = distance * 3.0
 
-        # 1. Collision penalty: Catastrophic for safety
-        #    Exponential penalty - multiple collisions indicate poor behavior
+        # 1. Collision penalty: Critical for safety
+        #    Collisions indicate poor decision-making
         if collisions > 0:
-            collision_penalty = 10.0 * (collisions ** 1.5)  # 1→10, 2→28, 3→52
+            collision_penalty = 15.0 * (collisions ** 1.5)  # 1→15, 2→42, 3→78
             fitness -= collision_penalty
 
-        # 2. Open path exploration bonus
-        #    Reward finding and using open spaces (clearance > 1m is good)
+        # 2. Path quality bonus (reward maintaining good clearance)
+        #    This rewards finding open paths without requiring speed
         if avg_clearance > 0.5:
-            # Scale bonus with clearance: 0.5m→0, 1.0m→0.5, 2.0m→2.0, 5.0m→4.5
-            openness_bonus = min((avg_clearance - 0.5) * 1.0, 5.0)
-            fitness += openness_bonus
+            # Reward smart path selection
+            clearance_bonus = min((avg_clearance - 0.5) * 2.0, 8.0)
+            fitness += clearance_bonus
 
-        # 3. Confident speed bonus (speed is good when combined with safety)
-        #    Reward high speed ONLY when clearance is also high
-        #    This encourages "speed up in open areas, slow down in tight spaces"
-        if collisions == 0 and avg_clearance > 0.8:
-            # Confidence factor: higher clearance allows higher speed bonus
-            confidence_multiplier = min(avg_clearance / 2.0, 1.5)  # 0.8m→0.4x, 2m→1.0x, 4m+→1.5x
-            speed_bonus = avg_speed * 5.0 * confidence_multiplier  # 0.2m/s @ 2m clear → +1.0
-            fitness += speed_bonus
-
-        # 4. Smooth motion reward (low action jerkiness)
-        #    Reward smooth turns and steady motion
-        #    action_smoothness is std of angular velocity changes (lower = smoother)
+        # 3. Smooth motion reward
+        #    Smooth actions indicate confident, deliberate behavior
+        #    Works for both slow-cautious and fast-aggressive
         if action_smoothness > 0:
-            # Typical smoothness range: 0.01 (very smooth) to 0.3+ (jerky)
             if action_smoothness < 0.1:  # Very smooth
-                smoothness_bonus = (0.1 - action_smoothness) * 10.0  # Up to +1.0 bonus
+                smoothness_bonus = (0.1 - action_smoothness) * 15.0  # Up to +1.5
                 fitness += smoothness_bonus
             elif action_smoothness > 0.3:  # Very jerky
-                jerkiness_penalty = (action_smoothness - 0.3) * 5.0  # Increasing penalty
+                jerkiness_penalty = (action_smoothness - 0.3) * 8.0
                 fitness -= jerkiness_penalty
 
-        # 5. Efficiency reward (distance/time)
-        #    Penalize if robot took too long (indicates erratic motion, spinning, backtracking)
-        #    Expected: ~0.08 m/s = reasonable exploration speed
-        expected_speed = 0.08  # m/s baseline for exploration
-        actual_speed = distance / duration
-
-        if actual_speed < expected_speed * 0.5:  # Very slow = likely stuck/spinning
-            fitness *= 0.7  # 30% penalty for inefficient motion
-        elif actual_speed > expected_speed * 1.5:  # Fast and smooth
-            fitness *= 1.1  # 10% bonus for efficient exploration
-
-        # 6. Stagnation penalty
-        #    If barely moving, heavily penalize (robot gave up or stuck)
-        if avg_speed < 0.02 and collisions == 0:  # Nearly stationary without collisions
-            fitness *= 0.3  # Harsh penalty - robot is doing nothing useful
-
-        # 7. Forward movement bias (CRITICAL for tank steering)
-        #    Tank steering means turning in place = zero progress but wastes time
-        #    Heavily penalize spinning, strongly reward forward movement
+        # 4. Forward movement bias (CRITICAL for tank steering)
+        #    Penalize spinning in place, reward making progress
+        #    This is behavior-neutral: applies to slow and fast equally
         if avg_linear_action > 0 or avg_angular_action > 0:
-            # Forward bias ratio: linear_action / (linear_action + angular_action)
-            # 1.0 = pure forward, 0.5 = equal mix, 0.0 = pure spinning
-            total_action = avg_linear_action + avg_angular_action + 1e-6  # Avoid divide by zero
+            total_action = avg_linear_action + avg_angular_action + 1e-6
             forward_bias = avg_linear_action / total_action
 
-            if forward_bias > 0.6:  # Mostly forward movement (good!)
-                forward_bonus = (forward_bias - 0.6) * 15.0  # Up to +6.0 bonus
+            if forward_bias > 0.6:  # Mostly forward movement
+                forward_bonus = (forward_bias - 0.6) * 20.0  # Up to +8.0
                 fitness += forward_bonus
-            elif forward_bias < 0.3:  # Mostly spinning in place (bad!)
-                spinning_penalty = (0.3 - forward_bias) * 20.0  # Up to -6.0 penalty
+            elif forward_bias < 0.3:  # Mostly spinning in place
+                spinning_penalty = (0.3 - forward_bias) * 25.0  # Up to -7.5
                 fitness -= spinning_penalty
 
-            # Extra harsh penalty if lots of rotation but little distance
+            # Extra penalty for spinning with little progress
             if avg_angular_action > 0.5 and distance < 2.0:
-                # High rotation, low distance = spinning in place
-                fitness -= 10.0  # Severe penalty
+                fitness -= 12.0  # Severe penalty for unproductive spinning
+
+        # 5. Efficiency: distance per time
+        #    This is BEHAVIOR-NEUTRAL: rewards making progress efficiently
+        #    A slow cautious model can be just as efficient as a fast aggressive one
+        #    We only penalize if robot is stuck/stagnant
+        actual_speed = distance / duration
+
+        if distance < 1.0 and collisions == 0:
+            # Barely moved and no obstacles - likely frozen/stuck
+            fitness *= 0.3  # Harsh penalty for stagnation
+        elif actual_speed < 0.03:
+            # Moving but very inefficiently
+            fitness *= 0.7  # Moderate penalty
+
+        # 6. Diversity bonus (optional): reward exploring novel behaviors
+        #    This helps prevent premature convergence and maintains exploration
+        if self.enable_diversity_bonus and fitness > 0:
+            novelty_score = self.population.calculate_behavior_novelty(avg_speed, avg_clearance)
+            if novelty_score > 0.5:  # Significantly different from existing population
+                diversity_bonus = novelty_score * 3.0  # Up to +3.0 bonus
+                fitness += diversity_bonus
+                # Note: this is logged separately in the main loop
 
         return fitness
 
     def run(self, num_evaluations: int = 1000):
-        """Run MAP-Elites training with REQ-REP protocol."""
+        """Run single-population evolution training with REQ-REP protocol."""
         print("=" * 60)
-        print("Starting MAP-Elites Training")
+        print("Starting Single-Population Evolution Training")
         print("=" * 60)
         print()
 
         # Resume from checkpoint if loaded
-        evaluation_count = self.archive.total_evaluations
+        evaluation_count = self.population.total_evaluations
 
         if evaluation_count > 0:
             print(f"Resuming from evaluation {evaluation_count}")
@@ -746,7 +832,7 @@ class MAPElitesTrainer:
         else:
             print(f"Target evaluations: {num_evaluations}")
 
-        print(f"Archive dimensions: {len(self.archive.speed_bins)-1} × {len(self.archive.clearance_bins)-1}")
+        print(f"Population size: {self.population.population_size}")
         print()
         print("Waiting for rover to connect...")
         print()
@@ -807,8 +893,8 @@ class MAPElitesTrainer:
                     # Compute fitness
                     fitness = self.compute_fitness(message)
 
-                    # Try to add to archive
-                    added, is_new_cell, improvement_ratio = self.archive.add(
+                    # Try to add to population
+                    added, improvement, rank = self.population.add(
                         model_state=model_state,
                         fitness=fitness,
                         avg_speed=avg_speed,
@@ -820,41 +906,75 @@ class MAPElitesTrainer:
                         }
                     )
 
-                    # Request trajectory for tournament selection if significant improvement or new cell
+                    # GREEDY COMPUTE: Collect trajectory from ALL additions (not just top performers)
+                    # Tournament size scales with importance
                     should_collect = False
                     collection_reason = ""
+                    tournament_size = 0
+                    is_champion = False
 
                     if added:
-                        if is_new_cell and self.always_refine_new_cells:
-                            should_collect = True
-                            collection_reason = "new behavior cell"
-                        elif improvement_ratio >= self.refinement_fitness_threshold:
-                            should_collect = True
-                            collection_reason = f"{improvement_ratio*100:.1f}% fitness improvement"
+                        # Always collect from population additions (maximize V620 compute)
+                        should_collect = True
+
+                        # Determine adaptive tournament size based on rank
+                        if rank == 1:
+                            # NEW BEST MODEL - champion treatment!
+                            tournament_size = self.tournament_sizes['champion']  # 500
+                            collection_reason = f"🏆 NEW CHAMPION (rank #1)"
+                            is_champion = True
+                        elif rank <= 5:
+                            # Elite performer
+                            tournament_size = self.tournament_sizes['elite']  # 300
+                            collection_reason = f"Elite (rank #{rank})"
+                        elif rank <= 10:
+                            # Good performer
+                            tournament_size = self.tournament_sizes['good']  # 150
+                            collection_reason = f"Good (rank #{rank})"
                         else:
-                            collection_reason = f"skipped (only {improvement_ratio*100:.1f}% improvement)"
+                            # Marginal addition
+                            tournament_size = self.tournament_sizes['marginal']  # 75
+                            collection_reason = f"Marginal (rank #{rank})"
+
+                    # Calculate variable episode duration suggestion
+                    best_fitness = self.population.get_best()['fitness'] if self.population.get_best() else 0
+                    pop_size = len(self.population.population)
+
+                    if pop_size < 5:
+                        suggested_duration = 30.0  # Early: fail fast
+                    elif best_fitness < 10:
+                        suggested_duration = 50.0  # Mid: standard
+                    else:
+                        suggested_duration = 75.0  # Late: deep data
 
                     # If added and should collect, request trajectory data for tournament selection
                     if added and should_collect:
-                        # Get the cell index where this model was added
-                        cell_idx = self.archive.get_cell_index(avg_speed, avg_clearance)
+                        # Store tournament metadata for when trajectory arrives
+                        self.refinement_pending[model_id] = (model_state, tournament_size, is_champion)
 
-                        # Store for tournament when trajectory data arrives
-                        self.refinement_pending[model_id] = (cell_idx, model_state)
-
-                        # Send acknowledgment with trajectory request
+                        # Send acknowledgment with trajectory request and episode duration suggestion
                         self.socket.send_pyobj({
                             'type': 'ack',
                             'collect_trajectory': True,
-                            'model_id': model_id  # Re-run same model
+                            'model_id': model_id,  # Re-run same model
+                            'suggested_episode_duration': suggested_duration
                         })
-                        print(f"  → Requesting trajectory for tournament ({collection_reason})...", flush=True)
+                        print(f"  → Requesting trajectory for {collection_reason} "
+                              f"(tournament: {tournament_size} candidates, "
+                              f"next episode: {suggested_duration:.0f}s)...", flush=True)
                     else:
-                        # Normal acknowledgment
-                        self.socket.send_pyobj({'type': 'ack'})
+                        # Normal acknowledgment with episode duration suggestion
+                        self.socket.send_pyobj({
+                            'type': 'ack',
+                            'suggested_episode_duration': suggested_duration
+                        })
 
                     # Log progress
-                    status = f"✓ ADDED ({collection_reason})" if added else "rejected"
+                    if added:
+                        status = f"✓ ADDED rank #{rank} ({collection_reason})"
+                    else:
+                        status = "rejected (below threshold)"
+
                     print(f"← Eval {evaluation_count}/{num_evaluations} | "
                           f"Model #{model_id} ({gen_type}) | "
                           f"Fitness: {fitness:.2f} | "
@@ -866,8 +986,10 @@ class MAPElitesTrainer:
                     # Checkpoint every 10 evaluations
                     if evaluation_count % 10 == 0:
                         self.save_checkpoint(evaluation_count)
-                        stats = self.archive.get_stats()
-                        print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)",
+                        stats = self.population.get_stats()
+                        best_fitness = stats.get('fitness_best', 0.0)
+                        pop_size = stats['population_size']
+                        print(f"  Population: {pop_size} models | Best fitness: {best_fitness:.2f}",
                               flush=True)
 
                 elif message['type'] == 'trajectory_data':
@@ -878,13 +1000,13 @@ class MAPElitesTrainer:
 
                     print(f"← Received trajectory data for model #{model_id}", flush=True)
 
-                    # Get the cell and model from pending tracking
+                    # Get the model and tournament metadata from pending tracking
                     if model_id not in self.refinement_pending:
                         print(f"  ⚠ Model #{model_id} not pending tournament", flush=True)
                         self.socket.send_pyobj({'type': 'ack'})
                         continue
 
-                    cell_idx, original_model_state = self.refinement_pending.pop(model_id)
+                    original_model_state, tournament_size, is_champion = self.refinement_pending.pop(model_id)
 
                     # Decompress trajectory data
                     if compressed:
@@ -906,13 +1028,38 @@ class MAPElitesTrainer:
                     else:
                         trajectory_data = trajectory_raw
 
-                    print(f"  📦 Caching model #{model_id} (cell {cell_idx}, {len(trajectory_data['actions'])} samples) for tournament", flush=True)
+                    print(f"  📦 Caching model #{model_id} ({len(trajectory_data['actions'])} samples) for tournament", flush=True)
 
-                    # Cache original model + trajectory for goal-oriented tournament selection
-                    # NO gradient descent - tournament will directly optimize for goals!
-                    self.last_refined_model = (original_model_state, trajectory_data)
+                    # MULTI-TOURNAMENT for champions: run 3 parallel tournaments
+                    if self.enable_multi_tournament and is_champion:
+                        print(f"  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...", flush=True)
 
-                    print(f"  ✓ Ready for tournament selection ({self.tournament_candidates} candidates)", flush=True)
+                        # Run 3 independent tournaments with varying mutation ranges
+                        mutation_ranges = [
+                            (0.005, 0.03),  # Conservative
+                            (0.01, 0.05),   # Standard
+                            (0.02, 0.08),   # Aggressive
+                        ]
+
+                        for i, mut_range in enumerate(mutation_ranges):
+                            print(f"    Running tournament {i+1}/3 (mutation: {mut_range})...", flush=True)
+                            best_mutation, fitness = self.tournament_selection(
+                                parent_state=original_model_state,
+                                trajectory_data=trajectory_data,
+                                num_candidates=tournament_size // 3,  # Divide compute across 3 tournaments
+                                mutation_std_range=mut_range
+                            )
+                            # Queue this candidate for evaluation
+                            self.multi_tournament_pending.append(best_mutation)
+
+                        print(f"  ✓ 3 tournament candidates queued for evaluation!", flush=True)
+
+                    else:
+                        # Standard single tournament
+                        # Cache original model + trajectory for goal-oriented tournament selection
+                        self.last_refined_model = (original_model_state, trajectory_data, tournament_size)
+
+                        print(f"  ✓ Ready for tournament selection ({tournament_size} candidates)", flush=True)
 
                     # Send acknowledgment (instant - no gradient descent wait!)
                     self.socket.send_pyobj({'type': 'ack'})
@@ -937,25 +1084,25 @@ class MAPElitesTrainer:
 
         print()
         print("=" * 60)
-        print("✅ MAP-Elites Training Complete!")
+        print("✅ Single-Population Evolution Training Complete!")
         print("=" * 60)
         self.save_checkpoint(evaluation_count, final=True)
-        self.print_archive_summary()
+        self.print_population_summary()
 
     def save_checkpoint(self, evaluation: int, final: bool = False):
-        """Save archive checkpoint."""
+        """Save population checkpoint."""
         suffix = 'final' if final else f'eval_{evaluation}'
-        archive_path = self.checkpoint_dir / f'map_elites_{suffix}.json'
+        checkpoint_path = self.checkpoint_dir / f'evolution_{suffix}.json'
 
-        self.archive.save(str(archive_path))
+        self.population.save(str(checkpoint_path))
 
-        # Also export best models in each category
-        self.export_best_models(suffix)
+        # Export best model
+        self.export_best_model(suffix)
 
-        print(f"✓ Checkpoint saved: {archive_path}")
+        print(f"✓ Checkpoint saved: {checkpoint_path}")
 
     def load_checkpoint(self, checkpoint_path: str):
-        """Load archive from checkpoint."""
+        """Load population from checkpoint."""
         import json
 
         checkpoint_path = Path(checkpoint_path)
@@ -964,112 +1111,77 @@ class MAPElitesTrainer:
         with open(checkpoint_path, 'r') as f:
             metadata = json.load(f)
 
-        # Create new archive with same bins
-        self.archive = MAPElitesArchive(
-            speed_bins=metadata['speed_bins'],
-            clearance_bins=metadata['clearance_bins']
+        # Create new population with same size
+        self.population = PopulationTracker(
+            population_size=metadata.get('population_size', 20)
         )
-        self.archive.total_evaluations = metadata['total_evaluations']
-        self.archive.archive_additions = metadata['archive_additions']
+        self.population.total_evaluations = metadata['total_evaluations']
+        self.population.improvements = metadata.get('improvements', 0)
 
         # Load models
-        models_dir = checkpoint_path.parent / 'map_elites_models'
+        models_dir = checkpoint_path.parent / 'evolution_models'
         if not models_dir.exists():
             print(f"⚠ Models directory not found: {models_dir}")
             return
 
-        # Debug: Check what's in the archive metadata
-        archive_metadata = metadata.get('archive', {})
-        archive_keys = list(archive_metadata.keys())
-        print(f"  Archive metadata has {len(archive_keys)} entries")
+        # Load population metadata
+        population_metadata = metadata.get('population', [])
+        print(f"  Population metadata has {len(population_metadata)} entries")
 
-        # Reconstruct archive
-        model_files = list(models_dir.glob('cell_*.pt'))
+        # Load model files
+        model_files = sorted(models_dir.glob('rank_*.pt'),
+                            key=lambda p: int(p.stem.split('_')[1]))
         print(f"  Found {len(model_files)} model files in {models_dir}")
 
         loaded_count = 0
         for model_file in model_files:
-            # Parse cell indices from filename: cell_0_1.pt
-            parts = model_file.stem.split('_')
-            speed_idx = int(parts[1])
-            clearance_idx = int(parts[2])
+            # Parse rank from filename: rank_1.pt
+            rank = int(model_file.stem.split('_')[1]) - 1  # Convert to 0-indexed
+
+            if rank >= len(population_metadata):
+                print(f"  ⚠ No metadata for rank {rank+1}")
+                continue
 
             # Load model
             model_state = torch.load(model_file, map_location='cpu')
+            entry_meta = population_metadata[rank]
 
-            # Get metadata from the archive dict stored in JSON
-            # Try multiple key formats for compatibility with old checkpoints
-            cell_key_formats = [
-                f"({speed_idx}, {clearance_idx})",  # Standard format
-                f"(np.int64({speed_idx}), {clearance_idx})",  # Old format with numpy type
-                f"({speed_idx}, np.int64({clearance_idx}))",  # Old format (rare)
-                f"(np.int64({speed_idx}), np.int64({clearance_idx}))",  # Old format both
-            ]
-
-            cell_data = None
-            found_key = None
-            for key_format in cell_key_formats:
-                if key_format in archive_metadata:
-                    cell_data = archive_metadata[key_format]
-                    found_key = key_format
-                    break
-
-            if cell_data is not None:
-                # Found metadata in checkpoint
-                self.archive.archive[(speed_idx, clearance_idx)] = {
-                    'model': model_state,
-                    'fitness': cell_data['fitness'],
-                    'avg_speed': cell_data['avg_speed'],
-                    'avg_clearance': cell_data['avg_clearance'],
-                    'metrics': cell_data['metrics'],
-                }
-                loaded_count += 1
-            else:
-                # Old checkpoint format without metadata - use -inf fitness so it gets replaced
-                print(f"  ⚠ No metadata for cell ({speed_idx}, {clearance_idx}), will be re-evaluated")
-                self.archive.archive[(speed_idx, clearance_idx)] = {
-                    'model': model_state,
-                    'fitness': float('-inf'),  # Ensures any real evaluation replaces this
-                    'avg_speed': 0.0,
-                    'avg_clearance': 0.0,
-                    'metrics': {},
-                }
-                loaded_count += 1
+            # Reconstruct population entry
+            entry = {
+                'model': model_state,
+                'fitness': entry_meta['fitness'],
+                'avg_speed': entry_meta['avg_speed'],
+                'avg_clearance': entry_meta['avg_clearance'],
+                'metrics': entry_meta['metrics'],
+            }
+            self.population.population.append(entry)
+            loaded_count += 1
 
         print(f"  Loaded {loaded_count}/{len(model_files)} models from checkpoint")
 
-    def export_best_models(self, suffix: str):
-        """Export best models for different behavior profiles."""
-        export_dir = self.checkpoint_dir / 'map_elites_exports'
+    def export_best_model(self, suffix: str):
+        """Export the best model from population."""
+        export_dir = self.checkpoint_dir / 'best_models'
         export_dir.mkdir(exist_ok=True)
 
-        # Find best models in different categories
-        categories = {
-            'cautious': (0, 3),      # Slow, high clearance
-            'balanced': (2, 2),      # Medium speed, medium clearance
-            'aggressive': (3, 1),    # Fast, low clearance
-            'explorer': (2, 3),      # Medium speed, high clearance
-        }
+        best_entry = self.population.get_best()
+        if best_entry:
+            model_path = export_dir / f'best_{suffix}.pt'
+            torch.save(best_entry['model'], model_path)
+            print(f"  ✓ Exported best model: fitness={best_entry['fitness']:.2f}")
 
-        for name, (speed_idx, clear_idx) in categories.items():
-            entry = self.archive.get_best_in_cell(speed_idx, clear_idx)
-            if entry:
-                model_path = export_dir / f'{name}_{suffix}.pt'
-                torch.save(entry['model'], model_path)
-                print(f"  ✓ Exported '{name}' model: fitness={entry['fitness']:.2f}")
-
-    def print_archive_summary(self):
-        """Print detailed archive summary."""
-        stats = self.archive.get_stats()
+    def print_population_summary(self):
+        """Print detailed population summary."""
+        stats = self.population.get_stats()
 
         print()
-        print("Archive Summary:")
-        print(f"  Coverage: {stats['coverage']:.1%} ({stats['filled_cells']}/{stats['total_cells']} cells)")
+        print("Population Summary:")
+        print(f"  Population size: {stats['population_size']}")
         print(f"  Total evaluations: {stats['total_evaluations']}")
-        print(f"  Archive additions: {stats['archive_additions']}")
+        print(f"  Improvements: {stats['improvements']}")
 
-        if 'fitness_max' in stats:
-            print(f"  Fitness - Max: {stats['fitness_max']:.2f}, "
+        if 'fitness_best' in stats:
+            print(f"  Fitness - Best: {stats['fitness_best']:.2f}, "
                   f"Mean: {stats['fitness_mean']:.2f}, "
                   f"Min: {stats['fitness_min']:.2f}")
         else:
@@ -1080,19 +1192,27 @@ class MAPElitesTrainer:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='MAP-Elites trainer for rover')
+    parser = argparse.ArgumentParser(description='Adaptive evolution trainer with greedy compute')
     parser.add_argument('--port', type=int, default=5556,
                         help='Port to listen for episode results')
     parser.add_argument('--num-evaluations', type=int, default=1000,
                         help='Number of episodes to evaluate')
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
                         help='Directory for checkpoints')
+    parser.add_argument('--initial-population', type=int, default=10,
+                        help='Initial population size (default: 10)')
+    parser.add_argument('--max-population', type=int, default=25,
+                        help='Maximum population size (default: 25)')
     parser.add_argument('--resume', type=str, default=None,
                         help='Resume from specific checkpoint (e.g., "eval_100" or "final")')
     parser.add_argument('--fresh', action='store_true',
                         help='Start fresh, ignore existing checkpoints')
-    parser.add_argument('--tournament-size', type=int, default=400,
-                        help='Number of mutations to test in goal-oriented tournament (default: 400, no gradient descent)')
+    parser.add_argument('--disable-diversity', action='store_true',
+                        help='Disable diversity bonus in fitness')
+    parser.add_argument('--disable-multi-tournament', action='store_true',
+                        help='Disable multi-tournament for champions')
+    parser.add_argument('--disable-warmup', action='store_true',
+                        help='Disable warmup acceleration')
     args = parser.parse_args()
 
     # Check ROCm
@@ -1104,15 +1224,23 @@ def main():
 
     print()
 
-    # Create trainer
+    # Create trainer with adaptive features
     trainer = MAPElitesTrainer(
         port=args.port,
         checkpoint_dir=args.checkpoint_dir,
+        initial_population_size=args.initial_population,
+        max_population_size=args.max_population,
     )
 
-    # Set tournament size from args
-    trainer.tournament_candidates = args.tournament_size
-    print(f"  Tournament selection: {args.tournament_size} candidates")
+    # Configure features
+    trainer.enable_diversity_bonus = not args.disable_diversity
+    trainer.enable_multi_tournament = not args.disable_multi_tournament
+    trainer.enable_warmup_acceleration = not args.disable_warmup
+
+    print(f"  Features enabled:")
+    print(f"    Diversity bonus: {trainer.enable_diversity_bonus}")
+    print(f"    Multi-tournament: {trainer.enable_multi_tournament}")
+    print(f"    Warmup acceleration: {trainer.enable_warmup_acceleration}")
     print()
 
     # Auto-resume from latest checkpoint (or explicit resume)
@@ -1124,18 +1252,18 @@ def main():
         print()
     elif args.resume:
         # Explicit resume request
-        checkpoint_to_load = Path(args.checkpoint_dir) / f'map_elites_{args.resume}.json'
+        checkpoint_to_load = Path(args.checkpoint_dir) / f'evolution_{args.resume}.json'
     else:
         # Auto-resume: find latest checkpoint
         checkpoint_dir = Path(args.checkpoint_dir)
         if checkpoint_dir.exists():
             # Look for checkpoints in order: final, then highest eval_N
-            final_checkpoint = checkpoint_dir / 'map_elites_final.json'
+            final_checkpoint = checkpoint_dir / 'evolution_final.json'
             if final_checkpoint.exists():
                 checkpoint_to_load = final_checkpoint
             else:
                 # Find highest eval_N checkpoint
-                eval_checkpoints = list(checkpoint_dir.glob('map_elites_eval_*.json'))
+                eval_checkpoints = list(checkpoint_dir.glob('evolution_eval_*.json'))
                 if eval_checkpoints:
                     # Extract numbers and find max
                     def get_eval_num(path):
@@ -1150,7 +1278,7 @@ def main():
         print(f"🔄 Resuming from checkpoint: {checkpoint_to_load.name}")
         trainer.load_checkpoint(str(checkpoint_to_load))
         print(f"✓ Checkpoint loaded")
-        trainer.print_archive_summary()
+        trainer.print_population_summary()
         print()
     else:
         print("Starting fresh (no checkpoint found)")
