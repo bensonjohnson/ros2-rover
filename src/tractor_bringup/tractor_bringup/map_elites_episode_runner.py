@@ -515,20 +515,21 @@ class MAPElitesEpisodeRunner(Node):
 
         try:
             import time
-            import lz4.frame
+            import zstandard as zstd
             start_time = time.time()
 
             trajectory_data = self._trajectory_cache[model_id]
 
-            # Compress
-            rgb_compressed = lz4.frame.compress(trajectory_data['rgb'].tobytes())
-            depth_compressed = lz4.frame.compress(trajectory_data['depth'].tobytes())
+            # Compress with Zstandard (level 10 - good compression/speed balance)
+            cctx = zstd.ZstdCompressor(level=10)
+            rgb_compressed = cctx.compress(trajectory_data['rgb'].tobytes())
+            depth_compressed = cctx.compress(trajectory_data['depth'].tobytes())
 
             original_mb = (trajectory_data['rgb'].nbytes + trajectory_data['depth'].nbytes) / 1024 / 1024
             compressed_mb = (len(rgb_compressed) + len(depth_compressed)) / 1024 / 1024
 
             self.get_logger().info(
-                f'  Compressed: {original_mb:.1f} MB → {compressed_mb:.1f} MB '
+                f'  Compressed (Zstd-10): {original_mb:.1f} MB → {compressed_mb:.1f} MB '
                 f'({original_mb/compressed_mb:.1f}x)'
             )
 
@@ -537,6 +538,7 @@ class MAPElitesEpisodeRunner(Node):
                 'type': 'trajectory_data',
                 'model_id': model_id,
                 'compressed': True,
+                'compression': 'zstd',  # Specify compression type
                 'trajectory': {
                     'rgb': rgb_compressed,
                     'rgb_shape': trajectory_data['rgb'].shape,
@@ -575,7 +577,7 @@ class MAPElitesEpisodeRunner(Node):
         """Send collected trajectory data to V620 server."""
         try:
             import time
-            import lz4.frame
+            import zstandard as zstd
             start_time = time.time()
 
             # Convert lists to numpy arrays
@@ -588,9 +590,10 @@ class MAPElitesEpisodeRunner(Node):
                 f'→ Preparing trajectory data: {len(actions_array)} samples'
             )
 
-            # Compress large arrays with LZ4 (fast compression)
-            rgb_compressed = lz4.frame.compress(rgb_array.tobytes())
-            depth_compressed = lz4.frame.compress(depth_array.tobytes())
+            # Compress large arrays with Zstandard (level 10 - good compression/speed balance)
+            cctx = zstd.ZstdCompressor(level=10)
+            rgb_compressed = cctx.compress(rgb_array.tobytes())
+            depth_compressed = cctx.compress(depth_array.tobytes())
 
             # Calculate sizes
             original_mb = (rgb_array.nbytes + depth_array.nbytes) / 1024 / 1024
@@ -598,7 +601,7 @@ class MAPElitesEpisodeRunner(Node):
             ratio = original_mb / compressed_mb if compressed_mb > 0 else 1.0
 
             self.get_logger().info(
-                f'  Compressed: {original_mb:.1f} MB → {compressed_mb:.1f} MB '
+                f'  Compressed (Zstd-10): {original_mb:.1f} MB → {compressed_mb:.1f} MB '
                 f'({ratio:.1f}x ratio)'
             )
 
@@ -607,6 +610,7 @@ class MAPElitesEpisodeRunner(Node):
                 'type': 'trajectory_data',
                 'model_id': self._current_model_id,
                 'compressed': True,
+                'compression': 'zstd',  # Specify compression type
                 'trajectory': {
                     'rgb': rgb_compressed,
                     'rgb_shape': rgb_array.shape,

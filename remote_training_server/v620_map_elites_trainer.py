@@ -115,7 +115,8 @@ class PopulationTracker:
             self.population.append(entry)
             self.population.sort(key=lambda x: x['fitness'], reverse=True)
             self.improvements += 1
-            rank = self.population.index(entry) + 1
+            # Find rank by object identity (avoid tensor comparison issues)
+            rank = next(i+1 for i, x in enumerate(self.population) if x is entry)
             return True, float('inf'), rank
 
         # Check if better than worst in population
@@ -128,7 +129,8 @@ class PopulationTracker:
             self.population[-1] = entry
             self.population.sort(key=lambda x: x['fitness'], reverse=True)
             self.improvements += 1
-            rank = self.population.index(entry) + 1
+            # Find rank by object identity (avoid tensor comparison issues)
+            rank = next(i+1 for i, x in enumerate(self.population) if x is entry)
             return True, improvement, rank
 
         return False, 0.0, -1
@@ -986,9 +988,25 @@ class MAPElitesTrainer:
                           f"{status}",
                           flush=True)
 
-                    # Checkpoint every 10 evaluations
-                    if evaluation_count % 10 == 0:
+                    # Checkpoint strategy: every eval during warmup, then every 10 evals
+                    should_checkpoint = False
+                    if evaluation_count <= 50:
+                        # During warmup: checkpoint EVERY evaluation (progress is slow/expensive)
+                        should_checkpoint = True
+                    else:
+                        # After warmup: checkpoint every 10 evaluations
+                        should_checkpoint = (evaluation_count % 10 == 0)
+
+                    # Special checkpoint at warmup completion (eval 50)
+                    if evaluation_count == 50:
+                        self.save_checkpoint(evaluation_count, warmup_complete=True)
+                        print(f"🎯 Warmup complete! Saved checkpoint: evolution_warmup_complete.json",
+                              flush=True)
+                    elif should_checkpoint:
                         self.save_checkpoint(evaluation_count)
+
+                    # Print status at every checkpoint
+                    if should_checkpoint:
                         stats = self.population.get_stats()
                         best_fitness = stats.get('fitness_best', 0.0)
                         pop_size = stats['population_size']
@@ -1101,9 +1119,14 @@ class MAPElitesTrainer:
         self.save_checkpoint(evaluation_count, final=True)
         self.print_population_summary()
 
-    def save_checkpoint(self, evaluation: int, final: bool = False):
+    def save_checkpoint(self, evaluation: int, final: bool = False, warmup_complete: bool = False):
         """Save population checkpoint."""
-        suffix = 'final' if final else f'eval_{evaluation}'
+        if final:
+            suffix = 'final'
+        elif warmup_complete:
+            suffix = 'warmup_complete'
+        else:
+            suffix = f'eval_{evaluation}'
         checkpoint_path = self.checkpoint_dir / f'evolution_{suffix}.json'
 
         self.population.save(str(checkpoint_path))
@@ -1269,17 +1292,26 @@ def main():
         # Auto-resume: find latest checkpoint
         checkpoint_dir = Path(args.checkpoint_dir)
         if checkpoint_dir.exists():
-            # Look for checkpoints in order: final, then highest eval_N
+            # Look for checkpoints in order: final, warmup_complete, then highest eval_N
             final_checkpoint = checkpoint_dir / 'evolution_final.json'
+            warmup_checkpoint = checkpoint_dir / 'evolution_warmup_complete.json'
+
             if final_checkpoint.exists():
                 checkpoint_to_load = final_checkpoint
             else:
                 # Find highest eval_N checkpoint
                 eval_checkpoints = list(checkpoint_dir.glob('evolution_eval_*.json'))
+
+                # Also consider warmup_complete as a candidate
+                if warmup_checkpoint.exists():
+                    eval_checkpoints.append(warmup_checkpoint)
+
                 if eval_checkpoints:
-                    # Extract numbers and find max
+                    # Extract numbers and find max (treat warmup_complete as eval_50)
                     def get_eval_num(path):
                         try:
+                            if 'warmup_complete' in path.stem:
+                                return 50
                             return int(path.stem.split('_')[-1])
                         except:
                             return 0
