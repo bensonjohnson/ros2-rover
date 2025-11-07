@@ -39,26 +39,49 @@ echo "Checking Python version..."
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo "  Python version: ${PYTHON_VERSION}"
 
-# Check ROCm GPU
+# Check Hardware Acceleration Backend
 echo ""
-echo "Checking ROCm GPU..."
-if command -v rocm-smi &> /dev/null; then
-  rocm-smi --showproductname 2>/dev/null | grep -A1 "GPU" || echo "  (rocm-smi output unavailable)"
-else
-  echo "⚠ rocm-smi not found - is ROCm installed?"
+echo "Checking hardware acceleration backend..."
+
+# Detect OS
+OS_TYPE=$(uname -s)
+echo "  OS: ${OS_TYPE}"
+
+# Check ROCm GPU on Linux
+if [ "$OS_TYPE" = "Linux" ]; then
+  if command -v rocm-smi &> /dev/null; then
+    echo ""
+    echo "ROCm GPU detected:"
+    rocm-smi --showproductname 2>/dev/null | grep -A1 "GPU" || echo "  (rocm-smi output unavailable)"
+  fi
 fi
 
-# Verify PyTorch can see GPU
+# Verify PyTorch backend
 echo ""
-echo "Verifying PyTorch + ROCm..."
+echo "Verifying PyTorch acceleration backend..."
 python3 -c "
 import torch
+import sys
+
+# Check CUDA (includes ROCm)
 if torch.cuda.is_available():
-    print(f'✓ GPU detected: {torch.cuda.get_device_name(0)}')
+    print(f'✓ CUDA/ROCm GPU detected: {torch.cuda.get_device_name(0)}')
     print(f'  Device count: {torch.cuda.device_count()}')
     print(f'  CUDA version: {torch.version.cuda}')
-else:
-    print('⚠ No GPU detected! Will use CPU (slower)')
+    print(f'  Backend: CUDA')
+    sys.exit(0)
+
+# Check MPS (Apple Silicon)
+if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    print('✓ Apple MPS (Metal) backend detected')
+    print(f'  Device: {torch.device(\"mps\")}')
+    print('  Backend: MPS')
+    sys.exit(0)
+
+# Fallback to CPU
+print('⚠ No GPU acceleration detected! Will use CPU (slower)')
+print('  Supported backends: CUDA/ROCm (Linux/Windows), MPS (macOS)')
+print('  Backend: CPU')
 " 2>&1
 
 # Check required packages

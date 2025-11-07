@@ -131,3 +131,15 @@ Waiting for rover to connect...
         #147: fitness=9.156340 (std=0.0106)
   ✓ Best mutation selected: fitness=9.798863 (std=0.0131)
 → Sent model #4 (tournament) to rover
+← Eval 24/1000 | Model #4 (tournament) | Fitness: 4.55 | Speed: 0.000 m/s | Clear: 0.43 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=71.59
+✓ Checkpoint saved: checkpoints/evolution_eval_24.json
+  Population: 10 models | Best fitness: 71.59
+→ Sent model #5 (mutation) to rover
+  → Requesting trajectory for Good (rank #10) (tournament: 150 candidates, next episode: 75s)...
+← Eval 25/1000 | Model #5 (mutation) | Fitness: 27.59 | Speed: 0.204 m/s | Clear: 0.34 m | ✓ ADDED rank #10 (Good (rank #10))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=71.59
+✓ Checkpoint saved: checkpoints/evolution_eval_25.json
+  Population: 10 models | Best fitness: 71.59
