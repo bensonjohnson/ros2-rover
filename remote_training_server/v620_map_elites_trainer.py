@@ -228,7 +228,9 @@ class PopulationTracker:
             })
 
         metadata = {
-            'population_size': self.population_size,
+            'population_size': self.population_size,  # Current adaptive size
+            'initial_population_size': self.initial_population_size,
+            'max_population_size': self.max_population_size,
             'population': population_metadata,
             'total_evaluations': self.total_evaluations,
             'improvements': self.improvements,
@@ -1146,9 +1148,13 @@ class MAPElitesTrainer:
         with open(checkpoint_path, 'r') as f:
             metadata = json.load(f)
 
-        # Create new population with same size
+        # Create new population tracker
+        # Prefer saved initial/max sizes if available (new format), otherwise use current values
+        initial_pop = metadata.get('initial_population_size', self.population.initial_population_size)
+        max_pop = metadata.get('max_population_size', metadata.get('population_size', self.population.max_population_size))
         self.population = PopulationTracker(
-            population_size=metadata.get('population_size', 20)
+            initial_population_size=initial_pop,
+            max_population_size=max_pop
         )
         self.population.total_evaluations = metadata['total_evaluations']
         self.population.improvements = metadata.get('improvements', 0)

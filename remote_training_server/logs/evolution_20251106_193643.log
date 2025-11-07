@@ -1,0 +1,22 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+🔄 Resuming from checkpoint: evolution_eval_19.json
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 1336, in <module>
+    main()
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 1323, in main
+    trainer.load_checkpoint(str(checkpoint_to_load))
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 1150, in load_checkpoint
+    self.population = PopulationTracker(
+                      ^^^^^^^^^^^^^^^^^^
+TypeError: PopulationTracker.__init__() got an unexpected keyword argument 'population_size'
