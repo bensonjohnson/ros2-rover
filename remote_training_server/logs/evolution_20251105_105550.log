@@ -1,0 +1,116 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Target evaluations: 1000
+Population size: 10
+
+Waiting for rover to connect...
+
+→ Sent model #0 (heuristic_cautious) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 30s)...
+← Eval 1/1000 | Model #0 (heuristic_cautious) | Fitness: 2.40 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+← Received trajectory data for model #0
+  📦 Caching model #0 (600 samples) for tournament
+  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...
+    Running tournament 1/3 (mutation: (0.005, 0.03))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #110: fitness=10.090811 (std=0.0166)
+        #17: fitness=10.033016 (std=0.0070)
+        #73: fitness=10.012015 (std=0.0149)
+        #37: fitness=9.971551 (std=0.0160)
+        #92: fitness=9.968918 (std=0.0214)
+  ✓ Best mutation selected: fitness=10.090811 (std=0.0166)
+    Running tournament 2/3 (mutation: (0.01, 0.05))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #76: fitness=10.271238 (std=0.0422)
+        #86: fitness=10.117801 (std=0.0475)
+        #149: fitness=10.055344 (std=0.0153)
+        #73: fitness=9.989114 (std=0.0181)
+        #28: fitness=9.907691 (std=0.0240)
+  ✓ Best mutation selected: fitness=10.271238 (std=0.0422)
+    Running tournament 3/3 (mutation: (0.02, 0.08))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #39: fitness=10.452986 (std=0.0789)
+        #163: fitness=9.930114 (std=0.0401)
+        #19: fitness=9.882158 (std=0.0310)
+        #61: fitness=9.827048 (std=0.0334)
+        #125: fitness=9.689445 (std=0.0522)
+  ✓ Best mutation selected: fitness=10.452986 (std=0.0789)
+  ✓ 3 tournament candidates queued for evaluation!
+→ Sent model #1 (heuristic_forward) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 30s)...
+← Eval 2/1000 | Model #1 (heuristic_forward) | Fitness: 28.15 | Speed: 0.205 m/s | Clear: 0.30 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+← Received trajectory data for model #1
+  📦 Caching model #1 (600 samples) for tournament
+  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...
+    Running tournament 1/3 (mutation: (0.005, 0.03))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #77: fitness=6.718117 (std=0.0200)
+        #159: fitness=6.661920 (std=0.0154)
+        #60: fitness=6.656775 (std=0.0153)
+        #120: fitness=6.645746 (std=0.0299)
+        #48: fitness=6.634255 (std=0.0067)
+  ✓ Best mutation selected: fitness=6.718117 (std=0.0200)
+    Running tournament 2/3 (mutation: (0.01, 0.05))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #34: fitness=7.340950 (std=0.0407)
+        #139: fitness=6.886535 (std=0.0447)
+        #105: fitness=6.815905 (std=0.0361)
+        #12: fitness=6.742235 (std=0.0201)
+        #156: fitness=6.650988 (std=0.0208)
+  ✓ Best mutation selected: fitness=7.340950 (std=0.0407)
+    Running tournament 3/3 (mutation: (0.02, 0.08))...
+  🏆 Running tournament selection (166 candidates)...
+    Evaluated 166/166 candidates...
+    Top 5 mutations:
+      ★ #75: fitness=7.171830 (std=0.0729)
+        #84: fitness=7.014847 (std=0.0360)
+        #48: fitness=6.776574 (std=0.0257)
+        #15: fitness=6.710696 (std=0.0303)
+        #86: fitness=6.647014 (std=0.0226)
+  ✓ Best mutation selected: fitness=7.171830 (std=0.0729)
+  ✓ 3 tournament candidates queued for evaluation!
+→ Sent model #2 (heuristic_explorer) to rover
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 900, in run
+    added, improvement, rank = self.population.add(
+                               ^^^^^^^^^^^^^^^^^^^^
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 118, in add
+    rank = self.population.index(entry) + 1
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Boolean value of Tensor with more than one value is ambiguous
+❌ Error in training loop: Boolean value of Tensor with more than one value is ambiguous
+→ Sent model #3 (heuristic_cautious) to rover
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 900, in run
+  File "/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py", line 118, in add
+    # Find rank by object identity (avoid tensor comparison issues)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Boolean value of Tensor with more than one value is ambiguous
+❌ Error in training loop: Boolean value of Tensor with more than one value is ambiguous
+→ Sent model #4 (heuristic_forward) to rover
