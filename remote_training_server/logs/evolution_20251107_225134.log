@@ -1,0 +1,33 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Target evaluations: 1000
+Population size: 10
+
+Waiting for rover to connect...
+
+⚠ Received result for unknown model ID 12
+→ Sent model #0 (heuristic_cautious) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 30s)...
+← Eval 1/1000 | Model #0 (heuristic_cautious) | Fitness: 0.74 | Speed: 0.000 m/s | Clear: 0.35 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+  💾 Saving population with 1 models
+  ✓ Exported best model: fitness=0.74
+✓ Checkpoint saved: checkpoints/evolution_eval_1.json
+  Population: 1 models | Best fitness: 0.74
+⚠ Unknown message type: trajectory_data_unavailable
+→ Sent model #1 (heuristic_forward) to rover

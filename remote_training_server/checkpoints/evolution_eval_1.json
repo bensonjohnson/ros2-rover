@@ -1,15 +1,17 @@
 {
   "population_size": 10,
+  "initial_population_size": 10,
+  "max_population_size": 25,
   "population": [
     {
       "rank": 1,
-      "fitness": 0.0,
+      "fitness": 1.0938080762028695,
       "avg_speed": 0.0,
-      "avg_clearance": 0.23482168061037859,
+      "avg_clearance": 0.41804001465439794,
       "metrics": {
         "distance": 0.0,
         "collisions": 0,
-        "duration": 60.04802465438843
+        "duration": 60.053815841674805
       }
     }
   ],
