@@ -266,6 +266,10 @@ class MAPElitesTrainer:
         self.checkpoint_dir.mkdir(exist_ok=True)
 
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        
+        # NEW: Auto-detect and set optimal batch size based on GPU memory
+        self.batch_size = self._calculate_optimal_batch_size()
+        print(f"✓ Auto-selected batch size: {self.batch_size} (based on available memory)")
 
         # Initialize adaptive population tracker
         self.population = PopulationTracker(
@@ -309,6 +313,7 @@ class MAPElitesTrainer:
         print(f"✓ Adaptive evolution trainer initialized on {self.device}")
         print(f"✓ Population: {initial_population_size} → {max_population_size} (adaptive)")
         print(f"✓ Tournament sizes: 75-500 (adaptive)")
+        print(f"✓ Batch size: {self.batch_size} (auto-scaled)")
         print(f"✓ REP socket listening on port {port}")
 
     def generate_random_model(self) -> dict:
@@ -317,6 +322,93 @@ class MAPElitesTrainer:
         # Random initialization is already done by PyTorch
         return model.state_dict()
 
+    def _calculate_optimal_batch_size(self) -> int:
+        """Calculate optimal batch size based on available GPU/CPU memory."""
+        if self.device.type == 'cuda':
+            return self._calculate_gpu_batch_size()
+        elif self.device.type == 'mps':
+            return self._calculate_mps_batch_size()
+        else:
+            return self._calculate_cpu_batch_size()
+    
+    def _calculate_gpu_batch_size(self) -> int:
+        """Calculate batch size for CUDA GPUs."""
+        try:
+            # Get total GPU memory in GB
+            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            
+            # Estimate memory per sample (model forward pass + gradients + optimizer states)
+            # Based on model architecture: ~500MB per sample including overhead
+            memory_per_sample_gb = 0.5
+            
+            # Reserve 20% for overhead and safety margin
+            available_memory_gb = total_memory_gb * 0.8
+            
+            # Calculate theoretical max batch size
+            theoretical_batch_size = int(available_memory_gb / memory_per_sample_gb)
+            
+            # Clamp to reasonable range
+            batch_size = max(8, min(theoretical_batch_size, 128))
+            
+            print(f"  GPU Memory: {total_memory_gb:.1f}GB → Batch size: {batch_size}")
+            return batch_size
+            
+        except Exception as e:
+            print(f"  ⚠ GPU memory detection failed: {e}, using default batch size 32")
+            return 32
+    
+    def _calculate_mps_batch_size(self) -> int:
+        """Calculate batch size for Apple MPS."""
+        try:
+            # MPS uses unified memory, estimate based on system RAM
+            import psutil
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+            
+            # MPS is less memory efficient than CUDA, use more conservative estimate
+            memory_per_sample_gb = 0.8  # Higher overhead for MPS
+            
+            # Reserve 30% for system and safety
+            available_memory_gb = total_memory_gb * 0.7
+            
+            # Calculate batch size
+            theoretical_batch_size = int(available_memory_gb / memory_per_sample_gb)
+            
+            # Clamp to reasonable range (MPS works better with smaller batches)
+            batch_size = max(4, min(theoretical_batch_size, 64))
+            
+            print(f"  MPS Memory: {total_memory_gb:.1f}GB → Batch size: {batch_size}")
+            return batch_size
+            
+        except Exception as e:
+            print(f"  ⚠ MPS memory detection failed: {e}, using default batch size 16")
+            return 16
+    
+    def _calculate_cpu_batch_size(self) -> int:
+        """Calculate batch size for CPU training."""
+        try:
+            # CPU training is much slower, use smaller batches
+            import psutil
+            total_memory_gb = psutil.virtual_memory().total / (1024**3)
+            
+            # CPU needs less memory per sample but is slower
+            memory_per_sample_gb = 0.3
+            
+            # Reserve 40% for system
+            available_memory_gb = total_memory_gb * 0.6
+            
+            # Calculate batch size
+            theoretical_batch_size = int(available_memory_gb / memory_per_sample_gb)
+            
+            # Clamp to reasonable range for CPU
+            batch_size = max(4, min(theoretical_batch_size, 32))
+            
+            print(f"  CPU Memory: {total_memory_gb:.1f}GB → Batch size: {batch_size}")
+            return batch_size
+            
+        except Exception as e:
+            print(f"  ⚠ CPU memory detection failed: {e}, using default batch size 8")
+            return 8
+    
     def generate_heuristic_model(self, policy_type: str) -> dict:
         """Generate model with heuristic behavior injected.
 
@@ -597,7 +689,7 @@ class MAPElitesTrainer:
         trajectory_data: dict,
         learning_rate: float = 1e-4,
         num_epochs: int = 10,
-        batch_size: int = 32,
+        batch_size: int = None,  # Now optional, will use self.batch_size if None
         use_replay_buffer: bool = True
     ) -> dict:
         """Refine model using gradient descent on trajectory data (behavioral cloning).
@@ -607,12 +699,18 @@ class MAPElitesTrainer:
             trajectory_data: Dictionary with 'rgb', 'depth', 'proprio', 'actions'
             learning_rate: Learning rate for optimizer
             num_epochs: Number of training epochs
-            batch_size: Batch size for training
+            batch_size: Batch size for training (auto-scaled if not provided)
             use_replay_buffer: Mix in data from trajectory buffer
 
         Returns:
             Refined model state dict
         """
+        # Use auto-scaled batch size if not specified
+        if batch_size is None:
+            batch_size = self.batch_size
+        
+        print(f"  📊 Gradient refinement with batch size: {batch_size}")
+        
         # Load model
         model = ActorNetwork().to(self.device)
         model.load_state_dict(model_state)
@@ -620,6 +718,11 @@ class MAPElitesTrainer:
 
         # Setup optimizer
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        
+        # Log memory usage before training
+        if self.device.type == 'cuda':
+            memory_before = torch.cuda.memory_allocated() / (1024**3)
+            print(f"  💾 GPU Memory before: {memory_before:.2f}GB")
 
         # Prepare current trajectory data
         rgb_list = [trajectory_data['rgb'].copy()]
@@ -699,6 +802,12 @@ class MAPElitesTrainer:
 
         avg_total_loss = total_loss / num_epochs
         print(f"  ✓ Gradient refinement complete, avg loss: {avg_total_loss:.6f}")
+        
+        # Log memory usage after training
+        if self.device.type == 'cuda':
+            memory_after = torch.cuda.memory_allocated() / (1024**3)
+            print(f"  💾 GPU Memory after: {memory_after:.2f}GB")
+            print(f"  💾 GPU Memory used: {memory_after - memory_before:.2f}GB")
 
         # Return refined model
         return model.state_dict()
