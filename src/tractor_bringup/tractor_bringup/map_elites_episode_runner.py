@@ -54,7 +54,7 @@ class MAPElitesEpisodeRunner(Node):
         self.declare_parameter('max_linear_speed', 0.18)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('collision_distance', 0.12)  # m
-        self.declare_parameter('inference_rate_hz', 10.0)
+        self.declare_parameter('inference_rate_hz', 30.0)  # Match camera frame rate
         self.declare_parameter('use_npu', True)
 
         self.server_addr = str(self.get_parameter('server_addr').value)
@@ -81,6 +81,13 @@ class MAPElitesEpisodeRunner(Node):
         self._collision_count = 0
         self._speed_samples = []
         self._clearance_samples = []
+        
+        # NEW: Tank-specific metrics
+        self._heading_samples = []  # For turn efficiency calculation
+        self._stationary_rotation_time = 0.0  # Time spent pivoting in place
+        self._track_slip_detected = False  # Flag for track slippage
+        self._last_commanded_speed = 0.0  # For slip detection
+        self._last_actual_speed = 0.0  # For slip detection
 
         # Trajectory collection (for gradient refinement)
         self._collect_trajectory = True  # Always collect by default (uses RAM but saves episode time)
@@ -88,6 +95,7 @@ class MAPElitesEpisodeRunner(Node):
         self._trajectory_depth = []
         self._trajectory_proprio = []
         self._trajectory_actions = []
+        self._trajectory_headings = []  # NEW: Store headings for turn efficiency
 
         # Trajectory cache per model (32GB RAM on rover)
         self._trajectory_cache = {}  # model_id -> trajectory_data
@@ -263,11 +271,17 @@ class MAPElitesEpisodeRunner(Node):
 
     def odom_callback(self, msg: Odometry) -> None:
         """Store latest odometry."""
+        # Extract quaternion and convert to yaw (heading)
+        q = msg.pose.pose.orientation
+        # Yaw from quaternion: atan2(2*(w*z + x*y), 1 - 2*(y² + z²))
+        yaw = np.arctan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        
         self._latest_odom = (
             msg.pose.pose.position.x,
             msg.pose.pose.position.y,
             msg.twist.twist.linear.x,
-            msg.twist.twist.angular.z
+            msg.twist.twist.angular.z,
+            yaw  # NEW: Add heading
         )
 
     def min_dist_callback(self, msg: Float32) -> None:
@@ -365,6 +379,12 @@ class MAPElitesEpisodeRunner(Node):
         self._trajectory_depth = []
         self._trajectory_proprio = []
         self._trajectory_actions = []
+        self._trajectory_headings = []  # NEW: Clear heading trajectory
+        
+        # NEW: Reset tank-specific metrics
+        self._heading_samples = []
+        self._stationary_rotation_time = 0.0
+        self._track_slip_detected = False
 
         self.get_logger().info('🚀 Episode started')
 
@@ -388,6 +408,16 @@ class MAPElitesEpisodeRunner(Node):
         # Compute averages
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
+        
+        # NEW: Compute turn efficiency (distance per heading change)
+        turn_efficiency = 0.0
+        if len(self._heading_samples) > 1 and self._total_distance > 0.1:
+            total_heading_change = np.sum(np.abs(np.diff(self._heading_samples)))
+            turn_efficiency = self._total_distance / (total_heading_change + 1e-6)
+        
+        # NEW: Detect track slippage (if we have commanded vs actual speed data)
+        # This is a simple detection - can be enhanced with more sophisticated slip detection
+        track_slip_detected = self._track_slip_detected
 
         # Compute action smoothness (lower is better = smoother turning)
         action_smoothness = 0.0
@@ -425,6 +455,10 @@ class MAPElitesEpisodeRunner(Node):
             'action_smoothness': float(action_smoothness),
             'avg_linear_action': float(avg_linear_action),
             'avg_angular_action': float(avg_angular_action),
+            # NEW: Tank-specific metrics
+            'turn_efficiency': float(turn_efficiency),
+            'stationary_rotation_time': float(self._stationary_rotation_time),
+            'track_slip_detected': bool(track_slip_detected),
         }
 
         # Send results to server and wait for acknowledgment
@@ -705,9 +739,23 @@ class MAPElitesEpisodeRunner(Node):
             current_speed = abs(self._latest_odom[2])  # Linear velocity
             self._speed_samples.append(current_speed)
             self._clearance_samples.append(self._min_forward_dist)
+            
+            # NEW: Record heading for turn efficiency
+            self._heading_samples.append(self._latest_odom[4])  # yaw/heading
+            
+            # NEW: Detect stationary rotation (pivot turns)
+            if abs(self._latest_odom[2]) < 0.02 and abs(angular_cmd) > 0.1:  # Low linear, high angular command
+                self._stationary_rotation_time += 1.0 / self.inference_rate  # Add timestep (now 1/30s)
+            
+            # NEW: Simple track slippage detection
+            commanded_speed = abs(linear_cmd)
+            actual_speed = abs(self._latest_odom[2])
+            if commanded_speed > 0.05 and actual_speed < commanded_speed * 0.3:  # Commanded but not moving much
+                self._track_slip_detected = True
 
             # Collect trajectory data if requested (subsample to avoid too much data)
-            if self._collect_trajectory and len(self._trajectory_rgb) < 600:  # Max 600 samples (~60s at 10Hz)
+            # Max 1800 samples (~60s at 30Hz)
+            if self._collect_trajectory and len(self._trajectory_rgb) < 1800:
                 # Store observation data
                 self._trajectory_rgb.append(self._latest_rgb.copy())
                 self._trajectory_depth.append(self._latest_depth.copy())
@@ -719,6 +767,9 @@ class MAPElitesEpisodeRunner(Node):
 
                 # Store action taken
                 self._trajectory_actions.append([linear_cmd / self.max_linear, angular_cmd / self.max_angular])
+                
+                # NEW: Store heading
+                self._trajectory_headings.append(self._latest_odom[4])
 
         except Exception as e:
             self.get_logger().error(f'Inference failed: {e}')

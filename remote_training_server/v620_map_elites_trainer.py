@@ -495,7 +495,7 @@ class MAPElitesTrainer:
         target_actions: torch.Tensor,
         proprio: torch.Tensor
     ) -> float:
-        """Compute goal-oriented tournament fitness.
+        """Compute tank-optimized tournament fitness with reduced imitation weight.
 
         Instead of just measuring action imitation (MSE), test if mutation
         achieves the actual fitness objectives:
@@ -503,6 +503,7 @@ class MAPElitesTrainer:
         - Low speed when clearance is low
         - Prefer forward motion over spinning
         - Smooth action transitions
+        - Tank-specific: reward controlled pivot turns at low speeds
 
         Args:
             pred_actions: Predicted actions (N, 2) [linear, angular]
@@ -514,31 +515,51 @@ class MAPElitesTrainer:
         """
         fitness = 0.0
 
-        # Extract clearance from proprioception (index 5)
+        # Extract clearance and speed from proprioception
         clearance = proprio[:, 5]  # (N,)
+        linear_speed = proprio[:, 0]  # (N,)
 
-        # 1. IMITATION BASELINE (30% weight)
-        #    Still reward staying close to successful behavior, but not as dominant
+        # 1. IMITATION BASELINE (REDUCED to 15% weight)
+        #    Reduced from 30% to encourage innovation over behavior cloning
         mse_loss = torch.nn.functional.mse_loss(pred_actions, target_actions)
         imitation_score = -mse_loss.item()
-        fitness += imitation_score * 0.3
+        fitness += imitation_score * 0.15  # Reduced from 0.30
 
-        # 2. SPEED-CLEARANCE CORRELATION (30% weight)
-        #    Reward high forward velocity when safe, low velocity when risky
-        high_clearance_mask = clearance > 2.0
-        low_clearance_mask = clearance < 0.5
+        # 2. SPEED-CLEARANCE CORRELATION (INCREASED to 35% weight)
+        #    Strongly reward appropriate speed based on clearance
+        #    Tank needs to be very responsive to clearance due to tight collision distance
+        high_clearance_mask = clearance > 1.5  # Reduced from 2.0 for tank environment
+        low_clearance_mask = clearance < 0.3   # Reduced from 0.5 for tank environment
 
         if high_clearance_mask.any():
-            # When clearance is high (>2m), should go forward confidently
+            # When clearance is high, should go forward confidently
             safe_linear = pred_actions[high_clearance_mask, 0].mean().item()
-            fitness += safe_linear * 15.0  # Strongly reward forward motion when safe
+            fitness += safe_linear * 25.0  # Increased from 15.0 for tank responsiveness
 
         if low_clearance_mask.any():
-            # When clearance is low (<0.5m), should be cautious (low linear)
+            # When clearance is low, should be very cautious
             risky_linear = pred_actions[low_clearance_mask, 0].mean().item()
-            fitness -= abs(risky_linear) * 10.0  # Penalize fast motion when risky
+            fitness -= abs(risky_linear) * 15.0  # Increased from 10.0 for safety
 
-        # 3. FORWARD BIAS (25% weight)
+        # 3. TANK PIVOT TURN BONUS: NEW
+        #    Reward controlled rotation at low speeds (critical for tank maneuvering)
+        low_speed_mask = linear_speed < 0.05  # Very low linear speed
+        moderate_angular_mask = torch.abs(pred_actions[:, 1]) > 0.2  # Some rotation
+        
+        if low_speed_mask.any() and moderate_angular_mask.any():
+            # Find timesteps with both low speed and rotation
+            pivot_mask = low_speed_mask & moderate_angular_mask
+            if pivot_mask.any():
+                # Reward smooth angular control during pivots
+                pivot_angular_actions = pred_actions[pivot_mask, 1]
+                angular_smoothness = torch.std(pivot_angular_actions).item()
+                
+                if angular_smoothness < 0.15:  # Smooth pivot control
+                    fitness += 10.0  # Bonus for good pivot turns
+                else:
+                    fitness -= 5.0   # Penalty for jerky pivots
+
+        # 4. FORWARD BIAS (25% weight) - Keep similar
         #    Tank steering: forward motion is good, spinning is bad
         linear_magnitude = torch.abs(pred_actions[:, 0]).mean().item()
         angular_magnitude = torch.abs(pred_actions[:, 1]).mean().item()
@@ -551,7 +572,7 @@ class MAPElitesTrainer:
         elif forward_ratio < 0.3:
             fitness -= (0.3 - forward_ratio) * 30.0  # Strong penalty for spinning
 
-        # 4. ACTION SMOOTHNESS (15% weight)
+        # 5. ACTION SMOOTHNESS (15% weight) - Keep similar
         #    Smooth actions indicate stable, confident behavior
         if pred_actions.shape[0] > 1:
             action_diffs = torch.diff(pred_actions, dim=0)
@@ -562,7 +583,7 @@ class MAPElitesTrainer:
             elif angular_smoothness > 0.3:
                 fitness -= (angular_smoothness - 0.3) * 15.0  # Penalize jerky
 
-        # 5. AVOID EXTREME ACTIONS (bonus)
+        # 6. AVOID EXTREME ACTIONS (bonus) - Keep similar
         #    Penalize saturation at action limits
         action_magnitude = torch.abs(pred_actions).mean().item()
         if action_magnitude > 0.9:
@@ -734,16 +755,17 @@ class MAPElitesTrainer:
             return self.mutate_model(parent_state), 'mutation'
 
     def compute_fitness(self, episode_data: dict) -> float:
-        """Compute behavior-neutral fitness with optional diversity bonus.
+        """Compute tank-optimized fitness with enhanced diversity for single evolution.
 
         Goals:
-        - Maximize collision-free exploration distance
-        - Reward smooth, efficient motion
-        - Reward forward bias (tank steering)
-        - BE NEUTRAL to speed (let model decide when to be fast/cautious)
+        - Maximize collision-free exploration distance (tank-speed adjusted)
+        - Reward smooth, efficient motion (critical for track longevity)
+        - Reward intelligent pivot turns (tank-specific)
+        - Penalize track slippage and unproductive spinning
         - Reward path quality and obstacle clearance
-        - (Optional) Bonus for exploring novel behaviors
+        - Strong diversity bonus to prevent single-evolution convergence
         """
+        # Extract standard metrics
         distance = episode_data['total_distance']
         collisions = episode_data['collision_count']
         avg_speed = episode_data.get('avg_speed', 0.0)
@@ -752,74 +774,68 @@ class MAPElitesTrainer:
         action_smoothness = episode_data.get('action_smoothness', 0.0)
         avg_linear_action = episode_data.get('avg_linear_action', 0.0)
         avg_angular_action = episode_data.get('avg_angular_action', 0.0)
+        
+        # NEW: Tank-specific metrics
+        turn_efficiency = episode_data.get('turn_efficiency', 0.0)
+        stationary_rotation = episode_data.get('stationary_rotation_time', 0.0)
+        track_slip = episode_data.get('track_slip_detected', False)
 
-        # Base fitness: exploration distance (PRIMARY goal)
-        # This is speed-neutral - slow+safe and fast+aggressive both maximize distance
-        fitness = distance * 3.0
+        # Base fitness: exploration distance (reduced weight for slow tank)
+        # Tank max speed is 0.18 m/s, so distance needs less weighting
+        fitness = distance * 2.0  # Reduced from 3.0 for tank speed
 
-        # 1. Collision penalty: Critical for safety
-        #    Collisions indicate poor decision-making
+        # 1. Collision penalty: Softer for tank learning
+        # Tank collision distance is very tight (0.12m), needs more forgiveness
         if collisions > 0:
-            collision_penalty = 15.0 * (collisions ** 1.5)  # 1→15, 2→42, 3→78
+            collision_penalty = 6.0 * (collisions ** 1.2)  # Reduced from 15.0 * 1.5
             fitness -= collision_penalty
 
-        # 2. Path quality bonus (reward maintaining good clearance)
-        #    This rewards finding open paths without requiring speed
-        if avg_clearance > 0.5:
-            # Reward smart path selection
-            clearance_bonus = min((avg_clearance - 0.5) * 2.0, 8.0)
+        # 2. Path quality bonus: Increased for tight tank clearances
+        # Reward maintaining clearance above collision distance + buffer
+        if avg_clearance > 0.15:  # 0.12m collision + 0.03m buffer
+            clearance_bonus = min((avg_clearance - 0.15) * 8.0, 15.0)  # Increased from 2.0, 8.0
             fitness += clearance_bonus
 
-        # 3. Smooth motion reward
-        #    Smooth actions indicate confident, deliberate behavior
-        #    Works for both slow-cautious and fast-aggressive
+        # 3. Tank pivot turn reward: NEW
+        # Reward efficient stationary rotation (critical for tank maneuvering)
+        if avg_speed < 0.05 and avg_angular_action > 0.2:  # Low speed, high rotation
+            if turn_efficiency > 0.5:  # Efficient pivot (good heading change per rotation)
+                fitness += 8.0  # Strong bonus for good pivot turns
+            else:
+                fitness -= 3.0  # Penalty for sloppy pivots
+
+        # 4. Penalize unproductive spinning: ENHANCED
+        # Tank should not spin in place without making progress
+        if avg_linear_action < 0.1 and avg_angular_action > 0.4:  # Mostly spinning
+            if distance < 1.0:  # Little progress
+                fitness -= 15.0  # Heavy penalty for unproductive spinning (was 12.0)
+
+        # 5. Smooth motion reward: INCREASED (critical for track longevity)
         if action_smoothness > 0:
-            if action_smoothness < 0.1:  # Very smooth
-                smoothness_bonus = (0.1 - action_smoothness) * 15.0  # Up to +1.5
+            if action_smoothness < 0.08:  # Very smooth (was 0.1)
+                smoothness_bonus = (0.08 - action_smoothness) * 20.0  # Increased from 15.0
                 fitness += smoothness_bonus
-            elif action_smoothness > 0.3:  # Very jerky
-                jerkiness_penalty = (action_smoothness - 0.3) * 8.0
+            elif action_smoothness > 0.25:  # Jerky (was 0.3)
+                jerkiness_penalty = (action_smoothness - 0.25) * 12.0  # Increased from 8.0
                 fitness -= jerkiness_penalty
 
-        # 4. Forward movement bias (CRITICAL for tank steering)
-        #    Penalize spinning in place, reward making progress
-        #    This is behavior-neutral: applies to slow and fast equally
-        if avg_linear_action > 0 or avg_angular_action > 0:
-            total_action = avg_linear_action + avg_angular_action + 1e-6
-            forward_bias = avg_linear_action / total_action
+        # 6. Track slippage penalty: NEW
+        if track_slip:
+            fitness -= 20.0  # Heavy penalty for track slippage (inefficient, damaging)
 
-            if forward_bias > 0.6:  # Mostly forward movement
-                forward_bonus = (forward_bias - 0.6) * 20.0  # Up to +8.0
-                fitness += forward_bonus
-            elif forward_bias < 0.3:  # Mostly spinning in place
-                spinning_penalty = (0.3 - forward_bias) * 25.0  # Up to -7.5
-                fitness -= spinning_penalty
-
-            # Extra penalty for spinning with little progress
-            if avg_angular_action > 0.5 and distance < 2.0:
-                fitness -= 12.0  # Severe penalty for unproductive spinning
-
-        # 5. Efficiency: distance per time
-        #    This is BEHAVIOR-NEUTRAL: rewards making progress efficiently
-        #    A slow cautious model can be just as efficient as a fast aggressive one
-        #    We only penalize if robot is stuck/stagnant
-        actual_speed = distance / duration
-
-        if distance < 1.0 and collisions == 0:
-            # Barely moved and no obstacles - likely frozen/stuck
-            fitness *= 0.3  # Harsh penalty for stagnation
-        elif actual_speed < 0.03:
-            # Moving but very inefficiently
+        # 7. Efficiency: Prevent stagnation (similar to before)
+        if distance < 0.5 and collisions == 0:  # Barely moved
+            fitness *= 0.4  # Harsh penalty for stagnation (was 0.3)
+        elif (distance / duration) < 0.02:  # Very inefficient
             fitness *= 0.7  # Moderate penalty
 
-        # 6. Diversity bonus (optional): reward exploring novel behaviors
-        #    This helps prevent premature convergence and maintains exploration
+        # 8. Diversity bonus: SIGNIFICANTLY INCREASED for single evolution
+        # Single evolution needs strong diversity to avoid premature convergence
         if self.enable_diversity_bonus and fitness > 0:
             novelty_score = self.population.calculate_behavior_novelty(avg_speed, avg_clearance)
-            if novelty_score > 0.5:  # Significantly different from existing population
-                diversity_bonus = novelty_score * 3.0  # Up to +3.0 bonus
+            if novelty_score > 0.6:  # More selective (was 0.5)
+                diversity_bonus = novelty_score * 12.0  # Massively increased from 3.0
                 fitness += diversity_bonus
-                # Note: this is logged separately in the main loop
 
         return fitness
 
