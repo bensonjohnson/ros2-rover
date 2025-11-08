@@ -1,0 +1,119 @@
+{
+  "population_size": 10,
+  "initial_population_size": 10,
+  "max_population_size": 10,
+  "population": [
+    {
+      "rank": 1,
+      "fitness": 71.59102923912158,
+      "avg_speed": 0.383745497270909,
+      "avg_clearance": 0.3659817134828218,
+      "metrics": {
+        "distance": 20.69723343916365,
+        "collisions": 0,
+        "duration": 60.07100963592529
+      }
+    },
+    {
+      "rank": 2,
+      "fitness": 49.78570051491881,
+      "avg_speed": 0.41978068268534807,
+      "avg_clearance": 0.4002679044414876,
+      "metrics": {
+        "distance": 13.509058226875274,
+        "collisions": 0,
+        "duration": 60.05641555786133
+      }
+    },
+    {
+      "rank": 3,
+      "fitness": 49.7747915684886,
+      "avg_speed": 0.405290926537736,
+      "avg_clearance": 0.3794708998250882,
+      "metrics": {
+        "distance": 13.928329547161047,
+        "collisions": 0,
+        "duration": 60.0640013217926
+      }
+    },
+    {
+      "rank": 4,
+      "fitness": 43.52415093709158,
+      "avg_speed": 0.3796827464166582,
+      "avg_clearance": 0.42218970352421187,
+      "metrics": {
+        "distance": 11.739379888154915,
+        "collisions": 0,
+        "duration": 60.09677529335022
+      }
+    },
+    {
+      "rank": 5,
+      "fitness": 43.14285568261136,
+      "avg_speed": 0.34839952931733853,
+      "avg_clearance": 0.4300332978590951,
+      "metrics": {
+        "distance": 11.694299024166257,
+        "collisions": 0,
+        "duration": 60.04875206947327
+      }
+    },
+    {
+      "rank": 6,
+      "fitness": 42.08376477373595,
+      "avg_speed": 0.34144994087641783,
+      "avg_clearance": 0.36831001691520215,
+      "metrics": {
+        "distance": 11.091186232028258,
+        "collisions": 0,
+        "duration": 60.075833559036255
+      }
+    },
+    {
+      "rank": 7,
+      "fitness": 35.16201442170327,
+      "avg_speed": 0.24923740681470632,
+      "avg_clearance": 0.3374076664646136,
+      "metrics": {
+        "distance": 8.75581417516601,
+        "collisions": 0,
+        "duration": 60.07143807411194
+      }
+    },
+    {
+      "rank": 8,
+      "fitness": 34.56104429835913,
+      "avg_speed": 0.2622446054307194,
+      "avg_clearance": 0.40294344629007645,
+      "metrics": {
+        "distance": 8.630549200470444,
+        "collisions": 0,
+        "duration": 60.09558463096619
+      }
+    },
+    {
+      "rank": 9,
+      "fitness": 32.853172157433114,
+      "avg_speed": 0.23968063520634164,
+      "avg_clearance": 0.3218150130410989,
+      "metrics": {
+        "distance": 7.821488894612077,
+        "collisions": 0,
+        "duration": 60.040106773376465
+      }
+    },
+    {
+      "rank": 10,
+      "fitness": 28.49983980883582,
+      "avg_speed": 0.1955802365236384,
+      "avg_clearance": 0.3649284672023056,
+      "metrics": {
+        "distance": 6.6779516751023404,
+        "collisions": 0,
+        "duration": 60.00784492492676
+      }
+    }
+  ],
+  "total_evaluations": 34,
+  "improvements": 25
+}
