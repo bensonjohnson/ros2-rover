@@ -1,0 +1,38 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+🔄 Resuming from checkpoint: evolution_eval_7.json
+  Population metadata has 7 entries
+  Found 7 model files in checkpoints/evolution_models
+  Loaded 7/7 models from checkpoint
+✓ Checkpoint loaded
+
+Population Summary:
+  Population size: 7
+  Total evaluations: 7
+  Improvements: 7
+  Fitness - Best: 34.94, Mean: -93.11, Min: -711.38
+  Avg speed: 0.215 m/s
+  Avg clearance: 0.36 m
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Resuming from evaluation 7
+Target evaluations: 1000 (need 993 more)
+Population size: 10
+
+Waiting for rover to connect...
+
+⚠ Received result for unknown model ID 6
+→ Sent model #0 (heuristic_forward) to rover

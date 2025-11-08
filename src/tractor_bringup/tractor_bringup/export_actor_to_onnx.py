@@ -40,9 +40,9 @@ def export_to_onnx(pt_path: str, onnx_path: str):
     model.load_state_dict(torch.load(pt_path, map_location='cpu'))
     model.eval()
 
-    # Dummy inputs
-    rgb = torch.randn(1, 3, 240, 424)
-    depth = torch.randn(1, 1, 240, 424)
+    # Dummy inputs (updated to 640x480 resolution)
+    rgb = torch.randn(1, 3, 480, 640)
+    depth = torch.randn(1, 1, 480, 640)
     proprio = torch.randn(1, 6)
 
     # Export to ONNX

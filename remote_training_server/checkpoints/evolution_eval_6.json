@@ -1,70 +1,72 @@
 {
   "population_size": 10,
+  "initial_population_size": 10,
+  "max_population_size": 25,
   "population": [
     {
       "rank": 1,
-      "fitness": 49.7747915684886,
-      "avg_speed": 0.405290926537736,
-      "avg_clearance": 0.3794708998250882,
+      "fitness": 8.34795583739503,
+      "avg_speed": 0.0005819138763117522,
+      "avg_clearance": 0.41054411254786016,
       "metrics": {
-        "distance": 13.928329547161047,
+        "distance": 0.050425665122498894,
         "collisions": 0,
-        "duration": 60.0640013217926
+        "duration": 60.01515865325928
       }
     },
     {
       "rank": 2,
-      "fitness": 4.885426957623936,
-      "avg_speed": 0.0005111597223457772,
-      "avg_clearance": 0.3040416173252607,
+      "fitness": 4.515184839992657,
+      "avg_speed": 0.26146283203426995,
+      "avg_clearance": 0.323660584064371,
       "metrics": {
-        "distance": 0.05352145609440149,
+        "distance": 9.203038898862333,
         "collisions": 0,
-        "duration": 60.08724403381348
+        "duration": 60.04033303260803
       }
     },
     {
       "rank": 3,
-      "fitness": 2.588515246276975,
-      "avg_speed": 0.009067001416149618,
-      "avg_clearance": 0.23552746708797734,
+      "fitness": 1.0938080762028695,
+      "avg_speed": 0.0,
+      "avg_clearance": 0.41804001465439794,
       "metrics": {
-        "distance": 0.366537049787327,
+        "distance": 0.0,
         "collisions": 0,
-        "duration": 60.009907484054565
+        "duration": 60.053815841674805
       }
     },
     {
       "rank": 4,
-      "fitness": 1.2818739095475062,
-      "avg_speed": 0.3740732061440477,
-      "avg_clearance": 0.40549752361663366,
+      "fitness": -5.31262341186634,
+      "avg_speed": 0.15410922305476335,
+      "avg_clearance": 0.28191182984290225,
       "metrics": {
-        "distance": 0.18304406798927395,
+        "distance": 5.452832779756177,
         "collisions": 0,
-        "duration": 60.02797222137451
+        "duration": 60.02332139015198
       }
     },
     {
       "rank": 5,
-      "fitness": 0.0,
-      "avg_speed": 0.0,
-      "avg_clearance": 0.23482168061037859,
+      "fitness": -11.058644949206718,
+      "avg_speed": 0.34084053486848503,
+      "avg_clearance": 0.38779868706193027,
       "metrics": {
-        "distance": 0.0,
+        "distance": 0.9302764275212256,
         "collisions": 0,
-        "duration": 60.04802465438843
+        "duration": 60.08101153373718
       }
     },
     {
       "rank": 6,
-      "fitness": -5.964933852176386,
-      "avg_speed": 0.3246191577827587,
-      "avg_clearance": 0.38313501826177043,
+      "fitness": -563.1309978100995,
+      "avg_speed": 0.2828472657925037,
+      "avg_clearance": 0.3477620802286659,
       "metrics": {
-        "distance": 1.007891293035722,
-        "collisions": 1,
-        "duration": 60.00032114982605
+        "distance": 1.2294700220686763,
+        "collisions": 43,
+        "duration": 60.07227802276611
       }
     }
   ],
