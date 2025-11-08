@@ -790,25 +790,39 @@ class MAPElitesTrainer:
             collision_penalty = 6.0 * (collisions ** 1.2)  # Reduced from 15.0 * 1.5
             fitness -= collision_penalty
 
-        # 2. Path quality bonus: Increased for tight tank clearances
-        # Reward maintaining clearance above collision distance + buffer
+        # 2. Path quality bonus: Enhanced for indoor navigation
+        # Reward maintaining clearance and moving towards open space
         if avg_clearance > 0.15:  # 0.12m collision + 0.03m buffer
-            clearance_bonus = min((avg_clearance - 0.15) * 8.0, 15.0)  # Increased from 2.0, 8.0
+            # Base clearance reward
+            clearance_bonus = min((avg_clearance - 0.15) * 8.0, 15.0)
             fitness += clearance_bonus
+            
+            # NEW: Bonus for being in "good" clearance zones (0.3m+ = comfortable indoor space)
+            if avg_clearance > 0.3:
+                open_space_bonus = min((avg_clearance - 0.3) * 5.0, 10.0)
+                fitness += open_space_bonus
 
-        # 3. Tank pivot turn reward: NEW
-        # Reward efficient stationary rotation (critical for tank maneuvering)
+        # 3. Tank pivot turn reward: Enhanced for indoor navigation
+        # Reward efficient stationary rotation and scanning behavior
         if avg_speed < 0.05 and avg_angular_action > 0.2:  # Low speed, high rotation
             if turn_efficiency > 0.5:  # Efficient pivot (good heading change per rotation)
                 fitness += 8.0  # Strong bonus for good pivot turns
             else:
                 fitness -= 3.0  # Penalty for sloppy pivots
+            
+            # NEW: Bonus for controlled scanning behavior (slow, deliberate turns)
+            if avg_angular_action < 0.5:  # Moderate angular speed (not spinning wildly)
+                if action_smoothness < 0.15:  # Smooth turning
+                    scanning_bonus = (0.15 - action_smoothness) * 10.0
+                    fitness += scanning_bonus
 
-        # 4. Penalize unproductive spinning: ENHANCED
+        # 4. Penalize unproductive spinning: ENHANCED for indoor nav
         # Tank should not spin in place without making progress
         if avg_linear_action < 0.1 and avg_angular_action > 0.4:  # Mostly spinning
             if distance < 1.0:  # Little progress
-                fitness -= 15.0  # Heavy penalty for unproductive spinning (was 12.0)
+                fitness -= 15.0  # Heavy penalty for unproductive spinning
+            elif avg_angular_action > 0.7:  # Wild spinning
+                fitness -= 25.0  # Severe penalty for chaotic behavior
 
         # 5. Smooth motion reward: INCREASED (critical for track longevity)
         if action_smoothness > 0:
@@ -823,11 +837,16 @@ class MAPElitesTrainer:
         if track_slip:
             fitness -= 20.0  # Heavy penalty for track slippage (inefficient, damaging)
 
-        # 7. Efficiency: Prevent stagnation (similar to before)
+        # 7. Efficiency: Enhanced for indoor exploration
         if distance < 0.5 and collisions == 0:  # Barely moved
-            fitness *= 0.4  # Harsh penalty for stagnation (was 0.3)
+            fitness *= 0.4  # Harsh penalty for stagnation
         elif (distance / duration) < 0.02:  # Very inefficient
             fitness *= 0.7  # Moderate penalty
+        
+        # NEW: Reward consistent exploration patterns (not just distance)
+        if distance > 2.0 and collisions == 0 and action_smoothness < 0.2:
+            exploration_bonus = min(distance * 0.5, 10.0)  # Bonus for smooth, collision-free exploration
+            fitness += exploration_bonus
 
         # 8. Diversity bonus: SIGNIFICANTLY INCREASED for single evolution
         # Single evolution needs strong diversity to avoid premature convergence
