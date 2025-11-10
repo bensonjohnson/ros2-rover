@@ -1,0 +1,32 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+ActorNetwork parameter count: 321,986
+[2025-11-08 15:49:54] INFO     <813868> evotorch.core: Instance of `RoverProblem` (id:130812221232464) -- The `dtype` for the problem's decision variables is set as torch.float32
+[2025-11-08 15:49:54] INFO     <813868> evotorch.core: Instance of `RoverProblem` (id:130812221232464) -- `eval_dtype` (the dtype of the fitnesses and evaluation data) is set as torch.float32
+[2025-11-08 15:49:54] INFO     <813868> evotorch.core: Instance of `RoverProblem` (id:130812221232464) -- The `device` of the problem is set as cuda
+[2025-11-08 15:49:54] INFO     <813868> evotorch.core: Instance of `RoverProblem` (id:130812221232464) -- The number of actors that will be allocated for parallelized evaluation is 0
+✓ PGPE Problem initialized
+✓ Parameters: 321,986
+✓ Device: cuda
+✓ REP socket listening on port 5556
+
+============================================================
+Initializing PGPE Algorithm
+============================================================
+Traceback (most recent call last):
+  File "/root/ros2-rover/remote_training_server/v620_pgpe_trainer.py", line 466, in <module>
+    main()
+  File "/root/ros2-rover/remote_training_server/v620_pgpe_trainer.py", line 370, in main
+    searcher = PGPE(
+               ^^^^^
+  File "/root/rocm-train/lib/python3.12/site-packages/evotorch/algorithms/distributed/gaussian.py", line 723, in __init__
+    super().__init__(
+  File "/root/rocm-train/lib/python3.12/site-packages/evotorch/algorithms/distributed/gaussian.py", line 97, in __init__
+    mu = problem.generate_values(1).reshape(-1)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/rocm-train/lib/python3.12/site-packages/evotorch/core.py", line 1871, in generate_values
+    self._fill(result)
+  File "/root/rocm-train/lib/python3.12/site-packages/evotorch/core.py", line 1897, in _fill
+    raise RuntimeError(
+RuntimeError: The default implementation of the method `_fill(...)` does not know how to initialize solutions because it appears that this Problem object was not given neither `initial_bounds` nor `bounds` during the moment of initialization. Please either instantiate this Problem object with `initial_bounds` and/or `bounds`, or override the method `_fill(...)` to specify how solutions should be initialized.

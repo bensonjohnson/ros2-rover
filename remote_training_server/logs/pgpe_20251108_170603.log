@@ -1,0 +1,37 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+ActorNetwork parameter count: 321,986
+[2025-11-08 17:06:05] INFO     <19302> evotorch.core: Instance of `RoverProblem` (id:130943127549760) -- The `dtype` for the problem's decision variables is set as torch.float32
+[2025-11-08 17:06:05] INFO     <19302> evotorch.core: Instance of `RoverProblem` (id:130943127549760) -- `eval_dtype` (the dtype of the fitnesses and evaluation data) is set as torch.float32
+[2025-11-08 17:06:05] INFO     <19302> evotorch.core: Instance of `RoverProblem` (id:130943127549760) -- The `device` of the problem is set as cuda
+[2025-11-08 17:06:05] INFO     <19302> evotorch.core: Instance of `RoverProblem` (id:130943127549760) -- The number of actors that will be allocated for parallelized evaluation is 0
+✓ PGPE Problem initialized
+✓ Parameters: 321,986
+✓ Device: cuda
+✓ REP socket listening on port 5556
+
+============================================================
+Initializing PGPE Algorithm
+============================================================
+✓ PGPE initialized
+  Population size: 20
+  Center learning rate: 0.01
+  Stdev learning rate: 0.001
+  Initial stdev: 0.02
+
+Starting fresh (no checkpoint found)
+
+============================================================
+Starting PGPE Evolution Training
+============================================================
+Target evaluations: 1000
+Starting generation: 0
+Starting evaluations: 0/1000
+
+Waiting for rover to connect...
+
+
+============================================================
+Evaluating batch of 20 solutions
+============================================================

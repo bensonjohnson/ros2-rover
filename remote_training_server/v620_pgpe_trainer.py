@@ -59,6 +59,7 @@ class RoverProblem(Problem):
         port: int = 5556,
         checkpoint_dir: str = './checkpoints',
         device: str = 'cuda',
+        warmstart_model: Optional[str] = None,
     ):
         # Create template model to get parameter count
         self.template_model = ActorNetwork().to(device)
@@ -67,17 +68,20 @@ class RoverProblem(Problem):
         print(f"ActorNetwork parameter count: {num_params:,}")
 
         # Initialize EvoTorch Problem
+        # Set initial_bounds for parameter initialization (similar to PyTorch default init)
         super().__init__(
             objective_sense="max",  # Maximize fitness
             solution_length=num_params,
             dtype=torch.float32,
             device=device,
+            initial_bounds=(-0.1, 0.1),  # Initialize params in [-0.1, 0.1]
         )
 
         self.port = port
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(exist_ok=True)
         self.device_str = device
+        self.warmstart_model = warmstart_model
 
         # ZeroMQ REP socket for communication with rover
         self.context = zmq.Context()
@@ -98,26 +102,30 @@ class RoverProblem(Problem):
         print(f"✓ Device: {device}")
         print(f"✓ REP socket listening on port {port}")
 
-    def _evaluate_batch(self, solutions: torch.Tensor) -> torch.Tensor:
+    def _evaluate_batch(self, solutions):
         """Evaluate a batch of solutions (policy parameter vectors).
 
         This is called by PGPE during optimization. We send each solution
         to the rover for real-world evaluation.
 
         Args:
-            solutions: (popsize, num_params) tensor of parameter vectors
+            solutions: SolutionBatch object containing parameter vectors
 
         Returns:
-            fitness: (popsize,) tensor of fitness values
+            None (sets evaluations on the SolutionBatch object)
         """
-        batch_size = solutions.shape[0]
+        # Extract solution values tensor from SolutionBatch
+        solution_values = solutions.values
+        batch_size = len(solutions)
         fitness_values = []
 
-        print(f"\n{'='*60}")
-        print(f"Evaluating batch of {batch_size} solutions")
-        print(f"{'='*60}")
+        print(f"\n{'='*60}", flush=True)
+        print(f"Evaluating batch of {batch_size} solutions", flush=True)
+        print(f"{'='*60}", flush=True)
 
-        for idx, solution in enumerate(solutions):
+        for idx in range(batch_size):
+            solution = solution_values[idx]
+
             # Convert solution (flat params) to model state dict
             model_state = self._solution_to_state_dict(solution)
 
@@ -131,11 +139,13 @@ class RoverProblem(Problem):
             if fitness > self.best_fitness_ever:
                 self.best_fitness_ever = fitness
                 self.best_model_ever = copy.deepcopy(model_state)
-                print(f"  🏆 NEW BEST! Fitness: {fitness:.2f}")
+                print(f"  🏆 NEW BEST! Fitness: {fitness:.2f}", flush=True)
 
-            print(f"  [{idx+1}/{batch_size}] Fitness: {fitness:.2f}")
+            print(f"  [{idx+1}/{batch_size}] Fitness: {fitness:.2f}", flush=True)
 
-        return torch.tensor(fitness_values, dtype=torch.float32, device=self.device)
+        # Set evaluations on the SolutionBatch
+        fitness_tensor = torch.tensor(fitness_values, dtype=torch.float32, device=self.device)
+        solutions.set_evals(fitness_tensor)
 
     def _solution_to_state_dict(self, solution: torch.Tensor) -> dict:
         """Convert flat parameter vector to model state dict.
@@ -324,6 +334,147 @@ class RoverProblem(Problem):
             torch.save(self.best_model_ever, filepath)
             print(f"✓ Saved best model (fitness={self.best_fitness_ever:.2f}): {filepath}")
 
+    def get_warmstart_center(self) -> Optional[torch.Tensor]:
+        """Load warmstart model and convert to flat parameter vector.
+
+        Returns:
+            Flat parameter tensor, or None if no warmstart model
+        """
+        if self.warmstart_model is None:
+            return None
+
+        try:
+            print(f"Loading warmstart model from: {self.warmstart_model}")
+            state_dict = torch.load(self.warmstart_model, map_location='cpu')
+
+            # Convert state dict to flat parameter vector
+            params = []
+            for name, param in self.template_model.named_parameters():
+                if name in state_dict:
+                    params.append(state_dict[name].flatten())
+                else:
+                    print(f"⚠ Warning: {name} not found in warmstart model")
+                    params.append(param.flatten())
+
+            center = torch.cat(params).to(self.device)
+            print(f"✓ Warmstart center loaded ({len(center):,} parameters)")
+            return center
+
+        except Exception as e:
+            print(f"❌ Error loading warmstart model: {e}")
+            return None
+
+
+def save_checkpoint(checkpoint_dir: Path, generation: int, searcher, problem, args):
+    """Save full PGPE checkpoint including distribution state.
+
+    Args:
+        checkpoint_dir: Directory to save checkpoint
+        generation: Current generation number
+        searcher: PGPE searcher instance
+        problem: RoverProblem instance
+        args: Command line arguments
+    """
+    checkpoint_path = checkpoint_dir / f'pgpe_gen_{generation}.pt'
+
+    # Save PGPE state
+    checkpoint_data = {
+        'generation': generation,
+        'evaluations': problem.total_evaluations,
+        'best_fitness_ever': problem.best_fitness_ever,
+        'best_model_state': problem.best_model_ever,
+
+        # PGPE distribution parameters
+        'center': searcher._mu.detach().cpu(),  # Center of distribution
+        'sigma': searcher._sigma.detach().cpu(),  # Exploration stdev
+
+        # Optimizer state (Adam momentum, variance, etc)
+        'optimizer_state': searcher._optimizer.state_dict() if hasattr(searcher, '_optimizer') else None,
+
+        # Hyperparameters
+        'population_size': args.population_size,
+        'center_lr': args.center_lr,
+        'stdev_lr': args.stdev_lr,
+        'stdev_init': args.stdev_init,
+    }
+
+    torch.save(checkpoint_data, checkpoint_path)
+    print(f"✓ Checkpoint saved: {checkpoint_path}", flush=True)
+
+    # Also save best model separately for easy access
+    if problem.best_model_ever is not None:
+        best_models_dir = checkpoint_dir / 'best_models'
+        best_models_dir.mkdir(exist_ok=True)
+        best_model_path = best_models_dir / f'best_gen_{generation}.pt'
+        problem.save_best_model(str(best_model_path))
+
+
+def load_checkpoint(checkpoint_path: str, searcher, problem):
+    """Load PGPE checkpoint and restore state.
+
+    Args:
+        checkpoint_path: Path to checkpoint file
+        searcher: PGPE searcher instance to restore
+        problem: RoverProblem instance to restore
+
+    Returns:
+        generation: Generation number to resume from
+    """
+    print(f"Loading checkpoint: {checkpoint_path}", flush=True)
+    checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
+
+    # Restore problem state
+    problem.total_evaluations = checkpoint_data['evaluations']
+    problem.best_fitness_ever = checkpoint_data['best_fitness_ever']
+    problem.best_model_ever = checkpoint_data['best_model_state']
+
+    # Restore PGPE distribution
+    searcher._mu[:] = checkpoint_data['center'].to(searcher._mu.device)
+    searcher._sigma[:] = checkpoint_data['sigma'].to(searcher._sigma.device)
+
+    # Restore optimizer state
+    if checkpoint_data['optimizer_state'] is not None and hasattr(searcher, '_optimizer'):
+        searcher._optimizer.load_state_dict(checkpoint_data['optimizer_state'])
+
+    generation = checkpoint_data['generation']
+
+    print(f"✓ Checkpoint loaded", flush=True)
+    print(f"  Generation: {generation}", flush=True)
+    print(f"  Evaluations: {problem.total_evaluations}", flush=True)
+    print(f"  Best fitness: {problem.best_fitness_ever:.2f}", flush=True)
+
+    return generation
+
+
+def find_latest_checkpoint(checkpoint_dir: Path) -> Optional[Path]:
+    """Find the most recent checkpoint file.
+
+    Args:
+        checkpoint_dir: Directory containing checkpoints
+
+    Returns:
+        Path to latest checkpoint, or None if no checkpoints exist
+    """
+    if not checkpoint_dir.exists():
+        return None
+
+    # Look for pgpe_gen_*.pt files
+    checkpoints = list(checkpoint_dir.glob('pgpe_gen_*.pt'))
+
+    if not checkpoints:
+        return None
+
+    # Extract generation numbers and find max
+    def get_gen_num(path):
+        try:
+            # Extract number from pgpe_gen_123.pt
+            return int(path.stem.split('_')[-1])
+        except:
+            return 0
+
+    latest = max(checkpoints, key=get_gen_num)
+    return latest
+
 
 def main():
     parser = argparse.ArgumentParser(description='PGPE trainer for rover evolution')
@@ -341,6 +492,12 @@ def main():
                         help='PGPE stdev learning rate (default: 0.001)')
     parser.add_argument('--stdev-init', type=float, default=0.02,
                         help='Initial standard deviation (default: 0.02)')
+    parser.add_argument('--warmstart', type=str, default=None,
+                        help='Path to warmstart model (e.g., checkpoints/best_models/best_final.pt)')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Resume from specific checkpoint (e.g., "gen_100")')
+    parser.add_argument('--fresh', action='store_true',
+                        help='Start fresh, ignore existing checkpoints')
     args = parser.parse_args()
 
     # Check GPU
@@ -359,6 +516,7 @@ def main():
         port=args.port,
         checkpoint_dir=args.checkpoint_dir,
         device=device,
+        warmstart_model=args.warmstart,
     )
 
     print()
@@ -374,18 +532,27 @@ def main():
         stdev_learning_rate=args.stdev_lr,
         stdev_init=args.stdev_init,
         optimizer="adam",  # Use Adam for distribution updates
-        optimizer_config={"lr": args.center_lr},
         ranking_method="centered",  # Centered ranking for better gradient estimates
     )
 
     # Add logger
     logger = StdOutLogger(searcher)
 
+    # Apply warmstart if provided
+    if args.warmstart:
+        warmstart_center = problem.get_warmstart_center()
+        if warmstart_center is not None:
+            # Set PGPE center to warmstart model parameters
+            searcher._mu[:] = warmstart_center
+            print(f"✓ Applied warmstart from {args.warmstart}")
+
     print(f"✓ PGPE initialized")
     print(f"  Population size: {args.population_size}")
     print(f"  Center learning rate: {args.center_lr}")
     print(f"  Stdev learning rate: {args.stdev_lr}")
     print(f"  Initial stdev: {args.stdev_init}")
+    if args.warmstart:
+        print(f"  Warmstart: {args.warmstart}")
     print()
 
     # Create checkpoint directory
@@ -394,51 +561,81 @@ def main():
     best_models_dir = checkpoint_dir / 'best_models'
     best_models_dir.mkdir(exist_ok=True)
 
-    print("=" * 60)
-    print("Starting PGPE Evolution Training")
-    print("=" * 60)
-    print(f"Target evaluations: {args.num_evaluations}")
-    print()
-    print("Waiting for rover to connect...")
-    print()
+    # Resume logic
+    start_generation = 0
+    checkpoint_to_load = None
+
+    if args.fresh:
+        print("🆕 Starting fresh (--fresh flag)", flush=True)
+        print(flush=True)
+    elif args.resume:
+        # Explicit resume request
+        checkpoint_to_load = checkpoint_dir / f'pgpe_{args.resume}.pt'
+        if not checkpoint_to_load.exists():
+            print(f"❌ Checkpoint not found: {checkpoint_to_load}", flush=True)
+            print("Available checkpoints:", flush=True)
+            for cp in sorted(checkpoint_dir.glob('pgpe_gen_*.pt')):
+                print(f"  {cp.name}", flush=True)
+            return
+    else:
+        # Auto-resume: find latest checkpoint
+        checkpoint_to_load = find_latest_checkpoint(checkpoint_dir)
+
+    # Load checkpoint if found
+    if checkpoint_to_load and checkpoint_to_load.exists():
+        print(f"🔄 Resuming from checkpoint: {checkpoint_to_load.name}", flush=True)
+        start_generation = load_checkpoint(str(checkpoint_to_load), searcher, problem)
+        print(flush=True)
+    elif not args.fresh:
+        print("Starting fresh (no checkpoint found)", flush=True)
+        print(flush=True)
+
+    print("=" * 60, flush=True)
+    print("Starting PGPE Evolution Training", flush=True)
+    print("=" * 60, flush=True)
+    print(f"Target evaluations: {args.num_evaluations}", flush=True)
+    print(f"Starting generation: {start_generation}", flush=True)
+    print(f"Starting evaluations: {problem.total_evaluations}/{args.num_evaluations}", flush=True)
+    print(flush=True)
+    print("Waiting for rover to connect...", flush=True)
+    print(flush=True)
 
     # Training loop
-    generation = 0
+    generation = start_generation
     while problem.total_evaluations < args.num_evaluations:
         try:
             # Run one generation (evaluates population, updates distribution)
             searcher.step()
             generation += 1
 
-            # Get current best
-            best_fitness = searcher.status['best'].evals[0].item()
-            mean_fitness = searcher.status['pop_best'].evals.mean().item()
+            # Get current best (with fallback if status not populated yet)
+            try:
+                best_fitness = searcher.status['best'].evals[0].item()
+                mean_fitness = searcher.status['pop_best'].evals.mean().item()
+            except (KeyError, AttributeError):
+                # Status not populated yet (first generation)
+                best_fitness = problem.best_fitness_ever
+                mean_fitness = best_fitness
 
-            print()
-            print(f"{'='*60}")
-            print(f"Generation {generation} Complete")
-            print(f"{'='*60}")
-            print(f"  Evaluations: {problem.total_evaluations}/{args.num_evaluations}")
-            print(f"  Best (this gen): {best_fitness:.2f}")
-            print(f"  Mean (this gen): {mean_fitness:.2f}")
-            print(f"  Best (all time): {problem.best_fitness_ever:.2f}")
-            print()
+            print(flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"Generation {generation} Complete", flush=True)
+            print(f"{'='*60}", flush=True)
+            print(f"  Evaluations: {problem.total_evaluations}/{args.num_evaluations}", flush=True)
+            print(f"  Best (this gen): {best_fitness:.2f}", flush=True)
+            print(f"  Mean (this gen): {mean_fitness:.2f}", flush=True)
+            print(f"  Best (all time): {problem.best_fitness_ever:.2f}", flush=True)
+            print(flush=True)
 
             # Save checkpoint every 10 generations
             if generation % 10 == 0:
-                checkpoint_path = checkpoint_dir / f'pgpe_gen_{generation}.json'
-                metadata = {
-                    'generation': generation,
-                    'evaluations': problem.total_evaluations,
-                    'best_fitness': problem.best_fitness_ever,
-                    'population_size': args.population_size,
-                }
-                with open(checkpoint_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
-
-                # Save best model
-                best_model_path = best_models_dir / f'best_gen_{generation}.pt'
-                problem.save_best_model(str(best_model_path))
+                save_checkpoint(
+                    checkpoint_dir=checkpoint_dir,
+                    generation=generation,
+                    searcher=searcher,
+                    problem=problem,
+                    args=args
+                )
 
         except KeyboardInterrupt:
             print("\n🛑 Training interrupted by user")
@@ -449,13 +646,24 @@ def main():
             traceback.print_exc()
             continue
 
-    print()
-    print("=" * 60)
-    print("✅ PGPE Evolution Training Complete!")
-    print("=" * 60)
-    print(f"  Total evaluations: {problem.total_evaluations}")
-    print(f"  Best fitness: {problem.best_fitness_ever:.2f}")
-    print()
+    print(flush=True)
+    print("=" * 60, flush=True)
+    print("✅ PGPE Evolution Training Complete!", flush=True)
+    print("=" * 60, flush=True)
+    print(f"  Total generations: {generation}", flush=True)
+    print(f"  Total evaluations: {problem.total_evaluations}", flush=True)
+    print(f"  Best fitness: {problem.best_fitness_ever:.2f}", flush=True)
+    print(flush=True)
+
+    # Save final checkpoint
+    print("Saving final checkpoint...", flush=True)
+    save_checkpoint(
+        checkpoint_dir=checkpoint_dir,
+        generation=generation,
+        searcher=searcher,
+        problem=problem,
+        args=args
+    )
 
     # Save final best model
     final_model_path = best_models_dir / 'best_final.pt'
