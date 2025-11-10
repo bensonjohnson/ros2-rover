@@ -1,0 +1,251 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+  GPU Memory: 30.0GB → Batch size: 47
+✓ Auto-selected batch size: 47 (based on available memory)
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ Batch size: 47 (auto-scaled)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+🔄 Resuming from checkpoint: evolution_eval_31.json
+  Population metadata has 10 entries
+  Found 10 model files in checkpoints/evolution_models
+  Loaded 10/10 models from checkpoint
+✓ Checkpoint loaded
+
+Population Summary:
+  Population size: 10
+  Total evaluations: 31
+  Improvements: 28
+  Fitness - Best: 54.88, Mean: 7.93, Min: 1.51
+  Avg speed: 0.220 m/s
+  Avg clearance: 0.40 m
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Resuming from evaluation 31
+Target evaluations: 1000 (need 969 more)
+Population size: 10
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+← Eval 32/1000 | Model #0 (random) | Fitness: 0.00 | Speed: 0.000 m/s | Clear: 0.00 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_32.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #1 (mutation) to rover
+→ Sent model #2 (random) to rover
+  → Requesting trajectory for Good (rank #6) (tournament: 150 candidates, next episode: 75s)...
+← Eval 33/1000 | Model #2 (random) | Fitness: 1.71 | Speed: 0.000 m/s | Clear: 0.41 m | ✓ ADDED rank #6 (Good (rank #6))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_33.json
+  Population: 10 models | Best fitness: 54.88
+← Received trajectory data for model #2
+  📦 Caching model #2 (600 samples) for tournament
+  ✓ Ready for tournament selection (150 candidates)
+  🏆 Running tournament (150 candidates)
+  🏆 Running tournament selection (150 candidates)...
+    Evaluated 30/150 candidates...
+    Evaluated 60/150 candidates...
+    Evaluated 90/150 candidates...
+    Evaluated 120/150 candidates...
+    Evaluated 150/150 candidates...
+    Top 5 mutations:
+      ★ #3: fitness=11.979740 (std=0.0487)
+        #94: fitness=11.883645 (std=0.0301)
+        #19: fitness=11.837694 (std=0.0441)
+        #150: fitness=11.754600 (std=0.0196)
+        #17: fitness=11.558181 (std=0.0280)
+  ✓ Best mutation selected: fitness=11.979740 (std=0.0487)
+→ Sent model #3 (tournament) to rover
+  → Requesting trajectory for Good (rank #10) (tournament: 150 candidates, next episode: 75s)...
+← Eval 34/1000 | Model #3 (tournament) | Fitness: 1.61 | Speed: 0.078 m/s | Clear: 0.42 m | ✓ ADDED rank #10 (Good (rank #10))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_34.json
+  Population: 10 models | Best fitness: 54.88
+← Received trajectory data for model #3
+  📦 Caching model #3 (601 samples) for tournament
+  ✓ Ready for tournament selection (150 candidates)
+  🏆 Running tournament (150 candidates)
+  🏆 Running tournament selection (150 candidates)...
+    Evaluated 30/150 candidates...
+    Evaluated 60/150 candidates...
+    Evaluated 90/150 candidates...
+    Evaluated 120/150 candidates...
+    Evaluated 150/150 candidates...
+    Top 5 mutations:
+      ★ #107: fitness=13.166678 (std=0.0315)
+        #137: fitness=12.675027 (std=0.0313)
+        #125: fitness=12.285825 (std=0.0481)
+        #5: fitness=12.042362 (std=0.0396)
+        #6: fitness=11.843297 (std=0.0471)
+  ✓ Best mutation selected: fitness=13.166678 (std=0.0315)
+→ Sent model #4 (tournament) to rover
+← Eval 35/1000 | Model #4 (tournament) | Fitness: -10.61 | Speed: 0.249 m/s | Clear: 0.41 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_35.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #5 (mutation) to rover
+← Eval 36/1000 | Model #5 (mutation) | Fitness: -8.83 | Speed: 0.099 m/s | Clear: 0.25 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_36.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #6 (mutation) to rover
+← Eval 37/1000 | Model #6 (mutation) | Fitness: 0.85 | Speed: 0.000 m/s | Clear: 0.21 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_37.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #7 (mutation) to rover
+← Eval 38/1000 | Model #7 (mutation) | Fitness: 0.21 | Speed: 0.000 m/s | Clear: 0.21 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_38.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #8 (mutation) to rover
+← Eval 39/1000 | Model #8 (mutation) | Fitness: 1.22 | Speed: 0.156 m/s | Clear: 0.34 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_39.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #9 (mutation) to rover
+  → Requesting trajectory for Elite (rank #2) (tournament: 300 candidates, next episode: 75s)...
+← Eval 40/1000 | Model #9 (mutation) | Fitness: 14.66 | Speed: 0.327 m/s | Clear: 0.32 m | ✓ ADDED rank #2 (Elite (rank #2))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_40.json
+  Population: 10 models | Best fitness: 54.88
+← Received trajectory data for model #9
+  📦 Caching model #9 (601 samples) for tournament
+  ✓ Ready for tournament selection (300 candidates)
+  🏆 Running tournament (300 candidates)
+  🏆 Running tournament selection (300 candidates)...
+    Evaluated 60/300 candidates...
+    Evaluated 120/300 candidates...
+    Evaluated 180/300 candidates...
+    Evaluated 240/300 candidates...
+    Evaluated 300/300 candidates...
+    Top 5 mutations:
+      ★ #79: fitness=4.757006 (std=0.0414)
+        #12: fitness=4.510135 (std=0.0356)
+        #281: fitness=4.479198 (std=0.0186)
+        #207: fitness=4.435326 (std=0.0304)
+        #25: fitness=4.405574 (std=0.0486)
+  ✓ Best mutation selected: fitness=4.757006 (std=0.0414)
+→ Sent model #10 (tournament) to rover
+  → Requesting trajectory for Elite (rank #2) (tournament: 300 candidates, next episode: 75s)...
+← Eval 41/1000 | Model #10 (tournament) | Fitness: 19.05 | Speed: 0.397 m/s | Clear: 0.44 m | ✓ ADDED rank #2 (Elite (rank #2))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_41.json
+  Population: 10 models | Best fitness: 54.88
+← Received trajectory data for model #10
+  📦 Caching model #10 (601 samples) for tournament
+  ✓ Ready for tournament selection (300 candidates)
+  🏆 Running tournament (300 candidates)
+  🏆 Running tournament selection (300 candidates)...
+    Evaluated 60/300 candidates...
+    Evaluated 120/300 candidates...
+    Evaluated 180/300 candidates...
+    Evaluated 240/300 candidates...
+    Evaluated 300/300 candidates...
+    Top 5 mutations:
+      ★ #162: fitness=5.379284 (std=0.0219)
+        #144: fitness=5.326642 (std=0.0244)
+        #265: fitness=5.184221 (std=0.0164)
+        #29: fitness=5.176498 (std=0.0100)
+        #198: fitness=5.157040 (std=0.0356)
+  ✓ Best mutation selected: fitness=5.379284 (std=0.0219)
+→ Sent model #11 (tournament) to rover
+← Eval 42/1000 | Model #11 (tournament) | Fitness: -6.13 | Speed: 0.131 m/s | Clear: 0.28 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_42.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #12 (mutation) to rover
+← Eval 43/1000 | Model #12 (mutation) | Fitness: 0.24 | Speed: 0.000 m/s | Clear: 0.22 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_43.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #13 (mutation) to rover
+← Eval 44/1000 | Model #13 (mutation) | Fitness: -4.73 | Speed: 0.306 m/s | Clear: 0.35 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_44.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #14 (mutation) to rover
+← Eval 45/1000 | Model #14 (mutation) | Fitness: 1.13 | Speed: 0.118 m/s | Clear: 0.31 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_45.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #15 (mutation) to rover
+← Eval 46/1000 | Model #15 (mutation) | Fitness: 0.01 | Speed: 0.000 m/s | Clear: 0.15 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_46.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #16 (mutation) to rover
+← Eval 47/1000 | Model #16 (mutation) | Fitness: 1.03 | Speed: 0.170 m/s | Clear: 0.31 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_47.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #17 (random) to rover
+← Eval 48/1000 | Model #17 (random) | Fitness: 1.31 | Speed: 0.060 m/s | Clear: 0.34 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_48.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #18 (random) to rover
+← Eval 49/1000 | Model #18 (random) | Fitness: 1.08 | Speed: 0.000 m/s | Clear: 0.41 m | rejected (below threshold)
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_49.json
+  Population: 10 models | Best fitness: 54.88
+→ Sent model #19 (mutation) to rover
+  → Requesting trajectory for Marginal (rank #11) (tournament: 75 candidates, next episode: 75s)...
+← Eval 50/1000 | Model #19 (mutation) | Fitness: -16.02 | Speed: 0.071 m/s | Clear: 0.18 m | ✓ ADDED rank #11 (Marginal (rank #11))
+  💾 Saving population with 11 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_warmup_complete.json
+🎯 Warmup complete! Saved checkpoint: evolution_warmup_complete.json
+  Population: 11 models | Best fitness: 54.88
+← Received trajectory data for model #19
+  📦 Caching model #19 (601 samples) for tournament
+  ✓ Ready for tournament selection (75 candidates)
+  🏆 Running tournament (75 candidates)
+  🏆 Running tournament selection (75 candidates)...
+    Evaluated 30/75 candidates...
+    Evaluated 60/75 candidates...
+    Evaluated 75/75 candidates...
+    Top 5 mutations:
+      ★ #24: fitness=4.288815 (std=0.0307)
+        #15: fitness=4.266487 (std=0.0448)
+        #70: fitness=4.098816 (std=0.0226)
+        #48: fitness=4.016142 (std=0.0150)
+        #56: fitness=4.014421 (std=0.0365)
+  ✓ Best mutation selected: fitness=4.288815 (std=0.0307)
+→ Sent model #20 (tournament) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 75s)...
+← Eval 51/1000 | Model #20 (tournament) | Fitness: 9428.20 | Speed: 0.340 m/s | Clear: 0.34 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+← Received trajectory data for model #20
+  📦 Caching model #20 (601 samples) for tournament
+  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...
+    Running tournament 1/3 (mutation: (0.005, 0.03))...
+  🏆 Running tournament selection (166 candidates)...

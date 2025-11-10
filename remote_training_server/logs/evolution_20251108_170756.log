@@ -1,0 +1,77 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+  GPU Memory: 30.0GB → Batch size: 47
+✓ Auto-selected batch size: 47 (based on available memory)
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ Batch size: 47 (auto-scaled)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+🔄 Resuming from checkpoint: evolution_eval_27.json
+  Population metadata has 10 entries
+  Found 10 model files in checkpoints/evolution_models
+  Loaded 10/10 models from checkpoint
+✓ Checkpoint loaded
+
+Population Summary:
+  Population size: 10
+  Total evaluations: 27
+  Improvements: 24
+  Fitness - Best: 8.35, Mean: 2.42, Min: 1.12
+  Avg speed: 0.045 m/s
+  Avg clearance: 0.41 m
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Resuming from evaluation 27
+Target evaluations: 1000 (need 973 more)
+Population size: 10
+
+Waiting for rover to connect...
+
+→ Sent model #0 (mutation) to rover
+  → Requesting trajectory for Elite (rank #3) (tournament: 300 candidates, next episode: 50s)...
+← Eval 28/1000 | Model #0 (mutation) | Fitness: 1.75 | Speed: 0.000 m/s | Clear: 0.42 m | ✓ ADDED rank #3 (Elite (rank #3))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=8.35
+✓ Checkpoint saved: checkpoints/evolution_eval_28.json
+  Population: 10 models | Best fitness: 8.35
+← Received trajectory data for model #0
+  📦 Caching model #0 (600 samples) for tournament
+  ✓ Ready for tournament selection (300 candidates)
+  🏆 Running tournament (300 candidates)
+  🏆 Running tournament selection (300 candidates)...
+    Evaluated 60/300 candidates...
+    Evaluated 120/300 candidates...
+    Evaluated 180/300 candidates...
+    Evaluated 240/300 candidates...
+    Evaluated 300/300 candidates...
+    Top 5 mutations:
+      ★ #241: fitness=11.991519 (std=0.0483)
+        #160: fitness=11.991442 (std=0.0491)
+        #195: fitness=11.985299 (std=0.0450)
+        #130: fitness=11.950860 (std=0.0208)
+        #190: fitness=11.930543 (std=0.0171)
+  ✓ Best mutation selected: fitness=11.991519 (std=0.0483)
+→ Sent model #1 (tournament) to rover
+  → Requesting trajectory for 🏆 NEW CHAMPION (rank #1) (tournament: 500 candidates, next episode: 75s)...
+← Eval 29/1000 | Model #1 (tournament) | Fitness: 54.88 | Speed: 1.607 m/s | Clear: 0.38 m | ✓ ADDED rank #1 (🏆 NEW CHAMPION (rank #1))
+  💾 Saving population with 10 models
+  ✓ Exported best model: fitness=54.88
+✓ Checkpoint saved: checkpoints/evolution_eval_29.json
+  Population: 10 models | Best fitness: 54.88
+← Received trajectory data for model #1
+  📦 Caching model #1 (601 samples) for tournament
+  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...
+    Running tournament 1/3 (mutation: (0.005, 0.03))...
+  🏆 Running tournament selection (166 candidates)...
+/root/ros2-rover/remote_training_server/v620_map_elites_trainer.py:647: UserWarning: std(): degrees of freedom is <= 0. Correction should be strictly less than the reduction factor (input numel divided by output numel). (Triggered internally at /pytorch/aten/src/ATen/native/ReduceOps.cpp:1857.)
+  angular_smoothness = torch.std(pivot_angular_actions).item()

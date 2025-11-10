@@ -266,10 +266,15 @@ class MAPElitesTrainer:
         self.checkpoint_dir.mkdir(exist_ok=True)
 
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
-        
-        # NEW: Auto-detect and set optimal batch size based on GPU memory
+
+        # Mixed Precision Training (fp16)
+        self.use_amp = torch.cuda.is_available()  # Enable AMP only on CUDA/ROCm
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp) if self.use_amp else None
+
+        # NEW: Auto-detect and set optimal batch size based on GPU memory with dynamic profiling
         self.batch_size = self._calculate_optimal_batch_size()
-        print(f"✓ Auto-selected batch size: {self.batch_size} (based on available memory)")
+        print(f"✓ Auto-selected batch size: {self.batch_size} (based on dynamic profiling)")
+        print(f"✓ Mixed precision (fp16): {'enabled' if self.use_amp else 'disabled (CPU only)'}")
 
         # Initialize adaptive population tracker
         self.population = PopulationTracker(
@@ -332,29 +337,80 @@ class MAPElitesTrainer:
             return self._calculate_cpu_batch_size()
     
     def _calculate_gpu_batch_size(self) -> int:
-        """Calculate batch size for CUDA GPUs."""
+        """Calculate batch size for CUDA GPUs using dynamic memory profiling."""
         try:
             # Get total GPU memory in GB
             total_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            
-            # Estimate memory per sample (model forward pass + gradients + optimizer states)
-            # Based on model architecture: ~500MB per sample including overhead
-            memory_per_sample_gb = 0.5
-            
-            # Reserve 20% for overhead and safety margin
-            available_memory_gb = total_memory_gb * 0.8
-            
-            # Calculate theoretical max batch size
-            theoretical_batch_size = int(available_memory_gb / memory_per_sample_gb)
-            
+            print(f"  GPU Memory: {total_memory_gb:.1f}GB total")
+
+            # Dynamic profiling: test actual memory usage with real model
+            print(f"  Running dynamic memory profiling...")
+
+            # Create test model and move to device
+            test_model = ActorNetwork().to(self.device)
+            test_model.train()
+            optimizer = torch.optim.Adam(test_model.parameters(), lr=1e-4)
+
+            # Test batch size (start small)
+            test_batch_size = 8
+
+            # Generate synthetic test data (typical image dimensions for rover)
+            # Assuming 640x480 resolution or similar
+            rgb_test = torch.randn(test_batch_size, 3, 480, 640, device=self.device)
+            depth_test = torch.randn(test_batch_size, 1, 480, 640, device=self.device)
+            proprio_test = torch.randn(test_batch_size, 6, device=self.device)
+            actions_test = torch.randn(test_batch_size, 2, device=self.device)
+
+            # Clear any existing allocations
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(self.device)
+
+            # Run test forward + backward pass with mixed precision
+            optimizer.zero_grad()
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                pred_actions = test_model(rgb_test, depth_test, proprio_test)
+                loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
+
+            if self.use_amp and self.scaler:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
+
+            # Measure peak memory usage
+            peak_memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
+            memory_per_sample_gb = peak_memory_gb / test_batch_size
+
+            print(f"    Test batch ({test_batch_size} samples): {peak_memory_gb:.2f}GB used")
+            print(f"    Memory per sample: {memory_per_sample_gb:.3f}GB")
+
+            # Clean up test model
+            del test_model, optimizer, rgb_test, depth_test, proprio_test, actions_test, pred_actions, loss
+            torch.cuda.empty_cache()
+
+            # Calculate optimal batch size with conservative margin
+            # Use 85% of total memory (15% headroom for spikes and overhead)
+            target_memory_gb = total_memory_gb * 0.85
+            optimal_batch_size = int(target_memory_gb / memory_per_sample_gb)
+
             # Clamp to reasonable range
-            batch_size = max(8, min(theoretical_batch_size, 128))
-            
-            print(f"  GPU Memory: {total_memory_gb:.1f}GB → Batch size: {batch_size}")
+            batch_size = max(8, min(optimal_batch_size, 256))
+
+            # Predict actual usage at optimal batch size
+            predicted_usage_gb = batch_size * memory_per_sample_gb
+            utilization_pct = (predicted_usage_gb / total_memory_gb) * 100
+
+            print(f"  Optimal batch size: {batch_size}")
+            print(f"  Predicted usage: {predicted_usage_gb:.1f}GB / {total_memory_gb:.1f}GB ({utilization_pct:.0f}%)")
+
             return batch_size
-            
+
         except Exception as e:
-            print(f"  ⚠ GPU memory detection failed: {e}, using default batch size 32")
+            print(f"  ⚠ Dynamic profiling failed: {e}, using conservative batch size 32")
+            import traceback
+            traceback.print_exc()
             return 32
     
     def _calculate_mps_batch_size(self) -> int:
@@ -543,11 +599,12 @@ class MAPElitesTrainer:
                 batch_end = min(batch_start + batch_eval_size, num_candidates)
                 batch_candidates = candidates[batch_start:batch_end]
 
-                # Collect predictions from all models in batch
+                # Collect predictions from all models in batch (with mixed precision)
                 batch_predictions = []
                 for candidate, _ in batch_candidates:
                     candidate.eval()
-                    pred_actions = candidate(rgb, depth, proprio)
+                    with torch.cuda.amp.autocast(enabled=self.use_amp):
+                        pred_actions = candidate(rgb, depth, proprio)
                     batch_predictions.append(pred_actions)
 
                 # Compute fitness for all in batch
@@ -644,12 +701,15 @@ class MAPElitesTrainer:
             if pivot_mask.any():
                 # Reward smooth angular control during pivots
                 pivot_angular_actions = pred_actions[pivot_mask, 1]
-                angular_smoothness = torch.std(pivot_angular_actions).item()
-                
-                if angular_smoothness < 0.15:  # Smooth pivot control
-                    fitness += 10.0  # Bonus for good pivot turns
-                else:
-                    fitness -= 5.0   # Penalty for jerky pivots
+
+                # Only compute smoothness if we have enough samples
+                if len(pivot_angular_actions) >= 2:
+                    angular_smoothness = torch.std(pivot_angular_actions).item()
+
+                    if angular_smoothness < 0.15:  # Smooth pivot control
+                        fitness += 10.0  # Bonus for good pivot turns
+                    else:
+                        fitness -= 5.0   # Penalty for jerky pivots
 
         # 4. FORWARD BIAS (25% weight) - Keep similar
         #    Tank steering: forward motion is good, spinning is bad
@@ -780,16 +840,22 @@ class MAPElitesTrainer:
                 proprio_batch = proprio[batch_indices]
                 actions_batch = actions[batch_indices]
 
-                # Forward pass
-                pred_actions = model(rgb_batch, depth_batch, proprio_batch)
-
-                # Behavioral cloning loss (MSE)
-                loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
-
-                # Backward pass
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+
+                # Mixed precision forward pass
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    pred_actions = model(rgb_batch, depth_batch, proprio_batch)
+                    # Behavioral cloning loss (MSE)
+                    loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
+
+                # Mixed precision backward pass
+                if self.use_amp and self.scaler:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
 
                 epoch_loss += loss.item()
                 num_batches += 1
