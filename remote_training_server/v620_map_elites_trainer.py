@@ -267,14 +267,16 @@ class MAPElitesTrainer:
 
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
 
-        # Mixed Precision Training (fp16)
-        self.use_amp = torch.cuda.is_available()  # Enable AMP only on CUDA/ROCm
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp) if self.use_amp else None
+        # Detect ROCm and apply optimizations
+        self.is_rocm = torch.cuda.is_available() and torch.version.hip is not None
+        if self.is_rocm:
+            print(f"✓ ROCm detected (HIP version: {torch.version.hip})")
+            self._apply_rocm_optimizations()
 
         # NEW: Auto-detect and set optimal batch size based on GPU memory with dynamic profiling
         self.batch_size = self._calculate_optimal_batch_size()
         print(f"✓ Auto-selected batch size: {self.batch_size} (based on dynamic profiling)")
-        print(f"✓ Mixed precision (fp16): {'enabled' if self.use_amp else 'disabled (CPU only)'}")
+        print(f"✓ Precision: fp32 (full precision for RKNN compatibility)")
 
         # Initialize adaptive population tracker
         self.population = PopulationTracker(
@@ -321,6 +323,24 @@ class MAPElitesTrainer:
         print(f"✓ Batch size: {self.batch_size} (auto-scaled)")
         print(f"✓ REP socket listening on port {port}")
 
+    def _apply_rocm_optimizations(self):
+        """Apply ROCm-specific optimizations for AMD GPUs."""
+        import os
+
+        # Disable MIOpen auto-tuner to avoid SQLite crashes
+        # The auto-tuner will be disabled via environment variables
+        torch.backends.cudnn.benchmark = False
+        print(f"  ✓ MIOpen auto-tuning disabled (using default kernels)")
+
+        # Check environment variables
+        print(f"  Environment check:")
+        if os.environ.get('MIOPEN_FIND_ENFORCE') == 'NONE':
+            print(f"    ✓ MIOPEN_FIND_ENFORCE=NONE")
+        if os.environ.get('MIOPEN_DISABLE_CACHE') == '1':
+            print(f"    ✓ MIOPEN_DISABLE_CACHE=1")
+        if os.environ.get('HSA_FORCE_FINE_GRAIN_PCIE') == '1':
+            print(f"    ✓ HSA_FORCE_FINE_GRAIN_PCIE=1")
+
     def generate_random_model(self) -> dict:
         """Generate random model (for initial population)."""
         model = ActorNetwork().to(self.device)
@@ -365,19 +385,12 @@ class MAPElitesTrainer:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats(self.device)
 
-            # Run test forward + backward pass with mixed precision
+            # Run test forward + backward pass (fp32)
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
-                pred_actions = test_model(rgb_test, depth_test, proprio_test)
-                loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
-
-            if self.use_amp and self.scaler:
-                self.scaler.scale(loss).backward()
-                self.scaler.step(optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                optimizer.step()
+            pred_actions = test_model(rgb_test, depth_test, proprio_test)
+            loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
+            loss.backward()
+            optimizer.step()
 
             # Measure peak memory usage
             peak_memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
@@ -599,12 +612,11 @@ class MAPElitesTrainer:
                 batch_end = min(batch_start + batch_eval_size, num_candidates)
                 batch_candidates = candidates[batch_start:batch_end]
 
-                # Collect predictions from all models in batch (with mixed precision)
+                # Collect predictions from all models in batch (fp32)
                 batch_predictions = []
                 for candidate, _ in batch_candidates:
                     candidate.eval()
-                    with torch.cuda.amp.autocast(enabled=self.use_amp):
-                        pred_actions = candidate(rgb, depth, proprio)
+                    pred_actions = candidate(rgb, depth, proprio)
                     batch_predictions.append(pred_actions)
 
                 # Compute fitness for all in batch
@@ -842,20 +854,14 @@ class MAPElitesTrainer:
 
                 optimizer.zero_grad()
 
-                # Mixed precision forward pass
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
-                    pred_actions = model(rgb_batch, depth_batch, proprio_batch)
-                    # Behavioral cloning loss (MSE)
-                    loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
+                # Forward pass (fp32)
+                pred_actions = model(rgb_batch, depth_batch, proprio_batch)
+                # Behavioral cloning loss (MSE)
+                loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
 
-                # Mixed precision backward pass
-                if self.use_amp and self.scaler:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.step(optimizer)
-                    self.scaler.update()
-                else:
-                    loss.backward()
-                    optimizer.step()
+                # Backward pass
+                loss.backward()
+                optimizer.step()
 
                 epoch_loss += loss.item()
                 num_batches += 1

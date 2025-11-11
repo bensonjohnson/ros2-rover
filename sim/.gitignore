@@ -1,0 +1,29 @@
+# Habitat simulation artifacts
+
+# Scene data (too large for git)
+data/
+*.glb
+*.navmesh
+
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Model checkpoints (managed by parent folder)
+checkpoints/
+*.pt
+*.onnx
+*.rknn
+
+# Habitat cache
+.habitat-sim-cache/
+
+# Temporary files
+*.tmp
+temp/

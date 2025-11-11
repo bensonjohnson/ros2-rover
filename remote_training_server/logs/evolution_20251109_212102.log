@@ -1,0 +1,23 @@
+MIOpen(HIP): Warning [SearchImpl] Searching the best solution in the 9 dim space. Please, be patient...
+MIOpen(HIP): Warning [SearchImpl] Runs left: 863, min time so far: 6.88552, curr time: 6.88552 16,16,16,16,1,1,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 838, min time so far: 1.6756, curr time: 1.6756 16,8,16,16,1,2,1,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 812, min time so far: 0.596883, curr time: 1.31321 8,16,16,16,2,1,1,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 787, min time so far: 0.596883, curr time: 1.31825 8,8,16,16,2,2,1,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 760, min time so far: 0.595483, curr time: 9.01577 16,32,16,32,1,1,1,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 735, min time so far: 0.595483, curr time: 1.81565 16,16,16,32,1,2,1,4,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 710, min time so far: 0.595483, curr time: 1.07093 16,8,16,32,1,4,2,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 685, min time so far: 0.595483, curr time: 1.07257 8,32,16,32,2,1,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 660, min time so far: 0.595483, curr time: 1.16193 8,16,16,32,2,2,2,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 635, min time so far: 0.595483, curr time: 1.16085 8,8,16,32,2,4,2,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 605, min time so far: 0.595483, curr time: 4.1511 32,32,32,32,1,1,4,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 580, min time so far: 0.595483, curr time: 0.798885 32,16,32,32,1,2,4,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 555, min time so far: 0.595483, curr time: 0.797524 32,8,32,32,1,4,4,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 530, min time so far: 0.595483, curr time: 0.779204 16,32,32,32,2,1,4,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 505, min time so far: 0.595483, curr time: 0.788164 16,16,32,32,2,2,4,4,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 480, min time so far: 0.595483, curr time: 0.725244 16,8,32,32,2,4,8,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 452, min time so far: 0.595483, curr time: 0.747244 8,32,32,32,4,1,8,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 424, min time so far: 0.595483, curr time: 1.66233 8,8,32,32,4,4,1,2,1
+MIOpen(HIP): Warning [SearchImpl] Default run, min time so far: 0.595483, default time: 0.781964 16,16,32,32,2,2,8,2,1
+MIOpen(HIP): Warning [SearchImpl] ...Score: 1.31316
+terminate called after throwing an instance of 'miopen::Exception'
+  what():  /longer_pathname_so_that_rpms_can_support_packaging_the_debug_info_for_all_os_profiles/src/rocm-libraries/projects/miopen/src/sqlite_db.cpp:227: Internal error while accessing SQLite database: unable to open database file

@@ -1,0 +1,92 @@
+# Habitat 3.0 Configuration for MAP-Elites Navigation Training
+# This config creates a navigation task matching the physical rover setup
+
+ENVIRONMENT:
+  MAX_EPISODE_STEPS: 1800  # 60s at 30Hz
+  ITERATOR_OPTIONS:
+    SHUFFLE: true
+    MAX_SCENE_REPEAT_EPISODES: 50  # Change scene every 50 episodes
+    MAX_SCENE_REPEAT_STEPS: 10000
+
+SIMULATOR:
+  TYPE: "Sim-v0"
+  ACTION_SPACE_CONFIG: "v0"
+  FORWARD_STEP_SIZE: 0.25  # Not used with velocity control
+  TURN_ANGLE: 10  # Not used with velocity control
+
+  # Agent configuration (match tank rover dimensions)
+  AGENT_0:
+    HEIGHT: 0.88  # Tank height (camera mount height)
+    RADIUS: 0.18  # Tank radius (half width)
+    SENSORS: ['RGB_SENSOR', 'DEPTH_SENSOR']
+    IS_SET_START_STATE: false
+    START_POSITION: [0, 0, 0]
+    START_ROTATION: [0, 0, 0, 1]
+
+  # RGB Camera (match RealSense D435i)
+  RGB_SENSOR:
+    WIDTH: 640
+    HEIGHT: 480
+    HFOV: 69  # Horizontal field of view (degrees)
+    POSITION: [0, 0.88, 0]  # Camera at agent height
+    ORIENTATION: [0, 0, 0]  # Forward facing
+    TYPE: "HabitatSimRGBSensor"
+    NOISE_MODEL: "GaussianNoiseModel"
+    NOISE_MODEL_KWARGS:
+      INTENSITY_CONSTANT: 0.01  # Small noise for realism
+
+  # Depth Camera (match RealSense D435i)
+  DEPTH_SENSOR:
+    WIDTH: 640
+    HEIGHT: 480
+    HFOV: 69
+    MIN_DEPTH: 0.0
+    MAX_DEPTH: 10.0
+    POSITION: [0, 0.88, 0]
+    ORIENTATION: [0, 0, 0]
+    TYPE: "HabitatSimDepthSensor"
+    NOISE_MODEL: "RedwoodDepthNoiseModel"  # Realistic depth noise
+    NOISE_MODEL_KWARGS: {}
+
+  # Physics and collision
+  HABITAT_SIM_V0:
+    ALLOW_SLIDING: true
+    ENABLE_PHYSICS: true
+    PHYSICS_CONFIG_FILE: "./data/default.physics_config.json"
+    GPU_DEVICE_ID: 0
+    GPU_GPU: false  # Use CPU physics for stability
+
+TASK:
+  TYPE: "Nav-v0"
+
+  # Success criteria
+  SUCCESS_DISTANCE: 0.2  # 20cm to goal
+  SUCCESS_REWARD: 10.0
+  SLACK_REWARD: -0.01  # Small penalty per step
+
+  # Measurements to track
+  MEASUREMENTS:
+    - DISTANCE_TO_GOAL
+    - SUCCESS
+    - SPL  # Success weighted by Path Length
+    - COLLISIONS
+
+  # Goal sensor
+  GOAL_SENSOR_UUID: pointgoal_with_gps_compass
+  POINTGOAL_SENSOR:
+    TYPE: "PointGoalSensor"
+    GOAL_FORMAT: "POLAR"
+    DIMENSIONALITY: 2
+
+  # Collision sensor
+  COLLISIONS:
+    TYPE: "CollisionsMeasure"
+
+DATASET:
+  TYPE: "PointNav-v1"
+  SPLIT: "train"
+  DATA_PATH: "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+  SCENES_DIR: "data/scene_datasets/"
+
+  # Content settings
+  CONTENT_SCENES: ["*"]  # All scenes
