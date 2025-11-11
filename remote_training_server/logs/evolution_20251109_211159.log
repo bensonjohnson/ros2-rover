@@ -1,0 +1,57 @@
+MIOpen(HIP): Warning [SearchImpl] Searching the best solution in the 9 dim space. Please, be patient...
+MIOpen(HIP): Warning [SearchImpl] Runs left: 863, min time so far: 1.76277, curr time: 1.76277 16,16,16,16,1,1,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 813, min time so far: 0.625244, curr time: 1.34653 8,8,16,16,2,2,1,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 744, min time so far: 0.580923, curr time: 0.891285 8,32,16,32,2,1,2,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 658, min time so far: 0.557644, curr time: 0.913765 32,8,32,32,1,4,4,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 590, min time so far: 0.557644, curr time: 0.721804 8,32,32,32,4,1,8,1,1
+MIOpen(HIP): Warning [SearchImpl] Default run, min time so far: 0.557644, default time: 0.647124 16,16,32,32,2,2,8,2,1
+MIOpen(HIP): Warning [SearchImpl] ...Score: 1.16046
+MIOpen(HIP): Warning [SearchImpl] Searching the best solution in the 9 dim space. Please, be patient...
+MIOpen(HIP): Warning [SearchImpl] Runs left: 863, min time so far: 7.91765, curr time: 7.91765 16,16,16,16,1,1,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 838, min time so far: 1.86117, curr time: 6.56328 16,8,16,16,1,2,1,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 812, min time so far: 1.33017, curr time: 6.72952 8,16,16,16,2,1,1,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 787, min time so far: 1.33017, curr time: 4.63868 8,8,16,16,2,2,1,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 736, min time so far: 1.33017, curr time: 13.1876 16,16,16,32,1,2,1,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 711, min time so far: 1.33017, curr time: 5.51903 16,8,16,32,1,4,1,4,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 686, min time so far: 1.33017, curr time: 3.83826 8,32,16,32,2,1,2,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 661, min time so far: 1.33017, curr time: 3.87786 8,16,16,32,2,2,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 636, min time so far: 1.33017, curr time: 9.89394 8,8,16,32,2,4,2,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 552, min time so far: 1.33017, curr time: 1.57833 32,8,32,32,1,4,8,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 491, min time so far: 1.33017, curr time: 5.71315 16,8,32,32,2,4,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 450, min time so far: 1.33017, curr time: 11.085 8,16,32,32,4,2,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Default run, min time so far: 1.33017, default time: 0.559163 16,16,32,32,2,2,8,2,1
+MIOpen(HIP): Warning [SearchImpl] * * * Default time < min time, using default config * * *
+MIOpen(HIP): Warning [SearchImpl] ...Score: 1
+MIOpen(HIP): Warning [SearchImpl] Searching the best solution in the 9 dim space. Please, be patient...
+MIOpen(HIP): Warning [SearchImpl] Runs left: 863, min time so far: 20.874, curr time: 20.874 16,16,16,16,1,1,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 838, min time so far: 3.38831, curr time: 8.33457 16,8,16,16,1,2,1,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 812, min time so far: 3.38831, curr time: 19.6063 8,16,16,16,2,1,1,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 787, min time so far: 3.38831, curr time: 14.8568 8,8,16,16,2,2,1,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 736, min time so far: 3.29726, curr time: 32.5433 16,16,16,32,1,2,1,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 711, min time so far: 3.29726, curr time: 37.8671 16,8,16,32,1,4,1,4,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 686, min time so far: 3.29726, curr time: 16.761 8,32,16,32,2,1,2,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 661, min time so far: 3.29726, curr time: 5.82987 8,16,16,32,2,2,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 636, min time so far: 3.19279, curr time: 26.7623 8,8,16,32,2,4,2,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 552, min time so far: 3.19279, curr time: 10.6714 32,8,32,32,1,4,8,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 491, min time so far: 3.19279, curr time: 9.28809 16,8,32,32,2,4,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 450, min time so far: 3.19279, curr time: 28.2237 8,16,32,32,4,2,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Default run, min time so far: 3.19279, default time: 3.38542 16,16,32,32,2,2,8,2,1
+MIOpen(HIP): Warning [SearchImpl] ...Score: 1.06033
+MIOpen(HIP): Warning [SearchImpl] Searching the best solution in the 9 dim space. Please, be patient...
+MIOpen(HIP): Warning [SearchImpl] Runs left: 863, min time so far: 14.5739, curr time: 14.5739 16,16,16,16,1,1,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 838, min time so far: 3.47426, curr time: 3.47426 16,8,16,16,1,2,1,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 812, min time so far: 3.2633, curr time: 14.17 8,16,16,16,2,1,1,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 787, min time so far: 3.2633, curr time: 5.54831 8,8,16,16,2,2,1,2,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 736, min time so far: 3.2633, curr time: 18.3923 16,16,16,32,1,2,1,4,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 711, min time so far: 3.2633, curr time: 13.3 16,8,16,32,1,4,1,4,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 686, min time so far: 3.2633, curr time: 11.9692 8,32,16,32,2,1,2,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 661, min time so far: 3.2633, curr time: 3.28694 8,16,16,32,2,2,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 636, min time so far: 3.2633, curr time: 17.1549 8,8,16,32,2,4,2,2,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 552, min time so far: 3.2633, curr time: 5.60103 32,8,32,32,1,4,8,1,1
+MIOpen(HIP): Warning [SearchImpl] Runs left: 491, min time so far: 3.2219, curr time: 4.53691 16,8,32,32,2,4,2,1,2
+MIOpen(HIP): Warning [SearchImpl] Runs left: 450, min time so far: 3.12442, curr time: 18.0188 8,16,32,32,4,2,1,1,1
+MIOpen(HIP): Warning [SearchImpl] Default run, min time so far: 3.12442, default time: 1.64557 16,16,32,32,2,2,8,2,1
+MIOpen(HIP): Warning [SearchImpl] * * * Default time < min time, using default config * * *
+MIOpen(HIP): Warning [SearchImpl] ...Score: 1
+terminate called after throwing an instance of 'miopen::Exception'
+  what():  /longer_pathname_so_that_rpms_can_support_packaging_the_debug_info_for_all_os_profiles/src/rocm-libraries/projects/miopen/src/sqlite_db.cpp:227: Internal error while accessing SQLite database: unable to open database file

@@ -124,6 +124,17 @@ fi
 
 echo "✓ Port ${PORT} available"
 
+# ROCm optimizations (environment variables)
+if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
+  echo ""
+  echo "Applying ROCm optimizations..."
+  export HSA_FORCE_FINE_GRAIN_PCIE=1
+  # Disable MIOpen auto-tuning completely (use default kernels)
+  export MIOPEN_FIND_ENFORCE=NONE
+  export MIOPEN_DISABLE_CACHE=1
+  echo "✓ ROCm environment variables set (MIOpen auto-tuning disabled)"
+fi
+
 # Set up signal handling
 cleanup() {
   echo ""
