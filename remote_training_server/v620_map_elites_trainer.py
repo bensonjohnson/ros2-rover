@@ -501,15 +501,15 @@ class MAPElitesTrainer:
         with torch.no_grad():
             if policy_type == 'cautious':
                 # Bias: slow forward, moderate turning
-                final_layer.bias[0] = 0.2  # linear: slow
+                final_layer.bias[0] = 0.3  # linear: slow but increased (was 0.2)
                 final_layer.bias[1] = 0.0  # angular: neutral
             elif policy_type == 'forward':
-                # Bias: fast forward, minimal turning
-                final_layer.bias[0] = 0.6  # linear: fast
+                # Bias: VERY fast forward, minimal turning
+                final_layer.bias[0] = 0.75  # linear: very fast! (was 0.6)
                 final_layer.bias[1] = 0.0  # angular: neutral
             elif policy_type == 'explorer':
-                # Bias: moderate forward, slight turning tendency
-                final_layer.bias[0] = 0.4  # linear: moderate
+                # Bias: moderate-high forward, slight turning tendency
+                final_layer.bias[0] = 0.5  # linear: moderate-high (was 0.4)
                 final_layer.bias[1] = 0.1  # angular: slight turn
 
         return model.state_dict()
@@ -702,11 +702,35 @@ class MAPElitesTrainer:
             risky_linear = pred_actions[low_clearance_mask, 0].mean().item()
             fitness -= abs(risky_linear) * 15.0  # Increased from 10.0 for safety
 
-        # 3. TANK PIVOT TURN BONUS: NEW
+        # 3. SMOOTH OBSTACLE AVOIDANCE: NEW
+        #    Reward moving forward while smoothly turning near obstacles (the "flow" behavior)
+        medium_clearance_mask = (clearance > 0.15) & (clearance < 0.8)  # Near obstacles
+        forward_turning_mask = (torch.abs(pred_actions[:, 0]) > 0.3) & (torch.abs(pred_actions[:, 1]) > 0.15)
+
+        if medium_clearance_mask.any() and forward_turning_mask.any():
+            # Find timesteps with both medium clearance and forward+turning
+            flow_mask = medium_clearance_mask & forward_turning_mask
+            if flow_mask.any():
+                # Reward smooth obstacle navigation
+                flow_linear = pred_actions[flow_mask, 0].mean().item()
+                flow_angular = torch.abs(pred_actions[flow_mask, 1]).mean().item()
+
+                # Bonus scales with forward action magnitude
+                if flow_linear > 0.4:
+                    fitness += flow_linear * 18.0  # Strong reward for maintaining forward speed near obstacles
+
+                # Extra bonus if turning is smooth and controlled
+                if len(pred_actions[flow_mask]) >= 2:
+                    flow_action_diffs = torch.diff(pred_actions[flow_mask], dim=0)
+                    flow_smoothness = torch.std(flow_action_diffs).item()
+                    if flow_smoothness < 0.15:
+                        fitness += 12.0  # Bonus for smooth flow around obstacles
+
+        # 4. TANK PIVOT TURN BONUS
         #    Reward controlled rotation at low speeds (critical for tank maneuvering)
         low_speed_mask = linear_speed < 0.05  # Very low linear speed
         moderate_angular_mask = torch.abs(pred_actions[:, 1]) > 0.2  # Some rotation
-        
+
         if low_speed_mask.any() and moderate_angular_mask.any():
             # Find timesteps with both low speed and rotation
             pivot_mask = low_speed_mask & moderate_angular_mask
@@ -723,20 +747,24 @@ class MAPElitesTrainer:
                     else:
                         fitness -= 5.0   # Penalty for jerky pivots
 
-        # 4. FORWARD BIAS (25% weight) - Keep similar
+        # 5. FORWARD BIAS (INCREASED to 30% weight)
         #    Tank steering: forward motion is good, spinning is bad
         linear_magnitude = torch.abs(pred_actions[:, 0]).mean().item()
         angular_magnitude = torch.abs(pred_actions[:, 1]).mean().item()
         total_action = linear_magnitude + angular_magnitude + 1e-6
         forward_ratio = linear_magnitude / total_action
 
-        # Reward forward-biased actions
+        # Reward forward-biased actions MORE STRONGLY
         if forward_ratio > 0.6:
-            fitness += (forward_ratio - 0.6) * 25.0  # Strong reward
+            fitness += (forward_ratio - 0.6) * 35.0  # INCREASED strong reward (was 25.0)
         elif forward_ratio < 0.3:
-            fitness -= (0.3 - forward_ratio) * 30.0  # Strong penalty for spinning
+            fitness -= (0.3 - forward_ratio) * 40.0  # INCREASED penalty for spinning (was 30.0)
 
-        # 5. ACTION SMOOTHNESS (15% weight) - Keep similar
+        # Additional bonus for high linear values (not just ratio)
+        if linear_magnitude > 0.5:
+            fitness += (linear_magnitude - 0.5) * 20.0  # Reward high forward actions
+
+        # 6. ACTION SMOOTHNESS (15% weight) - Keep similar
         #    Smooth actions indicate stable, confident behavior
         if pred_actions.shape[0] > 1:
             action_diffs = torch.diff(pred_actions, dim=0)
@@ -747,7 +775,7 @@ class MAPElitesTrainer:
             elif angular_smoothness > 0.3:
                 fitness -= (angular_smoothness - 0.3) * 15.0  # Penalize jerky
 
-        # 6. AVOID EXTREME ACTIONS (bonus) - Keep similar
+        # 7. AVOID EXTREME ACTIONS (bonus) - Keep similar
         #    Penalize saturation at action limits
         action_magnitude = torch.abs(pred_actions).mean().item()
         if action_magnitude > 0.9:
@@ -961,9 +989,9 @@ class MAPElitesTrainer:
         stationary_rotation = episode_data.get('stationary_rotation_time', 0.0)
         track_slip = episode_data.get('track_slip_detected', False)
 
-        # Base fitness: exploration distance (reduced weight for slow tank)
-        # Tank max speed is 0.18 m/s, so distance needs less weighting
-        fitness = distance * 2.0  # Reduced from 3.0 for tank speed
+        # Base fitness: exploration distance (INCREASED to encourage forward movement)
+        # Tank max speed is 0.18 m/s, but we want to strongly reward distance covered
+        fitness = distance * 3.5  # INCREASED from 2.0 to encourage more forward movement
 
         # 1. Collision penalty: Softer for tank learning
         # Tank collision distance is very tight (0.12m), needs more forgiveness
@@ -975,13 +1003,26 @@ class MAPElitesTrainer:
         # Reward maintaining clearance and moving towards open space
         if avg_clearance > 0.15:  # 0.12m collision + 0.03m buffer
             # Base clearance reward
-            clearance_bonus = min((avg_clearance - 0.15) * 8.0, 15.0)
+            clearance_bonus = min((avg_clearance - 0.15) * 10.0, 18.0)  # INCREASED (was 8.0, cap 15.0)
             fitness += clearance_bonus
-            
+
             # NEW: Bonus for being in "good" clearance zones (0.3m+ = comfortable indoor space)
             if avg_clearance > 0.3:
-                open_space_bonus = min((avg_clearance - 0.3) * 5.0, 10.0)
+                open_space_bonus = min((avg_clearance - 0.3) * 6.0, 12.0)  # INCREASED (was 5.0, cap 10.0)
                 fitness += open_space_bonus
+
+        # NEW: Smooth obstacle avoidance bonus (moving forward while turning near obstacles)
+        # Reward the tank for maintaining speed while smoothly turning around obstacles
+        if avg_clearance > 0.15 and avg_clearance < 0.8:  # Near obstacles but not colliding
+            if avg_linear_action > 0.3 and avg_angular_action > 0.15:  # Moving and turning
+                if action_smoothness < 0.2:  # Smooth motion
+                    # This is the "flow" behavior we want - smooth navigation around obstacles
+                    obstacle_flow_bonus = 15.0
+                    fitness += obstacle_flow_bonus
+
+                    # Extra bonus if maintaining good speed while doing this
+                    if avg_speed > 0.08:  # Good speed for tank (0.18 max)
+                        fitness += 10.0
 
         # 3. Tank pivot turn reward: Enhanced for indoor navigation
         # Reward efficient stationary rotation and scanning behavior
@@ -997,13 +1038,24 @@ class MAPElitesTrainer:
                     scanning_bonus = (0.15 - action_smoothness) * 10.0
                     fitness += scanning_bonus
 
-        # 4. Penalize unproductive spinning: ENHANCED for indoor nav
+        # 4. Penalize unproductive spinning and reward forward motion: ENHANCED
         # Tank should not spin in place without making progress
         if avg_linear_action < 0.1 and avg_angular_action > 0.4:  # Mostly spinning
             if distance < 1.0:  # Little progress
-                fitness -= 15.0  # Heavy penalty for unproductive spinning
+                fitness -= 20.0  # INCREASED penalty for unproductive spinning (was 15.0)
             elif avg_angular_action > 0.7:  # Wild spinning
-                fitness -= 25.0  # Severe penalty for chaotic behavior
+                fitness -= 35.0  # INCREASED penalty for chaotic behavior (was 25.0)
+
+        # NEW: Explicit forward motion bonus
+        # Strongly reward good linear action (forward movement)
+        if avg_linear_action > 0.3:  # Decent forward action
+            forward_bonus = (avg_linear_action - 0.3) * 15.0  # Scale: 0.3->0.0, 1.0->10.5
+            fitness += forward_bonus
+
+        # Additional bonus for high forward + low angular (straight forward movement)
+        if avg_linear_action > 0.5 and avg_angular_action < 0.3:
+            straight_forward_bonus = 12.0
+            fitness += straight_forward_bonus
 
         # 5. Smooth motion reward: INCREASED (critical for track longevity)
         if action_smoothness > 0:
@@ -1018,16 +1070,24 @@ class MAPElitesTrainer:
         if track_slip:
             fitness -= 20.0  # Heavy penalty for track slippage (inefficient, damaging)
 
-        # 7. Efficiency: Enhanced for indoor exploration
+        # 7. Efficiency: Enhanced for indoor exploration with stronger distance rewards
         if distance < 0.5 and collisions == 0:  # Barely moved
-            fitness *= 0.4  # Harsh penalty for stagnation
+            fitness *= 0.3  # HARSHER penalty for stagnation (was 0.4)
         elif (distance / duration) < 0.02:  # Very inefficient
-            fitness *= 0.7  # Moderate penalty
-        
+            fitness *= 0.6  # STRONGER penalty (was 0.7)
+
         # NEW: Reward consistent exploration patterns (not just distance)
         if distance > 2.0 and collisions == 0 and action_smoothness < 0.2:
-            exploration_bonus = min(distance * 0.5, 10.0)  # Bonus for smooth, collision-free exploration
+            exploration_bonus = min(distance * 0.8, 15.0)  # INCREASED bonus (was 0.5 and capped at 10.0)
             fitness += exploration_bonus
+
+        # Additional distance milestone bonuses
+        if distance > 5.0:
+            milestone_bonus = 8.0  # Good progress
+            fitness += milestone_bonus
+        if distance > 10.0:
+            milestone_bonus = 15.0  # Excellent progress
+            fitness += milestone_bonus
 
         # 8. Diversity bonus: SIGNIFICANTLY INCREASED for single evolution
         # Single evolution needs strong diversity to avoid premature convergence

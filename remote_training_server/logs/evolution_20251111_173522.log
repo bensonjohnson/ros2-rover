@@ -1,0 +1,115 @@
+✓ GPU: AMD Radeon PRO V620
+  CUDA version: None
+
+✓ ROCm detected (HIP version: 7.0.2)
+  ✓ MIOpen auto-tuning disabled (using default kernels)
+  Environment check:
+    ✓ MIOPEN_FIND_ENFORCE=NONE
+    ✓ MIOPEN_DISABLE_CACHE=1
+    ✓ HSA_FORCE_FINE_GRAIN_PCIE=1
+  GPU Memory: 30.0GB total
+  Running dynamic memory profiling...
+    Test batch (8 samples): 0.41GB used
+    Memory per sample: 0.051GB
+  Optimal batch size: 256
+  Predicted usage: 13.2GB / 30.0GB (44%)
+✓ Auto-selected batch size: 256 (based on dynamic profiling)
+✓ Precision: fp32 (full precision for RKNN compatibility)
+✓ Adaptive evolution trainer initialized on cuda
+✓ Population: 10 → 25 (adaptive)
+✓ Tournament sizes: 75-500 (adaptive)
+✓ Batch size: 256 (auto-scaled)
+✓ REP socket listening on port 5556
+  Features enabled:
+    Diversity bonus: True
+    Multi-tournament: True
+    Warmup acceleration: True
+
+🔄 Resuming from checkpoint: evolution_warmup_complete.json
+  Population metadata has 11 entries
+  Found 11 model files in checkpoints/evolution_models
+  Loaded 11/11 models from checkpoint
+✓ Checkpoint loaded
+
+Population Summary:
+  Population size: 11
+  Total evaluations: 50
+  Improvements: 33
+  Fitness - Best: 54.88, Mean: 8.55, Min: -16.02
+  Avg speed: 0.250 m/s
+  Avg clearance: 0.38 m
+
+============================================================
+Starting Single-Population Evolution Training
+============================================================
+
+Resuming from evaluation 50
+Target evaluations: 1000 (need 950 more)
+Population size: 10
+
+Waiting for rover to connect...
+
+→ Sent model #0 (random) to rover
+  → Requesting trajectory for Marginal (rank #11) (tournament: 75 candidates, next episode: 75s)...
+← Eval 51/1000 | Model #0 (random) | Fitness: 1.47 | Speed: 0.056 m/s | Clear: 0.38 m | ✓ ADDED rank #11 (Marginal (rank #11))
+← Received trajectory data for model #0
+  📦 Caching model #0 (600 samples) for tournament
+  ✓ Ready for tournament selection (75 candidates)
+  🏆 Running tournament (75 candidates)
+  🏆 Running tournament selection (75 candidates)...
+    Evaluated 30/75 candidates...
+    Evaluated 60/75 candidates...
+    Evaluated 75/75 candidates...
+    Top 5 mutations:
+      ★ #14: fitness=12.140741 (std=0.0351)
+        #49: fitness=11.179274 (std=0.0375)
+        #23: fitness=11.101672 (std=0.0338)
+        #45: fitness=11.086460 (std=0.0255)
+        #20: fitness=10.985709 (std=0.0201)
+  ✓ Best mutation selected: fitness=12.140741 (std=0.0351)
+→ Sent model #1 (tournament) to rover
+  → Requesting trajectory for Good (rank #8) (tournament: 150 candidates, next episode: 75s)...
+← Eval 52/1000 | Model #1 (tournament) | Fitness: 1.71 | Speed: 0.000 m/s | Clear: 0.41 m | ✓ ADDED rank #8 (Good (rank #8))
+← Received trajectory data for model #1
+  📦 Caching model #1 (601 samples) for tournament
+  ✓ Ready for tournament selection (150 candidates)
+  🏆 Running tournament (150 candidates)
+  🏆 Running tournament selection (150 candidates)...
+    Evaluated 30/150 candidates...
+    Evaluated 60/150 candidates...
+    Evaluated 90/150 candidates...
+    Evaluated 120/150 candidates...
+    Evaluated 150/150 candidates...
+    Top 5 mutations:
+      ★ #54: fitness=11.947292 (std=0.0330)
+        #39: fitness=11.939711 (std=0.0489)
+        #86: fitness=11.923886 (std=0.0404)
+        #118: fitness=11.909938 (std=0.0324)
+        #135: fitness=11.908059 (std=0.0450)
+  ✓ Best mutation selected: fitness=11.947292 (std=0.0330)
+→ Sent model #2 (tournament) to rover
+  → Requesting trajectory for Marginal (rank #13) (tournament: 75 candidates, next episode: 75s)...
+← Eval 53/1000 | Model #2 (tournament) | Fitness: 1.22 | Speed: 0.099 m/s | Clear: 0.39 m | ✓ ADDED rank #13 (Marginal (rank #13))
+← Received trajectory data for model #2
+  📦 Caching model #2 (601 samples) for tournament
+  ✓ Ready for tournament selection (75 candidates)
+  🏆 Running tournament (75 candidates)
+  🏆 Running tournament selection (75 candidates)...
+    Evaluated 30/75 candidates...
+    Evaluated 60/75 candidates...
+    Evaluated 75/75 candidates...
+    Top 5 mutations:
+      ★ #28: fitness=14.775990 (std=0.0477)
+        #56: fitness=13.209469 (std=0.0439)
+        #2: fitness=10.598488 (std=0.0467)
+        #37: fitness=10.026158 (std=0.0471)
+        #12: fitness=10.005426 (std=0.0347)
+  ✓ Best mutation selected: fitness=14.775990 (std=0.0477)
+→ Sent model #3 (tournament) to rover
+  → Requesting trajectory for Marginal (rank #14) (tournament: 75 candidates, next episode: 75s)...
+← Eval 54/1000 | Model #3 (tournament) | Fitness: -6.45 | Speed: 0.076 m/s | Clear: 0.42 m | ✓ ADDED rank #14 (Marginal (rank #14))
+← Received trajectory data for model #3
+  📦 Caching model #3 (601 samples) for tournament
+  ✓ Ready for tournament selection (75 candidates)
+  🏆 Running tournament (75 candidates)
+  🏆 Running tournament selection (75 candidates)...
