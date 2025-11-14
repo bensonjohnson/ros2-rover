@@ -135,18 +135,15 @@ class HabitatEpisodeRunner:
     def _create_habitat_env(self, scene_dataset: str):
         """Create Habitat environment with navigation task."""
         # Create basic navigation config
+        # Use the habitat-lab config path
+        import habitat
+        habitat_lab_path = Path(habitat.__file__).parent
+        config_file = "benchmark/nav/pointnav/pointnav_habitat_test.yaml"
+        configs_dir = str(habitat_lab_path / "config")
         config = habitat.get_config(
-            config_paths="benchmark/nav/pointnav/pointnav_habitat_test.yaml"
+            config_path=config_file,
+            configs_dir=configs_dir
         )
-
-        # Customize config for our needs
-        config.defrost()
-
-        # Simulator settings
-        config.SIMULATOR.TYPE = "Sim-v0"
-        config.SIMULATOR.ACTION_SPACE_CONFIG = "v0"
-        config.SIMULATOR.FORWARD_STEP_SIZE = 0.25  # Not used (we use velocity control)
-        config.SIMULATOR.TURN_ANGLE = 10  # Not used
 
         # Get robot dimensions (from URDF if available, otherwise defaults)
         if self.robot_dims:
@@ -159,34 +156,43 @@ class HabitatEpisodeRunner:
             agent_radius = 0.093  # 93mm
             camera_height = 0.123  # 123mm
 
-        # RGB sensor (match RealSense D435i resolution)
-        config.SIMULATOR.RGB_SENSOR.WIDTH = 640
-        config.SIMULATOR.RGB_SENSOR.HEIGHT = 480
-        config.SIMULATOR.RGB_SENSOR.HFOV = 69  # D435i horizontal FOV
-        config.SIMULATOR.RGB_SENSOR.POSITION = [0, camera_height, 0]  # URDF-based height
+        # Set data path to habitat-lab installation directory
+        habitat_data_path = Path.home() / "habitat-lab" / "data"
 
-        # Depth sensor
-        config.SIMULATOR.DEPTH_SENSOR.WIDTH = 640
-        config.SIMULATOR.DEPTH_SENSOR.HEIGHT = 480
-        config.SIMULATOR.DEPTH_SENSOR.HFOV = 69
-        config.SIMULATOR.DEPTH_SENSOR.MIN_DEPTH = 0.0
-        config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH = 10.0
-        config.SIMULATOR.DEPTH_SENSOR.POSITION = [0, camera_height, 0]  # URDF-based height
+        # Customize config using habitat's read_write context manager
+        with habitat.config.read_write(config):
+            # Fix dataset paths - the downloader created a nested structure with symlinks
+            config.habitat.dataset.data_path = str(habitat_data_path / "datasets/pointnav/habitat-test-scenes/v1/{split}/{split}.json.gz")
+            # The JSON has scene_id like: "data/scene_datasets/habitat-test-scenes/file.glb"
+            # The downloader created: habitat_test_scenes/data/scene_datasets/habitat-test-scenes/ -> scenes
+            # So scenes_dir should be the habitat_test_scenes directory
+            config.habitat.dataset.scenes_dir = str(habitat_data_path / "versioned_data/habitat_test_scenes")
 
-        # Agent configuration (URDF-based tank dimensions)
-        config.SIMULATOR.AGENT_0.HEIGHT = agent_height  # 90mm - actual tank height
-        config.SIMULATOR.AGENT_0.RADIUS = agent_radius  # 93mm - actual tank radius
+            # Simulator settings - use CPU rendering (EGL/CUDA not compatible with AMD)
+            config.habitat.simulator.habitat_sim_v0.gpu_device_id = -1  # CPU rendering
+            config.habitat.simulator.forward_step_size = 0.25
+            config.habitat.simulator.turn_angle = 10
 
-        # Task settings
-        config.TASK.TYPE = "Nav-v0"
-        config.TASK.SUCCESS_DISTANCE = 0.2
-        config.TASK.MEASUREMENTS = ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL', 'COLLISIONS']
+            # RGB sensor (match RealSense D435i resolution)
+            config.habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.width = 640
+            config.habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.height = 480
+            config.habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.hfov = 69
+            config.habitat.simulator.agents.main_agent.sim_sensors.rgb_sensor.position = [0, camera_height, 0]
 
-        # Environment settings
-        config.ENVIRONMENT.MAX_EPISODE_STEPS = int(self.episode_duration * self.inference_rate)
-        config.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = True
+            # Depth sensor
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.width = 640
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.height = 480
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.hfov = 69
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.min_depth = 0.0
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.max_depth = 10.0
+            config.habitat.simulator.agents.main_agent.sim_sensors.depth_sensor.position = [0, camera_height, 0]
 
-        config.freeze()
+            # Agent configuration (URDF-based tank dimensions)
+            config.habitat.simulator.agents.main_agent.height = agent_height
+            config.habitat.simulator.agents.main_agent.radius = agent_radius
+
+            # Environment settings
+            config.habitat.environment.max_episode_steps = int(self.episode_duration * self.inference_rate)
 
         # Create environment
         env = habitat.Env(config=config)
