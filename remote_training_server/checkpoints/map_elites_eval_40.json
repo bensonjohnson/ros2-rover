@@ -1,0 +1,60 @@
+{
+  "speed_bins": [
+    0.0,
+    0.05,
+    0.1,
+    0.15,
+    0.2
+  ],
+  "clearance_bins": [
+    0.2,
+    0.5,
+    1.0,
+    2.0,
+    5.0
+  ],
+  "archive": {
+    "(np.int64(1), 0)": {
+      "fitness": 9223.247270490469,
+      "avg_speed": 0.096927615583164,
+      "avg_clearance": 0.41733945487144586,
+      "metrics": {
+        "distance": 4191.225711720534,
+        "collisions": 0,
+        "duration": 60.03609347343445
+      }
+    },
+    "(0, 0)": {
+      "fitness": 5.797300172676894,
+      "avg_speed": 0.0,
+      "avg_clearance": 0.41252082085450753,
+      "metrics": {
+        "distance": 0.02441754008993929,
+        "collisions": 0,
+        "duration": 60.072001218795776
+      }
+    },
+    "(np.int64(2), 0)": {
+      "fitness": 10.657741934826781,
+      "avg_speed": 0.11174753377319663,
+      "avg_clearance": 0.35113978594194434,
+      "metrics": {
+        "distance": 2.936813213863127,
+        "collisions": 0,
+        "duration": 60.099111557006836
+      }
+    },
+    "(3, 0)": {
+      "fitness": 8.273407092897077,
+      "avg_speed": 0.22443023604429083,
+      "avg_clearance": 0.366888536564919,
+      "metrics": {
+        "distance": 2.7457018962883244,
+        "collisions": 0,
+        "duration": 60.05553388595581
+      }
+    }
+  },
+  "total_evaluations": 40,
+  "archive_additions": 9
+}

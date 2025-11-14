@@ -9,6 +9,21 @@ echo "=================================================="
 echo "Habitat MAP-Elites Training"
 echo "=================================================="
 
+# Activate conda environment
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate habitat
+    echo "✓ Activated conda environment: habitat"
+else
+    echo "⚠ Warning: Conda not found at $HOME/miniconda3"
+    echo "  Make sure habitat-lab and dependencies are installed for system python3"
+fi
+
+# Force OpenGL rendering for AMD GPU (disable EGL/CUDA)
+export MAGNUM_DEVICE="GLX"
+export HABITAT_SIM_LOG="quiet"
+export MAGNUM_LOG="quiet"
+
 # Configuration
 SERVER_ADDR=${1:-tcp://localhost:5556}
 NUM_EPISODES=${2:-1000}

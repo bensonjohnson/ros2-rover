@@ -1,0 +1,40 @@
+{
+  "speed_bins": [
+    0.0,
+    0.05,
+    0.1,
+    0.15,
+    0.2
+  ],
+  "clearance_bins": [
+    0.2,
+    0.5,
+    1.0,
+    2.0,
+    5.0
+  ],
+  "archive": {
+    "(np.int64(1), 0)": {
+      "fitness": 2.5817741310872386,
+      "avg_speed": 0.06056715165313763,
+      "avg_clearance": 0.4133594215114581,
+      "metrics": {
+        "distance": 0.04555137694719702,
+        "collisions": 0,
+        "duration": 60.03169655799866
+      }
+    },
+    "(0, 0)": {
+      "fitness": 5.797300172676894,
+      "avg_speed": 0.0,
+      "avg_clearance": 0.41252082085450753,
+      "metrics": {
+        "distance": 0.02441754008993929,
+        "collisions": 0,
+        "duration": 60.072001218795776
+      }
+    }
+  },
+  "total_evaluations": 10,
+  "archive_additions": 5
+}
