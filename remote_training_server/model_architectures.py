@@ -61,28 +61,74 @@ class RGBDEncoder(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    """Policy network head with proprioception fusion."""
+    """Policy network head with proprioception fusion and optional LSTM memory."""
 
-    def __init__(self, feature_dim: int, proprio_dim: int, action_dim: int = 2):
+    def __init__(self, feature_dim: int, proprio_dim: int, action_dim: int = 2, use_lstm: bool = True, hidden_size: int = 128):
         super().__init__()
+        self.use_lstm = use_lstm
+        self.hidden_size = hidden_size
+        
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 64),
             nn.ReLU(inplace=True),
             nn.Linear(64, 64),
             nn.ReLU(inplace=True),
         )
+        
+        # LSTM for temporal memory
+        if self.use_lstm:
+            lstm_input_dim = feature_dim + 64  # Visual features + proprioception
+            self.lstm = nn.LSTM(
+                input_size=lstm_input_dim,
+                hidden_size=hidden_size,
+                num_layers=1,
+                batch_first=True
+            )
+            policy_input_dim = hidden_size
+        else:
+            policy_input_dim = feature_dim + 64
+        
         self.policy = nn.Sequential(
-            nn.Linear(feature_dim + 64, 128),
+            nn.Linear(policy_input_dim, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
             nn.Linear(64, action_dim),
         )
 
-    def forward(self, features: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
+    def forward(self, features: torch.Tensor, proprio: torch.Tensor, hidden_state=None) -> tuple:
+        """Forward pass with optional hidden state.
+        
+        Args:
+            features: (B, feature_dim) visual features
+            proprio: (B, proprio_dim) proprioception
+            hidden_state: Optional (h, c) tuple for LSTM, each (1, B, hidden_size)
+            
+        Returns:
+            If use_lstm: (actions, (h_new, c_new))
+            Else: (actions, None)
+        """
         proprio_feat = self.proprio_encoder(proprio)
-        combined = torch.cat([features, proprio_feat], dim=1)
-        return self.policy(combined)
+        combined = torch.cat([features, proprio_feat], dim=1)  # (B, feature_dim + 64)
+        
+        if self.use_lstm:
+            # LSTM expects (B, seq_len, input_dim), we have single timestep
+            lstm_input = combined.unsqueeze(1)  # (B, 1, feature_dim + 64)
+            
+            if hidden_state is None:
+                # Initialize hidden state to zeros
+                batch_size = features.size(0)
+                h0 = torch.zeros(1, batch_size, self.hidden_size, device=features.device)
+                c0 = torch.zeros(1, batch_size, self.hidden_size, device=features.device)
+                hidden_state = (h0, c0)
+            
+            lstm_out, hidden_state_new = self.lstm(lstm_input, hidden_state)
+            lstm_out = lstm_out.squeeze(1)  # (B, hidden_size)
+            actions = self.policy(lstm_out)
+            return actions, hidden_state_new
+        else:
+            actions = self.policy(combined)
+            return actions, None
 
 
 class ValueHead(nn.Module):
