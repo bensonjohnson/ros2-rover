@@ -59,11 +59,11 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             depth = data['depth']  # (H, W) float32
             proprio = data['proprio']  # (6,) float32
 
-    # Store samples in order: rgb, depth, proprio, lstm_h, lstm_c
-    # Initialize LSTM states to zeros for calibration
-    lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
-    lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
-    loaded_samples.append((rgb, depth, proprio, lstm_h, lstm_c))
+            # Store samples in order: rgb, depth, proprio, lstm_h, lstm_c
+            # Initialize LSTM states to zeros for calibration
+            lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
+            lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
+            loaded_samples.append((rgb, depth, proprio, lstm_h, lstm_c))
 
             if (i + 1) % 10 == 0:
                 print(f"  Loaded {i + 1}/{len(calibration_files)} samples")
