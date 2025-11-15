@@ -23,27 +23,30 @@ from model_architectures import RGBDEncoder, PolicyHead  # Reuse network compone
 
 
 class ActorNetwork(nn.Module):
-    """Actor-only network for MAP-Elites (no value head needed)."""
+    """Actor-only network for MAP-Elites with LSTM memory (no value head needed)."""
 
-    def __init__(self, proprio_dim: int = 6):
+    def __init__(self, proprio_dim: int = 6, use_lstm: bool = True):
         super().__init__()
         self.encoder = RGBDEncoder()
-        self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim)
+        self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim, use_lstm=use_lstm)
+        self.use_lstm = use_lstm
 
-    def forward(self, rgb, depth, proprio):
-        """Forward pass.
+    def forward(self, rgb, depth, proprio, hidden_state=None):
+        """Forward pass with optional LSTM hidden state.
 
         Args:
             rgb: (B, 3, H, W) RGB image
             depth: (B, 1, H, W) Depth image
             proprio: (B, 6) Proprioception
+            hidden_state: Optional (h, c) tuple for LSTM, each (1, B, 128)
 
         Returns:
-            action: (B, 2) [linear_vel, angular_vel] in [-1, 1] range
+            If use_lstm: (action, (h_new, c_new)) where action is (B, 2) [linear_vel, angular_vel] in [-1, 1] range
+            Else: (action, None)
         """
         features = self.encoder(rgb, depth)
-        action = self.policy_head(features, proprio)
-        return torch.tanh(action)  # Squash to [-1, 1] range
+        action, hidden_state_new = self.policy_head(features, proprio, hidden_state)
+        return torch.tanh(action), hidden_state_new  # Squash to [-1, 1] range
 
 
 class PopulationTracker:
@@ -616,7 +619,7 @@ class MAPElitesTrainer:
                 batch_predictions = []
                 for candidate, _ in batch_candidates:
                     candidate.eval()
-                    pred_actions = candidate(rgb, depth, proprio)
+                    pred_actions, _ = candidate(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
                     batch_predictions.append(pred_actions)
 
                 # Compute fitness for all in batch
@@ -882,8 +885,8 @@ class MAPElitesTrainer:
 
                 optimizer.zero_grad()
 
-                # Forward pass (fp32)
-                pred_actions = model(rgb_batch, depth_batch, proprio_batch)
+                # Forward pass (fp32) - LSTM returns (actions, hidden_state)
+                pred_actions, _ = model(rgb_batch, depth_batch, proprio_batch)
                 # Behavioral cloning loss (MSE)
                 loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
 

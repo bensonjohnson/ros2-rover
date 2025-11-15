@@ -73,6 +73,10 @@ class MAPElitesEpisodeRunner(Node):
         self._episode_running = False
         self._rknn_runtime = None
         self._current_model_state = None
+        
+        # LSTM hidden state for temporal memory
+        self._lstm_hidden_h = None  # (1, 1, 128) when initialized
+        self._lstm_hidden_c = None  # (1, 1, 128) when initialized
 
         # Episode metrics
         self._episode_start_time = 0.0
@@ -385,6 +389,10 @@ class MAPElitesEpisodeRunner(Node):
         self._heading_samples = []
         self._stationary_rotation_time = 0.0
         self._track_slip_detected = False
+        
+        # NEW: Reset LSTM hidden state for new episode
+        self._lstm_hidden_h = None
+        self._lstm_hidden_c = None
 
         self.get_logger().info('🚀 Episode started')
 
@@ -712,11 +720,30 @@ class MAPElitesEpisodeRunner(Node):
                     lin_vel, ang_vel, 0.0, 0.0, 0.0, self._min_forward_dist
                 ]], dtype=np.float32)  # (1, 6)
 
-                # Run RKNN inference
-                outputs = self._rknn_runtime.inference(inputs=[rgb, depth, proprio])
+                # Prepare LSTM hidden state inputs
+                # If None, initialize to zeros (will be done by RKNN internally or pass zeros)
+                if self._lstm_hidden_h is None:
+                    # Initialize hidden states to zeros
+                    lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
+                    lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
+                else:
+                    lstm_h = self._lstm_hidden_h
+                    lstm_c = self._lstm_hidden_c
 
-                # Parse output
-                action = outputs[0][0]  # (2,)
+                # Run RKNN inference with LSTM hidden states
+                # RKNN model expects: [rgb, depth, proprio, lstm_h, lstm_c]
+                # Returns: [action, new_lstm_h, new_lstm_c]
+                outputs = self._rknn_runtime.inference(inputs=[rgb, depth, proprio, lstm_h, lstm_c])
+
+                # Parse outputs
+                action = outputs[0][0]  # (2,) action
+                new_lstm_h = outputs[1]  # (1, 1, 128) new hidden state
+                new_lstm_c = outputs[2]  # (1, 1, 128) new cell state
+                
+                # Store updated hidden states for next timestep
+                self._lstm_hidden_h = new_lstm_h
+                self._lstm_hidden_c = new_lstm_c
+                
                 linear_cmd = float(np.clip(action[0], -1.0, 1.0) * self.max_linear)
                 angular_cmd = float(np.clip(action[1], -1.0, 1.0) * self.max_angular)
 
