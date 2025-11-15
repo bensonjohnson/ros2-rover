@@ -134,20 +134,21 @@ def convert_onnx_to_rknn(
         # RK3588 supports: 'asymmetric_quantized-8', 'asymmetric_quantized-16'
         # asymmetric_quantized-8 = INT8 quantization (requires calibration dataset)
         # asymmetric_quantized-16 = INT16 quantization (better accuracy, larger model)
+        # Note: For LSTM hidden states, RKNN expects single scalar values, not arrays
         ret = rknn.config(
             mean_values=[
-                [127.5, 127.5, 127.5],  # RGB
-                [0],                     # Depth
-                [0, 0, 0, 0, 0, 0],     # Proprio
-                [0] * 128,               # LSTM hidden state (no normalization)
-                [0] * 128                # LSTM cell state (no normalization)
+                [127.5, 127.5, 127.5],  # RGB (3 channels)
+                [0],                     # Depth (1 channel)
+                [0, 0, 0, 0, 0, 0],     # Proprio (6 values)
+                [0],                     # LSTM hidden state (scalar for whole tensor)
+                [0]                      # LSTM cell state (scalar for whole tensor)
             ],
             std_values=[
-                [127.5, 127.5, 127.5],  # RGB
-                [1],                     # Depth
-                [1, 1, 1, 1, 1, 1],     # Proprio
-                [1] * 128,               # LSTM hidden state (no normalization)
-                [1] * 128                # LSTM cell state (no normalization)
+                [127.5, 127.5, 127.5],  # RGB (3 channels)
+                [1],                     # Depth (1 channel)
+                [1, 1, 1, 1, 1, 1],     # Proprio (6 values)
+                [1],                     # LSTM hidden state (scalar - no normalization)
+                [1]                      # LSTM cell state (scalar - no normalization)
             ],
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'asymmetric_quantized-16',
