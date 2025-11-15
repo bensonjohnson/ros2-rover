@@ -388,9 +388,9 @@ class MAPElitesTrainer:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats(self.device)
 
-            # Run test forward + backward pass (fp32)
+            # Run test forward + backward pass (fp32) - LSTM returns (actions, hidden_state)
             optimizer.zero_grad()
-            pred_actions = test_model(rgb_test, depth_test, proprio_test)
+            pred_actions, _ = test_model(rgb_test, depth_test, proprio_test)
             loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
             loss.backward()
             optimizer.step()
