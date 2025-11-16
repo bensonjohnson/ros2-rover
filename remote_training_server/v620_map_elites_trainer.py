@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 import zmq
 import zstandard as zstd
+from tqdm import tqdm
 
 from model_architectures import RGBDEncoder, PolicyHead  # Reuse network components
 
@@ -621,7 +622,13 @@ class MAPElitesTrainer:
         fitness_scores = []
 
         with torch.no_grad():
-            for batch_start in range(0, num_candidates, batch_eval_size):
+            # Use tqdm for progress bar
+            pbar = tqdm(range(0, num_candidates, batch_eval_size), 
+                       desc="    Evaluating candidates", 
+                       unit="batch",
+                       leave=False)
+            
+            for batch_start in pbar:
                 batch_end = min(batch_start + batch_eval_size, num_candidates)
                 batch_candidates = candidates[batch_start:batch_end]
 
@@ -647,10 +654,9 @@ class MAPElitesTrainer:
                         best_fitness = fitness
                         best_mutation = batch_candidates[i][0].state_dict()
                         best_std = mutation_std
-
-                # Log batch progress
-                if batch_end % max(10, num_candidates // 5) == 0 or batch_end == num_candidates:
-                    print(f"    Evaluated {batch_end}/{num_candidates} candidates...", flush=True)
+                
+                # Update progress bar with current best fitness
+                pbar.set_postfix({'best_fitness': f'{best_fitness:.4f}'})
 
         # Show top 5 candidates
         fitness_scores.sort(reverse=True, key=lambda x: x[0])
