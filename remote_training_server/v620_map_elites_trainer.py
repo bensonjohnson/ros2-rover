@@ -263,12 +263,14 @@ class MAPElitesTrainer:
         device: str = 'cuda',
         initial_population_size: int = 10,
         max_population_size: int = 25,
+        use_fp16: bool = True,
     ):
         self.port = port
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(exist_ok=True)
 
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+        self.use_fp16 = use_fp16 and self.device.type == 'cuda'
 
         # Detect ROCm and apply optimizations
         self.is_rocm = torch.cuda.is_available() and torch.version.hip is not None
@@ -279,7 +281,15 @@ class MAPElitesTrainer:
         # NEW: Auto-detect and set optimal batch size based on GPU memory with dynamic profiling
         self.batch_size = self._calculate_optimal_batch_size()
         print(f"✓ Auto-selected batch size: {self.batch_size} (based on dynamic profiling)")
-        print(f"✓ Precision: fp32 (full precision for RKNN compatibility)")
+        
+        if self.use_fp16:
+            print(f"✓ Precision: fp16 mixed precision (2x faster, 50% less memory)")
+            print(f"  Note: ONNX export will still be fp32 for RKNN compatibility")
+            # Initialize gradient scaler for mixed precision training
+            self.scaler = torch.cuda.amp.GradScaler()
+        else:
+            print(f"✓ Precision: fp32 (full precision)")
+            self.scaler = None
 
         # Initialize adaptive population tracker
         self.population = PopulationTracker(
@@ -885,14 +895,27 @@ class MAPElitesTrainer:
 
                 optimizer.zero_grad()
 
-                # Forward pass (fp32) - LSTM returns (actions, hidden_state)
-                pred_actions, _ = model(rgb_batch, depth_batch, proprio_batch)
-                # Behavioral cloning loss (MSE)
-                loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
-
-                # Backward pass
-                loss.backward()
-                optimizer.step()
+                # Forward pass with automatic mixed precision if enabled
+                if self.use_fp16:
+                    with torch.cuda.amp.autocast():
+                        # fp16 forward pass - LSTM returns (actions, hidden_state)
+                        pred_actions, _ = model(rgb_batch, depth_batch, proprio_batch)
+                        # Behavioral cloning loss (MSE)
+                        loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
+                    
+                    # Scaled backward pass for fp16
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                else:
+                    # fp32 forward pass - LSTM returns (actions, hidden_state)
+                    pred_actions, _ = model(rgb_batch, depth_batch, proprio_batch)
+                    # Behavioral cloning loss (MSE)
+                    loss = torch.nn.functional.mse_loss(pred_actions, actions_batch)
+                    
+                    # Standard backward pass for fp32
+                    loss.backward()
+                    optimizer.step()
 
                 epoch_loss += loss.item()
                 num_batches += 1
