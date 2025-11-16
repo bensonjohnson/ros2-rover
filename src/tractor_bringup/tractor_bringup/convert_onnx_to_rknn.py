@@ -179,12 +179,10 @@ def convert_onnx_to_rknn(
         # Build
         if quantize and calibration_dir:
             print("Building RKNN model with INT8 quantization...")
-            print("⚠ Note: Quantization with multi-input NPZ calibration not yet implemented")
-            print("  Falling back to INT16 mode (no calibration required)")
-            # TODO: Implement proper dataset.txt generation for multi-input models
-            # dataset = _load_calibration_dataset(calibration_dir)
-            # ret = rknn.build(do_quantization=True, dataset=dataset)
-            ret = rknn.build(do_quantization=False)
+            print("  Loading calibration dataset...")
+            dataset = _load_calibration_dataset(calibration_dir)
+            print("  Running quantization (this may take a few minutes)...")
+            ret = rknn.build(do_quantization=True, dataset=dataset)
         else:
             print("Building RKNN model (INT16 mode - no calibration)...")
             ret = rknn.build(do_quantization=False)
