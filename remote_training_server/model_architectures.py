@@ -56,6 +56,12 @@ class RGBDEncoder(nn.Module):
         depth_feat = self.depth_conv(depth)
         fused = torch.cat([rgb_feat, depth_feat], dim=1)
         features = self.fusion_conv(fused)
+        
+        # Spatial Attention
+        # Compute attention map from features
+        attention = torch.sigmoid(torch.mean(features, dim=1, keepdim=True))
+        features = features * attention
+        
         features = self.pool(features)
         return features.view(features.size(0), -1)
 

@@ -92,6 +92,14 @@ class MAPElitesEpisodeRunner(Node):
         self._track_slip_detected = False  # Flag for track slippage
         self._last_commanded_speed = 0.0  # For slip detection
         self._last_actual_speed = 0.0  # For slip detection
+        
+        # NEW: Coverage and Oscillation
+        self._visited_grid = set()
+        self._grid_resolution = 0.5  # 0.5m grid cells
+        self._oscillation_count = 0
+        self._recent_linear_actions = []
+        self._last_linear_cmd = 0.0
+        self._last_angular_cmd = 0.0
 
         # Trajectory collection (for gradient refinement)
         self._collect_trajectory = True  # Always collect by default (uses RAM but saves episode time)
@@ -287,6 +295,12 @@ class MAPElitesEpisodeRunner(Node):
             msg.twist.twist.angular.z,
             yaw  # NEW: Add heading
         )
+        
+        # NEW: Update coverage grid
+        if self._episode_running:
+            grid_x = int(msg.pose.pose.position.x / self._grid_resolution)
+            grid_y = int(msg.pose.pose.position.y / self._grid_resolution)
+            self._visited_grid.add((grid_x, grid_y))
 
     def min_dist_callback(self, msg: Float32) -> None:
         """Store minimum forward distance."""
@@ -372,24 +386,31 @@ class MAPElitesEpisodeRunner(Node):
         while self._latest_odom is None:
             rclpy.spin_once(self, timeout_sec=0.1)
 
+        # Reset metrics
+        self._episode_start_time = time.time()
         self._episode_start_pos = (self._latest_odom[0], self._latest_odom[1])
         self._total_distance = 0.0
         self._collision_count = 0
         self._speed_samples = []
         self._clearance_samples = []
+        self._heading_samples = []
+        self._stationary_rotation_time = 0.0
+        self._track_slip_detected = False
+        
+        # NEW: Reset coverage and oscillation
+        self._visited_grid.clear()
+        self._oscillation_count = 0
+        self._recent_linear_actions = []
+        self._last_linear_cmd = 0.0
+        self._last_angular_cmd = 0.0
 
-        # Always clear trajectory buffers (we collect for every episode now)
+        # Reset trajectory buffers
         self._trajectory_rgb = []
         self._trajectory_depth = []
         self._trajectory_proprio = []
         self._trajectory_actions = []
         self._trajectory_headings = []  # NEW: Clear heading trajectory
-        
-        # NEW: Reset tank-specific metrics
-        self._heading_samples = []
-        self._stationary_rotation_time = 0.0
-        self._track_slip_detected = False
-        
+
         # NEW: Reset LSTM hidden state for new episode
         self._lstm_hidden_h = None
         self._lstm_hidden_c = None
@@ -467,6 +488,8 @@ class MAPElitesEpisodeRunner(Node):
             'turn_efficiency': float(turn_efficiency),
             'stationary_rotation_time': float(self._stationary_rotation_time),
             'track_slip_detected': bool(track_slip_detected),
+            'coverage_count': int(len(self._visited_grid)),
+            'oscillation_count': int(self._oscillation_count),
         }
 
         # Send results to server and wait for acknowledgment
@@ -717,7 +740,7 @@ class MAPElitesEpisodeRunner(Node):
 
                 lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
                 proprio = np.array([[
-                    lin_vel, ang_vel, 0.0, 0.0, 0.0, self._min_forward_dist
+                    lin_vel, ang_vel, self._last_linear_cmd, self._last_angular_cmd, 0.0, self._min_forward_dist
                 ]], dtype=np.float32)  # (1, 6)
 
                 # Prepare LSTM hidden state inputs
@@ -779,6 +802,22 @@ class MAPElitesEpisodeRunner(Node):
             actual_speed = abs(self._latest_odom[2])
             if commanded_speed > 0.05 and actual_speed < commanded_speed * 0.3:  # Commanded but not moving much
                 self._track_slip_detected = True
+            
+            # NEW: Oscillation detection
+            self._recent_linear_actions.append(linear_cmd)
+            if len(self._recent_linear_actions) > 20:
+                self._recent_linear_actions.pop(0)
+                # Count sign flips
+                sign_flips = 0
+                for i in range(1, len(self._recent_linear_actions)):
+                    if self._recent_linear_actions[i] * self._recent_linear_actions[i-1] < -0.01: # Significant sign flip
+                        sign_flips += 1
+                if sign_flips > 5:
+                    self._oscillation_count += 1
+
+            # Store last commands for next proprioception
+            self._last_linear_cmd = linear_cmd
+            self._last_angular_cmd = angular_cmd
 
             # Collect trajectory data if requested (subsample to avoid too much data)
             # Max 1800 samples (~60s at 30Hz)
@@ -789,7 +828,7 @@ class MAPElitesEpisodeRunner(Node):
 
                 # Store proprioception
                 lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
-                proprio_vec = [lin_vel, ang_vel, 0.0, 0.0, 0.0, self._min_forward_dist]
+                proprio_vec = [lin_vel, ang_vel, self._last_linear_cmd, self._last_angular_cmd, 0.0, self._min_forward_dist]
                 self._trajectory_proprio.append(proprio_vec)
 
                 # Store action taken
