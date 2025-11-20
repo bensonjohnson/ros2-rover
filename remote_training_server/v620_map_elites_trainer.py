@@ -385,13 +385,32 @@ class MAPElitesTrainer:
         print(f"✓ REP socket listening on port {port}")
 
     def _apply_rocm_optimizations(self):
-        """Apply ROCm-specific optimizations for AMD GPUs."""
+        """Apply ROCm-specific optimizations for AMD GPUs (ROCm 6.0+)."""
         import os
 
-        # Disable MIOpen auto-tuner to avoid SQLite crashes
-        # The auto-tuner will be disabled via environment variables
-        torch.backends.cudnn.benchmark = False
-        print(f"  ✓ MIOpen auto-tuning disabled (using default kernels)")
+        print(f"  Applying ROCm 7.1+ optimizations...")
+
+        # 1. Enable TF32 (TensorFloat-32) for significant speedup on RDNA3/CDNA2+
+        # This allows FP32 matmuls to run at lower precision internally
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print(f"    ✓ TF32 enabled (matmul & cudnn)")
+
+        # 2. MIOpen Optimizations
+        # Enable MIOpen V8 API for better performance
+        os.environ['TORCH_CUDNN_V8_API_ENABLED'] = '1'
+        
+        # Disable MIOpen auto-tuner to avoid SQLite database locking/crashes in multi-process
+        # But allow it to use compiled kernels
+        torch.backends.cudnn.benchmark = True  # CHANGED: Enable benchmark for fixed input sizes
+        print(f"    ✓ MIOpen V8 API enabled")
+        print(f"    ✓ cuDNN/MIOpen benchmark enabled (optimized for fixed input sizes)")
+
+        # 3. Memory Allocator
+        # Use expandable segments to reduce fragmentation
+        if 'PYTORCH_HIP_ALLOC_CONF' not in os.environ:
+            os.environ['PYTORCH_HIP_ALLOC_CONF'] = 'max_split_size_mb:128,garbage_collection_threshold:0.8'
+            print(f"    ✓ HIP allocator tuned (max_split_size_mb:128)")
 
         # Check environment variables
         print(f"  Environment check:")

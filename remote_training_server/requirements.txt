@@ -26,3 +26,10 @@ psutil>=5.9.0
 
 # Optional: for advanced visualization
 matplotlib>=3.7.0
+
+# Compression
+lz4>=4.3.0
+zstandard>=0.21.0
+
+# Utilities
+tqdm>=4.65.0
