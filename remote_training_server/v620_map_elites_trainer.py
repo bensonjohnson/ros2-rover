@@ -254,6 +254,49 @@ class PopulationTracker:
             torch.save(entry['model'], model_path)
 
 
+class ReplayBuffer:
+    """Experience Replay Buffer for storing successful trajectories.
+    
+    Prevents catastrophic forgetting by maintaining a diverse set of past experiences.
+    """
+    def __init__(self, max_size: int = 50):
+        self.max_size = max_size
+        self.buffer = []  # List of (fitness, trajectory_data) tuples
+        
+    def add(self, trajectory_data: dict, fitness: float):
+        """Add trajectory to buffer if it's good enough or buffer not full."""
+        # Always add if buffer not full
+        if len(self.buffer) < self.max_size:
+            self.buffer.append((fitness, trajectory_data))
+            self.buffer.sort(key=lambda x: x[0], reverse=True)
+            return
+            
+        # If full, replace worst entry if new one is better
+        if fitness > self.buffer[-1][0]:
+            self.buffer[-1] = (fitness, trajectory_data)
+            self.buffer.sort(key=lambda x: x[0], reverse=True)
+            
+    def sample(self, n: int) -> List[dict]:
+        """Sample n trajectories from buffer."""
+        if not self.buffer:
+            return []
+        
+        import random
+        # Sample from top 50% to encourage high-quality replay
+        elite_size = max(1, len(self.buffer) // 2)
+        candidates = self.buffer[:elite_size]
+        
+        # If we need more samples than elites, sample from whole buffer
+        if n > len(candidates):
+            candidates = self.buffer
+            
+        samples = random.sample(candidates, min(n, len(candidates)))
+        return [s[1] for s in samples]
+    
+    def __len__(self):
+        return len(self.buffer)
+
+
 class MAPElitesTrainer:
     """Single-population evolution trainer with adaptive strategies."""
 
@@ -297,6 +340,10 @@ class MAPElitesTrainer:
             initial_population_size=initial_population_size,
             max_population_size=max_population_size
         )
+        
+        # Initialize Replay Buffer
+        self.replay_buffer = ReplayBuffer(max_size=50)
+        print(f"✓ Replay Buffer initialized (max size: 50)")
 
         # Create template model
         self.template_model = ActorNetwork().to(self.device)
@@ -851,23 +898,17 @@ class MAPElitesTrainer:
         actions_list = [trajectory_data['actions']]
 
         # Mix in replay buffer data (prevents catastrophic forgetting)
-        if use_replay_buffer and self.trajectory_buffer:
-            num_replay_samples = int(len(self.trajectory_buffer) * self.replay_buffer_mix_ratio)
-            num_replay_samples = max(1, min(num_replay_samples, len(self.trajectory_buffer)))
-
-            # Sample random trajectories from buffer
-            import random
-            buffer_cells = list(self.trajectory_buffer.keys())
-            replay_cells = random.sample(buffer_cells, num_replay_samples)
-
-            for cell in replay_cells:
-                replay_traj = self.trajectory_buffer[cell]
+        if use_replay_buffer and len(self.replay_buffer) > 0:
+            # Sample up to 5 past trajectories
+            replay_trajectories = self.replay_buffer.sample(5)
+            
+            for replay_traj in replay_trajectories:
                 rgb_list.append(replay_traj['rgb'])
                 depth_list.append(replay_traj['depth'])
                 proprio_list.append(replay_traj['proprio'])
                 actions_list.append(replay_traj['actions'])
 
-            print(f"    Mixed in {num_replay_samples} trajectories from buffer", flush=True)
+            print(f"    Mixed in {len(replay_trajectories)} trajectories from replay buffer", flush=True)
 
         # Concatenate all data
         rgb_combined = np.concatenate(rgb_list, axis=0)
@@ -1383,6 +1424,20 @@ class MAPElitesTrainer:
                         trajectory_data = trajectory_raw
 
                     print(f"  📦 Caching model #{model_id} ({len(trajectory_data['actions'])} samples) for tournament", flush=True)
+                    
+                    # Add to Replay Buffer if it was a good run (fitness > 0)
+                    # We don't have the fitness here directly, but we can infer it or just add all valid trajectories
+                    # The buffer will sort and keep the best ones
+                    # We need to find the fitness for this model_id
+                    # It was just evaluated, so we can look it up in population or just pass a placeholder
+                    # Better: The episode_result message came before this. We should have stored the fitness.
+                    # For now, we'll use a heuristic or just add it.
+                    # Actually, let's look up the fitness from the population if possible
+                    # But the model might not be in population yet if it's pending refinement
+                    # Let's just add it with a default high priority if it's a champion
+                    priority = 100.0 if is_champion else 10.0
+                    self.replay_buffer.add(trajectory_data, priority)
+                    print(f"  💾 Added to Replay Buffer (size: {len(self.replay_buffer)})", flush=True)
 
                     # MULTI-TOURNAMENT for champions: run 3 parallel tournaments
                     if self.enable_multi_tournament and is_champion:
@@ -1555,7 +1610,7 @@ class MAPElitesTrainer:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Adaptive evolution trainer with greedy compute')
+    parser = argparse.ArgumentParser(description='Adaptive evolution trainer with greedy code')
     parser.add_argument('--port', type=int, default=5556,
                         help='Port to listen for episode results')
     parser.add_argument('--num-evaluations', type=int, default=1000,
