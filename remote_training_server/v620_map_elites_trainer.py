@@ -1020,6 +1020,10 @@ class MAPElitesTrainer:
         turn_efficiency = episode_data.get('turn_efficiency', 0.0)
         stationary_rotation = episode_data.get('stationary_rotation_time', 0.0)
         track_slip = episode_data.get('track_slip_detected', False)
+        
+        # NEW: Coverage and Oscillation
+        coverage_count = episode_data.get('coverage_count', 0)
+        oscillation_count = episode_data.get('oscillation_count', 0)
 
         # Base fitness: exploration distance (INCREASED to encourage forward movement)
         # Tank max speed is 0.18 m/s, but we want to strongly reward distance covered
@@ -1120,6 +1124,15 @@ class MAPElitesTrainer:
         if distance > 10.0:
             milestone_bonus = 15.0  # Excellent progress
             fitness += milestone_bonus
+
+        # NEW: Coverage bonus (visiting new areas)
+        if coverage_count > 5:
+            coverage_bonus = coverage_count * 2.0
+            fitness += coverage_bonus
+            
+        # NEW: Oscillation penalty
+        if oscillation_count > 0:
+            fitness -= oscillation_count * 5.0
 
         # 8. Diversity bonus: SIGNIFICANTLY INCREASED for single evolution
         # Single evolution needs strong diversity to avoid premature convergence
