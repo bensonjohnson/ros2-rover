@@ -392,9 +392,23 @@ class MAPElitesTrainer:
 
         # 1. Enable TF32 (TensorFloat-32) for significant speedup on RDNA3/CDNA2+
         # This allows FP32 matmuls to run at lower precision internally
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        print(f"    ✓ TF32 enabled (matmul & cudnn)")
+        try:
+            # New API (PyTorch 2.x+)
+            torch.set_float32_matmul_precision('high')
+            print(f"    ✓ TF32 enabled (matmul: high precision)")
+        except AttributeError:
+            # Old API
+            torch.backends.cuda.matmul.allow_tf32 = True
+            print(f"    ✓ TF32 enabled (matmul: allow_tf32)")
+
+        try:
+            # New API for cuDNN
+            torch.backends.cudnn.conv.fp32_precision = 'tf32'
+            print(f"    ✓ TF32 enabled (cudnn: tf32)")
+        except AttributeError:
+            # Old API
+            torch.backends.cudnn.allow_tf32 = True
+            print(f"    ✓ TF32 enabled (cudnn: allow_tf32)")
 
         # 2. MIOpen Optimizations
         # Enable MIOpen V8 API for better performance
