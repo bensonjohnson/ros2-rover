@@ -387,11 +387,17 @@ class MAPElitesTrainer:
     def _apply_rocm_optimizations(self):
         """Apply ROCm-specific optimizations for AMD GPUs (ROCm 6.0+)."""
         import os
+        import warnings
 
         print(f"  Applying ROCm 7.1+ optimizations...")
 
         # 1. Enable TF32 (TensorFloat-32) for significant speedup on RDNA3/CDNA2+
         # This allows FP32 matmuls to run at lower precision internally
+        
+        # Suppress the specific warning about TF32 API deprecation because we ARE using the new API
+        # but PyTorch 2.x on ROCm seems to trigger it anyway when calling set_float32_matmul_precision
+        warnings.filterwarnings("ignore", message=".*Please use the new API settings to control TF32 behavior.*")
+        
         try:
             # New API (PyTorch 2.x+)
             torch.set_float32_matmul_precision('high')
@@ -416,9 +422,10 @@ class MAPElitesTrainer:
         
         # Disable MIOpen auto-tuner to avoid SQLite database locking/crashes in multi-process
         # But allow it to use compiled kernels
-        torch.backends.cudnn.benchmark = True  # CHANGED: Enable benchmark for fixed input sizes
+        torch.backends.cudnn.benchmark = False  # CHANGED: Disable benchmark to fix slow startup
         print(f"    ✓ MIOpen V8 API enabled")
-        print(f"    ✓ cuDNN/MIOpen benchmark enabled (optimized for fixed input sizes)")
+        print(f"    ✓ cuDNN/MIOpen benchmark disabled (fast startup)")
+        # print(f"      (Note: You may see 'MIOpen(HIP): Warning [SearchImpl]' logs initially - this is normal benchmarking)")
 
         # 3. Memory Allocator
         # Use expandable segments to reduce fragmentation
