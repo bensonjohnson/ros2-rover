@@ -708,6 +708,24 @@ class MAPElitesTrainer:
         # Evaluate all candidates in parallel batches (GPU efficient)
         batch_eval_size = 10  # Evaluate 10 models simultaneously
         fitness_scores = []
+        
+        # Also evaluate the parent (unmutated) model to ensure we don't regress
+        parent_model = ActorNetwork().to(self.device)
+        parent_model.load_state_dict(parent_state)
+        parent_model.eval()
+        with torch.no_grad():
+            parent_pred, _ = parent_model(rgb, depth, proprio)
+            parent_fitness = self.compute_tournament_fitness(
+                pred_actions=parent_pred,
+                target_actions=actions,
+                proprio=proprio
+            )
+            # Add parent as candidate #0
+            fitness_scores.append((parent_fitness, 0.0, -1))
+            best_fitness = parent_fitness
+            best_mutation = parent_state
+            best_std = 0.0
+            print(f"    Parent fitness baseline: {parent_fitness:.6f}", flush=True)
 
         with torch.no_grad():
             # Use tqdm for progress bar
@@ -791,27 +809,27 @@ class MAPElitesTrainer:
         #    Reduced from 30% to encourage innovation over behavior cloning
         mse_loss = torch.nn.functional.mse_loss(pred_actions, target_actions)
         imitation_score = -mse_loss.item()
-        fitness += imitation_score * 0.15  # Reduced from 0.30
+        fitness += imitation_score * 0.15
 
         # 2. SPEED-CLEARANCE CORRELATION (INCREASED to 35% weight)
         #    Strongly reward appropriate speed based on clearance
         #    Tank needs to be very responsive to clearance due to tight collision distance
-        high_clearance_mask = clearance > 1.5  # Reduced from 2.0 for tank environment
-        low_clearance_mask = clearance < 0.3   # Reduced from 0.5 for tank environment
+        high_clearance_mask = clearance > 1.5
+        low_clearance_mask = clearance < 0.3
 
         if high_clearance_mask.any():
             # When clearance is high, should go forward confidently
             safe_linear = pred_actions[high_clearance_mask, 0].mean().item()
-            fitness += safe_linear * 25.0  # Increased from 15.0 for tank responsiveness
+            fitness += safe_linear * 35.0  # Increased from 25.0 to encourage speed
 
         if low_clearance_mask.any():
             # When clearance is low, should be very cautious
             risky_linear = pred_actions[low_clearance_mask, 0].mean().item()
-            fitness -= abs(risky_linear) * 15.0  # Increased from 10.0 for safety
+            fitness -= abs(risky_linear) * 5.0  # Reduced from 15.0 to be less conservative
 
         # 3. SMOOTH OBSTACLE AVOIDANCE: NEW
         #    Reward moving forward while smoothly turning near obstacles (the "flow" behavior)
-        medium_clearance_mask = (clearance > 0.15) & (clearance < 0.8)  # Near obstacles
+        medium_clearance_mask = (clearance > 0.15) & (clearance < 0.8)
         forward_turning_mask = (torch.abs(pred_actions[:, 0]) > 0.3) & (torch.abs(pred_actions[:, 1]) > 0.15)
 
         if medium_clearance_mask.any() and forward_turning_mask.any():
@@ -820,23 +838,22 @@ class MAPElitesTrainer:
             if flow_mask.any():
                 # Reward smooth obstacle navigation
                 flow_linear = pred_actions[flow_mask, 0].mean().item()
-                flow_angular = torch.abs(pred_actions[flow_mask, 1]).mean().item()
-
+                
                 # Bonus scales with forward action magnitude
                 if flow_linear > 0.4:
-                    fitness += flow_linear * 18.0  # Strong reward for maintaining forward speed near obstacles
+                    fitness += flow_linear * 25.0  # Increased from 18.0
 
                 # Extra bonus if turning is smooth and controlled
                 if len(pred_actions[flow_mask]) >= 2:
                     flow_action_diffs = torch.diff(pred_actions[flow_mask], dim=0)
                     flow_smoothness = torch.std(flow_action_diffs).item()
                     if flow_smoothness < 0.15:
-                        fitness += 12.0  # Bonus for smooth flow around obstacles
+                        fitness += 15.0  # Increased from 12.0
 
         # 4. TANK PIVOT TURN BONUS
         #    Reward controlled rotation at low speeds (critical for tank maneuvering)
-        low_speed_mask = linear_speed < 0.05  # Very low linear speed
-        moderate_angular_mask = torch.abs(pred_actions[:, 1]) > 0.2  # Some rotation
+        low_speed_mask = linear_speed < 0.05
+        moderate_angular_mask = torch.abs(pred_actions[:, 1]) > 0.2
 
         if low_speed_mask.any() and moderate_angular_mask.any():
             # Find timesteps with both low speed and rotation
@@ -850,9 +867,9 @@ class MAPElitesTrainer:
                     angular_smoothness = torch.std(pivot_angular_actions).item()
 
                     if angular_smoothness < 0.15:  # Smooth pivot control
-                        fitness += 10.0  # Bonus for good pivot turns
+                        fitness += 10.0
                     else:
-                        fitness -= 5.0   # Penalty for jerky pivots
+                        fitness -= 1.0   # Reduced from 5.0 to be less punitive on noise
 
         # 5. FORWARD BIAS (INCREASED to 30% weight)
         #    Tank steering: forward motion is good, spinning is bad
@@ -863,13 +880,13 @@ class MAPElitesTrainer:
 
         # Reward forward-biased actions MORE STRONGLY
         if forward_ratio > 0.6:
-            fitness += (forward_ratio - 0.6) * 35.0  # INCREASED strong reward (was 25.0)
+            fitness += (forward_ratio - 0.6) * 40.0  # Increased from 35.0
         elif forward_ratio < 0.3:
-            fitness -= (0.3 - forward_ratio) * 40.0  # INCREASED penalty for spinning (was 30.0)
+            fitness -= (0.3 - forward_ratio) * 10.0  # Reduced from 40.0 to allow exploration
 
         # Additional bonus for high linear values (not just ratio)
         if linear_magnitude > 0.5:
-            fitness += (linear_magnitude - 0.5) * 20.0  # Reward high forward actions
+            fitness += (linear_magnitude - 0.5) * 25.0  # Increased from 20.0
 
         # 6. ACTION SMOOTHNESS (15% weight) - Keep similar
         #    Smooth actions indicate stable, confident behavior
