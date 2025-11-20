@@ -330,7 +330,7 @@ class MAPElitesTrainer:
             print(f"✓ Precision: fp16 mixed precision (2x faster, 50% less memory)")
             print(f"  Note: ONNX export will still be fp32 for RKNN compatibility")
             # Initialize gradient scaler for mixed precision training
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
         else:
             print(f"✓ Precision: fp32 (full precision)")
             self.scaler = None
@@ -490,8 +490,8 @@ class MAPElitesTrainer:
             optimizer.zero_grad()
             
             if self.use_fp16:
-                scaler = torch.cuda.amp.GradScaler()
-                with torch.cuda.amp.autocast():
+                scaler = torch.amp.GradScaler('cuda')
+                with torch.amp.autocast('cuda'):
                     pred_actions, _ = test_model(rgb_test, depth_test, proprio_test)
                     loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
                 scaler.scale(loss).backward()
@@ -725,7 +725,7 @@ class MAPElitesTrainer:
         parent_model.eval()
         with torch.no_grad():
             if self.use_fp16:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     parent_pred, _ = parent_model(rgb, depth, proprio)
             else:
                 parent_pred, _ = parent_model(rgb, depth, proprio)
@@ -758,7 +758,7 @@ class MAPElitesTrainer:
                 for candidate, _ in batch_candidates:
                     candidate.eval()
                     if self.use_fp16:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast('cuda'):
                             pred_actions, _ = candidate(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
                     else:
                         pred_actions, _ = candidate(rgb, depth, proprio)
@@ -1021,7 +1021,7 @@ class MAPElitesTrainer:
 
                 # Forward pass with automatic mixed precision if enabled
                 if self.use_fp16:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast('cuda'):
                         # fp16 forward pass - LSTM returns (actions, hidden_state)
                         pred_actions, _ = model(rgb_batch, depth_batch, proprio_batch)
                         # Behavioral cloning loss (MSE)
