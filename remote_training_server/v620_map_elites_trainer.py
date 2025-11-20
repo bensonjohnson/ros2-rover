@@ -423,7 +423,8 @@ class MAPElitesTrainer:
             optimal_batch_size = int(target_memory_gb / memory_per_sample_gb)
 
             # Clamp to reasonable range
-            batch_size = max(8, min(optimal_batch_size, 256))
+            # Increased max from 256 to 2048 for high-VRAM cards (like V620 32GB)
+            batch_size = max(8, min(optimal_batch_size, 2048))
 
             # Predict actual usage at optimal batch size
             predicted_usage_gb = batch_size * memory_per_sample_gb
