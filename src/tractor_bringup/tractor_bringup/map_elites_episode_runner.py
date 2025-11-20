@@ -124,6 +124,11 @@ class MAPElitesEpisodeRunner(Node):
         # Current model being evaluated
         self._current_model_id = None
 
+        # Generate unique client ID for debugging multiple instances
+        import uuid
+        self.client_id = str(uuid.uuid4())[:8]
+        self.get_logger().info(f'Client ID: {self.client_id}')
+
         # Subscribers
         self.rgb_sub = self.create_subscription(
             Image, '/camera/camera/color/image_raw',
@@ -315,10 +320,13 @@ class MAPElitesEpisodeRunner(Node):
         """Request new model from V620 server."""
         try:
             # Send model request
-            request = {'type': 'request_model'}
+            request = {
+                'type': 'request_model',
+                'client_id': self.client_id
+            }
             self.zmq_socket.send_pyobj(request)
 
-            self.get_logger().info('Requesting new model from V620...')
+            self.get_logger().info(f'Requesting new model from V620 (Client {self.client_id})...')
 
             # Wait for response (infinite timeout - may be delayed by refinement/tournament)
             if self.zmq_socket.poll(timeout=-1):  # Infinite timeout
@@ -475,6 +483,7 @@ class MAPElitesEpisodeRunner(Node):
         # Package episode results
         episode_result = {
             'type': 'episode_result',
+            'client_id': self.client_id,
             'model_id': self._current_model_id,
             'total_distance': float(self._total_distance),
             'collision_count': int(self._collision_count),

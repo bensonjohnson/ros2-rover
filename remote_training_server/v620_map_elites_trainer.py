@@ -1254,6 +1254,8 @@ class MAPElitesTrainer:
 
                 if message['type'] == 'request_model':
                     # Rover is requesting a new model to evaluate
+                    client_id = message.get('client_id', 'unknown')
+                    
                     model_state, gen_type = self.generate_model_for_evaluation()
                     model_id = self.next_model_id
                     self.next_model_id += 1
@@ -1276,10 +1278,11 @@ class MAPElitesTrainer:
                     }
                     self.socket.send_pyobj(response)
 
-                    print(f"→ Sent model #{model_id} ({gen_type}) to rover", flush=True)
+                    print(f"→ Sent model #{model_id} ({gen_type}) to rover {client_id}", flush=True)
 
                 elif message['type'] == 'episode_result':
                     # Rover is sending back episode results
+                    client_id = message.get('client_id', 'unknown')
                     model_id = message['model_id']
                     total_distance = message['total_distance']
                     collision_count = message['collision_count']
@@ -1386,7 +1389,7 @@ class MAPElitesTrainer:
                         status = "rejected (below threshold)"
 
                     print(f"← Eval {evaluation_count}/{num_evaluations} | "
-                          f"Model #{model_id} ({gen_type}) | "
+                          f"Model #{model_id} ({gen_type}) | Client {client_id} | "
                           f"Fitness: {fitness:.2f} | "
                           f"Speed: {avg_speed:.3f} m/s | "
                           f"Clear: {avg_clearance:.2f} m | "
