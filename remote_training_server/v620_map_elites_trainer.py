@@ -486,12 +486,22 @@ class MAPElitesTrainer:
             torch.cuda.empty_cache()
             torch.cuda.reset_peak_memory_stats(self.device)
 
-            # Run test forward + backward pass (fp32) - LSTM returns (actions, hidden_state)
+            # Run test forward + backward pass (fp32 or fp16) - LSTM returns (actions, hidden_state)
             optimizer.zero_grad()
-            pred_actions, _ = test_model(rgb_test, depth_test, proprio_test)
-            loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
-            loss.backward()
-            optimizer.step()
+            
+            if self.use_fp16:
+                scaler = torch.cuda.amp.GradScaler()
+                with torch.cuda.amp.autocast():
+                    pred_actions, _ = test_model(rgb_test, depth_test, proprio_test)
+                    loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                pred_actions, _ = test_model(rgb_test, depth_test, proprio_test)
+                loss = torch.nn.functional.mse_loss(pred_actions, actions_test)
+                loss.backward()
+                optimizer.step()
 
             # Measure peak memory usage
             peak_memory_gb = torch.cuda.max_memory_allocated(self.device) / (1024**3)
@@ -714,7 +724,12 @@ class MAPElitesTrainer:
         parent_model.load_state_dict(parent_state)
         parent_model.eval()
         with torch.no_grad():
-            parent_pred, _ = parent_model(rgb, depth, proprio)
+            if self.use_fp16:
+                with torch.cuda.amp.autocast():
+                    parent_pred, _ = parent_model(rgb, depth, proprio)
+            else:
+                parent_pred, _ = parent_model(rgb, depth, proprio)
+
             parent_fitness = self.compute_tournament_fitness(
                 pred_actions=parent_pred,
                 target_actions=actions,
@@ -738,11 +753,15 @@ class MAPElitesTrainer:
                 batch_end = min(batch_start + batch_eval_size, num_candidates)
                 batch_candidates = candidates[batch_start:batch_end]
 
-                # Collect predictions from all models in batch (fp32)
+                # Collect predictions from all models in batch
                 batch_predictions = []
                 for candidate, _ in batch_candidates:
                     candidate.eval()
-                    pred_actions, _ = candidate(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
+                    if self.use_fp16:
+                        with torch.cuda.amp.autocast():
+                            pred_actions, _ = candidate(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
+                    else:
+                        pred_actions, _ = candidate(rgb, depth, proprio)
                     batch_predictions.append(pred_actions)
 
                 # Compute fitness for all in batch
