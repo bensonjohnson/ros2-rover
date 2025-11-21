@@ -86,6 +86,8 @@ class MAPElitesEpisodeRunner(Node):
         self._collision_count = 0
         self._speed_samples = []
         self._clearance_samples = []
+        self._left_clearance_samples = []  # NEW: Left side clearance
+        self._right_clearance_samples = []  # NEW: Right side clearance
         
         # NEW: Tank-specific metrics
         self._heading_samples = []  # For turn efficiency calculation
@@ -284,6 +286,28 @@ class MAPElitesEpisodeRunner(Node):
             if depth.dtype == np.uint16:
                 depth = depth.astype(np.float32) * 0.001  # mm to m
             self._latest_depth = depth.astype(np.float32)
+
+            # NEW: Calculate left/right clearance for centering reward
+            if self._episode_running:
+                h, w = self._latest_depth.shape
+                # Bottom half only (like safety monitor)
+                roi_y_start = h // 2
+                
+                # Left 30%
+                left_roi = self._latest_depth[roi_y_start:, :int(w*0.3)]
+                # Right 30%
+                right_roi = self._latest_depth[roi_y_start:, int(w*0.7):]
+                
+                # Filter valid depths (>0.1m) and cap at 5.0m
+                valid_left = left_roi[(left_roi > 0.1) & (left_roi < 5.0)]
+                valid_right = right_roi[(right_roi > 0.1) & (right_roi < 5.0)]
+                
+                left_clearance = float(np.min(valid_left)) if len(valid_left) > 0 else 5.0
+                right_clearance = float(np.min(valid_right)) if len(valid_right) > 0 else 5.0
+                
+                self._left_clearance_samples.append(left_clearance)
+                self._right_clearance_samples.append(right_clearance)
+
         except Exception as e:
             self.get_logger().warn(f'Depth conversion failed: {e}')
 
@@ -402,6 +426,8 @@ class MAPElitesEpisodeRunner(Node):
         self._collision_count = 0
         self._speed_samples = []
         self._clearance_samples = []
+        self._left_clearance_samples = []
+        self._right_clearance_samples = []
         self._heading_samples = []
         self._stationary_rotation_time = 0.0
         self._track_slip_detected = False
@@ -446,6 +472,8 @@ class MAPElitesEpisodeRunner(Node):
         # Compute averages
         avg_speed = np.mean(self._speed_samples) if self._speed_samples else 0.0
         avg_clearance = np.mean(self._clearance_samples) if self._clearance_samples else 0.0
+        avg_left_clearance = np.mean(self._left_clearance_samples) if self._left_clearance_samples else 0.0
+        avg_right_clearance = np.mean(self._right_clearance_samples) if self._right_clearance_samples else 0.0
         
         # NEW: Compute turn efficiency (distance per heading change)
         turn_efficiency = 0.0
@@ -490,6 +518,8 @@ class MAPElitesEpisodeRunner(Node):
             'collision_count': int(self._collision_count),
             'avg_speed': float(avg_speed),
             'avg_clearance': float(avg_clearance),
+            'avg_left_clearance': float(avg_left_clearance),
+            'avg_right_clearance': float(avg_right_clearance),
             'duration': float(duration),
             'action_smoothness': float(action_smoothness),
             'avg_linear_action': float(avg_linear_action),
@@ -511,7 +541,8 @@ class MAPElitesEpisodeRunner(Node):
                 f'dist={self._total_distance:.2f}m, '
                 f'collisions={self._collision_count}, '
                 f'avg_speed={avg_speed:.3f}m/s, '
-                f'avg_clearance={avg_clearance:.2f}m'
+                f'avg_clearance={avg_clearance:.2f}m, '
+                f'L/R={avg_left_clearance:.1f}/{avg_right_clearance:.1f}m'
             )
 
             # Wait for acknowledgment

@@ -1148,6 +1148,10 @@ class MAPElitesTrainer:
         # NEW: Coverage and Oscillation
         coverage_count = episode_data.get('coverage_count', 0)
         oscillation_count = episode_data.get('oscillation_count', 0)
+        
+        # NEW: Centering metrics
+        avg_left = episode_data.get('avg_left_clearance', 0.0)
+        avg_right = episode_data.get('avg_right_clearance', 0.0)
 
         # Base fitness: exploration distance (INCREASED to encourage forward movement)
         # Tank max speed is 0.18 m/s, but we want to strongly reward distance covered
@@ -1170,6 +1174,26 @@ class MAPElitesTrainer:
             if avg_clearance > 0.3:
                 open_space_bonus = min((avg_clearance - 0.3) * 6.0, 12.0)  # INCREASED (was 5.0, cap 10.0)
                 fitness += open_space_bonus
+
+        # NEW: Centering and Widest Path Bonus
+        # Reward keeping equal distance to side obstacles (centering)
+        # and maximizing that distance (finding widest path)
+        if avg_left > 0 and avg_right > 0:
+            # 1. Centering: penalize difference (asymmetry)
+            # Only penalize if we are somewhat confined (< 2m clearance)
+            # In open space, asymmetry matters less
+            if avg_left < 2.0 or avg_right < 2.0:
+                diff = abs(avg_left - avg_right)
+                centering_penalty = diff * 8.0  # Strong penalty for hugging walls
+                fitness -= centering_penalty
+            
+            # 2. Widest path: reward min(left, right)
+            # This encourages finding the path where the closest obstacle is furthest away
+            # This is "finding the best clear path"
+            min_side_clearance = min(avg_left, avg_right)
+            if min_side_clearance > 0.3:
+                width_bonus = (min_side_clearance - 0.3) * 10.0
+                fitness += width_bonus
 
         # NEW: Smooth obstacle avoidance bonus (moving forward while turning near obstacles)
         # Reward the tank for maintaining speed while smoothly turning around obstacles
@@ -1339,6 +1363,8 @@ class MAPElitesTrainer:
                     collision_count = message['collision_count']
                     avg_speed = message['avg_speed']
                     avg_clearance = message['avg_clearance']
+                    avg_left_clearance = message.get('avg_left_clearance', 0.0)
+                    avg_right_clearance = message.get('avg_right_clearance', 0.0)
                     episode_duration = message['duration']
                     action_smoothness = message.get('action_smoothness', 0.0)
                     avg_linear_action = message.get('avg_linear_action', 0.0)
@@ -1445,6 +1471,7 @@ class MAPElitesTrainer:
                           f"Fitness: {fitness:.2f} | "
                           f"Speed: {avg_speed:.3f} m/s | "
                           f"Clear: {avg_clearance:.2f} m | "
+                          f"L/R: {avg_left_clearance:.1f}/{avg_right_clearance:.1f} m | "
                           f"{status}",
                           flush=True)
 
