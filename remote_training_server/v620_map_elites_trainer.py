@@ -1548,15 +1548,6 @@ class MAPElitesTrainer:
                     print(f"  📦 Caching model #{model_id} ({len(trajectory_data['actions'])} samples) for tournament", flush=True)
                     
                     # Add to Replay Buffer if it was a good run (fitness > 0)
-                    # We don't have the fitness here directly, but we can infer it or just add all valid trajectories
-                    # The buffer will sort and keep the best ones
-                    # We need to find the fitness for this model_id
-                    # It was just evaluated, so we can look it up in population or just pass a placeholder
-                    # Better: The episode_result message came before this. We should have stored the fitness.
-                    # For now, we'll use a heuristic or just add it.
-                    # Actually, let's look up the fitness from the population if possible
-                    # But the model might not be in population yet if it's pending refinement
-                    # Let's just add it with a default high priority if it's a champion
                     priority = 100.0 if is_champion else 10.0
                     self.replay_buffer.add(trajectory_data, priority)
                     print(f"  💾 Added to Replay Buffer (size: {len(self.replay_buffer)})", flush=True)
