@@ -6,6 +6,7 @@ No teleoperation required - rover explores autonomously!
 """
 
 import os
+import math
 import subprocess
 import tempfile
 import time
@@ -303,8 +304,8 @@ class MAPElitesEpisodeRunner(Node):
         
         # NEW: Update coverage grid
         if self._episode_running:
-            grid_x = int(msg.pose.pose.position.x / self._grid_resolution)
-            grid_y = int(msg.pose.pose.position.y / self._grid_resolution)
+            grid_x = math.floor(msg.pose.pose.position.x / self._grid_resolution)
+            grid_y = math.floor(msg.pose.pose.position.y / self._grid_resolution)
             self._visited_grid.add((grid_x, grid_y))
 
     def min_dist_callback(self, msg: Float32) -> None:
