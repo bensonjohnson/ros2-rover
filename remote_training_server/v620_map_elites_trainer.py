@@ -94,6 +94,7 @@ class PopulationTracker:
         fitness: float,
         avg_speed: float,
         avg_clearance: float,
+        avg_angular_action: float,
         metrics: dict
     ) -> Tuple[bool, float, int]:
         """Try to add model to population.
@@ -111,6 +112,7 @@ class PopulationTracker:
             'fitness': fitness,
             'avg_speed': avg_speed,
             'avg_clearance': avg_clearance,
+            'avg_angular_action': avg_angular_action,
             'metrics': metrics,
         }
 
@@ -156,7 +158,7 @@ class PopulationTracker:
             return None
         return self.population[0]
 
-    def calculate_behavior_novelty(self, avg_speed: float, avg_clearance: float) -> float:
+    def calculate_behavior_novelty(self, avg_speed: float, avg_clearance: float, avg_angular_action: float) -> float:
         """Calculate how novel this behavior is compared to population.
 
         Returns novelty score in [0, 1] where 1 = very novel, 0 = common.
@@ -167,14 +169,17 @@ class PopulationTracker:
         # Get existing behaviors
         speeds = [entry['avg_speed'] for entry in self.population]
         clearances = [entry['avg_clearance'] for entry in self.population]
+        angular_actions = [entry.get('avg_angular_action', 0.0) for entry in self.population]
 
         # Calculate minimum distance to existing behaviors (k-nearest neighbor style)
         distances = []
         for i in range(len(self.population)):
-            # Normalize speed (0-0.3 m/s typical) and clearance (0-5m typical)
+            # Normalize speed (0-0.3 m/s typical), clearance (0-5m typical), angular (0-1.0)
             speed_dist = abs(avg_speed - speeds[i]) / 0.3
             clearance_dist = abs(avg_clearance - clearances[i]) / 5.0
-            euclidean_dist = np.sqrt(speed_dist**2 + clearance_dist**2)
+            angular_dist = abs(avg_angular_action - angular_actions[i]) / 1.0
+
+            euclidean_dist = np.sqrt(speed_dist**2 + clearance_dist**2 + angular_dist**2)
             distances.append(euclidean_dist)
 
         # Use 3-nearest neighbor average distance as novelty
@@ -228,6 +233,7 @@ class PopulationTracker:
                 'fitness': entry['fitness'],
                 'avg_speed': entry['avg_speed'],
                 'avg_clearance': entry['avg_clearance'],
+                'avg_angular_action': entry.get('avg_angular_action', 0.0),
                 'metrics': entry['metrics']
             })
 
@@ -1243,19 +1249,28 @@ class MAPElitesTrainer:
             milestone_bonus = 15.0  # Excellent progress
             fitness += milestone_bonus
 
-        # NEW: Coverage bonus (visiting new areas)
+        # NEW: Coverage bonus (visiting new areas) - INCREASED
         if coverage_count > 5:
-            coverage_bonus = coverage_count * 2.0
+            coverage_bonus = coverage_count * 3.0  # Increased from 2.0
             fitness += coverage_bonus
-            
-        # NEW: Oscillation penalty
+
+        # NEW: Coverage Efficiency bonus
+        # Reward covering new ground efficiently (not just moving back and forth)
+        if distance > 1.0 and coverage_count > 10:
+            # Ratio of unique cells to distance traveled
+            # High ratio means efficient exploration
+            coverage_efficiency = coverage_count / (distance + 1e-6)
+            if coverage_efficiency > 1.5:
+                fitness += coverage_efficiency * 5.0
+
+        # NEW: Oscillation penalty - INCREASED
         if oscillation_count > 0:
-            fitness -= oscillation_count * 5.0
+            fitness -= oscillation_count * 10.0  # Increased from 5.0
 
         # 8. Diversity bonus: SIGNIFICANTLY INCREASED for single evolution
         # Single evolution needs strong diversity to avoid premature convergence
         if self.enable_diversity_bonus and fitness > 0:
-            novelty_score = self.population.calculate_behavior_novelty(avg_speed, avg_clearance)
+            novelty_score = self.population.calculate_behavior_novelty(avg_speed, avg_clearance, avg_angular_action)
             if novelty_score > 0.6:  # More selective (was 0.5)
                 diversity_bonus = novelty_score * 12.0  # Massively increased from 3.0
                 fitness += diversity_bonus
@@ -1348,6 +1363,7 @@ class MAPElitesTrainer:
                         fitness=fitness,
                         avg_speed=avg_speed,
                         avg_clearance=avg_clearance,
+                        avg_angular_action=avg_angular_action,
                         metrics={
                             'distance': total_distance,
                             'collisions': collision_count,
@@ -1649,6 +1665,7 @@ class MAPElitesTrainer:
                 'fitness': entry_meta['fitness'],
                 'avg_speed': entry_meta['avg_speed'],
                 'avg_clearance': entry_meta['avg_clearance'],
+                'avg_angular_action': entry_meta.get('avg_angular_action', 0.0),
                 'metrics': entry_meta['metrics'],
             }
             self.population.population.append(entry)
