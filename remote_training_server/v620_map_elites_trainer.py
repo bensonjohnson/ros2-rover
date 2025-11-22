@@ -1506,24 +1506,30 @@ class MAPElitesTrainer:
                         # Always collect from population additions (maximize V620 compute)
                         should_collect = True
 
-                        # Determine adaptive tournament size based on rank
-                        if rank == 1:
-                            # NEW BEST MODEL - champion treatment!
-                            tournament_size = self.tournament_sizes['champion']  # 500
-                            collection_reason = f"🏆 NEW CHAMPION (rank #1)"
-                            is_champion = True
-                        elif rank <= 5:
-                            # Elite performer
-                            tournament_size = self.tournament_sizes['elite']  # 300
-                            collection_reason = f"Elite (rank #{rank})"
-                        elif rank <= 10:
-                            # Good performer
-                            tournament_size = self.tournament_sizes['good']  # 150
-                            collection_reason = f"Good (rank #{rank})"
+                        # Skip tournament logic during warmup (first 10 evals)
+                        if self.population.total_evaluations <= 10:
+                            tournament_size = 0
+                            collection_reason = f"Warmup (rank #{rank})"
+                            is_champion = False
                         else:
-                            # Marginal addition
-                            tournament_size = self.tournament_sizes['marginal']  # 75
-                            collection_reason = f"Marginal (rank #{rank})"
+                            # Determine adaptive tournament size based on rank
+                            if rank == 1:
+                                # NEW BEST MODEL - champion treatment!
+                                tournament_size = self.tournament_sizes['champion']  # 500
+                                collection_reason = f"🏆 NEW CHAMPION (rank #1)"
+                                is_champion = True
+                            elif rank <= 5:
+                                # Elite performer
+                                tournament_size = self.tournament_sizes['elite']  # 300
+                                collection_reason = f"Elite (rank #{rank})"
+                            elif rank <= 10:
+                                # Good performer
+                                tournament_size = self.tournament_sizes['good']  # 150
+                                collection_reason = f"Good (rank #{rank})"
+                            else:
+                                # Marginal addition
+                                tournament_size = self.tournament_sizes['marginal']  # 75
+                                collection_reason = f"Marginal (rank #{rank})"
 
                     # Calculate variable episode duration suggestion
                     best_fitness = self.population.get_best()['fitness'] if self.population.get_best() else 0
@@ -1650,36 +1656,40 @@ class MAPElitesTrainer:
                     self.replay_buffer.add(trajectory_data, priority)
                     print(f"  💾 Added to Replay Buffer (size: {len(self.replay_buffer)})", flush=True)
 
-                    # MULTI-TOURNAMENT for champions: run 3 parallel tournaments
-                    if self.enable_multi_tournament and is_champion:
-                        print(f"  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...", flush=True)
+                    # Skip tournament if size is 0 (warmup)
+                    if tournament_size > 0:
+                        # MULTI-TOURNAMENT for champions: run 3 parallel tournaments
+                        if self.enable_multi_tournament and is_champion:
+                            print(f"  🏆🏆🏆 CHAMPION detected! Running 3 parallel tournaments...", flush=True)
 
-                        # Run 3 independent tournaments with varying mutation ranges
-                        mutation_ranges = [
-                            (0.005, 0.03),  # Conservative
-                            (0.01, 0.05),   # Standard
-                            (0.02, 0.08),   # Aggressive
-                        ]
+                            # Run 3 independent tournaments with varying mutation ranges
+                            mutation_ranges = [
+                                (0.005, 0.03),  # Conservative
+                                (0.01, 0.05),   # Standard
+                                (0.02, 0.08),   # Aggressive
+                            ]
 
-                        for i, mut_range in enumerate(mutation_ranges):
-                            print(f"    Running tournament {i+1}/3 (mutation: {mut_range})...", flush=True)
-                            best_mutation, fitness = self.tournament_selection(
-                                parent_state=original_model_state,
-                                trajectory_data=trajectory_data,
-                                num_candidates=tournament_size // 3,  # Divide compute across 3 tournaments
-                                mutation_std_range=mut_range
-                            )
-                            # Queue this candidate for evaluation
-                            self.multi_tournament_pending.append(best_mutation)
+                            for i, mut_range in enumerate(mutation_ranges):
+                                print(f"    Running tournament {i+1}/3 (mutation: {mut_range})...", flush=True)
+                                best_mutation, fitness = self.tournament_selection(
+                                    parent_state=original_model_state,
+                                    trajectory_data=trajectory_data,
+                                    num_candidates=tournament_size // 3,  # Divide compute across 3 tournaments
+                                    mutation_std_range=mut_range
+                                )
+                                # Queue this candidate for evaluation
+                                self.multi_tournament_pending.append(best_mutation)
 
-                        print(f"  ✓ 3 tournament candidates queued for evaluation!", flush=True)
+                            print(f"  ✓ 3 tournament candidates queued for evaluation!", flush=True)
 
+                        else:
+                            # Standard single tournament
+                            # Cache original model + trajectory for goal-oriented tournament selection
+                            self.last_refined_model = (original_model_state, trajectory_data, tournament_size)
+
+                            print(f"  ✓ Ready for tournament selection ({tournament_size} candidates)", flush=True)
                     else:
-                        # Standard single tournament
-                        # Cache original model + trajectory for goal-oriented tournament selection
-                        self.last_refined_model = (original_model_state, trajectory_data, tournament_size)
-
-                        print(f"  ✓ Ready for tournament selection ({tournament_size} candidates)", flush=True)
+                        print(f"  ✓ Trajectory stored in buffer (skipping tournament during warmup)", flush=True)
 
                     # Send acknowledgment (instant - no gradient descent wait!)
                     self.socket.send_pyobj({'type': 'ack'})
