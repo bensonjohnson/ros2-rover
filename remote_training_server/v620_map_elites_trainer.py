@@ -434,7 +434,13 @@ class ReplayBuffer:
         if os.path.exists(filepath):
             print(f"  📂 Loading Replay Buffer from {filepath}...", flush=True)
             try:
-                self.buffer = torch.load(filepath)
+                # Fix for PyTorch 2.6+ default weights_only=True
+                try:
+                    self.buffer = torch.load(filepath, weights_only=False)
+                except TypeError:
+                    # Fallback for older PyTorch versions
+                    self.buffer = torch.load(filepath)
+                    
                 print(f"    ✓ Loaded {len(self.buffer)} items", flush=True)
             except Exception as e:
                 print(f"    ⚠ Failed to load replay buffer: {e}", flush=True)
