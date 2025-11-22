@@ -380,6 +380,23 @@ class ReplayBuffer:
         # For now return numpy arrays, caller converts to tensor
         return rgb_batch, depth_batch, proprio_batch, action_batch, reward_batch
 
+    def save(self, filepath: str):
+        """Save replay buffer to disk."""
+        print(f"  💾 Saving Replay Buffer ({len(self.buffer)} items)...", flush=True)
+        torch.save(self.buffer, filepath)
+
+    def load(self, filepath: str):
+        """Load replay buffer from disk."""
+        if os.path.exists(filepath):
+            print(f"  📂 Loading Replay Buffer from {filepath}...", flush=True)
+            try:
+                self.buffer = torch.load(filepath)
+                print(f"    ✓ Loaded {len(self.buffer)} items", flush=True)
+            except Exception as e:
+                print(f"    ⚠ Failed to load replay buffer: {e}", flush=True)
+        else:
+            print(f"    ⚠ Replay buffer file not found: {filepath}", flush=True)
+
     def __len__(self):
         return len(self.buffer)
 
@@ -1734,6 +1751,17 @@ class MAPElitesTrainer:
         # Export best model
         self.export_best_model(suffix)
 
+        # Save Critic and Optimizer
+        critic_path = self.checkpoint_dir / f'critic_{suffix}.pt'
+        torch.save({
+            'critic_state': self.critic.state_dict(),
+            'optimizer_state': self.critic_optimizer.state_dict()
+        }, critic_path)
+
+        # Save Replay Buffer
+        buffer_path = self.checkpoint_dir / f'replay_buffer_{suffix}.pt'
+        self.replay_buffer.save(str(buffer_path))
+
         print(f"✓ Checkpoint saved: {checkpoint_path}")
 
     def load_checkpoint(self, checkpoint_path: str):
@@ -1798,6 +1826,32 @@ class MAPElitesTrainer:
             loaded_count += 1
 
         print(f"  Loaded {loaded_count}/{len(model_files)} models from checkpoint")
+
+        # Load Critic and Optimizer
+        # Infer suffix from checkpoint filename
+        filename = checkpoint_path.name
+        if filename.startswith('evolution_') and filename.endswith('.json'):
+            suffix = filename.replace('evolution_', '').replace('.json', '')
+            
+            critic_path = checkpoint_path.parent / f'critic_{suffix}.pt'
+            if critic_path.exists():
+                print(f"  📂 Loading Critic from {critic_path}...", flush=True)
+                try:
+                    checkpoint = torch.load(critic_path, map_location=self.device)
+                    self.critic.load_state_dict(checkpoint['critic_state'])
+                    self.critic_optimizer.load_state_dict(checkpoint['optimizer_state'])
+                    print(f"    ✓ Critic loaded", flush=True)
+                except Exception as e:
+                    print(f"    ⚠ Failed to load critic: {e}", flush=True)
+            else:
+                print(f"    ⚠ Critic checkpoint not found: {critic_path}", flush=True)
+
+            # Load Replay Buffer
+            buffer_path = checkpoint_path.parent / f'replay_buffer_{suffix}.pt'
+            if buffer_path.exists():
+                self.replay_buffer.load(str(buffer_path))
+            else:
+                print(f"    ⚠ Replay buffer checkpoint not found: {buffer_path}", flush=True)
 
     def export_best_model(self, suffix: str):
         """Export the best model from population."""
