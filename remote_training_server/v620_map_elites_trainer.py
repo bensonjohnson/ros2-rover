@@ -1910,6 +1910,33 @@ class MAPElitesTrainer:
             buffer_path = checkpoint_path.parent / f'replay_buffer_{suffix}.pt'
             if buffer_path.exists():
                 self.replay_buffer.load(str(buffer_path))
+                
+                # Auto-recovery: If buffer is empty, try to find a previous non-empty one
+                if len(self.replay_buffer) == 0:
+                    print(f"    ⚠ Loaded buffer is empty. Attempting to recover from previous checkpoints...", flush=True)
+                    # Find all buffer files
+                    buffer_files = list(checkpoint_path.parent.glob('replay_buffer_eval_*.pt'))
+                    
+                    # Sort by evaluation number (descending)
+                    def get_eval_num(p):
+                        try:
+                            return int(p.stem.split('_')[-1])
+                        except:
+                            return -1
+                            
+                    buffer_files.sort(key=get_eval_num, reverse=True)
+                    
+                    for backup_path in buffer_files:
+                        # Skip the one we just tried
+                        if backup_path.name == buffer_path.name:
+                            continue
+                            
+                        print(f"    Trying backup: {backup_path.name}...", flush=True)
+                        self.replay_buffer.load(str(backup_path))
+                        
+                        if len(self.replay_buffer) > 0:
+                            print(f"    ✓ Recovered {len(self.replay_buffer)} items from {backup_path.name}", flush=True)
+                            break
             else:
                 print(f"    ⚠ Replay buffer checkpoint not found: {buffer_path}", flush=True)
 
