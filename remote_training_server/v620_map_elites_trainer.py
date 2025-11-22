@@ -507,6 +507,15 @@ class MAPElitesTrainer:
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-3)
         print(f"✓ Critic Network initialized for PGA-MAP-Elites")
 
+        # OPTIMIZATION: Persistent models to avoid GPU alloc/dealloc overhead
+        self.mutation_model = ActorNetwork().to(self.device)
+        self.mutation_optimizer = torch.optim.SGD(self.mutation_model.parameters(), lr=1e-2)
+        
+        # Pool of models for batch evaluation (matches batch_eval_size=10)
+        self.eval_pool_size = 10
+        self.eval_pool = [ActorNetwork().to(self.device) for _ in range(self.eval_pool_size)]
+        print(f"✓ Persistent model pool initialized (size: {self.eval_pool_size})")
+
         # Mutation parameters
         self.mutation_std = 0.02  # Gaussian noise std for weight perturbation
 
@@ -815,8 +824,8 @@ class MAPElitesTrainer:
         if mutation_std is None:
             mutation_std = self.get_adaptive_mutation_std()
 
-        # Load parent weights
-        child_model = ActorNetwork().to(self.device)
+        # OPTIMIZATION: Reuse persistent model
+        child_model = self.mutation_model
         child_model.load_state_dict(parent_state)
 
         # Add Gaussian noise to all parameters
@@ -875,19 +884,13 @@ class MAPElitesTrainer:
                 # Use PGA (Gradient Mutation)
                 # Use fewer steps for tournament candidates to keep it fast
                 candidate_state = self.gradient_mutation(parent_state, mutation_std, steps=3)
-                candidate = ActorNetwork().to(self.device)
-                candidate.load_state_dict(candidate_state)
+                # OPTIMIZATION: Store state dict (CPU) instead of model (GPU)
+                candidates.append((candidate_state, mutation_std))
             else:
                 # Standard Gaussian Mutation
-                candidate = ActorNetwork().to(self.device)
-                candidate.load_state_dict(parent_state)
-
-                with torch.no_grad():
-                    for param in candidate.parameters():
-                        noise = torch.randn_like(param) * mutation_std
-                        param.add_(noise)
-
-            candidates.append((candidate, mutation_std))
+                # OPTIMIZATION: Use mutate_model which returns state dict
+                candidate_state = self.mutate_model(parent_state, mutation_std)
+                candidates.append((candidate_state, mutation_std))
             
             # Progress indicator for generation (can be slow with PGA)
             if (i + 1) % 10 == 0:
@@ -896,11 +899,12 @@ class MAPElitesTrainer:
         print(f"      Generated {num_candidates}/{num_candidates} candidates.        ", flush=True)
 
         # Evaluate all candidates in parallel batches (GPU efficient)
-        batch_eval_size = 10  # Evaluate 10 models simultaneously
+        batch_eval_size = self.eval_pool_size  # Use pool size (10)
         fitness_scores = []
         
         # Also evaluate the parent (unmutated) model to ensure we don't regress
-        parent_model = ActorNetwork().to(self.device)
+        # OPTIMIZATION: Use first model from pool for parent evaluation
+        parent_model = self.eval_pool[0]
         parent_model.load_state_dict(parent_state)
         parent_model.eval()
         with torch.no_grad():
@@ -935,13 +939,18 @@ class MAPElitesTrainer:
 
                 # Collect predictions from all models in batch
                 batch_predictions = []
-                for candidate, _ in batch_candidates:
-                    candidate.eval()
+                
+                # OPTIMIZATION: Load state dicts into persistent pool models
+                for idx, (candidate_state, _) in enumerate(batch_candidates):
+                    model = self.eval_pool[idx]
+                    model.load_state_dict(candidate_state)
+                    model.eval()
+                    
                     if self.use_fp16:
                         with torch.amp.autocast('cuda'):
-                            pred_actions, _ = candidate(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
+                            pred_actions, _ = model(rgb, depth, proprio)  # LSTM returns (actions, hidden_state)
                     else:
-                        pred_actions, _ = candidate(rgb, depth, proprio)
+                        pred_actions, _ = model(rgb, depth, proprio)
                     batch_predictions.append(pred_actions)
 
                 # Compute fitness for all in batch
@@ -957,7 +966,7 @@ class MAPElitesTrainer:
 
                     if fitness > best_fitness:
                         best_fitness = fitness
-                        best_mutation = batch_candidates[i][0].state_dict()
+                        best_mutation = batch_candidates[i][0] # It's already state dict
                         best_std = mutation_std
                 
                 # Update progress bar with current best fitness
@@ -2039,13 +2048,13 @@ class MAPElitesTrainer:
         
         Uses the Critic to guide the mutation towards higher Q-values.
         """
-        # Load parent model
-        model = ActorNetwork().to(self.device)
+        # OPTIMIZATION: Reuse persistent model to avoid GPU alloc/dealloc
+        model = self.mutation_model
         model.load_state_dict(parent_state)
         model.train()
         
-        # Create optimizer for the actor (just for this mutation step)
-        optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+        # Reuse persistent optimizer (SGD is stateless so this is safe)
+        optimizer = self.mutation_optimizer
         
         # Sample a batch of data to compute gradients on
         batch = self.replay_buffer.sample_transitions(batch_size=32)
