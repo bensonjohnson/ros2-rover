@@ -853,18 +853,28 @@ class MAPElitesTrainer:
         candidates = []
 
         # Generate candidate mutations with varying mutation strengths
+        # PGA-MAP-Elites: Use gradient mutation for 50% of candidates if possible
+        use_pga = len(self.replay_buffer) > 4
+        
         for i in range(num_candidates):
             # Vary mutation strength across candidates
             mutation_std = np.random.uniform(*mutation_std_range)
 
-            # Create mutation
-            candidate = ActorNetwork().to(self.device)
-            candidate.load_state_dict(parent_state)
+            if use_pga and i % 2 == 0:
+                # Use PGA (Gradient Mutation)
+                # Use fewer steps for tournament candidates to keep it fast
+                candidate_state = self.gradient_mutation(parent_state, mutation_std, steps=3)
+                candidate = ActorNetwork().to(self.device)
+                candidate.load_state_dict(candidate_state)
+            else:
+                # Standard Gaussian Mutation
+                candidate = ActorNetwork().to(self.device)
+                candidate.load_state_dict(parent_state)
 
-            with torch.no_grad():
-                for param in candidate.parameters():
-                    noise = torch.randn_like(param) * mutation_std
-                    param.add_(noise)
+                with torch.no_grad():
+                    for param in candidate.parameters():
+                        noise = torch.randn_like(param) * mutation_std
+                        param.add_(noise)
 
             candidates.append((candidate, mutation_std))
 
@@ -1266,7 +1276,7 @@ class MAPElitesTrainer:
                 return self.generate_random_model(), 'random'
             
             # PGA-MAP-Elites: Use gradient mutation if we have enough data
-            if len(self.replay_buffer) > 10:
+            if len(self.replay_buffer) > 4:  # Lowered threshold
                 return self.gradient_mutation(parent_state), 'pga_mutation'
             else:
                 return self.mutate_model(parent_state), 'mutation'
@@ -1539,7 +1549,7 @@ class MAPElitesTrainer:
                     # We train the critic on every episode result to keep it updated
                     # Note: We need trajectory data for this, but we only get it later for some models.
                     # However, we can train on PAST data in the buffer.
-                    if len(self.replay_buffer) > 5:
+                    if len(self.replay_buffer) > 2:  # Lowered threshold to start sooner
                         self.train_critic(batch_size=64, num_steps=10)
 
                     # Try to add to population
