@@ -20,7 +20,7 @@ import zmq
 import zstandard as zstd
 from tqdm import tqdm
 
-from model_architectures import RGBDEncoder, PolicyHead  # Reuse network components
+from model_architectures import RGBDEncoder, PolicyHead, CriticNetwork  # Reuse network components
 
 
 class ActorNetwork(nn.Module):
@@ -299,6 +299,87 @@ class ReplayBuffer:
         samples = random.sample(candidates, min(n, len(candidates)))
         return [s[1] for s in samples]
     
+    def sample_transitions(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample transitions (s, a, r, s') from buffer for Critic training.
+        
+        Returns:
+            (rgb, depth, proprio, action, reward) tensors
+        """
+        if not self.buffer:
+            return None
+            
+        import random
+        
+        # Collect all transitions from all trajectories in buffer
+        # This is expensive to do every time, so we do it on the fly for a random subset of trajectories
+        
+        # Sample a few trajectories
+        num_traj = min(len(self.buffer), max(1, batch_size // 20))
+        trajectories = random.sample([b[1] for b in self.buffer], num_traj)
+        
+        rgb_list = []
+        depth_list = []
+        proprio_list = []
+        action_list = []
+        reward_list = []
+        
+        for traj in trajectories:
+            # Extract data
+            rgb = traj['rgb']
+            depth = traj['depth']
+            proprio = traj['proprio']
+            actions = traj['actions']
+            
+            # Length of trajectory
+            T = len(actions)
+            if T < 2:
+                continue
+                
+            # Select random time steps
+            indices = random.sample(range(T-1), min(T-1, 20))  # Sample up to 20 steps per trajectory
+            
+            for t in indices:
+                # State s
+                rgb_list.append(rgb[t])
+                depth_list.append(depth[t])
+                proprio_list.append(proprio[t])
+                
+                # Action a
+                action_list.append(actions[t])
+                
+                # Reward r (approximate based on next state s')
+                # r = linear_vel * 2.0 - abs(angular_vel) * 0.5 + clearance_bonus
+                next_proprio = proprio[t+1]
+                linear_vel = next_proprio[0]
+                # angular_vel = next_proprio[1] # Not available in proprio directly? Proprio is [lin_vel, ang_vel, roll, pitch, accel, clearance]
+                # Let's check proprio definition in rover code. Usually it is [v, w, ...]
+                # Assuming index 1 is angular velocity
+                angular_vel = next_proprio[1]
+                clearance = next_proprio[5]
+                
+                reward = linear_vel * 2.0 - abs(angular_vel) * 0.5
+                if clearance > 0.3:
+                    reward += 0.5
+                if clearance < 0.15:
+                    reward -= 1.0
+                    
+                reward_list.append(reward)
+                
+        if not rgb_list:
+            return None
+            
+        # Convert to numpy then tensor
+        rgb_batch = np.array(rgb_list)
+        depth_batch = np.array(depth_list)
+        proprio_batch = np.array(proprio_list)
+        action_batch = np.array(action_list)
+        reward_batch = np.array(reward_list)
+        
+        # To tensors
+        # Note: device will be handled by caller or we can do it here if we pass device
+        # For now return numpy arrays, caller converts to tensor
+        return rgb_batch, depth_batch, proprio_batch, action_batch, reward_batch
+
     def __len__(self):
         return len(self.buffer)
 
@@ -353,6 +434,11 @@ class MAPElitesTrainer:
 
         # Create template model
         self.template_model = ActorNetwork().to(self.device)
+        
+        # PGA-MAP-Elites: Critic Network
+        self.critic = CriticNetwork().to(self.device)
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-3)
+        print(f"✓ Critic Network initialized for PGA-MAP-Elites")
 
         # Mutation parameters
         self.mutation_std = 0.02  # Gaussian noise std for weight perturbation
@@ -1117,7 +1203,12 @@ class MAPElitesTrainer:
             parent_state = self.population.get_random_elite()
             if parent_state is None:
                 return self.generate_random_model(), 'random'
-            return self.mutate_model(parent_state), 'mutation'
+            
+            # PGA-MAP-Elites: Use gradient mutation if we have enough data
+            if len(self.replay_buffer) > 10:
+                return self.gradient_mutation(parent_state), 'pga_mutation'
+            else:
+                return self.mutate_model(parent_state), 'mutation'
 
     def compute_fitness(self, episode_data: dict) -> float:
         """Compute tank-optimized fitness with enhanced diversity for single evolution.
@@ -1382,6 +1473,13 @@ class MAPElitesTrainer:
 
                     # Compute fitness
                     fitness = self.compute_fitness(message)
+                    
+                    # PGA-MAP-Elites: Train Critic
+                    # We train the critic on every episode result to keep it updated
+                    # Note: We need trajectory data for this, but we only get it later for some models.
+                    # However, we can train on PAST data in the buffer.
+                    if len(self.replay_buffer) > 5:
+                        self.train_critic(batch_size=64, num_steps=10)
 
                     # Try to add to population
                     added, improvement, rank = self.population.add(
@@ -1722,7 +1820,122 @@ class MAPElitesTrainer:
         print(f"  Avg speed: {stats.get('speed_mean', 0):.3f} m/s")
         print(f"  Avg clearance: {stats.get('clearance_mean', 0):.2f} m")
 
+    def train_critic(self, batch_size: int = 64, num_steps: int = 10):
+        """Train the Critic network using data from ReplayBuffer.
+        
+        Args:
+            batch_size: Number of transitions to sample
+            num_steps: Number of gradient updates
+        """
+        if len(self.replay_buffer) < 5:
+            return
+            
+        self.critic.train()
+        
+        total_loss = 0.0
+        
+        for _ in range(num_steps):
+            batch = self.replay_buffer.sample_transitions(batch_size)
+            if batch is None:
+                break
+                
+            rgb_np, depth_np, proprio_np, action_np, reward_np = batch
+            
+            # Convert to tensors
+            rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0
+            depth = torch.from_numpy(depth_np).unsqueeze(1).to(self.device).float()
+            proprio = torch.from_numpy(proprio_np).to(self.device).float()
+            action = torch.from_numpy(action_np).to(self.device).float()
+            reward = torch.from_numpy(reward_np).to(self.device).float().unsqueeze(1)
+            
+            self.critic_optimizer.zero_grad()
+            
+            if self.use_fp16:
+                with torch.amp.autocast('cuda'):
+                    # Predict Q(s, a)
+                    q_values = self.critic(rgb, depth, proprio, action)
+                    # Target is just reward (Monte Carlo / 1-step estimate)
+                    # Ideally we would use target network and next state Q-value, but for simplicity we use reward as proxy for "goodness"
+                    # Or we can assume gamma=0 for immediate reward maximization
+                    loss = torch.nn.functional.mse_loss(q_values, reward)
+                
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.critic_optimizer)
+                self.scaler.update()
+            else:
+                q_values = self.critic(rgb, depth, proprio, action)
+                loss = torch.nn.functional.mse_loss(q_values, reward)
+                loss.backward()
+                self.critic_optimizer.step()
+                
+            total_loss += loss.item()
+            
+        # print(f"    Critic loss: {total_loss / num_steps:.4f}")
 
+    def gradient_mutation(self, parent_state: dict, mutation_std: float = 0.01, steps: int = 5) -> dict:
+        """Apply Policy Gradient Assisted Mutation (PGA).
+        
+        Uses the Critic to guide the mutation towards higher Q-values.
+        """
+        # Load parent model
+        model = ActorNetwork().to(self.device)
+        model.load_state_dict(parent_state)
+        model.train()
+        
+        # Create optimizer for the actor (just for this mutation step)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+        
+        # Sample a batch of data to compute gradients on
+        batch = self.replay_buffer.sample_transitions(batch_size=32)
+        if batch is None:
+            # Fallback to random mutation if no data
+            return self.mutate_model(parent_state, mutation_std)
+            
+        rgb_np, depth_np, proprio_np, _, _ = batch
+        
+        rgb = torch.from_numpy(rgb_np).permute(0, 3, 1, 2).to(self.device).float() / 255.0
+        depth = torch.from_numpy(depth_np).unsqueeze(1).to(self.device).float()
+        proprio = torch.from_numpy(proprio_np).to(self.device).float()
+        
+        # Freeze Critic
+        self.critic.eval()
+        for param in self.critic.parameters():
+            param.requires_grad = False
+            
+        # Gradient Ascent on Q-value
+        for _ in range(steps):
+            optimizer.zero_grad()
+            
+            if self.use_fp16:
+                with torch.amp.autocast('cuda'):
+                    # Actor forward
+                    actions, _ = model(rgb, depth, proprio)
+                    # Critic forward
+                    q_values = self.critic(rgb, depth, proprio, actions)
+                    # Maximize Q => Minimize -Q
+                    loss = -q_values.mean()
+                
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+            else:
+                actions, _ = model(rgb, depth, proprio)
+                q_values = self.critic(rgb, depth, proprio, actions)
+                loss = -q_values.mean()
+                loss.backward()
+                optimizer.step()
+                
+        # Unfreeze Critic
+        for param in self.critic.parameters():
+            param.requires_grad = True
+            
+        # Add small random noise (exploration)
+        with torch.no_grad():
+            for param in model.parameters():
+                noise = torch.randn_like(param) * mutation_std
+                param.add_(noise)
+                
+        return model.state_dict()
 def main():
     parser = argparse.ArgumentParser(description='Adaptive evolution trainer with greedy code')
     parser.add_argument('--port', type=int, default=5556,
