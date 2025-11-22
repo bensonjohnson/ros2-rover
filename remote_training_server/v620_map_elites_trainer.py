@@ -862,6 +862,11 @@ class MAPElitesTrainer:
         # PGA-MAP-Elites: Use gradient mutation for 50% of candidates if possible
         use_pga = len(self.replay_buffer) > 4
         
+        if use_pga:
+            print(f"    🧬 Generating {num_candidates} candidates (50% PGA-Mutation)...", flush=True)
+        else:
+            print(f"    🎲 Generating {num_candidates} candidates (Random Mutation)...", flush=True)
+        
         for i in range(num_candidates):
             # Vary mutation strength across candidates
             mutation_std = np.random.uniform(*mutation_std_range)
@@ -883,6 +888,12 @@ class MAPElitesTrainer:
                         param.add_(noise)
 
             candidates.append((candidate, mutation_std))
+            
+            # Progress indicator for generation (can be slow with PGA)
+            if (i + 1) % 10 == 0:
+                print(f"      Generated {i+1}/{num_candidates}...", end='\r', flush=True)
+        
+        print(f"      Generated {num_candidates}/{num_candidates} candidates.        ", flush=True)
 
         # Evaluate all candidates in parallel batches (GPU efficient)
         batch_eval_size = 10  # Evaluate 10 models simultaneously
