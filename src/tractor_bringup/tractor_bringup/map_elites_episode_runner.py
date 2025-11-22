@@ -545,8 +545,8 @@ class MAPElitesEpisodeRunner(Node):
                 f'L/R={avg_left_clearance:.1f}/{avg_right_clearance:.1f}m'
             )
 
-            # Wait for acknowledgment
-            if self.zmq_socket.poll(timeout=10000):  # 10 second timeout
+            # Wait for acknowledgment (infinite timeout - server might be checkpointing)
+            if self.zmq_socket.poll(timeout=-1):
                 ack = self.zmq_socket.recv_pyobj()
                 if ack.get('type') == 'ack':
                     self.get_logger().info('✓ Results acknowledged by V620')
