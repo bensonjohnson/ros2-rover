@@ -264,24 +264,65 @@ class ReplayBuffer:
     """Experience Replay Buffer for storing successful trajectories.
     
     Prevents catastrophic forgetting by maintaining a diverse set of past experiences.
+    Stores data in compressed format (Zstandard) to save RAM.
     """
-    def __init__(self, max_size: int = 50):
+    def __init__(self, max_size: int = 50, compressed: bool = True):
         self.max_size = max_size
+        self.compressed = compressed
         self.buffer = []  # List of (fitness, trajectory_data) tuples
         
     def add(self, trajectory_data: dict, fitness: float):
         """Add trajectory to buffer if it's good enough or buffer not full."""
+        data_to_store = trajectory_data
+        
+        if self.compressed:
+            # Check if we need to compress (if it's raw numpy arrays)
+            if isinstance(trajectory_data['rgb'], np.ndarray):
+                # Compress
+                cctx = zstd.ZstdCompressor(level=3)
+                data_to_store = {
+                    'rgb': cctx.compress(trajectory_data['rgb'].tobytes()),
+                    'rgb_shape': trajectory_data['rgb'].shape,
+                    'rgb_dtype': trajectory_data['rgb'].dtype,
+                    'depth': cctx.compress(trajectory_data['depth'].tobytes()),
+                    'depth_shape': trajectory_data['depth'].shape,
+                    'depth_dtype': trajectory_data['depth'].dtype,
+                    'proprio': trajectory_data['proprio'], # Keep uncompressed (small)
+                    'actions': trajectory_data['actions'], # Keep uncompressed (small)
+                }
+            # If it's already compressed (from client message structure), we might need to adapt it
+            # But the trainer currently decompresses everything before calling add.
+            # So we can assume input is always uncompressed numpy dict if we don't change the trainer loop.
+            # This is safer.
+
         # Always add if buffer not full
         if len(self.buffer) < self.max_size:
-            self.buffer.append((fitness, trajectory_data))
+            self.buffer.append((fitness, data_to_store))
             self.buffer.sort(key=lambda x: x[0], reverse=True)
             return
             
         # If full, replace worst entry if new one is better
         if fitness > self.buffer[-1][0]:
-            self.buffer[-1] = (fitness, trajectory_data)
+            self.buffer[-1] = (fitness, data_to_store)
             self.buffer.sort(key=lambda x: x[0], reverse=True)
             
+    def _decompress(self, data: dict) -> dict:
+        """Decompress trajectory data."""
+        if not self.compressed or isinstance(data['rgb'], np.ndarray):
+            return data
+            
+        dctx = zstd.ZstdDecompressor()
+        
+        rgb = np.frombuffer(dctx.decompress(data['rgb']), dtype=data['rgb_dtype']).reshape(data['rgb_shape'])
+        depth = np.frombuffer(dctx.decompress(data['depth']), dtype=data['depth_dtype']).reshape(data['depth_shape'])
+        
+        return {
+            'rgb': rgb,
+            'depth': depth,
+            'proprio': data['proprio'],
+            'actions': data['actions']
+        }
+
     def sample(self, n: int) -> List[dict]:
         """Sample n trajectories from buffer."""
         if not self.buffer:
@@ -297,7 +338,7 @@ class ReplayBuffer:
             candidates = self.buffer
             
         samples = random.sample(candidates, min(n, len(candidates)))
-        return [s[1] for s in samples]
+        return [self._decompress(s[1]) for s in samples]
     
     def sample_transitions(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample transitions (s, a, r, s') from buffer for Critic training.
@@ -316,6 +357,9 @@ class ReplayBuffer:
         # Sample a few trajectories
         num_traj = min(len(self.buffer), max(1, batch_size // 20))
         trajectories = random.sample([b[1] for b in self.buffer], num_traj)
+        
+        # Decompress them
+        trajectories = [self._decompress(t) for t in trajectories]
         
         rgb_list = []
         depth_list = []
@@ -446,8 +490,8 @@ class MAPElitesTrainer:
         )
         
         # Initialize Replay Buffer
-        self.replay_buffer = ReplayBuffer(max_size=50)
-        print(f"✓ Replay Buffer initialized (max size: 50)")
+        self.replay_buffer = ReplayBuffer(max_size=50, compressed=True)
+        print(f"✓ Replay Buffer initialized (max size: 50, compressed: True)")
 
         # Create template model
         self.template_model = ActorNetwork().to(self.device)
