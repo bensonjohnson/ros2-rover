@@ -160,3 +160,37 @@ class ValueHead(nn.Module):
         proprio_feat = self.proprio_encoder(proprio)
         combined = torch.cat([features, proprio_feat], dim=1)
         return self.value(combined).squeeze(-1)
+
+
+class CriticNetwork(nn.Module):
+    """Critic network for PGA-MAP-Elites (Q-function).
+    
+    Estimates Q(s, a) - the expected return for taking action a in state s.
+    """
+    def __init__(self, proprio_dim: int = 6, action_dim: int = 2):
+        super().__init__()
+        self.encoder = RGBDEncoder()
+        
+        # Proprioception encoder
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 64),
+            nn.ReLU(inplace=True),
+        )
+        
+        # Q-network: takes (features + proprio + action)
+        self.q_net = nn.Sequential(
+            nn.Linear(self.encoder.output_dim + 64 + action_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, rgb, depth, proprio, action):
+        features = self.encoder(rgb, depth)
+        proprio_feat = self.proprio_encoder(proprio)
+        
+        combined = torch.cat([features, proprio_feat, action], dim=1)
+        return self.q_net(combined)
