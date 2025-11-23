@@ -94,8 +94,12 @@ class PPOBuffer:
         """Sample a random batch for training."""
         indices = torch.randint(0, self.size, (batch_size,))
         
+        # RGB needs to be permuted from (B, H, W, C) to (B, C, H, W) for PyTorch Conv2d
+        rgb_batch = self.rgb[indices].to(self.device).float() / 255.0
+        rgb_batch = rgb_batch.permute(0, 3, 1, 2)
+        
         return {
-            'rgb': self.rgb[indices].to(self.device).float() / 255.0,
+            'rgb': rgb_batch,
             'depth': self.depth[indices].to(self.device).float().unsqueeze(1),
             'proprio': self.proprio[indices].to(self.device),
             'actions': self.actions[indices].to(self.device),
@@ -155,6 +159,7 @@ class V620PPOTrainer:
         self.total_steps = 0
         self.update_count = 0
         self.best_reward = -float('inf')
+        self.model_version = 0  # Track model updates
         
         # ZMQ Setup
         self.context = zmq.Context()
@@ -308,6 +313,7 @@ class V620PPOTrainer:
                 output_names=['action', 'lstm_h_out', 'lstm_c_out']
             )
             print(f"📦 Exported ONNX: {onnx_path}")
+            self.model_version += 1  # Signal that a new model is ready
             
         except Exception as e:
             print(f"❌ ONNX Export failed: {e}")
@@ -356,23 +362,26 @@ class V620PPOTrainer:
                             if self.update_count % 100 == 0:
                                 self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
                     
-                    # Send back curriculum info
+                    # Send back curriculum info and latest model version
                     response['curriculum'] = {
                         'collision_dist': self.collision_dist,
                         'max_speed': self.max_speed
                     }
+                    response['model_version'] = self.model_version
                     
                 elif message['type'] == 'get_model':
-                    print(f"📤 Rover requested model update")
                     # Send latest ONNX model
                     onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
                     if os.path.exists(onnx_path):
+                        print(f"📤 Rover requested model update")
                         with open(onnx_path, 'rb') as f:
                             model_bytes = f.read()
                         response['model_bytes'] = model_bytes
-                        print(f"📤 Sent ONNX model ({len(model_bytes)} bytes)")
+                        response['model_version'] = self.model_version
+                        print(f"📤 Sent ONNX model v{self.model_version} ({len(model_bytes)} bytes)")
                     else:
-                        print("⚠ No ONNX model found yet")
+                        # Silent fail if not ready yet (to avoid log spam)
+                        # print("⚠ No ONNX model found yet")
                         response['error'] = 'No model available'
                 
                 self.socket.send_pyobj(response)

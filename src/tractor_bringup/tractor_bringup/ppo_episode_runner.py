@@ -83,6 +83,8 @@ class PPOEpisodeRunner(Node):
         self._rknn_runtime = None
         self._model_ready = True  # Allow random exploration initially
         self._temp_dir = Path(tempfile.mkdtemp(prefix='ppo_rover_'))
+        self._current_model_version = -1
+        self._model_update_needed = False
         
         # LSTM State (if used in future, currently stateless PPO)
         self._lstm_h = None
@@ -297,13 +299,19 @@ class PPOEpisodeRunner(Node):
                         self._curriculum_collision_dist = curr['collision_dist']
                         self._curriculum_max_speed = curr['max_speed']
                         self.get_logger().info(f"🎓 Curriculum: Dist={self._curriculum_collision_dist:.2f}, Speed={self._curriculum_max_speed:.2f}")
+                    
+                    # Check for model update notification
+                    if 'model_version' in response:
+                        server_version = response['model_version']
+                        if server_version > self._current_model_version:
+                            self.get_logger().info(f"🔔 New model available: v{server_version} (Current: v{self._current_model_version})")
+                            self._model_update_needed = True
                         
                 except Exception as e:
                     self.get_logger().error(f"Sync failed: {e}")
             
-            # 2. Periodically request new model (every 30s)
-            current_time = time.time()
-            if current_time - self._last_model_update > 30.0:
+            # 2. Request new model if notified
+            if self._model_update_needed:
                 try:
                     self.get_logger().info("📥 Requesting model update...")
                     self.zmq_socket.send_pyobj({'type': 'get_model'})
@@ -317,20 +325,19 @@ class PPOEpisodeRunner(Node):
                             
                         self.get_logger().info(f"💾 Received ONNX model ({len(response['model_bytes'])} bytes)")
                         
+                        # Update version tracking
+                        if 'model_version' in response:
+                            self._current_model_version = response['model_version']
+                        
                         # Convert to RKNN
                         if HAS_RKNN:
                             self.get_logger().info("🔄 Converting to RKNN (this may take a minute)...")
                             rknn_path = str(onnx_path).replace('.onnx', '.rknn')
                             
                             # Call conversion script
-                            # We assume convert_onnx_to_rknn.sh is in the PATH or current dir
-                            # Or we can call the python script directly if we know where it is
-                            # Let's try calling the shell script which handles env setup
                             cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path)]
                             
-                            # If script not found in current dir, try known location
                             if not os.path.exists("convert_onnx_to_rknn.sh"):
-                                # Fallback: try to find it or just skip if we can't find it
                                 self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
                             else:
                                 result = subprocess.run(cmd, capture_output=True, text=True)
@@ -352,11 +359,13 @@ class PPOEpisodeRunner(Node):
                                             # Swap runtime
                                             self._rknn_runtime = new_runtime
                                             self._model_ready = True
-                                            self.get_logger().info("🚀 New model loaded and active!")
+                                            self._model_update_needed = False # Reset flag only on success
+                                            self.get_logger().info(f"🚀 New model v{self._current_model_version} loaded and active!")
                                 else:
                                     self.get_logger().error(f"RKNN Conversion failed: {result.stderr}")
-                        
-                        self._last_model_update = current_time
+                        else:
+                            # If no RKNN (e.g. testing on PC), just mark as updated
+                            self._model_update_needed = False
                         
                 except Exception as e:
                     self.get_logger().error(f"Model update failed: {e}")
