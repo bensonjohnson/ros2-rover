@@ -171,6 +171,9 @@ class V620PPOTrainer:
         self.curriculum_level = 0
         self.collision_dist = 0.5  # Start safe
         self.max_speed = 0.1       # Start slow
+        
+        # Connection tracking
+        self.last_data_time = time.time()
 
     def update_curriculum(self):
         """Update difficulty based on performance."""
@@ -291,9 +294,16 @@ class V620PPOTrainer:
                 response = {'type': 'ack'}
                 
                 if message['type'] == 'data_batch':
+                    # Log connection status
+                    current_time = time.time()
+                    dt = current_time - self.last_data_time
+                    self.last_data_time = current_time
+                    batch_len = len(message['data']['rewards'])
+                    print(f"📥 Received batch: {batch_len} steps (Rover active, {dt:.1f}s since last)")
+
                     # Add data to buffer
                     self.buffer.add_batch(message['data'])
-                    self.total_steps += len(message['data']['rewards'])
+                    self.total_steps += batch_len
                     
                     # Update curriculum
                     self.update_curriculum()
@@ -321,6 +331,7 @@ class V620PPOTrainer:
                     }
                     
                 elif message['type'] == 'get_model':
+                    print(f"📤 Rover requested model update")
                     # Send latest model weights
                     buffer = io.BytesIO()
                     torch.save({
