@@ -99,6 +99,7 @@ class PPOEpisodeRunner(Node):
         
         # Background Threads
         self._stop_event = threading.Event()
+        self._last_model_update = 0.0
         self._sync_thread = threading.Thread(target=self._sync_loop)
         self._sync_thread.start()
 
@@ -293,8 +294,28 @@ class PPOEpisodeRunner(Node):
                     self.get_logger().error(f"Sync failed: {e}")
             
             # 2. Periodically request new model (every 30s)
-            # TODO: Implement model download logic here
-            # For now, we just sleep
+            current_time = time.time()
+            if current_time - self._last_model_update > 30.0:
+                try:
+                    self.get_logger().info("📥 Requesting model update...")
+                    self.zmq_socket.send_pyobj({'type': 'get_model'})
+                    
+                    response = self.zmq_socket.recv_pyobj()
+                    if 'model_bytes' in response:
+                        # Save to temp file
+                        model_path = self._temp_dir / f"model_{int(current_time)}.pt"
+                        with open(model_path, 'wb') as f:
+                            f.write(response['model_bytes'])
+                            
+                        self.get_logger().info(f"💾 Received model ({len(response['model_bytes'])} bytes)")
+                        
+                        # TODO: Convert to RKNN here if needed
+                        # For now, we just acknowledge receipt
+                        self._last_model_update = current_time
+                        
+                except Exception as e:
+                    self.get_logger().error(f"Model update failed: {e}")
+
             time.sleep(0.1)
 
     def destroy_node(self):
