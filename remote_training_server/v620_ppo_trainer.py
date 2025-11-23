@@ -134,7 +134,8 @@ class V620PPOTrainer:
         self.proprio_dim = 9
         
         self.encoder = RGBDEncoder().to(self.device)
-        self.policy_head = PolicyHead(self.encoder.output_dim, self.proprio_dim).to(self.device)
+        # Disable LSTM for stateless PPO (fixes MIOpen backward error and ONNX export)
+        self.policy_head = PolicyHead(self.encoder.output_dim, self.proprio_dim, use_lstm=False).to(self.device)
         self.value_head = ValueHead(self.encoder.output_dim, self.proprio_dim).to(self.device)
         
         # Trainable log_std for continuous action space
