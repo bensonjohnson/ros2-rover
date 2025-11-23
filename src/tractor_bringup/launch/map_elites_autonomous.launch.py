@@ -84,9 +84,10 @@ def generate_launch_description():
             "device_type": "435i",
             "depth_module.depth_profile": "640x480x30",
             "rgb_camera.color_profile": "640x480x30",
-            "enable_gyro": "false",
-            "enable_accel": "false",
-            "enable_imu": "false",
+            "enable_gyro": "true",
+            "enable_accel": "true",
+            "enable_imu": "true",
+            "unite_imu_method": "2", # Linear_interpolation
         }.items()
     )
 
