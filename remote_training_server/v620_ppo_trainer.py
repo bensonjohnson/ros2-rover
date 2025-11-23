@@ -336,8 +336,6 @@ class V620PPOTrainer:
             dummy_rgb = torch.randn(1, 3, 240, 424, device=self.device)
             dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-            dummy_lstm_h = torch.zeros(1, 1, 128, device=self.device)
-            dummy_lstm_c = torch.zeros(1, 1, 128, device=self.device)
             
             # Wrap model to handle forward pass signature
             class ActorWrapper(nn.Module):
@@ -346,23 +344,22 @@ class V620PPOTrainer:
                     self.encoder = encoder
                     self.policy = policy
                     
-                def forward(self, rgb, depth, proprio, lstm_h, lstm_c):
+                def forward(self, rgb, depth, proprio):
                     features = self.encoder(rgb, depth)
-                    # Pass LSTM state if policy uses it, otherwise ignore
-                    # Note: PolicyHead handles hidden_state tuple
-                    action, (new_h, new_c) = self.policy(features, proprio, (lstm_h, lstm_c))
-                    return action, new_h, new_c
+                    # Pass None for hidden state to bypass LSTM
+                    action, _ = self.policy(features, proprio, None)
+                    return action
 
             actor = ActorWrapper(self.encoder, self.policy_head)
             actor.eval()
             
             torch.onnx.export(
                 actor,
-                (dummy_rgb, dummy_depth, dummy_proprio, dummy_lstm_h, dummy_lstm_c),
+                (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
                 opset_version=12,
-                input_names=['rgb', 'depth', 'proprio', 'lstm_h', 'lstm_c'],
-                output_names=['action', 'lstm_h_out', 'lstm_c_out']
+                input_names=['rgb', 'depth', 'proprio'],
+                output_names=['action']
             )
             print(f"📦 Exported ONNX: {onnx_path}")
             self.model_version += 1  # Signal that a new model is ready

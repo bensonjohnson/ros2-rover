@@ -201,13 +201,10 @@ class PPOEpisodeRunner(Node):
         proprio = np.array([[w_l, w_r, ax, ay, gz, mx, my, mz, self._min_forward_dist]], dtype=np.float32)
 
         # 2. Inference (RKNN)
-        # Returns: [action_mean, lstm_h, lstm_c] (value head not exported in actor ONNX)
+        # Returns: [action_mean] (value head not exported in actor ONNX)
         if self._rknn_runtime:
-            # Prepare dummy LSTM states (since we don't use them yet but model expects them)
-            lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
-            lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
-            
-            outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio, lstm_h, lstm_c])
+            # Stateless inference (LSTM removed for export compatibility)
+            outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
             
             # Output 0 is action (1, 2)
             action_mean = outputs[0][0] 

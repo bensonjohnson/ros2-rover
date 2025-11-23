@@ -59,11 +59,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             depth = data['depth']  # (H, W) float32
             proprio = data['proprio']  # (6,) float32
 
-            # Store samples in order: rgb, depth, proprio, lstm_h, lstm_c
-            # Initialize LSTM states to zeros for calibration
-            lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
-            lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
-            loaded_samples.append((rgb, depth, proprio, lstm_h, lstm_c))
+            # Store samples in order: rgb, depth, proprio
+            # LSTM states removed for stateless export
+            loaded_samples.append((rgb, depth, proprio))
 
             if (i + 1) % 10 == 0:
                 print(f"  Loaded {i + 1}/{len(calibration_files)} samples")
@@ -140,15 +138,11 @@ def convert_onnx_to_rknn(
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [0],                     # Depth (1 channel)
                 [0, 0, 0, 0, 0, 0, 0, 0, 0],     # Proprio (9 values)
-                [0],                     # LSTM hidden state (scalar for whole tensor)
-                [0]                      # LSTM cell state (scalar for whole tensor)
             ],
             'std_values': [
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [1],                     # Depth (1 channel)
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],     # Proprio (9 values)
-                [1],                     # LSTM hidden state (scalar - no normalization)
-                [1]                      # LSTM cell state (scalar - no normalization)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -163,17 +157,15 @@ def convert_onnx_to_rknn(
             return False
 
         # Load ONNX
-        print("Loading ONNX model with LSTM inputs...")
+        print("Loading ONNX model (stateless)...")
         # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
         ret = rknn.load_onnx(
             model=onnx_path,
-            inputs=['rgb', 'depth', 'proprio', 'lstm_h', 'lstm_c'],
+            inputs=['rgb', 'depth', 'proprio'],
             input_size_list=[
                 [1, 3, 240, 424],   # RGB
                 [1, 1, 240, 424],   # Depth
                 [1, 9],             # Proprio
-                [1, 1, 128],        # LSTM hidden state
-                [1, 1, 128]         # LSTM cell state
             ]
         )
         if ret != 0:
