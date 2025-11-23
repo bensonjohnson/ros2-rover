@@ -381,8 +381,10 @@ class V620PPOTrainer:
                     batch_len = len(message['data']['rewards'])
                     print(f"📥 Received batch: {batch_len} steps (Rover active, {dt:.1f}s since last)")
 
-                    # Add data to buffer
-                    self.buffer.add_batch(message['data'])
+                    # Add data to buffer (thread-safe)
+                    with self.training_lock:
+                        self.buffer.add_batch(message['data'])
+                    
                     self.total_steps += batch_len
                     
                     # Update curriculum
