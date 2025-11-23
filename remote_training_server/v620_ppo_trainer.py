@@ -228,9 +228,8 @@ class V620PPOTrainer:
                         for k, v in metrics.items():
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
                             
-                    # Save checkpoint
-                    if self.update_count % 100 == 0:
-                        self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
+                    # Save checkpoint every batch (as requested)
+                    self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
                     
                     # Always export ONNX for immediate rover update
                     self.export_onnx()
