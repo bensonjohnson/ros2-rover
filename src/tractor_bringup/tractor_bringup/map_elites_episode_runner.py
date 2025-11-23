@@ -28,7 +28,7 @@ except ImportError:
     HAS_PYTORCH = False
     print("⚠ PyTorch not available - cannot receive models from V620")
 
-from sensor_msgs.msg import Image, Imu, JointState
+from sensor_msgs.msg import Image, Imu, JointState, MagneticField
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32
 from geometry_msgs.msg import Twist
@@ -71,6 +71,7 @@ class MAPElitesEpisodeRunner(Node):
         self._latest_depth = None
         self._latest_odom = None
         self._latest_imu = None
+        self._latest_mag = None
         self._latest_wheel_vels = None
         self._min_forward_dist = 10.0
         self._episode_running = False
@@ -150,6 +151,10 @@ class MAPElitesEpisodeRunner(Node):
         self.imu_sub = self.create_subscription(
             Imu, '/imu/data',
             self.imu_callback, qos_profile_sensor_data
+        )
+        self.mag_sub = self.create_subscription(
+            MagneticField, '/imu/mag',
+            self.mag_callback, qos_profile_sensor_data
         )
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states',
@@ -348,6 +353,14 @@ class MAPElitesEpisodeRunner(Node):
             msg.linear_acceleration.x,
             msg.linear_acceleration.y,
             msg.angular_velocity.z
+        )
+
+    def mag_callback(self, msg: MagneticField) -> None:
+        """Store latest Magnetometer data."""
+        self._latest_mag = (
+            msg.magnetic_field.x,
+            msg.magnetic_field.y,
+            msg.magnetic_field.z
         )
 
     def joint_state_callback(self, msg: JointState) -> None:
@@ -805,7 +818,7 @@ class MAPElitesEpisodeRunner(Node):
                 depth = np.expand_dims(depth, axis=0)  # (1, 1, H, W)
 
                 # Construct new proprioception vector:
-                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, min_forward_dist]
+                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, mag_x, mag_y, mag_z, min_forward_dist]
                 
                 # Defaults if sensors not ready
                 w_left, w_right = 0.0, 0.0
@@ -815,10 +828,14 @@ class MAPElitesEpisodeRunner(Node):
                 accel_x, accel_y, gyro_z = 0.0, 0.0, 0.0
                 if self._latest_imu:
                     accel_x, accel_y, gyro_z = self._latest_imu
+
+                mag_x, mag_y, mag_z = 0.0, 0.0, 0.0
+                if self._latest_mag:
+                    mag_x, mag_y, mag_z = self._latest_mag
                 
                 proprio = np.array([[
-                    w_left, w_right, accel_x, accel_y, gyro_z, self._min_forward_dist
-                ]], dtype=np.float32)  # (1, 6)
+                    w_left, w_right, accel_x, accel_y, gyro_z, mag_x, mag_y, mag_z, self._min_forward_dist
+                ]], dtype=np.float32)  # (1, 9)
 
                 # Prepare LSTM hidden state inputs
                 # If None, initialize to zeros (will be done by RKNN internally or pass zeros)
@@ -904,7 +921,7 @@ class MAPElitesEpisodeRunner(Node):
                 self._trajectory_depth.append(self._latest_depth.copy())
 
                 # Store proprioception
-                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, min_forward_dist]
+                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, mag_x, mag_y, mag_z, min_forward_dist]
                 w_left, w_right = 0.0, 0.0
                 if self._latest_wheel_vels:
                     w_left, w_right = self._latest_wheel_vels
@@ -913,7 +930,11 @@ class MAPElitesEpisodeRunner(Node):
                 if self._latest_imu:
                     accel_x, accel_y, gyro_z = self._latest_imu
 
-                proprio_vec = [w_left, w_right, accel_x, accel_y, gyro_z, self._min_forward_dist]
+                mag_x, mag_y, mag_z = 0.0, 0.0, 0.0
+                if self._latest_mag:
+                    mag_x, mag_y, mag_z = self._latest_mag
+
+                proprio_vec = [w_left, w_right, accel_x, accel_y, gyro_z, mag_x, mag_y, mag_z, self._min_forward_dist]
                 self._trajectory_proprio.append(proprio_vec)
 
                 # Store action taken
