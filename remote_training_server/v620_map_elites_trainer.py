@@ -1007,6 +1007,14 @@ class MAPElitesTrainer:
         Returns:
             Fitness score (higher is better)
         """
+        # Check for NaNs in inputs
+        if torch.isnan(pred_actions).any():
+            return float('-inf')
+        
+        if torch.isnan(target_actions).any() or torch.isnan(proprio).any():
+            # This shouldn't happen if data is clean, but handle it
+            return float('-inf')
+
         fitness = 0.0
 
         # Extract clearance and speed from proprioception
@@ -1016,6 +1024,9 @@ class MAPElitesTrainer:
         # 1. IMITATION BASELINE (REDUCED to 15% weight)
         #    Reduced from 30% to encourage innovation over behavior cloning
         mse_loss = torch.nn.functional.mse_loss(pred_actions, target_actions)
+        if torch.isnan(mse_loss):
+            return float('-inf')
+            
         imitation_score = -mse_loss.item()
         fitness += imitation_score * 0.15
 
