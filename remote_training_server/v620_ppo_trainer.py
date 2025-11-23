@@ -160,7 +160,7 @@ class V620PPOTrainer:
         self.total_steps = 0
         self.update_count = 0
         self.best_reward = -float('inf')
-        self.model_version = 0  # Track model updates
+        self.model_version = -1  # Track model updates (start at -1 until first save)
         
         # ZMQ Setup
         self.context = zmq.Context()
@@ -421,7 +421,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
     parser.add_argument('--buffer_size', type=int, default=25000)
-    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--batch_size', type=int, default=2048)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--update_epochs', type=int, default=10)
     parser.add_argument('--clip_eps', type=float, default=0.2)
