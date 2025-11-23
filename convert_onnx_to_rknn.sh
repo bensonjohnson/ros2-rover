@@ -10,7 +10,7 @@ echo "ONNX → RKNN Converter (RK3588)"
 echo "=================================================="
 
 ONNX_PATH=${1:-""}
-CALIBRATION_DIR=${2:-"calibration_data"}
+CALIBRATION_DIR=${2:-""} # Default to empty (disable auto-quantization)
 
 if [ -z "$ONNX_PATH" ]; then
   echo "Usage: $0 <onnx_file> [calibration_dir]"
