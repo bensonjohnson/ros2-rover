@@ -231,6 +231,9 @@ class V620PPOTrainer:
                     # Save checkpoint
                     if self.update_count % 100 == 0:
                         self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
+                    
+                    # Always export ONNX for immediate rover update
+                    self.export_onnx()
                 
                 self.is_training = False
             
@@ -322,7 +325,11 @@ class V620PPOTrainer:
         }, path)
         print(f"💾 Saved checkpoint: {path}")
         
-        # Export to ONNX for Rover (RKNN)
+        # Also export ONNX whenever we save a checkpoint
+        self.export_onnx()
+
+    def export_onnx(self):
+        """Export current policy to ONNX for Rover."""
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
             
