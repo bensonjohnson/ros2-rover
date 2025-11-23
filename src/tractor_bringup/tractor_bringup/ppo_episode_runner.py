@@ -199,11 +199,19 @@ class PPOEpisodeRunner(Node):
         proprio = np.array([[w_l, w_r, ax, ay, gz, mx, my, mz, self._min_forward_dist]], dtype=np.float32)
 
         # 2. Inference (RKNN)
-        # Returns: [action_mean, value] (assuming deterministic inference for now, exploration added here)
+        # Returns: [action_mean, lstm_h, lstm_c] (value head not exported in actor ONNX)
         if self._rknn_runtime:
-            outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
-            action_mean = outputs[0][0] # (2,)
-            value = outputs[1][0] # (1,)
+            # Prepare dummy LSTM states (since we don't use them yet but model expects them)
+            lstm_h = np.zeros((1, 1, 128), dtype=np.float32)
+            lstm_c = np.zeros((1, 1, 128), dtype=np.float32)
+            
+            outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio, lstm_h, lstm_c])
+            
+            # Output 0 is action (1, 2)
+            action_mean = outputs[0][0] 
+            
+            # We don't get value from actor model, so estimate or ignore
+            value = 0.0 
         else:
             action_mean = np.zeros(2)
             value = 0.0
@@ -302,15 +310,52 @@ class PPOEpisodeRunner(Node):
                     
                     response = self.zmq_socket.recv_pyobj()
                     if 'model_bytes' in response:
-                        # Save to temp file
-                        model_path = self._temp_dir / f"model_{int(current_time)}.pt"
-                        with open(model_path, 'wb') as f:
+                        # Save ONNX to temp file
+                        onnx_path = self._temp_dir / "latest_model.onnx"
+                        with open(onnx_path, 'wb') as f:
                             f.write(response['model_bytes'])
                             
-                        self.get_logger().info(f"💾 Received model ({len(response['model_bytes'])} bytes)")
+                        self.get_logger().info(f"💾 Received ONNX model ({len(response['model_bytes'])} bytes)")
                         
-                        # TODO: Convert to RKNN here if needed
-                        # For now, we just acknowledge receipt
+                        # Convert to RKNN
+                        if HAS_RKNN:
+                            self.get_logger().info("🔄 Converting to RKNN (this may take a minute)...")
+                            rknn_path = str(onnx_path).replace('.onnx', '.rknn')
+                            
+                            # Call conversion script
+                            # We assume convert_onnx_to_rknn.sh is in the PATH or current dir
+                            # Or we can call the python script directly if we know where it is
+                            # Let's try calling the shell script which handles env setup
+                            cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path)]
+                            
+                            # If script not found in current dir, try known location
+                            if not os.path.exists("convert_onnx_to_rknn.sh"):
+                                # Fallback: try to find it or just skip if we can't find it
+                                self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
+                            else:
+                                result = subprocess.run(cmd, capture_output=True, text=True)
+                                
+                                if result.returncode == 0 and os.path.exists(rknn_path):
+                                    self.get_logger().info("✅ RKNN Conversion successful")
+                                    
+                                    # Load new model
+                                    self.get_logger().info("🔄 Loading new RKNN model...")
+                                    new_runtime = RKNNLite()
+                                    ret = new_runtime.load_rknn(rknn_path)
+                                    if ret != 0:
+                                        self.get_logger().error("Load RKNN failed")
+                                    else:
+                                        ret = new_runtime.init_runtime()
+                                        if ret != 0:
+                                            self.get_logger().error("Init RKNN runtime failed")
+                                        else:
+                                            # Swap runtime
+                                            self._rknn_runtime = new_runtime
+                                            self._model_ready = True
+                                            self.get_logger().info("🚀 New model loaded and active!")
+                                else:
+                                    self.get_logger().error(f"RKNN Conversion failed: {result.stderr}")
+                        
                         self._last_model_update = current_time
                         
                 except Exception as e:
