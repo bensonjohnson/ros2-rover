@@ -147,6 +147,9 @@ class V620PPOTrainer:
             {'params': self.log_std, 'lr': args.lr}
         ])
         
+        # Mixed Precision Scaler
+        self.scaler = torch.cuda.amp.GradScaler()
+        
         # Replay Buffer
         self.buffer = PPOBuffer(
             capacity=args.buffer_size,
@@ -237,54 +240,51 @@ class V620PPOTrainer:
         for _ in pbar:
             batch = self.buffer.get_batch(self.args.batch_size)
             
-            # Forward pass
-            features = self.encoder(batch['rgb'], batch['depth'])
-            action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
-            values = self.value_head(features, batch['proprio'])
+            # Mixed Precision Context
+            with torch.cuda.amp.autocast():
+                # Forward pass
+                features = self.encoder(batch['rgb'], batch['depth'])
+                action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
+                values = self.value_head(features, batch['proprio'])
+                
+                # Action distribution
+                std = self.log_std.exp()
+                dist = torch.distributions.Normal(action_mean, std)
+                
+                # Compute log probs
+                current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
+                entropy = dist.entropy().sum(dim=-1).mean()
+                
+                # Ratios
+                ratios = torch.exp(current_log_probs - batch['log_probs'])
+                
+                # Advantages
+                advantages = batch['rewards'] - values.detach()
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                
+                # Policy Loss
+                surr1 = ratios * advantages
+                surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
+                policy_loss = -torch.min(surr1, surr2).mean()
+                
+                # Value Loss
+                value_loss = 0.5 * (values - batch['rewards']).pow(2).mean()
+                
+                # Total Loss
+                loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
             
-            # Action distribution
-            std = self.log_std.exp()
-            dist = torch.distributions.Normal(action_mean, std)
-            
-            # Compute log probs of actions taken
-            # Actions are already tanh'd, so we need to account for that if we used raw actions
-            # But here we assume actions in buffer are the raw outputs before tanh?
-            # Actually, standard PPO usually stores raw actions or handles tanh correction.
-            # For simplicity with continuous control, we'll use the log_prob stored in buffer
-            # and recompute current log_prob.
-            
-            # NOTE: To properly handle tanh distribution, we should use TanhNormal or similar.
-            # Here we use a simplified approximation:
-            current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
-            entropy = dist.entropy().sum(dim=-1).mean()
-            
-            # Ratios
-            ratios = torch.exp(current_log_probs - batch['log_probs'])
-            
-            # Advantages (using GAE computed on rover or simple returns here)
-            # For simplicity in async setting, we use returns - values
-            # Ideally GAE is computed on full trajectories before adding to buffer
-            advantages = batch['rewards'] - values.detach() # Simple advantage
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-            
-            # Policy Loss
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
-            policy_loss = -torch.min(surr1, surr2).mean()
-            
-            # Value Loss
-            value_loss = 0.5 * (values - batch['rewards']).pow(2).mean()
-            
-            # Total Loss
-            loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
-            
-            # Update
+            # Update with Scaler
             self.optimizer.zero_grad()
-            loss.backward()
+            self.scaler.scale(loss).backward()
+            
+            # Unscale before clipping
+            self.scaler.unscale_(self.optimizer)
             nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.5)
             nn.utils.clip_grad_norm_(self.policy_head.parameters(), 0.5)
             nn.utils.clip_grad_norm_(self.value_head.parameters(), 0.5)
-            self.optimizer.step()
+            
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
             metrics['policy_loss'].append(policy_loss.item())
             metrics['value_loss'].append(value_loss.item())
@@ -421,9 +421,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
     parser.add_argument('--buffer_size', type=int, default=25000)
-    parser.add_argument('--batch_size', type=int, default=2048)
+    parser.add_argument('--batch_size', type=int, default=1536)
     parser.add_argument('--lr', type=float, default=3e-4)
-    parser.add_argument('--update_epochs', type=int, default=10)
+    parser.add_argument('--update_epochs', type=int, default=5)
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--value_coef', type=float, default=0.5)
     parser.add_argument('--entropy_coef', type=float, default=0.01)
