@@ -125,12 +125,19 @@ class V620PPOTrainer:
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
             # Enable TF32 for Ampere/RDNA3
-            try:
-                torch.set_float32_matmul_precision('high')
-            except AttributeError:
-                # Fallback for older PyTorch versions
-                torch.backends.cuda.matmul.allow_tf32 = True
-                torch.backends.cudnn.allow_tf32 = True
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*TF32.*")
+                try:
+                    torch.set_float32_matmul_precision('high')
+                except AttributeError:
+                    # Fallback for older PyTorch versions
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                
+                try:
+                    torch.backends.cudnn.allow_tf32 = True
+                except AttributeError:
+                    pass
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU (slow)")
