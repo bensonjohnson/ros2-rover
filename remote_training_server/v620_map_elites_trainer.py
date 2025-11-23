@@ -22,11 +22,13 @@ from tqdm import tqdm
 
 from model_architectures import RGBDEncoder, PolicyHead, CriticNetwork  # Reuse network components
 
+# Configuration
+PROPRIO_DIM = 9  # [w_l, w_r, ax, ay, wz, mag_x, mag_y, mag_z, dist]
 
 class ActorNetwork(nn.Module):
     """Actor-only network for MAP-Elites with LSTM memory (no value head needed)."""
 
-    def __init__(self, proprio_dim: int = 6, use_lstm: bool = True):
+    def __init__(self, proprio_dim: int = PROPRIO_DIM, use_lstm: bool = True):
         super().__init__()
         self.encoder = RGBDEncoder()
         self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim, use_lstm=use_lstm)
@@ -48,7 +50,6 @@ class ActorNetwork(nn.Module):
         features = self.encoder(rgb, depth)
         action, hidden_state_new = self.policy_head(features, proprio, hidden_state)
         return torch.tanh(action), hidden_state_new  # Squash to [-1, 1] range
-
 
 class PopulationTracker:
     """Simple population tracker for single-population evolution with adaptive sizing."""
@@ -259,7 +260,6 @@ class PopulationTracker:
             model_path = models_dir / f'rank_{idx+1}.pt'
             torch.save(entry['model'], model_path)
 
-
 class ReplayBuffer:
     """Experience Replay Buffer for storing successful trajectories.
     
@@ -395,7 +395,7 @@ class ReplayBuffer:
                 # r = linear_vel * 2.0 - abs(angular_vel) * 0.5 + clearance_bonus
                 next_proprio = proprio[t+1]
                 
-                # NEW PROPRIO: [w_l, w_r, ax, ay, wz, dist]
+                # NEW PROPRIO: [w_l, w_r, ax, ay, wz, mag_x, mag_y, mag_z, dist]
                 # Calculate linear speed from wheel velocities (rad/s) -> m/s
                 # Wheel radius ~0.15m
                 w_l = next_proprio[0]
@@ -405,7 +405,8 @@ class ReplayBuffer:
                 # Angular velocity from IMU (index 4)
                 angular_vel = next_proprio[4]
                 
-                clearance = next_proprio[5]
+                # Clearance is now at index 8 (last element)
+                clearance = next_proprio[8]
                 
                 reward = linear_vel * 2.0 - abs(angular_vel) * 0.5
                 if clearance > 0.3:
@@ -455,7 +456,6 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
-
 
 class MAPElitesTrainer:
     """Single-population evolution trainer with adaptive strategies."""
@@ -509,7 +509,7 @@ class MAPElitesTrainer:
         self.template_model = ActorNetwork().to(self.device)
         
         # PGA-MAP-Elites: Critic Network
-        self.critic = CriticNetwork().to(self.device)
+        self.critic = CriticNetwork(proprio_dim=PROPRIO_DIM).to(self.device)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=1e-3)
         print(f"✓ Critic Network initialized for PGA-MAP-Elites")
 
@@ -653,7 +653,7 @@ class MAPElitesTrainer:
             # Assuming 640x480 resolution or similar
             rgb_test = torch.randn(test_batch_size, 3, 480, 640, device=self.device)
             depth_test = torch.randn(test_batch_size, 1, 480, 640, device=self.device)
-            proprio_test = torch.randn(test_batch_size, 6, device=self.device)
+            proprio_test = torch.randn(test_batch_size, PROPRIO_DIM, device=self.device)
             actions_test = torch.randn(test_batch_size, 2, device=self.device)
 
             # Clear any existing allocations
@@ -1025,7 +1025,7 @@ class MAPElitesTrainer:
 
         # Extract clearance and speed from proprioception
         # NEW PROPRIO: [w_l, w_r, ax, ay, wz, dist]
-        clearance = proprio[:, 5]  # (N,)
+        clearance = proprio[:, 8]  # (N,) - CHANGED: Index 8 for distance
         
         # Calculate linear speed from wheel velocities (rad/s) -> m/s
         # Wheel radius ~0.15m
@@ -2234,7 +2234,6 @@ def main():
 
     # Run training
     trainer.run(num_evaluations=args.num_evaluations)
-
 
 if __name__ == '__main__':
     main()
