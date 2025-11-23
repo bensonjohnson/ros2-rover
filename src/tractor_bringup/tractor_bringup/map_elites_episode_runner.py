@@ -28,7 +28,7 @@ except ImportError:
     HAS_PYTORCH = False
     print("⚠ PyTorch not available - cannot receive models from V620")
 
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Imu, JointState
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32
 from geometry_msgs.msg import Twist
@@ -70,6 +70,8 @@ class MAPElitesEpisodeRunner(Node):
         self._latest_rgb = None
         self._latest_depth = None
         self._latest_odom = None
+        self._latest_imu = None
+        self._latest_wheel_vels = None
         self._min_forward_dist = 10.0
         self._episode_running = False
         self._rknn_runtime = None
@@ -144,6 +146,14 @@ class MAPElitesEpisodeRunner(Node):
         self.odom_sub = self.create_subscription(
             Odometry, '/odom',
             self.odom_callback, 10
+        )
+        self.imu_sub = self.create_subscription(
+            Imu, '/camera/camera/imu',
+            self.imu_callback, qos_profile_sensor_data
+        )
+        self.joint_state_sub = self.create_subscription(
+            JointState, '/joint_states',
+            self.joint_state_callback, 10
         )
         self.min_dist_sub = self.create_subscription(
             Float32, '/min_forward_distance',
@@ -331,6 +341,21 @@ class MAPElitesEpisodeRunner(Node):
             grid_x = math.floor(msg.pose.pose.position.x / self._grid_resolution)
             grid_y = math.floor(msg.pose.pose.position.y / self._grid_resolution)
             self._visited_grid.add((grid_x, grid_y))
+
+    def imu_callback(self, msg: Imu) -> None:
+        """Store latest IMU data."""
+        self._latest_imu = (
+            msg.linear_acceleration.x,
+            msg.linear_acceleration.y,
+            msg.angular_velocity.z
+        )
+
+    def joint_state_callback(self, msg: JointState) -> None:
+        """Store latest wheel velocities."""
+        # Assuming velocity[2] is left and velocity[3] is right based on Hiwonder driver
+        # joint_msg.velocity = [0.0, 0.0, self.left_velocity, self.right_velocity]
+        if len(msg.velocity) >= 4:
+            self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
 
     def min_dist_callback(self, msg: Float32) -> None:
         """Store minimum forward distance."""
@@ -779,9 +804,20 @@ class MAPElitesEpisodeRunner(Node):
                 depth = np.expand_dims(depth, axis=0)  # (1, H, W)
                 depth = np.expand_dims(depth, axis=0)  # (1, 1, H, W)
 
-                lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
+                # Construct new proprioception vector:
+                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, min_forward_dist]
+                
+                # Defaults if sensors not ready
+                w_left, w_right = 0.0, 0.0
+                if self._latest_wheel_vels:
+                    w_left, w_right = self._latest_wheel_vels
+                
+                accel_x, accel_y, gyro_z = 0.0, 0.0, 0.0
+                if self._latest_imu:
+                    accel_x, accel_y, gyro_z = self._latest_imu
+                
                 proprio = np.array([[
-                    lin_vel, ang_vel, self._last_linear_cmd, self._last_angular_cmd, 0.0, self._min_forward_dist
+                    w_left, w_right, accel_x, accel_y, gyro_z, self._min_forward_dist
                 ]], dtype=np.float32)  # (1, 6)
 
                 # Prepare LSTM hidden state inputs
@@ -868,8 +904,16 @@ class MAPElitesEpisodeRunner(Node):
                 self._trajectory_depth.append(self._latest_depth.copy())
 
                 # Store proprioception
-                lin_vel, ang_vel = self._latest_odom[2], self._latest_odom[3]
-                proprio_vec = [lin_vel, ang_vel, self._last_linear_cmd, self._last_angular_cmd, 0.0, self._min_forward_dist]
+                # [wheel_vel_left, wheel_vel_right, imu_accel_x, imu_accel_y, imu_ang_vel_z, min_forward_dist]
+                w_left, w_right = 0.0, 0.0
+                if self._latest_wheel_vels:
+                    w_left, w_right = self._latest_wheel_vels
+                
+                accel_x, accel_y, gyro_z = 0.0, 0.0, 0.0
+                if self._latest_imu:
+                    accel_x, accel_y, gyro_z = self._latest_imu
+
+                proprio_vec = [w_left, w_right, accel_x, accel_y, gyro_z, self._min_forward_dist]
                 self._trajectory_proprio.append(proprio_vec)
 
                 # Store action taken

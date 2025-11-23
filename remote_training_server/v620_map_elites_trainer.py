@@ -394,11 +394,17 @@ class ReplayBuffer:
                 # Reward r (approximate based on next state s')
                 # r = linear_vel * 2.0 - abs(angular_vel) * 0.5 + clearance_bonus
                 next_proprio = proprio[t+1]
-                linear_vel = next_proprio[0]
-                # angular_vel = next_proprio[1] # Not available in proprio directly? Proprio is [lin_vel, ang_vel, roll, pitch, accel, clearance]
-                # Let's check proprio definition in rover code. Usually it is [v, w, ...]
-                # Assuming index 1 is angular velocity
-                angular_vel = next_proprio[1]
+                
+                # NEW PROPRIO: [w_l, w_r, ax, ay, wz, dist]
+                # Calculate linear speed from wheel velocities (rad/s) -> m/s
+                # Wheel radius ~0.15m
+                w_l = next_proprio[0]
+                w_r = next_proprio[1]
+                linear_vel = (w_l + w_r) * 0.15 / 2.0
+                
+                # Angular velocity from IMU (index 4)
+                angular_vel = next_proprio[4]
+                
                 clearance = next_proprio[5]
                 
                 reward = linear_vel * 2.0 - abs(angular_vel) * 0.5
@@ -1018,8 +1024,14 @@ class MAPElitesTrainer:
         fitness = 0.0
 
         # Extract clearance and speed from proprioception
+        # NEW PROPRIO: [w_l, w_r, ax, ay, wz, dist]
         clearance = proprio[:, 5]  # (N,)
-        linear_speed = proprio[:, 0]  # (N,)
+        
+        # Calculate linear speed from wheel velocities (rad/s) -> m/s
+        # Wheel radius ~0.15m
+        w_l = proprio[:, 0]
+        w_r = proprio[:, 1]
+        linear_speed = (w_l + w_r) * 0.15 / 2.0
 
         # 1. IMITATION BASELINE (REDUCED to 15% weight)
         #    Reduced from 30% to encourage innovation over behavior cloning
@@ -1071,7 +1083,7 @@ class MAPElitesTrainer:
 
         # 4. TANK PIVOT TURN BONUS
         #    Reward controlled rotation at low speeds (critical for tank maneuvering)
-        low_speed_mask = linear_speed < 0.05
+        low_speed_mask = torch.abs(linear_speed) < 0.05
         moderate_angular_mask = torch.abs(pred_actions[:, 1]) > 0.2
 
         if low_speed_mask.any() and moderate_angular_mask.any():
