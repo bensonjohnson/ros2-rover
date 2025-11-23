@@ -218,7 +218,6 @@ class V620PPOTrainer:
                 # Run training step
                 with self.training_lock:
                     metrics = self.train_step()
-                self.is_training = False
                 
                 if metrics:
                     self.update_count += 1
@@ -232,6 +231,8 @@ class V620PPOTrainer:
                     # Save checkpoint
                     if self.update_count % 100 == 0:
                         self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
+                
+                self.is_training = False
             
             time.sleep(0.1)
 
