@@ -81,7 +81,7 @@ class PPOEpisodeRunner(Node):
 
         # Model State
         self._rknn_runtime = None
-        self._model_ready = False
+        self._model_ready = True  # Allow random exploration initially
         self._temp_dir = Path(tempfile.mkdtemp(prefix='ppo_rover_'))
         
         # LSTM State (if used in future, currently stateless PPO)
@@ -177,7 +177,11 @@ class PPOEpisodeRunner(Node):
 
     def _control_loop(self):
         """Main control loop running at 30Hz."""
-        if not self._model_ready or self._latest_rgb is None:
+        if not self._model_ready:
+            return
+
+        if self._latest_rgb is None:
+            # self.get_logger().warn('Waiting for RGB data...', throttle_duration_sec=5.0)
             return
 
         # 1. Prepare Inputs
