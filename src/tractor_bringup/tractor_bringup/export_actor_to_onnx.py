@@ -17,7 +17,7 @@ from model_architectures import RGBDEncoder, PolicyHead
 class ActorNetwork(nn.Module):
     """Actor-only network for MAP-Elites with LSTM memory."""
 
-    def __init__(self, proprio_dim: int = 6, use_lstm: bool = True):
+    def __init__(self, proprio_dim: int = 9, use_lstm: bool = True):
         super().__init__()
         self.encoder = RGBDEncoder()
         self.policy_head = PolicyHead(self.encoder.output_dim, proprio_dim, use_lstm=use_lstm)
@@ -29,7 +29,7 @@ class ActorNetwork(nn.Module):
         Args:
             rgb: (1, 3, H, W) RGB image
             depth: (1, 1, H, W) Depth image
-            proprio: (1, 6) Proprioception
+            proprio: (1, 9) Proprioception
             lstm_h: (1, 1, 128) LSTM hidden state
             lstm_c: (1, 1, 128) LSTM cell state
             
@@ -61,14 +61,14 @@ def export_to_onnx(pt_path: str, onnx_path: str):
         onnx_path: Output ONNX path
     """
     # Load model
-    model = ActorNetwork(use_lstm=True)
+    model = ActorNetwork(proprio_dim=9, use_lstm=True)
     model.load_state_dict(torch.load(pt_path, map_location='cpu'))
     model.eval()
 
     # Dummy inputs (640x480 resolution + LSTM hidden states)
     rgb = torch.randn(1, 3, 480, 640)
     depth = torch.randn(1, 1, 480, 640)
-    proprio = torch.randn(1, 6)
+    proprio = torch.randn(1, 9)
     lstm_h = torch.zeros(1, 1, 128)  # LSTM hidden state
     lstm_c = torch.zeros(1, 1, 128)  # LSTM cell state
 
