@@ -261,18 +261,45 @@ class V620PPOTrainer:
         """Perform PPO update with mini-batches."""
         metrics = {'policy_loss': [], 'value_loss': [], 'entropy': []}
         
+        # Optimization: Move entire active buffer to GPU once
+        print("  ⚡ Moving buffer to GPU...")
+        with torch.no_grad():
+            # Slice valid data
+            valid_slice = slice(0, self.buffer.size)
+            
+            # RGB: (N, H, W, C) -> (N, C, H, W) normalized
+            gpu_rgb = self.buffer.rgb[valid_slice].to(self.device).float() / 255.0
+            gpu_rgb = gpu_rgb.permute(0, 3, 1, 2)
+            
+            # Depth: (N, H, W) -> (N, 1, H, W)
+            gpu_depth = self.buffer.depth[valid_slice].to(self.device).float().unsqueeze(1)
+            
+            gpu_proprio = self.buffer.proprio[valid_slice].to(self.device)
+            gpu_actions = self.buffer.actions[valid_slice].to(self.device)
+            gpu_rewards = self.buffer.rewards[valid_slice].to(self.device)
+            gpu_log_probs = self.buffer.log_probs[valid_slice].to(self.device)
+        
         # Use tqdm for progress bar
         pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False, file=sys.stdout)
         
         for _ in pbar:
             # Shuffle data for each epoch
-            indices = torch.randperm(self.buffer.size)
+            indices = torch.randperm(self.buffer.size, device=self.device)
             
             # Iterate in mini-batches
             for start_idx in range(0, self.buffer.size, self.args.mini_batch_size):
                 try:
                     batch_indices = indices[start_idx : start_idx + self.args.mini_batch_size]
-                    batch = self.buffer.get_batch(batch_indices)
+                    
+                    # Slice from GPU tensors
+                    batch = {
+                        'rgb': gpu_rgb[batch_indices],
+                        'depth': gpu_depth[batch_indices],
+                        'proprio': gpu_proprio[batch_indices],
+                        'actions': gpu_actions[batch_indices],
+                        'rewards': gpu_rewards[batch_indices],
+                        'log_probs': gpu_log_probs[batch_indices]
+                    }
                     
                     # Mixed Precision Context
                     with torch.amp.autocast('cuda'):
