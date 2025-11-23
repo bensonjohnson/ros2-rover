@@ -30,6 +30,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 # Import model architectures
 from model_architectures import RGBDEncoder, PolicyHead, ValueHead
@@ -179,6 +180,11 @@ class V620PPOTrainer:
         
         # Connection tracking
         self.last_data_time = time.time()
+        
+        # Training Thread
+        self.training_lock = threading.Lock()
+        self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
+        self.training_thread.start()
 
     def update_curriculum(self):
         """Update difficulty based on performance."""
@@ -198,14 +204,37 @@ class V620PPOTrainer:
             print(f"   Collision Dist: {self.collision_dist:.2f}m")
             print(f"   Max Speed: {self.max_speed:.2f}m/s")
 
+    def _training_loop(self):
+        """Background training loop."""
+        print("🧵 Training thread started")
+        while True:
+            if self.buffer.size > self.args.batch_size:
+                # Run training step
+                with self.training_lock:
+                    metrics = self.train_step()
+                
+                if metrics:
+                    self.update_count += 1
+                    
+                    # Log metrics
+                    if self.update_count % 10 == 0:
+                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} E={metrics['entropy']:.3f}")
+                        for k, v in metrics.items():
+                            self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                            
+                    # Save checkpoint
+                    if self.update_count % 100 == 0:
+                        self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
+            
+            time.sleep(0.1)
+
     def train_step(self):
         """Perform one PPO update step."""
-        if self.buffer.size < self.args.batch_size:
-            return None
-            
         metrics = {'policy_loss': [], 'value_loss': [], 'entropy': []}
         
-        for _ in range(self.args.update_epochs):
+        # Use tqdm for progress bar
+        pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False)
+        for _ in pbar:
             batch = self.buffer.get_batch(self.args.batch_size)
             
             # Forward pass
@@ -260,6 +289,12 @@ class V620PPOTrainer:
             metrics['policy_loss'].append(policy_loss.item())
             metrics['value_loss'].append(value_loss.item())
             metrics['entropy'].append(entropy.item())
+            
+            # Update progress bar description
+            pbar.set_postfix({
+                'ploss': f"{policy_loss.item():.3f}",
+                'vloss': f"{value_loss.item():.3f}"
+            })
             
         return {k: np.mean(v) for k, v in metrics.items()}
 
@@ -346,21 +381,7 @@ class V620PPOTrainer:
                     # Update curriculum
                     self.update_curriculum()
                     
-                    # Train if enough data
-                    if self.buffer.size > self.args.batch_size:
-                        metrics = self.train_step()
-                        if metrics:
-                            self.update_count += 1
-                            
-                            # Log metrics
-                            if self.update_count % 10 == 0:
-                                print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} E={metrics['entropy']:.3f}")
-                                for k, v in metrics.items():
-                                    self.writer.add_scalar(f'train/{k}', v, self.total_steps)
-                                    
-                            # Save checkpoint
-                            if self.update_count % 100 == 0:
-                                self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
+                    # Training is handled by background thread now
                     
                     # Send back curriculum info and latest model version
                     response['curriculum'] = {
