@@ -70,7 +70,7 @@ def generate_launch_description():
         parameters=[os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml")]
     )
 
-    # RealSense camera
+    # RealSense camera (IMU disabled, using LSM9DS1 instead)
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
@@ -84,11 +84,17 @@ def generate_launch_description():
             "device_type": "435i",
             "depth_module.depth_profile": "640x480x30",
             "rgb_camera.color_profile": "640x480x30",
-            "enable_gyro": "true",
-            "enable_accel": "true",
-            "enable_imu": "true",
-            "unite_imu_method": "2", # Linear_interpolation
+            "enable_gyro": "false",
+            "enable_accel": "false",
+            "enable_imu": "false",
         }.items()
+    )
+
+    # LSM9DS1 IMU (Chassis mounted)
+    lsm9ds1_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lsm9ds1_imu.launch.py")
+        )
     )
 
     # Safety monitor (depth-based, no point cloud required)
@@ -153,6 +159,7 @@ def generate_launch_description():
 
     # Sensors
     ld.add_action(TimerAction(period=5.0, actions=[realsense_launch]))
+    ld.add_action(TimerAction(period=6.0, actions=[lsm9ds1_launch]))
 
     # Control and episode runner
     ld.add_action(TimerAction(period=8.0, actions=[vfc_node]))
