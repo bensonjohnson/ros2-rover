@@ -165,6 +165,7 @@ class V620PPOTrainer:
         self.update_count = 0
         self.best_reward = -float('inf')
         self.model_version = -1  # Track model updates (start at -1 until first save)
+        self.is_training = False
         
         # ZMQ Setup
         self.context = zmq.Context()
@@ -213,9 +214,11 @@ class V620PPOTrainer:
         print("🧵 Training thread started")
         while True:
             if self.buffer.size > self.args.batch_size:
+                self.is_training = True
                 # Run training step
                 with self.training_lock:
                     metrics = self.train_step()
+                self.is_training = False
                 
                 if metrics:
                     self.update_count += 1
@@ -399,6 +402,15 @@ class V620PPOTrainer:
                     }
                     response['model_version'] = self.model_version
                     
+                    # Tell rover to wait if we are about to train (or are training)
+                    if self.buffer.size > self.args.batch_size:
+                        response['wait_for_training'] = True
+                    
+                elif message['type'] == 'check_status':
+                    # Rover polling for training completion
+                    response['status'] = 'training' if self.is_training else 'ready'
+                    response['model_version'] = self.model_version
+
                 elif message['type'] == 'get_model':
                     # Send latest ONNX model
                     onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
