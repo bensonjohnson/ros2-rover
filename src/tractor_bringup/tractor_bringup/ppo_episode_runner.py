@@ -300,6 +300,36 @@ class PPOEpisodeRunner(Node):
                         self._curriculum_max_speed = curr['max_speed']
                         self.get_logger().info(f"🎓 Curriculum: Dist={self._curriculum_collision_dist:.2f}, Speed={self._curriculum_max_speed:.2f}")
                     
+                    # Check for wait signal (Server is training)
+                    if response.get('wait_for_training', False):
+                        self.get_logger().info("🛑 Server is training. Pausing rover...")
+                        self._model_ready = False # Stop inference loop
+                        
+                        # Stop robot immediately
+                        stop_cmd = Twist()
+                        self.cmd_pub.publish(stop_cmd)
+                        
+                        # Poll until ready
+                        while not self._stop_event.is_set():
+                            time.sleep(1.0)
+                            try:
+                                self.zmq_socket.send_pyobj({'type': 'check_status'})
+                                status_resp = self.zmq_socket.recv_pyobj()
+                                
+                                if status_resp.get('status') == 'ready':
+                                    self.get_logger().info("✅ Server training complete. Resuming...")
+                                    # Check if we need to update model
+                                    if status_resp.get('model_version', -1) > self._current_model_version:
+                                        self._model_update_needed = True
+                                    else:
+                                        self._model_ready = True # Resume if no update needed
+                                    break
+                                else:
+                                    self.get_logger().info("⏳ Waiting for training to finish...")
+                            except Exception as e:
+                                self.get_logger().error(f"Polling failed: {e}")
+                                time.sleep(1.0)
+
                     # Check for model update notification
                     if 'model_version' in response:
                         server_version = response['model_version']
