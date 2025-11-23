@@ -65,9 +65,9 @@ def export_to_onnx(pt_path: str, onnx_path: str):
     model.load_state_dict(torch.load(pt_path, map_location='cpu'))
     model.eval()
 
-    # Dummy inputs (640x480 resolution + LSTM hidden states)
-    rgb = torch.randn(1, 3, 480, 640)
-    depth = torch.randn(1, 1, 480, 640)
+    # Dummy inputs (240x424 resolution + LSTM hidden states)
+    rgb = torch.randn(1, 3, 240, 424)
+    depth = torch.randn(1, 1, 240, 424)
     proprio = torch.randn(1, 9)
     lstm_h = torch.zeros(1, 1, 128)  # LSTM hidden state
     lstm_c = torch.zeros(1, 1, 128)  # LSTM cell state
