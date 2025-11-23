@@ -148,7 +148,7 @@ class MAPElitesEpisodeRunner(Node):
             self.odom_callback, 10
         )
         self.imu_sub = self.create_subscription(
-            Imu, '/camera/camera/imu',
+            Imu, '/imu/data',
             self.imu_callback, qos_profile_sensor_data
         )
         self.joint_state_sub = self.create_subscription(
