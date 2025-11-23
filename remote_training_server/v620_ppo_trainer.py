@@ -271,14 +271,46 @@ class V620PPOTrainer:
         }, path)
         print(f"💾 Saved checkpoint: {path}")
         
-        # Also export best model for rover (PyTorch format for now, rover converts to RKNN)
-        # We only need the actor parts
-        actor_path = os.path.join(self.args.checkpoint_dir, "latest_actor.pt")
-        torch.save({
-            'encoder': self.encoder.state_dict(),
-            'policy': self.policy_head.state_dict(),
-            'log_std': self.log_std
-        }, actor_path)
+        # Export to ONNX for Rover (RKNN)
+        try:
+            onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+            
+            # Create dummy inputs matching RKNN expectation
+            dummy_rgb = torch.randn(1, 3, 240, 424, device=self.device)
+            dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
+            dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
+            dummy_lstm_h = torch.zeros(1, 1, 128, device=self.device)
+            dummy_lstm_c = torch.zeros(1, 1, 128, device=self.device)
+            
+            # Wrap model to handle forward pass signature
+            class ActorWrapper(nn.Module):
+                def __init__(self, encoder, policy):
+                    super().__init__()
+                    self.encoder = encoder
+                    self.policy = policy
+                    
+                def forward(self, rgb, depth, proprio, lstm_h, lstm_c):
+                    features = self.encoder(rgb, depth)
+                    # Pass LSTM state if policy uses it, otherwise ignore
+                    # Note: PolicyHead handles hidden_state tuple
+                    action, (new_h, new_c) = self.policy(features, proprio, (lstm_h, lstm_c))
+                    return action, new_h, new_c
+
+            actor = ActorWrapper(self.encoder, self.policy_head)
+            actor.eval()
+            
+            torch.onnx.export(
+                actor,
+                (dummy_rgb, dummy_depth, dummy_proprio, dummy_lstm_h, dummy_lstm_c),
+                onnx_path,
+                opset_version=12,
+                input_names=['rgb', 'depth', 'proprio', 'lstm_h', 'lstm_c'],
+                output_names=['action', 'lstm_h_out', 'lstm_c_out']
+            )
+            print(f"📦 Exported ONNX: {onnx_path}")
+            
+        except Exception as e:
+            print(f"❌ ONNX Export failed: {e}")
 
     def run(self):
         """Main training loop."""
@@ -332,15 +364,16 @@ class V620PPOTrainer:
                     
                 elif message['type'] == 'get_model':
                     print(f"📤 Rover requested model update")
-                    # Send latest model weights
-                    buffer = io.BytesIO()
-                    torch.save({
-                        'encoder': self.encoder.state_dict(),
-                        'policy': self.policy_head.state_dict(),
-                        'log_std': self.log_std
-                    }, buffer)
-                    response['model_bytes'] = buffer.getvalue()
-                    print(f"📤 Sent model update to rover")
+                    # Send latest ONNX model
+                    onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+                    if os.path.exists(onnx_path):
+                        with open(onnx_path, 'rb') as f:
+                            model_bytes = f.read()
+                        response['model_bytes'] = model_bytes
+                        print(f"📤 Sent ONNX model ({len(model_bytes)} bytes)")
+                    else:
+                        print("⚠ No ONNX model found yet")
+                        response['error'] = 'No model available'
                 
                 self.socket.send_pyobj(response)
                 
