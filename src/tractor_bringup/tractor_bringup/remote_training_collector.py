@@ -23,7 +23,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-from sensor_msgs.msg import Image, Imu
+from sensor_msgs.msg import Image, Imu, JointState, MagneticField
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32
@@ -48,7 +48,9 @@ class RemoteTrainingCollector(Node):
         self.declare_parameter('server_address', 'tcp://192.168.1.100:5555')  # V620 IP
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('depth_topic', '/camera/camera/aligned_depth_to_color/image_raw')
-        self.declare_parameter('imu_topic', '/lsm9ds1_imu_publisher/imu/data')
+        self.declare_parameter('imu_topic', '/imu/data')
+        self.declare_parameter('mag_topic', '/imu/mag')
+        self.declare_parameter('joint_state_topic', '/joint_states')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('cmd_vel_topic', 'cmd_vel_ai')
         self.declare_parameter('min_distance_topic', '/min_forward_distance')
@@ -67,6 +69,8 @@ class RemoteTrainingCollector(Node):
         self.rgb_topic = str(self.get_parameter('rgb_topic').value)
         self.depth_topic = str(self.get_parameter('depth_topic').value)
         self.imu_topic = str(self.get_parameter('imu_topic').value)
+        self.mag_topic = str(self.get_parameter('mag_topic').value)
+        self.joint_state_topic = str(self.get_parameter('joint_state_topic').value)
         self.odom_topic = str(self.get_parameter('odom_topic').value)
         self.cmd_vel_topic = str(self.get_parameter('cmd_vel_topic').value)
         self.min_distance_topic = str(self.get_parameter('min_distance_topic').value)
@@ -103,7 +107,9 @@ class RemoteTrainingCollector(Node):
         # State caches
         self._latest_rgb: Optional[np.ndarray] = None
         self._latest_depth: Optional[np.ndarray] = None
-        self._latest_imu: Optional[Tuple[float, float, float]] = None  # roll, pitch, accel_mag
+        self._latest_imu: Optional[Tuple[float, float, float]] = None  # ax, ay, wz
+        self._latest_mag: Optional[Tuple[float, float, float]] = None  # mx, my, mz
+        self._latest_wheel_vels: Optional[Tuple[float, float]] = None  # left, right
         self._latest_vel: Optional[Tuple[float, float]] = None  # linear, angular
         self._latest_action: Optional[Tuple[float, float]] = None  # cmd linear, angular
         self._min_forward_dist: float = 10.0
@@ -122,6 +128,12 @@ class RemoteTrainingCollector(Node):
         )
         self.imu_sub = self.create_subscription(
             Imu, self.imu_topic, self.imu_callback, qos_profile_sensor_data
+        )
+        self.mag_sub = self.create_subscription(
+            MagneticField, self.mag_topic, self.mag_callback, qos_profile_sensor_data
+        )
+        self.joint_state_sub = self.create_subscription(
+            JointState, self.joint_state_topic, self.joint_state_callback, 10
         )
         self.odom_sub = self.create_subscription(
             Odometry, self.odom_topic, self.odom_callback, 20
@@ -163,15 +175,30 @@ class RemoteTrainingCollector(Node):
 
     def imu_callback(self, msg: Imu) -> None:
         try:
-            roll, pitch = self._roll_pitch_from_quaternion(
-                msg.orientation.x, msg.orientation.y,
-                msg.orientation.z, msg.orientation.w
+            self._latest_imu = (
+                msg.linear_acceleration.x,
+                msg.linear_acceleration.y,
+                msg.angular_velocity.z
             )
-            ax, ay, az = msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z
-            accel_mag = float(np.sqrt(ax * ax + ay * ay + az * az))
-            self._latest_imu = (roll, pitch, accel_mag)
         except Exception as exc:
             self.get_logger().debug(f'IMU parsing failed: {exc}')
+
+    def mag_callback(self, msg: MagneticField) -> None:
+        try:
+            self._latest_mag = (
+                msg.magnetic_field.x,
+                msg.magnetic_field.y,
+                msg.magnetic_field.z
+            )
+        except Exception as exc:
+            self.get_logger().debug(f'Mag parsing failed: {exc}')
+
+    def joint_state_callback(self, msg: JointState) -> None:
+        try:
+            if len(msg.velocity) >= 4:
+                self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
+        except Exception as exc:
+            self.get_logger().debug(f'Joint state parsing failed: {exc}')
 
     def odom_callback(self, msg: Odometry) -> None:
         try:
@@ -229,17 +256,22 @@ class RemoteTrainingCollector(Node):
         # Check if episode should terminate (collision or timeout)
         done = self._check_done()
 
-        # Build proprioception vector
-        lin_vel, ang_vel = self._latest_vel
-
-        # Use IMU data if available, otherwise use zeros
-        if self._latest_imu is not None:
-            roll, pitch, accel_mag = self._latest_imu
-        else:
-            roll, pitch, accel_mag = 0.0, 0.0, 0.0
+        # Build proprioception vector: [w_l, w_r, ax, ay, wz, mag_x, mag_y, mag_z, dist]
+        
+        w_left, w_right = 0.0, 0.0
+        if self._latest_wheel_vels:
+            w_left, w_right = self._latest_wheel_vels
+            
+        ax, ay, wz = 0.0, 0.0, 0.0
+        if self._latest_imu:
+            ax, ay, wz = self._latest_imu
+            
+        mx, my, mz = 0.0, 0.0, 0.0
+        if self._latest_mag:
+            mx, my, mz = self._latest_mag
 
         proprio = np.array([
-            lin_vel, ang_vel, roll, pitch, accel_mag, self._min_forward_dist
+            w_left, w_right, ax, ay, wz, mx, my, mz, self._min_forward_dist
         ], dtype=np.float32)
 
         # Build action vector
