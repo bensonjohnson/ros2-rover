@@ -357,7 +357,7 @@ import io
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
-    parser.add_argument('--buffer_size', type=int, default=100000)
+    parser.add_argument('--buffer_size', type=int, default=25000)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--update_epochs', type=int, default=4)
