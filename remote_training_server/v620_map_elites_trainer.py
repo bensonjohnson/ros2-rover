@@ -914,6 +914,7 @@ class MAPElitesTrainer:
         parent_model.load_state_dict(parent_state)
         parent_model.eval()
         with torch.no_grad():
+            # Try FP16 first if enabled
             if self.use_fp16:
                 with torch.amp.autocast('cuda'):
                     parent_pred, _ = parent_model(rgb, depth, proprio)
@@ -925,6 +926,19 @@ class MAPElitesTrainer:
                 target_actions=actions,
                 proprio=proprio
             )
+            
+            # Fallback to FP32 if FP16 produced NaNs/Inf
+            if parent_fitness == float('-inf') and self.use_fp16:
+                # print("    ⚠ Parent fitness -inf in FP16, retrying in FP32...")
+                parent_pred, _ = parent_model(rgb, depth, proprio) # FP32
+                parent_fitness = self.compute_tournament_fitness(
+                    pred_actions=parent_pred,
+                    target_actions=actions,
+                    proprio=proprio
+                )
+                if parent_fitness != float('-inf'):
+                    print(f"    ✓ Recovered parent fitness in FP32: {parent_fitness:.6f}")
+
             # Add parent as candidate #0
             fitness_scores.append((parent_fitness, 0.0, -1))
             best_fitness = parent_fitness
@@ -1015,10 +1029,15 @@ class MAPElitesTrainer:
         """
         # Check for NaNs in inputs
         if torch.isnan(pred_actions).any():
+            # print("  ⚠ NaN in predicted actions")
             return float('-inf')
         
-        if torch.isnan(target_actions).any() or torch.isnan(proprio).any():
-            # This shouldn't happen if data is clean, but handle it
+        if torch.isnan(target_actions).any():
+            # print("  ⚠ NaN in target actions")
+            return float('-inf')
+            
+        if torch.isnan(proprio).any():
+            # print("  ⚠ NaN in proprioception")
             return float('-inf')
 
         fitness = 0.0
