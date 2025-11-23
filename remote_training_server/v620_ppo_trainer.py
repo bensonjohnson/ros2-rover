@@ -111,6 +111,11 @@ class PPOBuffer:
             'values': self.values[indices].to(self.device),
         }
 
+    def clear(self):
+        """Clear buffer after update (PPO is on-policy)."""
+        self.ptr = 0
+        self.size = 0
+
 class V620PPOTrainer:
     """PPO Trainer optimized for V620 ROCm."""
     
@@ -234,6 +239,9 @@ class V620PPOTrainer:
                     
                     # Always export ONNX for immediate rover update
                     self.export_onnx()
+                    
+                    # Clear buffer after update (PPO is on-policy)
+                    self.buffer.clear()
                 
                 self.is_training = False
             
@@ -358,7 +366,7 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=12,
+                opset_version=14,
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action']
             )
