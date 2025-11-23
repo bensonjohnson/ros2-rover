@@ -125,8 +125,12 @@ class V620PPOTrainer:
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
             # Enable TF32 for Ampere/RDNA3
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+            try:
+                torch.set_float32_matmul_precision('high')
+            except AttributeError:
+                # Fallback for older PyTorch versions
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU (slow)")
@@ -153,7 +157,7 @@ class V620PPOTrainer:
         ])
         
         # Mixed Precision Scaler
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.scaler = torch.amp.GradScaler('cuda')
         
         # Replay Buffer
         self.buffer = PPOBuffer(
@@ -404,29 +408,41 @@ class V620PPOTrainer:
                     dt = current_time - self.last_data_time
                     self.last_data_time = current_time
                     batch_len = len(message['data']['rewards'])
-                    print(f"📥 Received batch: {batch_len} steps (Rover active, {dt:.1f}s since last)")
 
-                    # Add data to buffer (thread-safe)
-                    with self.training_lock:
-                        self.buffer.add_batch(message['data'])
-                    
-                    self.total_steps += batch_len
-                    
-                    # Update curriculum
-                    self.update_curriculum()
-                    
-                    # Training is handled by background thread now
-                    
-                    # Send back curriculum info and latest model version
-                    response['curriculum'] = {
-                        'collision_dist': self.collision_dist,
-                        'max_speed': self.max_speed
-                    }
-                    response['model_version'] = self.model_version
-                    
-                    # Tell rover to wait if we are about to train (or are training)
-                    if self.buffer.size >= self.args.rollout_steps:
+                    # Try to acquire lock without blocking
+                    if self.training_lock.acquire(blocking=False):
+                        try:
+                            print(f"📥 Received batch: {batch_len} steps (Rover active, {dt:.1f}s since last)")
+                            # Add data to buffer (thread-safe)
+                            self.buffer.add_batch(message['data'])
+                            
+                            self.total_steps += batch_len
+                            
+                            # Update curriculum
+                            self.update_curriculum()
+                            
+                            # Send back curriculum info and latest model version
+                            response['curriculum'] = {
+                                'collision_dist': self.collision_dist,
+                                'max_speed': self.max_speed
+                            }
+                            response['model_version'] = self.model_version
+                            
+                            # Tell rover to wait if we are about to train
+                            if self.buffer.size >= self.args.rollout_steps:
+                                response['wait_for_training'] = True
+                        finally:
+                            self.training_lock.release()
+                    else:
+                        # Lock is busy -> Training in progress
+                        print(f"🔒 Training in progress, discarding batch of {batch_len} steps")
                         response['wait_for_training'] = True
+                        # Still send curriculum/model info just in case
+                        response['curriculum'] = {
+                            'collision_dist': self.collision_dist,
+                            'max_speed': self.max_speed
+                        }
+                        response['model_version'] = self.model_version
                     
                 elif message['type'] == 'check_status':
                     # Rover polling for training completion
