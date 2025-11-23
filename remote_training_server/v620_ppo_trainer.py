@@ -14,6 +14,7 @@ Features:
 """
 
 import os
+import sys
 import time
 import json
 import argparse
@@ -236,65 +237,71 @@ class V620PPOTrainer:
         metrics = {'policy_loss': [], 'value_loss': [], 'entropy': []}
         
         # Use tqdm for progress bar
-        pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False)
+        pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False, file=sys.stdout)
         for _ in pbar:
-            batch = self.buffer.get_batch(self.args.batch_size)
-            
-            # Mixed Precision Context
-            with torch.cuda.amp.autocast():
-                # Forward pass
-                features = self.encoder(batch['rgb'], batch['depth'])
-                action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
-                values = self.value_head(features, batch['proprio'])
+            try:
+                batch = self.buffer.get_batch(self.args.batch_size)
                 
-                # Action distribution
-                std = self.log_std.exp()
-                dist = torch.distributions.Normal(action_mean, std)
+                # Mixed Precision Context
+                with torch.amp.autocast('cuda'):
+                    # Forward pass
+                    features = self.encoder(batch['rgb'], batch['depth'])
+                    action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
+                    values = self.value_head(features, batch['proprio'])
+                    
+                    # Action distribution
+                    std = self.log_std.exp()
+                    dist = torch.distributions.Normal(action_mean, std)
+                    
+                    # Compute log probs
+                    current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
+                    entropy = dist.entropy().sum(dim=-1).mean()
+                    
+                    # Ratios
+                    ratios = torch.exp(current_log_probs - batch['log_probs'])
+                    
+                    # Advantages
+                    advantages = batch['rewards'] - values.detach()
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    
+                    # Policy Loss
+                    surr1 = ratios * advantages
+                    surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    
+                    # Value Loss
+                    value_loss = 0.5 * (values - batch['rewards']).pow(2).mean()
+                    
+                    # Total Loss
+                    loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
                 
-                # Compute log probs
-                current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
-                entropy = dist.entropy().sum(dim=-1).mean()
+                # Update with Scaler
+                self.optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
                 
-                # Ratios
-                ratios = torch.exp(current_log_probs - batch['log_probs'])
+                # Unscale before clipping
+                self.scaler.unscale_(self.optimizer)
+                nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(self.policy_head.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(self.value_head.parameters(), 0.5)
                 
-                # Advantages
-                advantages = batch['rewards'] - values.detach()
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
                 
-                # Policy Loss
-                surr1 = ratios * advantages
-                surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
-                policy_loss = -torch.min(surr1, surr2).mean()
+                metrics['policy_loss'].append(policy_loss.item())
+                metrics['value_loss'].append(value_loss.item())
+                metrics['entropy'].append(entropy.item())
                 
-                # Value Loss
-                value_loss = 0.5 * (values - batch['rewards']).pow(2).mean()
-                
-                # Total Loss
-                loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
-            
-            # Update with Scaler
-            self.optimizer.zero_grad()
-            self.scaler.scale(loss).backward()
-            
-            # Unscale before clipping
-            self.scaler.unscale_(self.optimizer)
-            nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.5)
-            nn.utils.clip_grad_norm_(self.policy_head.parameters(), 0.5)
-            nn.utils.clip_grad_norm_(self.value_head.parameters(), 0.5)
-            
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            metrics['policy_loss'].append(policy_loss.item())
-            metrics['value_loss'].append(value_loss.item())
-            metrics['entropy'].append(entropy.item())
-            
-            # Update progress bar description
-            pbar.set_postfix({
-                'ploss': f"{policy_loss.item():.3f}",
-                'vloss': f"{value_loss.item():.3f}"
-            })
+                # Update progress bar description
+                pbar.set_postfix({
+                    'ploss': f"{policy_loss.item():.3f}",
+                    'vloss': f"{value_loss.item():.3f}"
+                })
+            except Exception as e:
+                print(f"\n❌ Error in training step: {e}")
+                import traceback
+                traceback.print_exc()
+                break
             
         return {k: np.mean(v) for k, v in metrics.items()}
 
