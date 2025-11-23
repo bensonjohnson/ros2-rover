@@ -139,14 +139,14 @@ def convert_onnx_to_rknn(
             mean_values=[
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [0],                     # Depth (1 channel)
-                [0, 0, 0, 0, 0, 0],     # Proprio (6 values)
+                [0, 0, 0, 0, 0, 0, 0, 0, 0],     # Proprio (9 values)
                 [0],                     # LSTM hidden state (scalar for whole tensor)
                 [0]                      # LSTM cell state (scalar for whole tensor)
             ],
             std_values=[
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [1],                     # Depth (1 channel)
-                [1, 1, 1, 1, 1, 1],     # Proprio (6 values)
+                [1, 1, 1, 1, 1, 1, 1, 1, 1],     # Proprio (9 values)
                 [1],                     # LSTM hidden state (scalar - no normalization)
                 [1]                      # LSTM cell state (scalar - no normalization)
             ],
@@ -167,7 +167,7 @@ def convert_onnx_to_rknn(
             input_size_list=[
                 [1, 3, 240, 424],   # RGB
                 [1, 1, 240, 424],   # Depth
-                [1, 6],             # Proprio
+                [1, 9],             # Proprio
                 [1, 1, 128],        # LSTM hidden state
                 [1, 1, 128]         # LSTM cell state
             ]
