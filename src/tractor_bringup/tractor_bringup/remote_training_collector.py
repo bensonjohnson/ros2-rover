@@ -87,6 +87,12 @@ class RemoteTrainingCollector(Node):
 
         # Create calibration directory
         if self.save_calibration:
+            # Clear existing calibration data to avoid mixing old (6-dim) and new (9-dim) samples
+            if os.path.exists(self.calibration_dir):
+                self.get_logger().warn(f'Clearing old calibration data in: {self.calibration_dir}')
+                import shutil
+                shutil.rmtree(self.calibration_dir)
+            
             os.makedirs(self.calibration_dir, exist_ok=True)
             self.get_logger().info(f'Saving calibration samples to: {self.calibration_dir}')
 

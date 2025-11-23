@@ -131,29 +131,33 @@ def convert_onnx_to_rknn(
 
         # Configure RKNN
         print("Configuring RKNN...")
-        # RK3588 supports: 'asymmetric_quantized-8', 'asymmetric_quantized-16'
+        # RK3588 supports: 'asymmetric_quantized-8', 'asymmetric_quantized-16', 'fp16'
         # asymmetric_quantized-8 = INT8 quantization (requires calibration dataset)
-        # asymmetric_quantized-16 = INT16 quantization (better accuracy, larger model)
-        # Note: For LSTM hidden states, RKNN expects single scalar values, not arrays
-        ret = rknn.config(
-            mean_values=[
+        # fp16 = Floating Point 16 (default if no quantization)
+        
+        config_args = {
+            'mean_values': [
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [0],                     # Depth (1 channel)
                 [0, 0, 0, 0, 0, 0, 0, 0, 0],     # Proprio (9 values)
                 [0],                     # LSTM hidden state (scalar for whole tensor)
                 [0]                      # LSTM cell state (scalar for whole tensor)
             ],
-            std_values=[
+            'std_values': [
                 [127.5, 127.5, 127.5],  # RGB (3 channels)
                 [1],                     # Depth (1 channel)
                 [1, 1, 1, 1, 1, 1, 1, 1, 1],     # Proprio (9 values)
                 [1],                     # LSTM hidden state (scalar - no normalization)
                 [1]                      # LSTM cell state (scalar - no normalization)
             ],
-            target_platform=target_platform,
-            quantized_dtype='asymmetric_quantized-8' if quantize else 'asymmetric_quantized-16',
-            optimization_level=3
-        )
+            'target_platform': target_platform,
+            'optimization_level': 3
+        }
+        
+        if quantize:
+            config_args['quantized_dtype'] = 'asymmetric_quantized-8'
+            
+        ret = rknn.config(**config_args)
         if ret != 0:
             print(f"❌ Failed to configure RKNN: {ret}")
             return False
@@ -184,7 +188,7 @@ def convert_onnx_to_rknn(
             print("  Running quantization (this may take a few minutes)...")
             ret = rknn.build(do_quantization=True, dataset=dataset)
         else:
-            print("Building RKNN model (INT16 mode - no calibration)...")
+            print("Building RKNN model (FP16 mode - no calibration)...")
             ret = rknn.build(do_quantization=False)
 
         if ret != 0:
@@ -246,9 +250,8 @@ def main():
     print()
     if args.quantize and args.calibration_dir:
         print("Mode: INT8 quantization with calibration data")
-        print("      (will fall back to INT16 until dataset.txt implemented)")
     else:
-        print("Mode: INT16 (no quantization)")
+        print("Mode: FP16 (no quantization)")
         if args.quantize:
             print("Note: --quantize requires --calibration-dir")
     print()
