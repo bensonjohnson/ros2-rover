@@ -47,7 +47,7 @@ class PPOBuffer:
         
         # Pre-allocate tensors on CPU (move to GPU in batches during training)
         self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
-        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16)
+        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float32)  # Changed from float16 for stability
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
         self.rewards = torch.zeros((capacity,), dtype=torch.float32)
@@ -162,9 +162,9 @@ class V620PPOTrainer:
             {'params': self.value_head.parameters(), 'lr': args.lr},
             {'params': self.log_std, 'lr': args.lr}
         ])
-        
-        # Mixed Precision Scaler
-        self.scaler = torch.amp.GradScaler('cuda')
+
+        # DISABLED: Mixed Precision causes NaN on ROCm (FP16 instability)
+        # self.scaler = torch.amp.GradScaler('cuda')
         
         # Replay Buffer
         self.buffer = PPOBuffer(
@@ -301,51 +301,59 @@ class V620PPOTrainer:
                         'log_probs': gpu_log_probs[batch_indices]
                     }
                     
-                    # Mixed Precision Context
-                    with torch.amp.autocast('cuda'):
-                        # Forward pass
-                        features = self.encoder(batch['rgb'], batch['depth'])
-                        action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
-                        values = self.value_head(features, batch['proprio'])
-                        
-                        # Action distribution
-                        std = self.log_std.exp()
-                        dist = torch.distributions.Normal(action_mean, std)
-                        
-                        # Compute log probs
-                        current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
-                        entropy = dist.entropy().sum(dim=-1).mean()
-                        
-                        # Ratios
-                        ratios = torch.exp(current_log_probs - batch['log_probs'])
-                        
-                        # Advantages
-                        advantages = batch['rewards'] - values.detach()
-                        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                        
-                        # Policy Loss
-                        surr1 = ratios * advantages
-                        surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
-                        policy_loss = -torch.min(surr1, surr2).mean()
-                        
-                        # Value Loss
-                        value_loss = 0.5 * (values - batch['rewards']).pow(2).mean()
-                        
-                        # Total Loss
-                        loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
-                    
-                    # Update with Scaler
+                    # Forward pass (FP32 for stability on ROCm)
+                    features = self.encoder(batch['rgb'], batch['depth'])
+                    action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
+                    values = self.value_head(features, batch['proprio'])
+
+                    # Action distribution
+                    std = self.log_std.exp().clamp(min=1e-6, max=2.0)  # Clamp std to prevent NaN
+
+                    # Check for NaN in action_mean before creating distribution
+                    if torch.isnan(action_mean).any():
+                        print(f"⚠️  NaN detected in action_mean! Skipping batch.")
+                        continue
+
+                    dist = torch.distributions.Normal(action_mean, std)
+
+                    # Compute log probs
+                    current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
+                    entropy = dist.entropy().sum(dim=-1).mean()
+
+                    # Ratios
+                    ratios = torch.exp(current_log_probs - batch['log_probs'])
+
+                    # Advantages (with more stable normalization)
+                    advantages = batch['rewards'] - values.squeeze().detach()
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
+
+                    # Policy Loss
+                    surr1 = ratios * advantages
+                    surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
+                    policy_loss = -torch.min(surr1, surr2).mean()
+
+                    # Value Loss
+                    value_loss = 0.5 * (values.squeeze() - batch['rewards']).pow(2).mean()
+
+                    # Total Loss
+                    loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
+
+                    # Check for NaN in loss
+                    if torch.isnan(loss):
+                        print(f"⚠️  NaN detected in loss! Skipping batch.")
+                        continue
+
+                    # Standard backprop (no mixed precision)
                     self.optimizer.zero_grad()
-                    self.scaler.scale(loss).backward()
-                    
-                    # Unscale before clipping
-                    self.scaler.unscale_(self.optimizer)
-                    nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.5)
-                    nn.utils.clip_grad_norm_(self.policy_head.parameters(), 0.5)
-                    nn.utils.clip_grad_norm_(self.value_head.parameters(), 0.5)
-                    
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    loss.backward()
+
+                    # Gradient clipping (including log_std)
+                    nn.utils.clip_grad_norm_(self.encoder.parameters(), 1.0)
+                    nn.utils.clip_grad_norm_(self.policy_head.parameters(), 1.0)
+                    nn.utils.clip_grad_norm_(self.value_head.parameters(), 1.0)
+                    nn.utils.clip_grad_norm_([self.log_std], 0.5)
+
+                    self.optimizer.step()
                     
                     metrics['policy_loss'].append(policy_loss.item())
                     metrics['value_loss'].append(value_loss.item())
