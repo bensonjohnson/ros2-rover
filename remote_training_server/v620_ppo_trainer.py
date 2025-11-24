@@ -234,24 +234,28 @@ class V620PPOTrainer:
                 # Run training step
                 with self.training_lock:
                     metrics = self.train_step()
-                
+
                 if metrics:
                     self.update_count += 1
-                    
+
                     # Log metrics
                     if self.update_count % 10 == 0:
                         print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
-                            
+
                     # Save checkpoint every batch (as requested)
                     self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
-                    
+
                     # Always export ONNX for immediate rover update
                     self.export_onnx()
-                    
+
                     # Clear buffer after update (PPO is on-policy)
                     self.buffer.clear()
+                else:
+                    # Training failed due to NaN - clear buffer but don't save model
+                    print("⚠️  Skipping checkpoint save due to failed training update")
+                    self.buffer.clear()  # Still clear buffer to avoid reusing bad data
                 
                 self.is_training = False
             
@@ -260,7 +264,10 @@ class V620PPOTrainer:
     def train_step(self):
         """Perform PPO update with mini-batches and early stopping."""
         metrics = {'policy_loss': [], 'value_loss': [], 'entropy': [], 'approx_kl': [], 'clip_fraction': []}
-        
+
+        # Flag to track if NaN occurred during training
+        nan_detected = False
+
         # Optimization: Move entire active buffer to GPU once
         print("  ⚡ Moving buffer to GPU...")
         with torch.no_grad():
@@ -310,10 +317,11 @@ class V620PPOTrainer:
                     # Action distribution
                     std = self.log_std.exp().clamp(min=1e-6, max=2.0)  # Clamp std to prevent NaN
 
-                    # Check for NaN in action_mean before creating distribution
-                    if torch.isnan(action_mean).any():
-                        print(f"⚠️  NaN detected in action_mean! Skipping batch.")
-                        continue
+                    # Check for NaN in forward pass outputs
+                    if torch.isnan(action_mean).any() or torch.isnan(values).any():
+                        print(f"⚠️  NaN detected in forward pass! Aborting training update.")
+                        nan_detected = True
+                        break
 
                     dist = torch.distributions.Normal(action_mean, std)
 
@@ -341,20 +349,49 @@ class V620PPOTrainer:
                     surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    # Value Loss
-                    value_loss = 0.5 * (values.squeeze() - batch['rewards']).pow(2).mean()
+                    # Value Loss (simple MSE with gradient scaling to prevent divergence)
+                    values_pred = values.squeeze()
+                    value_loss = 0.5 * (values_pred - batch['rewards']).pow(2).mean()
+
+                    # Detach and rescale if loss is too high (soft prevention)
+                    if value_loss.item() > 100.0:
+                        value_loss = value_loss * 0.1  # Scale down contribution
+
+                    # Safety check: abort if value loss explodes
+                    if value_loss > 1000.0:
+                        print(f"⚠️  Value loss too high ({value_loss:.1f})! Aborting training update.")
+                        nan_detected = True
+                        break
 
                     # Total Loss
                     loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
 
                     # Check for NaN in loss
-                    if torch.isnan(loss):
-                        print(f"⚠️  NaN detected in loss! Skipping batch.")
-                        continue
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        print(f"⚠️  NaN/Inf detected in loss! Aborting training update.")
+                        nan_detected = True
+                        break
 
                     # Standard backprop (no mixed precision)
                     self.optimizer.zero_grad()
                     loss.backward()
+
+                    # Check for NaN in gradients
+                    has_nan_grad = False
+                    for name, param in self.encoder.named_parameters():
+                        if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                            has_nan_grad = True
+                            break
+                    if not has_nan_grad:
+                        for name, param in self.policy_head.named_parameters():
+                            if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                                has_nan_grad = True
+                                break
+
+                    if has_nan_grad:
+                        print(f"⚠️  NaN detected in gradients! Aborting training update.")
+                        nan_detected = True
+                        break
 
                     # Gradient clipping (including log_std)
                     nn.utils.clip_grad_norm_(self.encoder.parameters(), 1.0)
@@ -374,8 +411,14 @@ class V620PPOTrainer:
                     print(f"\n❌ Error in training step: {e}")
                     import traceback
                     traceback.print_exc()
+                    nan_detected = True
                     break
-            
+
+            # If NaN detected, abort entire training update
+            if nan_detected:
+                print(f"❌ NaN detected during training! Skipping this update entirely.")
+                break
+
             # Update progress bar description (avg of current epoch)
             if metrics['policy_loss']:
                 avg_kl = np.mean(metrics['approx_kl'][-10:]) if metrics['approx_kl'] else 0.0
@@ -390,7 +433,16 @@ class V620PPOTrainer:
                     print(f"\n⚠️  Early stopping at epoch {epoch + 1}/{self.args.update_epochs}: KL divergence ({avg_kl:.4f}) exceeded target ({self.args.target_kl:.4f})")
                     early_stop = True
                     break
-            
+
+        # If NaN was detected, return None to signal failure
+        if nan_detected:
+            return None
+
+        # Only return metrics if we have valid data
+        if not metrics['policy_loss']:
+            print("⚠️  No valid training data collected!")
+            return None
+
         return {k: np.mean(v) for k, v in metrics.items()}
 
     def save_checkpoint(self, filename):
@@ -543,7 +595,7 @@ if __name__ == '__main__':
     parser.add_argument('--buffer_size', type=int, default=25000)
     parser.add_argument('--rollout_steps', type=int, default=2048, help="Steps to collect before training")
     parser.add_argument('--mini_batch_size', type=int, default=512, help="Mini-batch size for PPO update")
-    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--lr', type=float, default=1e-4)  # Lowered from 3e-4 to prevent value head divergence
     parser.add_argument('--update_epochs', type=int, default=5)
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--value_coef', type=float, default=0.5)

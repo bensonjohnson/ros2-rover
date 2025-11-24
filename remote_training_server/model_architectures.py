@@ -102,6 +102,11 @@ class PolicyHead(nn.Module):
             nn.Linear(64, action_dim),
         )
 
+        # Initialize final layer to output small actions (near-zero mean)
+        # Helps with initial exploration and stability
+        nn.init.orthogonal_(self.policy[-1].weight, gain=0.01)
+        nn.init.constant_(self.policy[-1].bias, 0.0)
+
     def forward(self, features: torch.Tensor, proprio: torch.Tensor, hidden_state=None) -> tuple:
         """Forward pass with optional hidden state.
         
@@ -155,6 +160,11 @@ class ValueHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(64, 1),
         )
+
+        # Initialize final layer to output near-zero values
+        # This prevents huge value loss on first training step when model is random
+        nn.init.orthogonal_(self.value[-1].weight, gain=0.01)
+        nn.init.constant_(self.value[-1].bias, 0.0)
 
     def forward(self, features: torch.Tensor, proprio: torch.Tensor) -> torch.Tensor:
         proprio_feat = self.proprio_encoder(proprio)
