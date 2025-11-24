@@ -184,7 +184,7 @@ class V620PPOTrainer:
 
         # KL warm-up: start with higher target_kl for first few updates (cold start)
         self.kl_warmup_updates = 10  # Warm up for first 10 updates
-        self.kl_warmup_start = 0.1   # Start with 10x higher tolerance
+        self.kl_warmup_start = 0.5   # Start very permissive for cold start (33x normal)
         self.kl_warmup_end = args.target_kl  # End at configured target
         
         # ZMQ Setup
