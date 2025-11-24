@@ -181,6 +181,11 @@ class V620PPOTrainer:
         self.best_reward = -float('inf')
         self.model_version = -1  # Track model updates (start at -1 until first save)
         self.is_training = False
+
+        # KL warm-up: start with higher target_kl for first few updates (cold start)
+        self.kl_warmup_updates = 10  # Warm up for first 10 updates
+        self.kl_warmup_start = 0.1   # Start with 10x higher tolerance
+        self.kl_warmup_end = args.target_kl  # End at configured target
         
         # ZMQ Setup
         self.context = zmq.Context()
@@ -205,6 +210,15 @@ class V620PPOTrainer:
         self.training_lock = threading.Lock()
         self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self.training_thread.start()
+
+    def get_target_kl(self):
+        """Get current target KL with warm-up schedule."""
+        if self.update_count < self.kl_warmup_updates:
+            # Linear interpolation from warmup_start to warmup_end
+            alpha = self.update_count / self.kl_warmup_updates
+            return self.kl_warmup_start * (1 - alpha) + self.kl_warmup_end * alpha
+        else:
+            return self.kl_warmup_end
 
     def update_curriculum(self):
         """Update difficulty based on performance."""
@@ -240,9 +254,12 @@ class V620PPOTrainer:
 
                     # Log metrics
                     if self.update_count % 10 == 0:
-                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}")
+                        current_target_kl = self.get_target_kl()
+                        warmup_str = f" [KL target: {current_target_kl:.4f}]" if self.update_count < self.kl_warmup_updates else ""
+                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}{warmup_str}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                        self.writer.add_scalar(f'train/target_kl', current_target_kl, self.total_steps)
 
                     # Save checkpoint every batch (as requested)
                     self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
@@ -428,9 +445,11 @@ class V620PPOTrainer:
                     'kl': f"{avg_kl:.4f}"
                 })
 
-                # Early stopping: check if KL divergence exceeds target
-                if avg_kl > self.args.target_kl:
-                    print(f"\n⚠️  Early stopping at epoch {epoch + 1}/{self.args.update_epochs}: KL divergence ({avg_kl:.4f}) exceeded target ({self.args.target_kl:.4f})")
+                # Early stopping: check if KL divergence exceeds target (with warm-up)
+                current_target_kl = self.get_target_kl()
+                if avg_kl > current_target_kl:
+                    warmup_status = f" [warm-up {self.update_count}/{self.kl_warmup_updates}]" if self.update_count < self.kl_warmup_updates else ""
+                    print(f"\n⚠️  Early stopping at epoch {epoch + 1}/{self.args.update_epochs}: KL divergence ({avg_kl:.4f}) exceeded target ({current_target_kl:.4f}){warmup_status}")
                     early_stop = True
                     break
 
