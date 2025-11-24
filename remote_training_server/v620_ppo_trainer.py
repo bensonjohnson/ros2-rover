@@ -240,7 +240,7 @@ class V620PPOTrainer:
                     
                     # Log metrics
                     if self.update_count % 10 == 0:
-                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} E={metrics['entropy']:.3f}")
+                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
                             
@@ -258,8 +258,8 @@ class V620PPOTrainer:
             time.sleep(0.1)
 
     def train_step(self):
-        """Perform PPO update with mini-batches."""
-        metrics = {'policy_loss': [], 'value_loss': [], 'entropy': []}
+        """Perform PPO update with mini-batches and early stopping."""
+        metrics = {'policy_loss': [], 'value_loss': [], 'entropy': [], 'approx_kl': [], 'clip_fraction': []}
         
         # Optimization: Move entire active buffer to GPU once
         print("  ⚡ Moving buffer to GPU...")
@@ -281,8 +281,9 @@ class V620PPOTrainer:
         
         # Use tqdm for progress bar
         pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False, file=sys.stdout)
-        
-        for _ in pbar:
+
+        early_stop = False
+        for epoch in pbar:
             # Shuffle data for each epoch
             indices = torch.randperm(self.buffer.size, device=self.device)
             
@@ -323,6 +324,14 @@ class V620PPOTrainer:
                     # Ratios
                     ratios = torch.exp(current_log_probs - batch['log_probs'])
 
+                    # Approximate KL divergence for early stopping
+                    with torch.no_grad():
+                        log_ratio = current_log_probs - batch['log_probs']
+                        approx_kl = ((ratios - 1) - log_ratio).mean()
+
+                        # Clip fraction (percentage of samples being clipped)
+                        clip_fraction = ((ratios - 1.0).abs() > self.args.clip_eps).float().mean()
+
                     # Advantages (with more stable normalization)
                     advantages = batch['rewards'] - values.squeeze().detach()
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
@@ -354,10 +363,12 @@ class V620PPOTrainer:
                     nn.utils.clip_grad_norm_([self.log_std], 0.5)
 
                     self.optimizer.step()
-                    
+
                     metrics['policy_loss'].append(policy_loss.item())
                     metrics['value_loss'].append(value_loss.item())
                     metrics['entropy'].append(entropy.item())
+                    metrics['approx_kl'].append(approx_kl.item())
+                    metrics['clip_fraction'].append(clip_fraction.item())
                     
                 except Exception as e:
                     print(f"\n❌ Error in training step: {e}")
@@ -365,12 +376,20 @@ class V620PPOTrainer:
                     traceback.print_exc()
                     break
             
-            # Update progress bar description (avg of last epoch)
+            # Update progress bar description (avg of current epoch)
             if metrics['policy_loss']:
+                avg_kl = np.mean(metrics['approx_kl'][-10:]) if metrics['approx_kl'] else 0.0
                 pbar.set_postfix({
                     'ploss': f"{np.mean(metrics['policy_loss'][-10:]):.3f}",
-                    'vloss': f"{np.mean(metrics['value_loss'][-10:]):.3f}"
+                    'vloss': f"{np.mean(metrics['value_loss'][-10:]):.3f}",
+                    'kl': f"{avg_kl:.4f}"
                 })
+
+                # Early stopping: check if KL divergence exceeds target
+                if avg_kl > self.args.target_kl:
+                    print(f"\n⚠️  Early stopping at epoch {epoch + 1}/{self.args.update_epochs}: KL divergence ({avg_kl:.4f}) exceeded target ({self.args.target_kl:.4f})")
+                    early_stop = True
+                    break
             
         return {k: np.mean(v) for k, v in metrics.items()}
 
@@ -529,6 +548,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--value_coef', type=float, default=0.5)
     parser.add_argument('--entropy_coef', type=float, default=0.01)
+    parser.add_argument('--target_kl', type=float, default=0.015, help="Target KL divergence for early stopping")
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_ppo')
     parser.add_argument('--log_dir', type=str, default='./logs_ppo')
     
