@@ -93,6 +93,11 @@ class PPOEpisodeRunner(Node):
         # Previous action for smoothness reward
         self._prev_action = np.array([0.0, 0.0])
         self._prev_linear_cmds = deque(maxlen=20) # For oscillation detection
+        self._prev_angular_actions = deque(maxlen=10) # For action smoothness tracking
+
+        # Clearance tracking for centering rewards
+        self._left_clearance = 5.0
+        self._right_clearance = 5.0
 
         # ZMQ Setup
         self.zmq_context = zmq.Context()
@@ -144,38 +149,88 @@ class PPOEpisodeRunner(Node):
     def _safety_cb(self, msg): self._safety_override = msg.data
 
     def _compute_reward(self, action, linear_vel, angular_vel, clearance, collision):
-        """Compute dense reward for current step."""
+        """Compute dense reward with hybrid MAP-Elites approach for tank driving.
+
+        Goals:
+        - Maximize forward motion (never reward backward)
+        - Maintain centered path (balance left/right clearance)
+        - Smooth turning (penalize jerky steering)
+        - Moderate penalty for stationary spinning
+        - Strong penalties for collisions and oscillation
+        """
         reward = 0.0
-        
-        # 1. Forward progress (scaled by curriculum speed)
         target_speed = self._curriculum_max_speed
-        speed_reward = (linear_vel / target_speed) * 2.0
-        reward += speed_reward
-        
-        # 2. Clearance adaptation
-        if clearance > 1.5: # Safe
-            reward += (linear_vel / target_speed) * 3.0 # Encourage max speed
-        elif clearance < 0.5: # Risky
-            reward -= abs(linear_vel) * 2.0 # Encourage slowing down
-            
-        # 3. Collision penalty (huge)
+
+        # 1. Forward Progress Bonus (ONLY reward positive velocity)
+        forward_vel = max(0.0, linear_vel)  # Clip negative (backward) to zero
+        if forward_vel > 0.01:
+            speed_reward = (forward_vel / target_speed) * 3.0
+            reward += speed_reward
+
+            # Extra bonus for good speed
+            if forward_vel > 0.08:
+                reward += 2.0
+
+        # 2. Penalize Backward Motion (never go backward)
+        if linear_vel < -0.01:
+            reward -= abs(linear_vel) * 15.0
+
+        # 3. Stationary Penalty (force continuous motion)
+        if abs(linear_vel) < 0.02 and abs(angular_vel) < 0.1:
+            reward -= 3.0
+
+        # 4. Forward Action Bonus (reward intent to move forward)
+        if action[0] > 0.3:  # Strong forward action
+            reward += (action[0] - 0.3) * 4.0
+
+        # 5. Clearance Adaptation (context-aware speed)
+        if clearance > 1.5:  # Safe - encourage max speed
+            reward += forward_vel * 2.0
+        elif clearance < 0.5:  # Risky - encourage slowing
+            if forward_vel > 0.05:
+                reward -= forward_vel * 3.0
+
+        # 6. Centering Reward (balance left/right clearance like MAP-Elites)
+        if self._left_clearance < 2.0 or self._right_clearance < 2.0:
+            # Penalize imbalance (hugging walls)
+            diff = abs(self._left_clearance - self._right_clearance)
+            if diff > 0.2:
+                reward -= diff * 3.0
+
+        # Reward staying in widest part of path
+        min_side_clearance = min(self._left_clearance, self._right_clearance)
+        if min_side_clearance > 0.3:
+            reward += (min_side_clearance - 0.3) * 2.0
+
+        # 7. Collision Penalty (huge)
         if collision or self._safety_override:
             reward -= 50.0
-            
-        # 4. Smoothness (penalize jerky actions)
-        action_diff = np.abs(action - self._prev_action)
-        reward -= np.sum(action_diff) * 1.0
-        
-        # 5. Oscillation (penalize sign flips)
+
+        # 8. Action Smoothness (penalize jerky angular changes)
+        if len(self._prev_angular_actions) > 0:
+            angular_diff = abs(action[1] - self._prev_angular_actions[-1])
+            if angular_diff > 0.3:
+                reward -= angular_diff * 5.0  # Penalize jerky steering
+
+        # Track angular action for next step
+        self._prev_angular_actions.append(action[1])
+
+        # 9. Oscillation Penalty (increased from -5.0 to -8.0)
         if len(self._prev_linear_cmds) > 2:
-            # Check if sign flipped recently
             if self._prev_linear_cmds[-1] * self._prev_linear_cmds[-2] < -0.01:
-                reward -= 5.0
-                
-        # 6. Spinning without moving
+                reward -= 8.0
+
+        # 10. Spinning Without Moving (moderate penalty -8.0)
         if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.5:
-            reward -= 2.0
-            
+            reward -= 8.0
+
+        # 11. Smooth Forward + Turning Bonus (obstacle flow)
+        if forward_vel > 0.08 and abs(angular_vel) > 0.2 and clearance < 0.8:
+            # Smooth navigation around obstacles
+            action_diff = np.abs(action - self._prev_action)
+            if np.sum(action_diff) < 0.15:  # Smooth motion
+                reward += 5.0
+
         return reward
 
     def _control_loop(self):
@@ -196,6 +251,21 @@ class PPOEpisodeRunner(Node):
         rgb_input = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
 
         depth = cv2.resize(self._latest_depth, (424, 240))
+
+        # Calculate left/right clearance for centering rewards (like MAP-Elites)
+        h, w = depth.shape
+        roi_y_start = h // 2  # Bottom half only
+
+        # Left 30% and Right 30%
+        left_roi = depth[roi_y_start:, :int(w*0.3)]
+        right_roi = depth[roi_y_start:, int(w*0.7):]
+
+        # Filter valid depths (>0.1m) and cap at 5.0m
+        valid_left = left_roi[(left_roi > 0.1) & (left_roi < 5.0)]
+        valid_right = right_roi[(right_roi > 0.1) & (right_roi < 5.0)]
+
+        self._left_clearance = float(np.min(valid_left)) if len(valid_left) > 0 else 5.0
+        self._right_clearance = float(np.min(valid_right)) if len(valid_right) > 0 else 5.0
         depth_input = depth[None, None, ...] # (1, 1, 240, 424)
         
         # Proprioception
