@@ -293,10 +293,21 @@ class PPOEpisodeRunner(Node):
         # We use a fixed std dev for exploration on rover, or could receive it from server
         noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
         action = np.clip(action_mean + noise, -1.0, 1.0)
-        
+
+        # Safety check: if action_mean has NaN, use zero and warn
+        if np.isnan(action_mean).any():
+            self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
+            action_mean = np.zeros(2)
+            action = np.clip(noise, -1.0, 1.0)  # Pure random
+
         # Calculate log_prob of this action (needed for PPO)
         # Simplified: log_prob of Gaussian
         log_prob = -0.5 * np.sum(np.square((action - action_mean) / 0.5)) - np.log(0.5 * np.sqrt(2*np.pi))
+
+        # Safety check: if log_prob is NaN, skip this step
+        if np.isnan(log_prob) or np.isinf(log_prob):
+            self.get_logger().warn("⚠️  NaN/Inf in log_prob, skipping data collection")
+            return
 
         # 4. Execute Action
         cmd = Twist()
@@ -320,11 +331,19 @@ class PPOEpisodeRunner(Node):
         # 5. Compute Reward
         current_linear = self._latest_odom[2] if self._latest_odom else 0.0
         current_angular = self._latest_odom[3] if self._latest_odom else 0.0
-        
+
         reward = self._compute_reward(
-            actual_action, current_linear, current_angular, 
+            actual_action, current_linear, current_angular,
             self._min_forward_dist, collision
         )
+
+        # Clip reward to prevent extreme values
+        reward = np.clip(reward, -100.0, 100.0)
+
+        # Safety check: NaN in reward
+        if np.isnan(reward) or np.isinf(reward):
+            self.get_logger().warn("⚠️  NaN/Inf in reward, skipping data collection")
+            return
 
         # 6. Store Transition
         with self._buffer_lock:

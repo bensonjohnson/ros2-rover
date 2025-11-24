@@ -287,7 +287,34 @@ class V620PPOTrainer:
 
         # Optimization: Move entire active buffer to GPU once
         print("  ⚡ Moving buffer to GPU...")
+
+        # DIAGNOSTIC: Check buffer data for NaN/extreme values BEFORE GPU transfer
         with torch.no_grad():
+            # Check rewards for sanity
+            rewards_cpu = self.buffer.rewards[:self.buffer.size]
+            if torch.isnan(rewards_cpu).any() or torch.isinf(rewards_cpu).any():
+                print(f"❌ DIAGNOSTIC: NaN/Inf detected in REWARDS in buffer!")
+                print(f"   Rewards range: [{rewards_cpu.min():.2f}, {rewards_cpu.max():.2f}]")
+                nan_detected = True
+                return None
+
+            reward_mean = rewards_cpu.mean().item()
+            reward_std = rewards_cpu.std().item()
+            reward_min = rewards_cpu.min().item()
+            reward_max = rewards_cpu.max().item()
+            print(f"  📊 Rewards: mean={reward_mean:.2f}, std={reward_std:.2f}, range=[{reward_min:.2f}, {reward_max:.2f}]")
+
+            # Check if rewards are extreme
+            if abs(reward_mean) > 1000 or reward_std > 1000:
+                print(f"⚠️  WARNING: Extreme reward values detected! This may cause training instability.")
+
+            # Check log_probs
+            log_probs_cpu = self.buffer.log_probs[:self.buffer.size]
+            if torch.isnan(log_probs_cpu).any() or torch.isinf(log_probs_cpu).any():
+                print(f"❌ DIAGNOSTIC: NaN/Inf detected in LOG_PROBS in buffer!")
+                nan_detected = True
+                return None
+
             # Slice valid data
             valid_slice = slice(0, self.buffer.size)
             
@@ -330,6 +357,13 @@ class V620PPOTrainer:
                     features = self.encoder(batch['rgb'], batch['depth'])
                     action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
                     values = self.value_head(features, batch['proprio'])
+
+                    # DIAGNOSTIC: Log first batch statistics
+                    if start_idx == 0 and epoch == 0:
+                        print(f"  🔍 Forward pass diagnostics:")
+                        print(f"     action_mean: mean={action_mean.mean().item():.4f}, std={action_mean.std().item():.4f}, range=[{action_mean.min().item():.4f}, {action_mean.max().item():.4f}]")
+                        print(f"     values: mean={values.mean().item():.4f}, std={values.std().item():.4f}, range=[{values.min().item():.4f}, {values.max().item():.4f}]")
+                        print(f"     log_std: {self.log_std.data}")
 
                     # Action distribution
                     std = self.log_std.exp().clamp(min=1e-6, max=2.0)  # Clamp std to prevent NaN
