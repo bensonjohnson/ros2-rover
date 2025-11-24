@@ -420,7 +420,7 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=17,
+                opset_version=18,  # Changed from 17 to avoid version conversion warnings
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action']
             )
