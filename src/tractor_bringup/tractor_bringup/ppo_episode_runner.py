@@ -187,10 +187,14 @@ class PPOEpisodeRunner(Node):
             # self.get_logger().warn('Waiting for RGB data...', throttle_duration_sec=5.0)
             return
 
+        if self._latest_depth is None:
+            # self.get_logger().warn('Waiting for depth data...', throttle_duration_sec=5.0)
+            return
+
         # 1. Prepare Inputs
         rgb = cv2.resize(self._latest_rgb, (424, 240)) # Resize to model input
         rgb_input = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
-        
+
         depth = cv2.resize(self._latest_depth, (424, 240))
         depth_input = depth[None, None, ...] # (1, 1, 240, 424)
         
