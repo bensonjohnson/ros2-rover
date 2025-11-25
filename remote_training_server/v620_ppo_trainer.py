@@ -179,7 +179,7 @@ class V620PPOTrainer:
         self.total_steps = 0
         self.update_count = 0
         self.best_reward = -float('inf')
-        self.model_version = -1  # Track model updates (start at -1 until first save)
+        self.model_version = 0  # Start at 0 to trigger rover warmup sequence
         self.is_training = False
 
         # KL warm-up: start with higher target_kl for first few updates (cold start)
@@ -211,9 +211,81 @@ class V620PPOTrainer:
         self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self.training_thread.start()
         
+        # Auto-resume from latest checkpoint if available
+        latest_ckpt = self.find_latest_checkpoint()
+        if latest_ckpt and not args.force_restart:
+            self.load_checkpoint(latest_ckpt)
+        else:
+            if args.force_restart:
+                print("⚠ Force restart requested. Ignoring existing checkpoints.")
+            else:
+                print("ℹ No checkpoint found. Starting fresh.")
+            
+            # Apply heuristic initialization if requested (only if starting fresh)
+            if args.seed_behavior:
+                print(f"🌱 Seeding training with '{args.seed_behavior}' behavior...")
+                self.apply_heuristic_bias(self.policy_head, args.seed_behavior)
+
         # Export initial model so rover can start immediately
         print("💾 Exporting initial model...")
         self.export_onnx()
+
+    def find_latest_checkpoint(self):
+        """Find the latest checkpoint file."""
+        checkpoints = list(Path(self.args.checkpoint_dir).glob('ppo_update_*.pt'))
+        if not checkpoints:
+            return None
+        # Sort by update number
+        def get_update_num(path):
+            try:
+                return int(path.stem.split('_')[-1])
+            except:
+                return 0
+        return max(checkpoints, key=get_update_num)
+
+    def load_checkpoint(self, filepath):
+        """Load checkpoint and restore state."""
+        print(f"🔄 Resuming from checkpoint: {filepath}")
+        checkpoint = torch.load(filepath, map_location=self.device)
+        
+        self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
+        self.policy_head.load_state_dict(checkpoint['policy_head_state_dict'])
+        self.value_head.load_state_dict(checkpoint['value_head_state_dict'])
+        self.log_std.data = checkpoint['log_std']
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        self.total_steps = checkpoint['total_steps']
+        self.update_count = checkpoint['update_count']
+        self.model_version = self.update_count # Sync model version
+        
+        print(f"  ✓ Restored state: {self.total_steps} steps, {self.update_count} updates")
+
+    def apply_heuristic_bias(self, policy_head, behavior_type: str):
+        """Inject heuristic bias into the policy head."""
+        # Start with small random weights to break symmetry
+        with torch.no_grad():
+            for param in policy_head.parameters():
+                param.data *= 0.1
+
+        # Inject bias into policy head output layer
+        # policy_head.policy is a Sequential, last layer (-1) outputs [linear_vel, angular_vel]
+        final_layer = policy_head.policy[-1]  # Last Linear layer
+
+        with torch.no_grad():
+            if behavior_type == 'cautious':
+                # Bias: slow forward, moderate turning
+                final_layer.bias[0] = 0.3  # linear: slow but increased
+                final_layer.bias[1] = 0.0  # angular: neutral
+            elif behavior_type == 'forward':
+                # Bias: VERY fast forward, minimal turning
+                final_layer.bias[0] = 0.75  # linear: very fast!
+                final_layer.bias[1] = 0.0  # angular: neutral
+            elif behavior_type == 'explorer':
+                # Bias: moderate-high forward, slight turning tendency
+                final_layer.bias[0] = 0.5  # linear: moderate-high
+                final_layer.bias[1] = 0.1  # angular: slight turn
+            
+            print(f"  ✓ Applied bias: linear={final_layer.bias[0]:.2f}, angular={final_layer.bias[1]:.2f}")
 
     def get_target_kl(self):
         """Get current target KL with warm-up schedule."""
@@ -701,6 +773,10 @@ if __name__ == '__main__':
     parser.add_argument('--target_kl', type=float, default=0.015, help="Target KL divergence for early stopping")
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_ppo')
     parser.add_argument('--log_dir', type=str, default='./logs_ppo')
+    
+    parser.add_argument('--seed-behavior', type=str, default=None, choices=['forward', 'cautious', 'explorer'],
+                        help='Seed training with heuristic behavior (forward, cautious, explorer)')
+    parser.add_argument('--force-restart', action='store_true', help='Force fresh start (ignore existing checkpoints)')
     
     args = parser.parse_args()
     

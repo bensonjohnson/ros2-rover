@@ -88,6 +88,10 @@ class PPOEpisodeRunner(Node):
         self._current_model_version = -1
         self._model_update_needed = False
         
+        # Warmup State
+        self._warmup_start_time = 0.0
+        self._warmup_active = False
+        
         # LSTM State (if used in future, currently stateless PPO)
         self._lstm_h = None
         self._lstm_c = None
@@ -298,12 +302,42 @@ class PPOEpisodeRunner(Node):
             outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
 
             # Output 0 is action (1, 2)
-            action_mean = outputs[0][0]
+            action = outputs[0][0] # (2,)
 
+            # INTELLIGENT WARMUP SEQUENCE (Model 0)
+            if self._current_model_version == 0:
+                if not self._warmup_active:
+                    self._warmup_active = True
+                    self._warmup_start_time = time.time()
+                    self.get_logger().info('🔥 Starting Intelligent Warmup Sequence!')
+
+                elapsed = time.time() - self._warmup_start_time
+                
+                if elapsed < 2.0:
+                    # Phase 1: Forward (2s)
+                    action = np.array([0.8, 0.0], dtype=np.float32) # Strong forward
+                elif elapsed < 4.0:
+                    # Phase 2: Forward + Left (2s)
+                    action = np.array([0.5, 0.5], dtype=np.float32) # Forward + Left
+                elif elapsed < 6.0:
+                    # Phase 3: Forward + Right (2s)
+                    action = np.array([0.5, -0.5], dtype=np.float32) # Forward + Right
+                else:
+                    # Warmup complete - revert to model (or random if model is random)
+                    if self._warmup_active:
+                        self.get_logger().info('✅ Warmup Sequence Complete! Switching to model policy.')
+                        self._warmup_active = False
+            
+            # Apply safety override
+            if self._safety_override:
+                action[0] = 0.0 # Stop linear motion
+                # Allow rotation to clear obstacle if needed, or just stop
+                # For now, just stop everything to be safe
+                action[1] = 0.0
             # DIAGNOSTIC: Check RKNN output for NaN
-            if np.isnan(action_mean).any() or np.isinf(action_mean).any():
+            if np.isnan(action).any() or np.isinf(action).any():
                 self.get_logger().error(f"❌ RKNN model output contains NaN/Inf!")
-                self.get_logger().error(f"   action_mean: {action_mean}")
+                self.get_logger().error(f"   action: {action}")
                 self.get_logger().error(f"   RGB input range: [{rgb_input.min():.3f}, {rgb_input.max():.3f}]")
                 self.get_logger().error(f"   Depth input range: [{depth_input.min():.3f}, {depth_input.max():.3f}]")
                 self.get_logger().error(f"   Proprio input: {proprio}")
