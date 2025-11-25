@@ -517,20 +517,35 @@ class V620PPOTrainer:
     def export_onnx(self):
         """Export current policy to ONNX for Rover."""
         try:
+            # First check if model has NaN weights before export
+            has_nan = False
+            for name, param in self.encoder.named_parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    print(f"❌ NaN/Inf detected in encoder.{name}!")
+                    has_nan = True
+            for name, param in self.policy_head.named_parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    print(f"❌ NaN/Inf detected in policy_head.{name}!")
+                    has_nan = True
+
+            if has_nan:
+                print("❌ Cannot export ONNX - model has NaN weights!")
+                return
+
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
-            
+
             # Create dummy inputs matching RKNN expectation
             dummy_rgb = torch.randn(1, 3, 240, 424, device=self.device)
             dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-            
+
             # Wrap model to handle forward pass signature
             class ActorWrapper(nn.Module):
                 def __init__(self, encoder, policy):
                     super().__init__()
                     self.encoder = encoder
                     self.policy = policy
-                    
+
                 def forward(self, rgb, depth, proprio):
                     features = self.encoder(rgb, depth)
                     # Pass None for hidden state to bypass LSTM
@@ -539,6 +554,14 @@ class V620PPOTrainer:
 
             actor = ActorWrapper(self.encoder, self.policy_head)
             actor.eval()
+
+            # Test the model before export
+            with torch.no_grad():
+                test_output = actor(dummy_rgb, dummy_depth, dummy_proprio)
+                if torch.isnan(test_output).any() or torch.isinf(test_output).any():
+                    print(f"❌ Model produces NaN/Inf outputs! Cannot export.")
+                    print(f"   Output: {test_output}")
+                    return
             
             torch.onnx.export(
                 actor,

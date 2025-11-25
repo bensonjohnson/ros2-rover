@@ -279,12 +279,22 @@ class PPOEpisodeRunner(Node):
         if self._rknn_runtime:
             # Stateless inference (LSTM removed for export compatibility)
             outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
-            
+
             # Output 0 is action (1, 2)
-            action_mean = outputs[0][0] 
-            
+            action_mean = outputs[0][0]
+
+            # DIAGNOSTIC: Check RKNN output for NaN
+            if np.isnan(action_mean).any() or np.isinf(action_mean).any():
+                self.get_logger().error(f"❌ RKNN model output contains NaN/Inf!")
+                self.get_logger().error(f"   action_mean: {action_mean}")
+                self.get_logger().error(f"   RGB input range: [{rgb_input.min():.3f}, {rgb_input.max():.3f}]")
+                self.get_logger().error(f"   Depth input range: [{depth_input.min():.3f}, {depth_input.max():.3f}]")
+                self.get_logger().error(f"   Proprio input: {proprio}")
+                # Use zeros and continue
+                action_mean = np.zeros(2)
+
             # We don't get value from actor model, so estimate or ignore
-            value = 0.0 
+            value = 0.0
         else:
             action_mean = np.zeros(2)
             value = 0.0
