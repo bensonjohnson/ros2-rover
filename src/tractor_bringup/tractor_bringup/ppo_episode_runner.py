@@ -483,6 +483,8 @@ class PPOEpisodeRunner(Node):
                         onnx_path = self._temp_dir / "latest_model.onnx"
                         with open(onnx_path, 'wb') as f:
                             f.write(response['model_bytes'])
+                            f.flush()
+                            os.fsync(f.fileno())
                             
                         self.get_logger().info(f"💾 Received ONNX model ({len(response['model_bytes'])} bytes)")
                         
