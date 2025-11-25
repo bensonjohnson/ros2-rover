@@ -112,6 +112,7 @@ class PPOEpisodeRunner(Node):
         
         # Background Threads
         self._stop_event = threading.Event()
+        self._initial_sync_done = threading.Event() # Wait for server handshake
         self._last_model_update = 0.0
         self._sync_thread = threading.Thread(target=self._sync_loop)
         self._sync_thread.start()
@@ -241,6 +242,12 @@ class PPOEpisodeRunner(Node):
 
     def _control_loop(self):
         """Main control loop running at 30Hz."""
+        # 0. Wait for Initial Handshake
+        if not self._initial_sync_done.is_set():
+            # Publish stop command and wait
+            self.cmd_pub.publish(Twist())
+            return
+
         if not self._model_ready:
             return
 
@@ -445,6 +452,32 @@ class PPOEpisodeRunner(Node):
 
     def _sync_loop(self):
         """Background thread to sync with server."""
+        
+        # Initial Handshake: Query server state before doing anything
+        self.get_logger().info("🤝 Connecting to server to sync state...")
+        while not self._stop_event.is_set():
+            try:
+                self.zmq_socket.send_pyobj({'type': 'check_status'})
+                # Wait for response with timeout
+                if self.zmq_socket.poll(timeout=2000):
+                    response = self.zmq_socket.recv_pyobj()
+                    if 'model_version' in response:
+                        server_version = response['model_version']
+                        self.get_logger().info(f"✅ Connected! Server is at v{server_version}")
+                        self._current_model_version = server_version
+                        
+                        # If server has a trained model, we need to fetch it
+                        if server_version > 0:
+                            self._model_update_needed = True
+                            
+                        self._initial_sync_done.set()
+                        break
+                else:
+                    self.get_logger().warn("⏳ Waiting for server response...")
+            except Exception as e:
+                self.get_logger().warn(f"Handshake failed: {e}. Retrying...")
+                time.sleep(1.0)
+        
         while not self._stop_event.is_set():
             # 1. Check if we have enough data to send
             batch_to_send = None
@@ -458,7 +491,6 @@ class PPOEpisodeRunner(Node):
             
             if batch_to_send:
                 try:
-                    # Send data
                     self.get_logger().info(f"📤 Sending batch of {len(batch_to_send['rewards'])} steps")
                     self.zmq_socket.send_pyobj({
                         'type': 'data_batch',

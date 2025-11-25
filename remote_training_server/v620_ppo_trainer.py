@@ -212,15 +212,24 @@ class V620PPOTrainer:
         self.training_thread.start()
         
         # Auto-resume from latest checkpoint if available
+        print(f"🔍 Searching for checkpoints in: {os.path.abspath(args.checkpoint_dir)}")
         latest_ckpt = self.find_latest_checkpoint()
+        
+        if latest_ckpt:
+            print(f"📄 Found checkpoint: {latest_ckpt}")
+            
         if latest_ckpt and not args.force_restart:
             self.load_checkpoint(latest_ckpt)
         else:
             if args.force_restart:
                 print("⚠ Force restart requested. Ignoring existing checkpoints.")
+            elif latest_ckpt:
+                 print("ℹ Ignoring checkpoint (force restart not set, but logic fell through? Should not happen)")
             else:
                 print("ℹ No checkpoint found. Starting fresh.")
             
+            print(f"🆕 Starting at Model Version: {self.model_version}")
+
             # Apply heuristic initialization if requested (only if starting fresh)
             if args.seed_behavior:
                 print(f"🌱 Seeding training with '{args.seed_behavior}' behavior...")
