@@ -145,7 +145,7 @@ class V620PPOTrainer:
         # Model setup
         self.rgb_shape = (3, 240, 424)  # C, H, W
         self.depth_shape = (240, 424)   # H, W
-        self.proprio_dim = 9
+        self.proprio_dim = 6  # Changed from 9 to match rover: [lin_vel, ang_vel, roll, pitch, accel_mag, min_dist]
         
         self.encoder = RGBDEncoder().to(self.device)
         # Disable LSTM for stateless PPO (fixes MIOpen backward error and ONNX export)

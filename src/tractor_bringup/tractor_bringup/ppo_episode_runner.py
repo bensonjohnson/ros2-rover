@@ -268,11 +268,16 @@ class PPOEpisodeRunner(Node):
         self._right_clearance = float(np.min(valid_right)) if len(valid_right) > 0 else 5.0
         depth_input = depth[None, None, ...] # (1, 1, 240, 424)
         
-        # Proprioception
-        w_l, w_r = self._latest_wheel_vels if self._latest_wheel_vels else (0,0)
+        # Proprioception (6 values to match training server)
+        # Get velocities from odometry
+        lin_vel = self._latest_odom[2] if self._latest_odom else 0.0
+        ang_vel = self._latest_odom[3] if self._latest_odom else 0.0
+
+        # Get IMU data
         ax, ay, gz = self._latest_imu if self._latest_imu else (0,0,0)
-        mx, my, mz = self._latest_mag if self._latest_mag else (0,0,0)
-        proprio = np.array([[w_l, w_r, ax, ay, gz, mx, my, mz, self._min_forward_dist]], dtype=np.float32)
+
+        # Construct 6D proprio: [lin_vel, ang_vel, ax, ay, gz, min_dist]
+        proprio = np.array([[lin_vel, ang_vel, ax, ay, gz, self._min_forward_dist]], dtype=np.float32)
 
         # 2. Inference (RKNN)
         # Returns: [action_mean] (value head not exported in actor ONNX)
