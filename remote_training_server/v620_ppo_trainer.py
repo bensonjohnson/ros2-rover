@@ -575,11 +575,11 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=17,  # Try 17 (standard for recent PyTorch)
+                opset_version=18,  # Use 18 as required by PyTorch
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
                 export_params=True,
-                do_constant_folding=True,
+                do_constant_folding=False, # Disable constant folding to prevent potential weight removal issues
                 keep_initializers_as_inputs=False, # Force embedding
                 verbose=True
             )
