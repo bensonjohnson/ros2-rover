@@ -579,9 +579,10 @@ class V620PPOTrainer:
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
                 export_params=True,
-                do_constant_folding=False, # Disable constant folding to prevent potential weight removal issues
-                keep_initializers_as_inputs=False, # Force embedding
-                verbose=True
+                do_constant_folding=False,
+                keep_initializers_as_inputs=False,
+                verbose=True,
+                dynamo=False  # Explicitly disable Dynamo exporter to force legacy behavior
             )
             
             # Verify export size
