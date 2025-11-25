@@ -83,6 +83,8 @@ class PPOEpisodeRunner(Node):
         self._rknn_runtime = None
         self._model_ready = True  # Allow random exploration initially
         self._temp_dir = Path(tempfile.mkdtemp(prefix='ppo_rover_'))
+        self._calibration_dir = Path("./calibration_data")
+        self._calibration_dir.mkdir(exist_ok=True)
         self._current_model_version = -1
         self._model_update_needed = False
         
@@ -381,6 +383,20 @@ class PPOEpisodeRunner(Node):
             self._data_buffer['log_probs'].append(log_prob)
             self._data_buffer['values'].append(value)
             
+        # Save calibration data (keep ~100 samples)
+        # We save occasionally to avoid disk I/O spam
+        if np.random.rand() < 0.1: # 10% chance to save sample
+            calib_files = list(self._calibration_dir.glob('*.npz'))
+            if len(calib_files) < 100:
+                timestamp = int(time.time() * 1000)
+                save_path = self._calibration_dir / f"calib_{timestamp}.npz"
+                np.savez_compressed(
+                    save_path,
+                    rgb=rgb,
+                    depth=depth,
+                    proprio=proprio[0]
+                )
+            
         # Update state
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
@@ -480,7 +496,7 @@ class PPOEpisodeRunner(Node):
                             rknn_path = str(onnx_path).replace('.onnx', '.rknn')
                             
                             # Call conversion script
-                            cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path)]
+                            cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path), str(self._calibration_dir)]
                             
                             if not os.path.exists("convert_onnx_to_rknn.sh"):
                                 self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
