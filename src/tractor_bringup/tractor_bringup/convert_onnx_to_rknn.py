@@ -31,15 +31,15 @@ except ImportError:
 import numpy as np
 
 
-def _load_calibration_dataset(calibration_dir: str, max_samples: int = 200):
-    """Load calibration dataset from .npz files with NaN sanitization and normalization.
-
+def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
+    """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
+    
     Args:
         calibration_dir: Directory containing calibration_XXXX.npz files
-        max_samples: Maximum number of samples to load (increased to 200 for better quantization)
-
+        max_samples: Maximum number of samples to use
+        
     Returns:
-        Generator function that yields calibration samples
+        Path to the generated dataset.txt file
     """
     calibration_files = sorted([
         os.path.join(calibration_dir, f)
@@ -47,50 +47,73 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 200):
         if f.endswith('.npz')
     ])[:max_samples]
 
-    print(f"Loading {len(calibration_files)} calibration samples...")
+    print(f"Preparing calibration dataset from {len(calibration_files)} samples...")
+    
+    # Create a temporary directory for calibration artifacts
+    # We use a fixed path inside calibration_dir to avoid filling /tmp
+    dataset_dir = os.path.join(calibration_dir, "rknn_dataset")
+    os.makedirs(dataset_dir, exist_ok=True)
+    
+    dataset_txt_path = os.path.join(dataset_dir, "dataset.txt")
+    
+    valid_samples = 0
+    with open(dataset_txt_path, 'w') as f:
+        for i, file_path in enumerate(calibration_files):
+            try:
+                data = np.load(file_path)
+                rgb = data['rgb']  # (H, W, 3) uint8
+                depth = data['depth']  # (H, W) float32
+                proprio = data['proprio']  # (6,) float32
 
-    # RKNN expects a generator function for multi-input models
-    # The generator should yield tuples of (input1, input2, input3, ...)
-    loaded_samples = []
-    for i, file_path in enumerate(calibration_files):
-        try:
-            data = np.load(file_path)
-            rgb = data['rgb']  # (H, W, 3) uint8
-            depth = data['depth']  # (H, W) float32
-            proprio = data['proprio']  # (6,) float32
+                # Sanitize Depth
+                depth = np.nan_to_num(depth, nan=6.0, posinf=6.0, neginf=0.0)
+                depth = np.clip(depth, 0.0, 6.0)
+                # Normalize Depth (0-6m -> 0-1)
+                depth = depth / 6.0
+                
+                # Sanitize Proprio
+                proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
 
-            # CRITICAL: Sanitize NaN/Inf values to prevent quantization corruption
-            depth = np.nan_to_num(depth, nan=6.0, posinf=6.0, neginf=0.0)
-            depth = np.clip(depth, 0.0, 6.0)
-            proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
+                # Save as .npy
+                # RKNN expects NCHW or NHWC? 
+                # For .npy, it usually expects the shape that matches input_size_list.
+                # input_size_list is [1, 3, 240, 424] for RGB.
+                # So we should save as (1, 3, 240, 424) or (3, 240, 424)?
+                # Usually (1, ...) is safer if batch=1.
+                
+                # RGB: (H, W, 3) -> (1, 3, H, W) is standard for PyTorch ONNX, 
+                # BUT we configured mean/std on channel dim.
+                # If we pass (H, W, 3) to RKNN with NCHW model, RKNN might be confused or handle it.
+                # Let's match the input_size_list exactly: [1, 3, 240, 424]
+                
+                # Transpose RGB to NCHW
+                rgb_nchw = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
+                
+                # Depth to NCHW
+                depth_nchw = depth[None, None, ...] # (1, 1, 240, 424)
+                
+                # Proprio
+                proprio_batch = proprio[None, ...] # (1, 6)
+                
+                rgb_path = os.path.join(dataset_dir, f"rgb_{i}.npy")
+                depth_path = os.path.join(dataset_dir, f"depth_{i}.npy")
+                proprio_path = os.path.join(dataset_dir, f"proprio_{i}.npy")
+                
+                np.save(rgb_path, rgb_nchw)
+                np.save(depth_path, depth_nchw)
+                np.save(proprio_path, proprio_batch)
+                
+                # Write to dataset.txt (space separated)
+                f.write(f"{rgb_path} {depth_path} {proprio_path}\n")
+                
+                valid_samples += 1
+                
+            except Exception as exc:
+                print(f"⚠ Warning: Failed to process {file_path}: {exc}")
+                continue
 
-            # Store samples in order: rgb, depth, proprio
-            # LSTM states removed for stateless export
-            loaded_samples.append((rgb, depth, proprio))
-
-            if (i + 1) % 10 == 0:
-                print(f"  Loaded {i + 1}/{len(calibration_files)} samples")
-
-        except Exception as exc:
-            print(f"⚠ Warning: Failed to load {file_path}: {exc}")
-            continue
-
-    print(f"✓ Loaded {len(loaded_samples)} calibration samples")
-
-    # Return a generator function that RKNN will call
-    # We normalize here to match inference preprocessing exactly
-    def dataset_generator():
-        for rgb, depth, proprio in loaded_samples:
-            # Normalize RGB from uint8 [0,255] to float32 [0,1]
-            rgb_normalized = rgb.astype(np.float32) / 255.0
-
-            # Normalize depth from [0,6] to [0,1]
-            depth_normalized = depth / 6.0
-
-            # Proprio already in correct scale
-            yield (rgb_normalized, depth_normalized, proprio)
-
-    return dataset_generator
+    print(f"✓ Generated dataset.txt with {valid_samples} samples")
+    return dataset_txt_path
 
 
 def convert_onnx_to_rknn(
