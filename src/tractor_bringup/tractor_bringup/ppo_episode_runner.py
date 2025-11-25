@@ -351,15 +351,22 @@ class PPOEpisodeRunner(Node):
             value = 0.0
 
         # 3. Add Exploration Noise (Gaussian)
-        # We use a fixed std dev for exploration on rover, or could receive it from server
-        noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
-        action = np.clip(action_mean + noise, -1.0, 1.0)
+        # Skip noise during warmup (Model 0)
+        if self._current_model_version == 0:
+             # During warmup, action is deterministic and hardcoded
+             # We set action_mean to action so log_prob calculation works (it will be 0 distance)
+             action_mean = action
+             # No noise added
+        else:
+            # We use a fixed std dev for exploration on rover, or could receive it from server
+            noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
+            action = np.clip(action_mean + noise, -1.0, 1.0)
 
-        # Safety check: if action_mean has NaN, use zero and warn
-        if np.isnan(action_mean).any():
-            self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
-            action_mean = np.zeros(2)
-            action = np.clip(noise, -1.0, 1.0)  # Pure random
+            # Safety check: if action_mean has NaN, use zero and warn
+            if np.isnan(action_mean).any():
+                self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
+                action_mean = np.zeros(2)
+                action = np.clip(noise, -1.0, 1.0)  # Pure random
 
         # Calculate log_prob of this action (needed for PPO)
         # Simplified: log_prob of Gaussian
@@ -508,6 +515,17 @@ class PPOEpisodeRunner(Node):
             # 2. Request new model if notified
             if self._model_update_needed:
                 try:
+                    # SKIP download for Model 0 (Warmup Model)
+                    # We don't need a neural network for the hardcoded warmup sequence
+                    if self._current_model_version == -1 and response.get('model_version', -1) == 0:
+                         # We are initializing to Model 0
+                         self.get_logger().info("🔥 Initializing Warmup Sequence (Model 0) - Skipping download")
+                         self._current_model_version = 0
+                         self._model_ready = True
+                         self._model_update_needed = False
+                         # Ensure we don't try to download
+                         continue
+
                     self.get_logger().info("📥 Requesting model update...")
                     self.zmq_socket.send_pyobj({'type': 'get_model'})
                     
