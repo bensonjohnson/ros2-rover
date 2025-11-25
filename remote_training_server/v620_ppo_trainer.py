@@ -575,8 +575,7 @@ class V620PPOTrainer:
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
                 export_params=True,
-                do_constant_folding=True,
-                use_external_data_format=False  # CRITICAL: Force weights to be embedded in the file
+                do_constant_folding=True
             )
             
             # Verify export size
