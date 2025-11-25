@@ -567,12 +567,20 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=14,  # Downgraded to 14 for better RKNN compatibility and self-contained export
+                opset_version=18,  # Use 18 as requested by PyTorch
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
-                export_params=True  # Ensure weights are included
+                export_params=True,
+                do_constant_folding=True,
+                use_external_data_format=False  # CRITICAL: Force weights to be embedded in the file
             )
-            print(f"📦 Exported ONNX: {onnx_path}")
+            
+            # Verify export size
+            file_size = os.path.getsize(onnx_path)
+            print(f"📦 Exported ONNX: {onnx_path} ({file_size} bytes)")
+            if file_size < 100000: # < 100KB means weights are missing
+                print("⚠️  WARNING: Exported ONNX model is suspiciously small! Weights might be missing.")
+            
             self.model_version += 1  # Signal that a new model is ready
             
         except Exception as e:
