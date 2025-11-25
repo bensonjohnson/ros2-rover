@@ -103,8 +103,8 @@ class PolicyHead(nn.Module):
         )
 
         # Initialize final layer to output small actions (near-zero mean)
-        # Helps with initial exploration and stability
-        nn.init.orthogonal_(self.policy[-1].weight, gain=0.01)
+        # Use gain=0.1 instead of 0.01 to avoid quantization issues in RKNN
+        nn.init.orthogonal_(self.policy[-1].weight, gain=0.1)
         nn.init.constant_(self.policy[-1].bias, 0.0)
 
     def forward(self, features: torch.Tensor, proprio: torch.Tensor, hidden_state=None) -> tuple:
