@@ -302,7 +302,8 @@ class PPOEpisodeRunner(Node):
             outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
 
             # Output 0 is action (1, 2)
-            action = outputs[0][0] # (2,)
+            action_mean = outputs[0][0] # (2,)
+            action = action_mean
 
             # INTELLIGENT WARMUP SEQUENCE (Model 0)
             if self._current_model_version == 0:
