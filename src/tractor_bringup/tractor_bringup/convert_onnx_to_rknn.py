@@ -31,12 +31,12 @@ except ImportError:
 import numpy as np
 
 
-def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
-    """Load calibration dataset from .npz files.
+def _load_calibration_dataset(calibration_dir: str, max_samples: int = 200):
+    """Load calibration dataset from .npz files with NaN sanitization and normalization.
 
     Args:
         calibration_dir: Directory containing calibration_XXXX.npz files
-        max_samples: Maximum number of samples to load
+        max_samples: Maximum number of samples to load (increased to 200 for better quantization)
 
     Returns:
         Generator function that yields calibration samples
@@ -59,6 +59,11 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
             depth = data['depth']  # (H, W) float32
             proprio = data['proprio']  # (6,) float32
 
+            # CRITICAL: Sanitize NaN/Inf values to prevent quantization corruption
+            depth = np.nan_to_num(depth, nan=6.0, posinf=6.0, neginf=0.0)
+            depth = np.clip(depth, 0.0, 6.0)
+            proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
+
             # Store samples in order: rgb, depth, proprio
             # LSTM states removed for stateless export
             loaded_samples.append((rgb, depth, proprio))
@@ -73,9 +78,17 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
     print(f"✓ Loaded {len(loaded_samples)} calibration samples")
 
     # Return a generator function that RKNN will call
+    # We normalize here to match inference preprocessing exactly
     def dataset_generator():
-        for sample in loaded_samples:
-            yield sample
+        for rgb, depth, proprio in loaded_samples:
+            # Normalize RGB from uint8 [0,255] to float32 [0,1]
+            rgb_normalized = rgb.astype(np.float32) / 255.0
+
+            # Normalize depth from [0,6] to [0,1]
+            depth_normalized = depth / 6.0
+
+            # Proprio already in correct scale
+            yield (rgb_normalized, depth_normalized, proprio)
 
     return dataset_generator
 
@@ -134,15 +147,17 @@ def convert_onnx_to_rknn(
         # fp16 = Floating Point 16 (default if no quantization)
         
         config_args = {
+            # Disable RKNN normalization - we'll normalize in calibration generator
+            # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
-                [127.5, 127.5, 127.5],  # RGB (3 channels)
-                [0],                     # Depth (1 channel)
-                [0, 0, 0, 0, 0, 0, 0, 0, 0],     # Proprio (9 values)
+                [0, 0, 0],           # RGB (will be pre-normalized to [0,1] in generator)
+                [0],                 # Depth (will be pre-normalized to [0,1] in generator)
+                [0, 0, 0, 0, 0, 0],  # Proprio (6 values: lin_vel, ang_vel, ax, ay, gz, min_dist)
             ],
             'std_values': [
-                [127.5, 127.5, 127.5],  # RGB (3 channels)
-                [1],                     # Depth (1 channel)
-                [1, 1, 1, 1, 1, 1, 1, 1, 1],     # Proprio (9 values)
+                [1, 1, 1],           # RGB (no RKNN scaling)
+                [1],                 # Depth (no RKNN scaling)
+                [1, 1, 1, 1, 1, 1],  # Proprio (no RKNN scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -165,7 +180,7 @@ def convert_onnx_to_rknn(
             input_size_list=[
                 [1, 3, 240, 424],   # RGB
                 [1, 1, 240, 424],   # Depth
-                [1, 9],             # Proprio
+                [1, 6],             # Proprio (changed from 9 to 6)
             ]
         )
         if ret != 0:

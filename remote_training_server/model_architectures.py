@@ -177,7 +177,7 @@ class CriticNetwork(nn.Module):
     
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
-    def __init__(self, proprio_dim: int = 9, action_dim: int = 2):
+    def __init__(self, proprio_dim: int = 6, action_dim: int = 2):
         super().__init__()
         self.encoder = RGBDEncoder()
         
