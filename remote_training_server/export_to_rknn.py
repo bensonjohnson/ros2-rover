@@ -58,8 +58,8 @@ class RKNNConverter:
         # Configure RKNN
         print("Configuring RKNN...")
         ret = self.rknn.config(
-            mean_values=[[0, 0, 0]],  # RGB: [0, 255] -> [0, 1] (mean=0, std=255)
-            std_values=[[255, 255, 255]],
+            mean_values=[[0, 0, 0], [0], [0]*6],  # RGB: [0, 255]->[0, 1], Depth: [0, 1]->[0, 1], Proprio: No norm
+            std_values=[[255, 255, 255], [1], [1]*6],
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
             quantized_algorithm='normal',
@@ -128,24 +128,35 @@ class RKNNConverter:
         dataset = []
         for i, file_path in enumerate(calibration_files[:num_samples]):
             try:
+                # Try to load keys directly (if saved from ppo_episode_runner buffer)
                 data = np.load(file_path)
-                # Assume the observation includes RGB + depth channels
-                # Extract RGB (first 3 channels) and depth (channel index 1)
-                obs = data['observation']
+                if 'rgb' in data and 'depth' in data:
+                    rgb = data['rgb']
+                    depth = data['depth']
+                    # Proprio might be there or not
+                    if 'proprio' in data:
+                        proprio = data['proprio']
+                    else:
+                        proprio = np.zeros(6, dtype=np.float32)
+                    dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
+                    continue
 
-                # For RGB-D model: need separate RGB and depth
-                # This is a placeholder - adjust based on your actual data format
-                if obs.shape[0] >= 3:  # Has RGB (3 channels) + Depth (1 channel)
-                    # Extract RGB (first 3 channels) and depth (channel index 3)
-                    # Assuming format is (C, H, W)
-                    rgb = obs[:3].transpose(1, 2, 0)  # (H, W, 3)
-                    depth = obs[3]  # Depth channel
-                    dataset.append({'rgb': rgb, 'depth': depth})
-                elif obs.shape[0] >= 2:  # Has at least occupancy + depth (fallback)
-                    # Create dummy RGB for now (you'd extract real RGB from your data)
-                    rgb = np.random.randint(0, 255, (240, 424, 3), dtype=np.uint8)
-                    depth = obs[1]  # Depth channel
-                    dataset.append({'rgb': rgb, 'depth': depth})
+                # Fallback to 'observation' key (legacy/gym format)
+                if 'observation' in data:
+                    obs = data['observation']
+                    if obs.shape[0] >= 3:  # Has RGB (3 channels) + Depth (1 channel)
+                        # Extract RGB (first 3 channels) and depth (channel index 3)
+                        # Assuming format is (C, H, W)
+                        rgb = obs[:3].transpose(1, 2, 0)  # (H, W, 3)
+                        depth = obs[3]  # Depth channel
+                        proprio = np.zeros(6, dtype=np.float32) # Dummy proprio
+                        dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
+                    elif obs.shape[0] >= 2:  # Has at least occupancy + depth (fallback)
+                        # Create dummy RGB for now (you'd extract real RGB from your data)
+                        rgb = np.random.randint(0, 255, (240, 424, 3), dtype=np.uint8)
+                        depth = obs[1]  # Depth channel
+                        proprio = np.zeros(6, dtype=np.float32) # Dummy proprio
+                        dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
 
             except Exception as exc:
                 print(f"Failed to load {file_path}: {exc}")
@@ -161,7 +172,7 @@ class RKNNConverter:
         # Note: This is a simplified version - adjust based on your model inputs
         def data_generator():
             for sample in dataset:
-                yield [sample['rgb'], sample['depth']]
+                yield [sample['rgb'], sample['depth'], sample['proprio']]
 
         return data_generator
 

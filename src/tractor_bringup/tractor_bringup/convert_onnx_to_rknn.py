@@ -155,9 +155,9 @@ def convert_onnx_to_rknn(
                 [0, 0, 0, 0, 0, 0],  # Proprio (6 values: lin_vel, ang_vel, ax, ay, gz, min_dist)
             ],
             'std_values': [
-                [1, 1, 1],           # RGB (no RKNN scaling)
-                [1],                 # Depth (no RKNN scaling)
-                [1, 1, 1, 1, 1, 1],  # Proprio (no RKNN scaling)
+                [255, 255, 255],     # RGB: [0, 255] -> [0, 1] (std=255)
+                [1],                 # Depth (no scaling)
+                [1, 1, 1, 1, 1, 1],  # Proprio (no scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
