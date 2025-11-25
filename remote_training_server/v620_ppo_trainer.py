@@ -567,11 +567,15 @@ class V620PPOTrainer:
                     print(f"   Output: {test_output}")
                     return
             
+            # Check parameter count
+            param_count = sum(p.numel() for p in actor.parameters())
+            print(f"📊 Model has {param_count} parameters")
+            
             torch.onnx.export(
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=18,  # Use 18 as requested by PyTorch
+                opset_version=11,  # Revert to 11 for maximum stability and legacy exporter usage
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
                 export_params=True,
@@ -583,6 +587,9 @@ class V620PPOTrainer:
             print(f"📦 Exported ONNX: {onnx_path} ({file_size} bytes)")
             if file_size < 100000: # < 100KB means weights are missing
                 print("⚠️  WARNING: Exported ONNX model is suspiciously small! Weights might be missing.")
+                # DIAGNOSTIC: Check if we can save state_dict
+                torch.save(actor.state_dict(), onnx_path + ".pt")
+                print(f"  Saved state_dict to {onnx_path}.pt for comparison ({os.path.getsize(onnx_path + '.pt')} bytes)")
             
             self.model_version += 1  # Signal that a new model is ready
             
@@ -683,7 +690,7 @@ if __name__ == '__main__':
     parser.add_argument('--buffer_size', type=int, default=25000)
     parser.add_argument('--rollout_steps', type=int, default=2048, help="Steps to collect before training")
     parser.add_argument('--mini_batch_size', type=int, default=512, help="Mini-batch size for PPO update")
-    parser.add_argument('--lr', type=float, default=1e-4)  # Lowered from 3e-4 to prevent value head divergence
+    parser.add_argument('--lr', type=float, default=3e-5)  # Lowered to 3e-5 for stability
     parser.add_argument('--update_epochs', type=int, default=5)
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--value_coef', type=float, default=0.5)
