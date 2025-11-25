@@ -237,7 +237,7 @@ class V620PPOTrainer:
 
         # Export initial model so rover can start immediately
         print("💾 Exporting initial model...")
-        self.export_onnx()
+        self.export_onnx(increment_version=False) # Don't increment, keep at 0 (or restored version)
 
     def find_latest_checkpoint(self):
         """Find the latest checkpoint file."""
@@ -599,7 +599,7 @@ class V620PPOTrainer:
         # Also export ONNX whenever we save a checkpoint
         self.export_onnx()
 
-    def export_onnx(self):
+    def export_onnx(self, increment_version=True):
         """Export current policy to ONNX for Rover."""
         try:
             # First check if model has NaN weights before export
@@ -675,7 +675,8 @@ class V620PPOTrainer:
                 torch.save(actor.state_dict(), onnx_path + ".pt")
                 print(f"  Saved state_dict to {onnx_path}.pt for comparison ({os.path.getsize(onnx_path + '.pt')} bytes)")
             
-            self.model_version += 1  # Signal that a new model is ready
+            if increment_version:
+                self.model_version += 1  # Signal that a new model is ready
             
         except Exception as e:
             print(f"❌ ONNX Export failed: {e}")
