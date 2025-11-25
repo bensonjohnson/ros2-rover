@@ -348,15 +348,9 @@ class PPOEpisodeRunner(Node):
 
             elapsed = time.time() - self._warmup_start_time
             
-            if elapsed < 2.0:
-                # Phase 1: Forward (2s)
+            if elapsed < 4.0:
+                # Phase 1: Forward (4s)
                 action = np.array([0.8, 0.0], dtype=np.float32) # Strong forward
-            elif elapsed < 4.0:
-                # Phase 2: Forward + Left (2s)
-                action = np.array([0.5, 0.5], dtype=np.float32) # Forward + Left
-            elif elapsed < 6.0:
-                # Phase 3: Forward + Right (2s)
-                action = np.array([0.5, -0.5], dtype=np.float32) # Forward + Right
             else:
                 # Warmup complete - revert to model (or random if model is random)
                 if self._warmup_active:
