@@ -248,6 +248,8 @@ class PPOEpisodeRunner(Node):
 
         # 1. Prepare Inputs
         rgb = cv2.resize(self._latest_rgb, (424, 240)) # Resize to model input
+        # CRITICAL: Normalize RGB from uint8 [0,255] to float32 [0,1] to match RKNN calibration
+        rgb = rgb.astype(np.float32) / 255.0
         rgb_input = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
 
         depth = cv2.resize(self._latest_depth, (424, 240))
@@ -266,7 +268,9 @@ class PPOEpisodeRunner(Node):
 
         self._left_clearance = float(np.min(valid_left)) if len(valid_left) > 0 else 5.0
         self._right_clearance = float(np.min(valid_right)) if len(valid_right) > 0 else 5.0
-        depth_input = depth[None, None, ...] # (1, 1, 240, 424)
+        # CRITICAL: Normalize depth from [0,6m] to [0,1] to match RKNN calibration
+        depth_normalized = depth / 6.0
+        depth_input = depth_normalized[None, None, ...] # (1, 1, 240, 424)
         
         # Proprioception (6 values to match training server)
         # Get velocities from odometry
