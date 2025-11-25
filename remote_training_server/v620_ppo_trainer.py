@@ -575,14 +575,14 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=18,  # Use 18 as required by PyTorch
+                opset_version=11,  # Legacy exporter works best with opset 11
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
                 export_params=True,
-                do_constant_folding=False,
+                do_constant_folding=True,
                 keep_initializers_as_inputs=False,
                 verbose=True,
-                dynamo=False  # Explicitly disable Dynamo exporter to force legacy behavior
+                dynamo=False  # Force legacy exporter
             )
             
             # Verify export size
