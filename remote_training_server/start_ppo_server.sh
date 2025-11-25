@@ -157,7 +157,6 @@ python3 v620_ppo_trainer.py \
   --port ${PORT} \
   --checkpoint_dir ${CHECKPOINT_DIR} \
   --log_dir ${LOG_DIR} \
-  --calibration_dir ./calibration_data \
   2>&1 | tee "${LOG_FILE}" &
 
 TRAINER_PID=$!
