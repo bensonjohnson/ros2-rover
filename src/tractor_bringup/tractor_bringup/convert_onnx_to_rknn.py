@@ -95,9 +95,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 # Proprio
                 proprio_batch = proprio[None, ...] # (1, 6)
                 
-                rgb_path = os.path.join(dataset_dir, f"rgb_{i}.npy")
-                depth_path = os.path.join(dataset_dir, f"depth_{i}.npy")
-                proprio_path = os.path.join(dataset_dir, f"proprio_{i}.npy")
+                rgb_path = os.path.abspath(os.path.join(dataset_dir, f"rgb_{i}.npy"))
+                depth_path = os.path.abspath(os.path.join(dataset_dir, f"depth_{i}.npy"))
+                proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
                 
                 np.save(rgb_path, rgb_nchw)
                 np.save(depth_path, depth_nchw)

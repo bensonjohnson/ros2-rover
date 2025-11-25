@@ -567,9 +567,10 @@ class V620PPOTrainer:
                 actor,
                 (dummy_rgb, dummy_depth, dummy_proprio),
                 onnx_path,
-                opset_version=18,  # Changed from 17 to avoid version conversion warnings
+                opset_version=14,  # Downgraded to 14 for better RKNN compatibility and self-contained export
                 input_names=['rgb', 'depth', 'proprio'],
-                output_names=['action']
+                output_names=['action'],
+                export_params=True  # Ensure weights are included
             )
             print(f"📦 Exported ONNX: {onnx_path}")
             self.model_version += 1  # Signal that a new model is ready
