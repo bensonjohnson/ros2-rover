@@ -202,6 +202,37 @@ def convert_onnx_to_rknn(
             print(f"❌ Failed to build RKNN: {ret}")
             return False
 
+        # Test inference BEFORE export to validate model
+        print("Testing RKNN model with sample inputs...")
+        try:
+            # Initialize runtime for testing
+            ret = rknn.init_runtime()
+            if ret != 0:
+                print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
+            else:
+                # Create test inputs (normalized like rover)
+                test_rgb = np.random.rand(1, 3, 240, 424).astype(np.float32)  # [0, 1]
+                test_depth = np.random.rand(1, 1, 240, 424).astype(np.float32)  # [0, 1]
+                test_proprio = np.array([[-0.21, 2.33, 1.68, -0.18, 1.68, 0.43]], dtype=np.float32)
+
+                # Run inference
+                outputs = rknn.inference(inputs=[test_rgb, test_depth, test_proprio])
+
+                if outputs and len(outputs) > 0:
+                    test_output = outputs[0]
+                    print(f"  Test output: {test_output}")
+                    print(f"  Range: [{test_output.min():.6f}, {test_output.max():.6f}]")
+
+                    if np.isnan(test_output).any() or np.isinf(test_output).any():
+                        print(f"  ❌ RKNN model produces NaN/Inf! Conversion may be broken.")
+                        print(f"  This indicates an issue with FP16 precision or RKNN compatibility.")
+                    else:
+                        print(f"  ✓ RKNN test inference passed")
+                else:
+                    print(f"  ⚠ Warning: No outputs from test inference")
+        except Exception as exc:
+            print(f"⚠ Warning: Test inference failed: {exc}")
+
         # Export
         print(f"Exporting to {output_path}...")
         ret = rknn.export_rknn(output_path)
