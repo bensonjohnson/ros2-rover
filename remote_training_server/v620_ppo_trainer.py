@@ -210,6 +210,10 @@ class V620PPOTrainer:
         self.training_lock = threading.Lock()
         self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self.training_thread.start()
+        
+        # Export initial model so rover can start immediately
+        print("💾 Exporting initial model...")
+        self.export_onnx()
 
     def get_target_kl(self):
         """Get current target KL with warm-up schedule."""
