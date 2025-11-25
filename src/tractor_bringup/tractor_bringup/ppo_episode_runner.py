@@ -312,29 +312,8 @@ class PPOEpisodeRunner(Node):
             action_mean = outputs[0][0] # (2,)
             action = action_mean
 
-            # INTELLIGENT WARMUP SEQUENCE (Model 0)
-            if self._current_model_version == 0:
-                if not self._warmup_active:
-                    self._warmup_active = True
-                    self._warmup_start_time = time.time()
-                    self.get_logger().info('🔥 Starting Intelligent Warmup Sequence!')
-
-                elapsed = time.time() - self._warmup_start_time
-                
-                if elapsed < 2.0:
-                    # Phase 1: Forward (2s)
-                    action = np.array([0.8, 0.0], dtype=np.float32) # Strong forward
-                elif elapsed < 4.0:
-                    # Phase 2: Forward + Left (2s)
-                    action = np.array([0.5, 0.5], dtype=np.float32) # Forward + Left
-                elif elapsed < 6.0:
-                    # Phase 3: Forward + Right (2s)
-                    action = np.array([0.5, -0.5], dtype=np.float32) # Forward + Right
-                else:
-                    # Warmup complete - revert to model (or random if model is random)
-                    if self._warmup_active:
-                        self.get_logger().info('✅ Warmup Sequence Complete! Switching to model policy.')
-                        self._warmup_active = False
+            # INTELLIGENT WARMUP SEQUENCE (Model 0) - MOVED OUTSIDE
+            pass
             
             # Apply safety override
             if self._safety_override:
@@ -356,7 +335,33 @@ class PPOEpisodeRunner(Node):
             value = 0.0
         else:
             action_mean = np.zeros(2)
+            action = np.zeros(2) # Initialize action to avoid UnboundLocalError
             value = 0.0
+
+        # INTELLIGENT WARMUP SEQUENCE (Model 0)
+        # This overrides any model output if we are in warmup phase
+        if self._current_model_version == 0:
+            if not self._warmup_active:
+                self._warmup_active = True
+                self._warmup_start_time = time.time()
+                self.get_logger().info('🔥 Starting Intelligent Warmup Sequence!')
+
+            elapsed = time.time() - self._warmup_start_time
+            
+            if elapsed < 2.0:
+                # Phase 1: Forward (2s)
+                action = np.array([0.8, 0.0], dtype=np.float32) # Strong forward
+            elif elapsed < 4.0:
+                # Phase 2: Forward + Left (2s)
+                action = np.array([0.5, 0.5], dtype=np.float32) # Forward + Left
+            elif elapsed < 6.0:
+                # Phase 3: Forward + Right (2s)
+                action = np.array([0.5, -0.5], dtype=np.float32) # Forward + Right
+            else:
+                # Warmup complete - revert to model (or random if model is random)
+                if self._warmup_active:
+                    self.get_logger().info('✅ Warmup Sequence Complete! Switching to model policy.')
+                    self._warmup_active = False
 
         # 3. Add Exploration Noise (Gaussian)
         # Skip noise during warmup (Model 0)
