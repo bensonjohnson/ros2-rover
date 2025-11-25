@@ -480,7 +480,13 @@ class PPOEpisodeRunner(Node):
                                 self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
                             else:
                                 result = subprocess.run(cmd, capture_output=True, text=True)
-                                
+
+                                # Log conversion output for debugging
+                                if result.stdout:
+                                    for line in result.stdout.strip().split('\n'):
+                                        if 'Test output:' in line or 'RKNN model produces' in line or 'Range:' in line:
+                                            self.get_logger().info(f"[RKNN] {line.strip()}")
+
                                 if result.returncode == 0 and os.path.exists(rknn_path):
                                     self.get_logger().info("✅ RKNN Conversion successful")
                                     
