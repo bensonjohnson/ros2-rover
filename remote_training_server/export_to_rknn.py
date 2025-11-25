@@ -58,8 +58,8 @@ class RKNNConverter:
         # Configure RKNN
         print("Configuring RKNN...")
         ret = self.rknn.config(
-            mean_values=[[127.5, 127.5, 127.5]],  # RGB normalization (for 0-255 input)
-            std_values=[[127.5, 127.5, 127.5]],
+            mean_values=[[0, 0, 0]],  # RGB: [0, 255] -> [0, 1] (mean=0, std=255)
+            std_values=[[255, 255, 255]],
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
             quantized_algorithm='normal',
@@ -135,7 +135,13 @@ class RKNNConverter:
 
                 # For RGB-D model: need separate RGB and depth
                 # This is a placeholder - adjust based on your actual data format
-                if obs.shape[0] >= 2:  # Has at least occupancy + depth
+                if obs.shape[0] >= 3:  # Has RGB (3 channels) + Depth (1 channel)
+                    # Extract RGB (first 3 channels) and depth (channel index 3)
+                    # Assuming format is (C, H, W)
+                    rgb = obs[:3].transpose(1, 2, 0)  # (H, W, 3)
+                    depth = obs[3]  # Depth channel
+                    dataset.append({'rgb': rgb, 'depth': depth})
+                elif obs.shape[0] >= 2:  # Has at least occupancy + depth (fallback)
                     # Create dummy RGB for now (you'd extract real RGB from your data)
                     rgb = np.random.randint(0, 255, (240, 424, 3), dtype=np.uint8)
                     depth = obs[1]  # Depth channel

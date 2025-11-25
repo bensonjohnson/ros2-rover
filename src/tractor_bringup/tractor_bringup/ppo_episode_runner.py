@@ -248,9 +248,15 @@ class PPOEpisodeRunner(Node):
 
         # 1. Prepare Inputs
         rgb = cv2.resize(self._latest_rgb, (424, 240)) # Resize to model input
-        # CRITICAL: Normalize RGB from uint8 [0,255] to float32 [0,1] to match RKNN calibration
-        rgb = rgb.astype(np.float32) / 255.0
-        rgb_input = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
+        # CRITICAL: Pass uint8 [0,255] to RKNN (it handles normalization via config)
+        # rgb = rgb.astype(np.float32) / 255.0  <-- REMOVED
+        rgb_input = rgb[None, ...] # (1, 240, 424, 3) - RKNN expects NHWC for uint8 input usually, but let's check config
+        # Actually, RKNN API usually expects NHWC for images.
+        # But our model was exported with NCHW input layout in PyTorch.
+        # RKNN config 'mean_values' applies to channel dimension.
+        # If we pass NHWC uint8, RKNN converts to NCHW float internally if model expects it.
+        # Let's keep it simple: Pass NHWC uint8.
+        rgb_input = rgb[None, ...] # (1, 240, 424, 3)
 
         depth = cv2.resize(self._latest_depth, (424, 240))
 
