@@ -343,19 +343,15 @@ class PPOEpisodeRunner(Node):
         if self._current_model_version == 0:
             if not self._warmup_active:
                 self._warmup_active = True
-                self._warmup_start_time = time.time()
-                self.get_logger().info('🔥 Starting Intelligent Warmup Sequence!')
+                self.get_logger().info('🔥 Starting Continuous Warmup: Driving Straight until Model 1...')
 
-            elapsed = time.time() - self._warmup_start_time
+            # Always drive forward
+            action = np.array([0.8, 0.0], dtype=np.float32)
             
-            if elapsed < 4.0:
-                # Phase 1: Forward (4s)
-                action = np.array([0.8, 0.0], dtype=np.float32) # Strong forward
-            else:
-                # Warmup complete - revert to model (or random if model is random)
-                if self._warmup_active:
-                    self.get_logger().info('✅ Warmup Sequence Complete! Switching to model policy.')
-                    self._warmup_active = False
+        elif self._warmup_active:
+             # Just switched from 0 to >0
+             self.get_logger().info('✅ Warmup Complete (Model loaded). Switching to policy.')
+             self._warmup_active = False
 
         # 3. Add Exploration Noise (Gaussian)
         # Skip noise during warmup (Model 0)
