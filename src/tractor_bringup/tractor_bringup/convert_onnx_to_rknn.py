@@ -175,12 +175,12 @@ def convert_onnx_to_rknn(
             'mean_values': [
                 [0, 0, 0],           # RGB (will be pre-normalized to [0,1] in generator)
                 [0],                 # Depth (will be pre-normalized to [0,1] in generator)
-                [0, 0, 0, 0, 0, 0, 0],  # Proprio (7 values: lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence)
+                [0] * 10,            # Proprio (10 values: ax, ay, az, gx, gy, gz, mx, my, mz, min_dist)
             ],
             'std_values': [
                 [255, 255, 255],     # RGB: [0, 255] -> [0, 1] (std=255)
                 [1],                 # Depth (no scaling)
-                [1, 1, 1, 1, 1, 1, 1],  # Proprio (no scaling)
+                [1] * 10,            # Proprio (no scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -203,7 +203,7 @@ def convert_onnx_to_rknn(
             input_size_list=[
                 [1, 3, 240, 424],   # RGB
                 [1, 1, 240, 424],   # Depth
-                [1, 7],             # Proprio (lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence)
+                [1, 10],            # Proprio (ax, ay, az, gx, gy, gz, mx, my, mz, min_dist)
             ]
         )
         if ret != 0:
@@ -236,7 +236,7 @@ def convert_onnx_to_rknn(
                 # Create test inputs (normalized like rover)
                 test_rgb = np.random.rand(1, 3, 240, 424).astype(np.float32)  # [0, 1]
                 test_depth = np.random.rand(1, 1, 240, 424).astype(np.float32)  # [0, 1]
-                test_proprio = np.array([[-0.21, 2.33, 1.68, -0.18, 1.68, 0.43]], dtype=np.float32)
+                test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference
                 outputs = rknn.inference(inputs=[test_rgb, test_depth, test_proprio])

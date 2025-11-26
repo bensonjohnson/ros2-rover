@@ -193,7 +193,7 @@ class V620PPOTrainer:
         # Model setup
         self.rgb_shape = (3, 240, 424)  # C, H, W
         self.depth_shape = (240, 424)   # H, W
-        self.proprio_dim = 7  # PPO: [lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence]
+        self.proprio_dim = 10  # PPO: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist]
         
         self.encoder = RGBDEncoder().to(self.device)
         # Disable LSTM for stateless PPO (fixes MIOpen backward error and ONNX export)

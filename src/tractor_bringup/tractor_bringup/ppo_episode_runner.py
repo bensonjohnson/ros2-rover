@@ -154,7 +154,11 @@ class PPOEpisodeRunner(Node):
         self._latest_depth = d
     def _odom_cb(self, msg): 
         self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
-    def _imu_cb(self, msg): self._latest_imu = (msg.linear_acceleration.x, msg.linear_acceleration.y, msg.angular_velocity.z)
+    def _imu_cb(self, msg): 
+        self._latest_imu = (
+            msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
+            msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z
+        )
     def _mag_cb(self, msg): self._latest_mag = (msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z)
     def _joint_cb(self, msg):
         if len(msg.velocity) >= 4: self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
@@ -299,17 +303,22 @@ class PPOEpisodeRunner(Node):
         depth_normalized = depth / 6.0
         depth_input = depth_normalized[None, None, ...] # (1, 1, 240, 424)
         
-        # Proprioception (6 values to match training server)
-        # Get velocities from odometry
-        lin_vel = self._latest_odom[2] if self._latest_odom else 0.0
-        ang_vel = self._latest_odom[3] if self._latest_odom else 0.0
-
+        # Proprioception (10 values: 9-axis IMU + min_dist)
         # Get IMU data
-        ax, ay, gz = self._latest_imu if self._latest_imu else (0,0,0)
+        if self._latest_imu:
+            ax, ay, az, gx, gy, gz = self._latest_imu
+        else:
+            ax, ay, az, gx, gy, gz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        # Construct 7D proprio: [lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence]
+        # Get Magnetometer data
+        if self._latest_mag:
+            mx, my, mz = self._latest_mag
+        else:
+            mx, my, mz = 0.0, 0.0, 0.0
+
+        # Construct 10D proprio: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist]
         proprio = np.array([[
-            lin_vel, ang_vel, ax, ay, gz, self._min_forward_dist, self._velocity_confidence
+            ax, ay, az, gx, gy, gz, mx, my, mz, self._min_forward_dist
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
@@ -411,7 +420,12 @@ class PPOEpisodeRunner(Node):
         
         # 5. Compute Reward
         current_linear = self._latest_odom[2] if self._latest_odom else 0.0
-        current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+        
+        # Use IMU Gyro Z for angular velocity if available (more reliable than encoders)
+        if self._latest_imu:
+            current_angular = self._latest_imu[5]
+        else:
+            current_angular = self._latest_odom[3] if self._latest_odom else 0.0
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
