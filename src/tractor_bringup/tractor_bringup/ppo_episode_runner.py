@@ -51,12 +51,14 @@ class PPOEpisodeRunner(Node):
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('inference_rate_hz', 30.0)
         self.declare_parameter('batch_size', 256)  # Send data every N steps
+        self.declare_parameter('collection_duration', 180.0) # Seconds to collect before triggering training
 
         self.server_addr = str(self.get_parameter('server_addr').value)
         self.max_linear = float(self.get_parameter('max_linear_speed').value)
         self.max_angular = float(self.get_parameter('max_angular_speed').value)
         self.inference_rate = float(self.get_parameter('inference_rate_hz').value)
         self.batch_size = int(self.get_parameter('batch_size').value)
+        self.collection_duration = float(self.get_parameter('collection_duration').value)
 
         # State
         self._latest_rgb = None
@@ -533,6 +535,26 @@ class PPOEpisodeRunner(Node):
                     for k in self._data_buffer:
                         self._data_buffer[k] = []
             
+            # Check if collection duration exceeded
+            time_based_trigger = False
+            if time.time() - self._collection_start_time > self.collection_duration:
+                time_based_trigger = True
+                self.get_logger().info(f"⏰ Collection duration ({self.collection_duration}s) exceeded. Triggering training...")
+                
+                # Force flush remaining data even if < batch_size
+                with self._buffer_lock:
+                    if len(self._data_buffer['rewards']) > 0:
+                        if batch_to_send is None:
+                            batch_to_send = {k: np.array(v) for k, v in self._data_buffer.items()}
+                        else:
+                            # Append to existing batch
+                            for k, v in self._data_buffer.items():
+                                batch_to_send[k] = np.concatenate([batch_to_send[k], np.array(v)])
+                        
+                        # Clear buffer
+                        for k in self._data_buffer:
+                            self._data_buffer[k] = []
+
             if batch_to_send:
                 try:
                     self.get_logger().info(f"📤 Sending batch of {len(batch_to_send['rewards'])} steps")
@@ -579,15 +601,68 @@ class PPOEpisodeRunner(Node):
                                 self.get_logger().error(f"Polling failed: {e}")
                                 time.sleep(1.0)
 
+                    # Check for explicit error from server
+                    if response.get('type') == 'error':
+                        self.get_logger().error(f"❌ Server reported error: {response.get('msg')}")
+
                     # Check for model update notification
                     if 'model_version' in response:
                         server_version = response['model_version']
                         if server_version > self._current_model_version:
                             self.get_logger().info(f"🔔 New model available: v{server_version} (Current: v{self._current_model_version})")
+                            self.get_logger().info(f"🔔 New model available: v{server_version} (Current: v{self._current_model_version})")
                             self._model_update_needed = True
                         
                 except Exception as e:
                     self.get_logger().error(f"Sync failed: {e}")
+            
+            # 1.5 Send Manual Trigger if time-based
+            if time_based_trigger:
+                try:
+                    self.get_logger().info("🛑 Stopping robot and requesting training start...")
+                    self._model_ready = False # Stop inference
+                    
+                    # Stop robot
+                    stop_cmd = Twist()
+                    self.cmd_pub.publish(stop_cmd)
+                    
+                    # Send trigger
+                    self.zmq_socket.send_pyobj({'type': 'start_training'})
+                    response = self.zmq_socket.recv_pyobj()
+                    
+                    if response.get('status') == 'training_queued':
+                        self.get_logger().info("✅ Training queued successfully. Waiting for completion...")
+                        
+                        # Wait loop
+                        while not self._stop_event.is_set():
+                            time.sleep(1.0)
+                            try:
+                                self.zmq_socket.send_pyobj({'type': 'check_status'})
+                                status_resp = self.zmq_socket.recv_pyobj()
+                                
+                                if status_resp.get('status') == 'ready':
+                                    self.get_logger().info("✅ Training complete!")
+                                    if status_resp.get('model_version', -1) > self._current_model_version:
+                                        self._model_update_needed = True
+                                    
+                                    # Reset timer and resume
+                                    self._collection_start_time = time.time()
+                                    self._model_ready = True
+                                    break
+                                else:
+                                    self.get_logger().info("⏳ Training in progress...")
+                            except Exception as e:
+                                self.get_logger().error(f"Polling error: {e}")
+                                time.sleep(1.0)
+                    else:
+                        self.get_logger().warn(f"Trigger failed: {response}")
+                        # Reset timer anyway to avoid loop
+                        self._collection_start_time = time.time()
+                        self._model_ready = True
+                        
+                except Exception as e:
+                    self.get_logger().error(f"Failed to trigger training: {e}")
+                    self._collection_start_time = time.time() # Reset to avoid stuck loop
             
             # 2. Request new model if notified
             if self._model_update_needed:
