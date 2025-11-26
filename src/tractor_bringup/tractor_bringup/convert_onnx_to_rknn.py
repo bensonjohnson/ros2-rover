@@ -63,7 +63,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 data = np.load(file_path)
                 rgb = data['rgb']  # (H, W, 3) uint8
                 depth = data['depth']  # (H, W) float32
-                proprio = data['proprio']  # (6,) float32
+                proprio = data['proprio']  # (7,) float32
 
                 # Sanitize Depth
                 depth = np.nan_to_num(depth, nan=6.0, posinf=6.0, neginf=0.0)
@@ -93,7 +93,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 depth_nchw = depth[None, None, ...] # (1, 1, 240, 424)
                 
                 # Proprio
-                proprio_batch = proprio[None, ...] # (1, 6)
+                proprio_batch = proprio[None, ...] # (1, 7)
                 
                 rgb_path = os.path.abspath(os.path.join(dataset_dir, f"rgb_{i}.npy"))
                 depth_path = os.path.abspath(os.path.join(dataset_dir, f"depth_{i}.npy"))
@@ -175,12 +175,12 @@ def convert_onnx_to_rknn(
             'mean_values': [
                 [0, 0, 0],           # RGB (will be pre-normalized to [0,1] in generator)
                 [0],                 # Depth (will be pre-normalized to [0,1] in generator)
-                [0, 0, 0, 0, 0, 0],  # Proprio (6 values: lin_vel, ang_vel, ax, ay, gz, min_dist)
+                [0, 0, 0, 0, 0, 0, 0],  # Proprio (7 values: lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence)
             ],
             'std_values': [
                 [255, 255, 255],     # RGB: [0, 255] -> [0, 1] (std=255)
                 [1],                 # Depth (no scaling)
-                [1, 1, 1, 1, 1, 1],  # Proprio (no scaling)
+                [1, 1, 1, 1, 1, 1, 1],  # Proprio (no scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -203,7 +203,7 @@ def convert_onnx_to_rknn(
             input_size_list=[
                 [1, 3, 240, 424],   # RGB
                 [1, 1, 240, 424],   # Depth
-                [1, 6],             # Proprio (changed from 9 to 6)
+                [1, 7],             # Proprio (lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence)
             ]
         )
         if ret != 0:
