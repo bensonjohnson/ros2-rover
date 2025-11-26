@@ -234,8 +234,9 @@ def convert_onnx_to_rknn(
                 print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
             else:
                 # Create test inputs (normalized like rover)
-                test_rgb = np.random.rand(1, 3, 240, 424).astype(np.float32)  # [0, 1]
-                test_depth = np.random.rand(1, 1, 240, 424).astype(np.float32)  # [0, 1]
+                # RKNN inference expects NHWC format for images by default
+                test_rgb = np.random.rand(1, 240, 424, 3).astype(np.float32)  # [0, 1]
+                test_depth = np.random.rand(1, 240, 424, 1).astype(np.float32)  # [0, 1]
                 test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference
