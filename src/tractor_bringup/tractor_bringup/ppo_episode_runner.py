@@ -144,6 +144,9 @@ class PPOEpisodeRunner(Node):
         self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10)
         self.create_subscription(Bool, '/safety_monitor_status', self._safety_cb, 10)
         self.create_subscription(Float32, '/velocity_confidence', self._vel_conf_cb, 10)
+        
+        # Initialize collection timer
+        self._collection_start_time = time.time()
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
