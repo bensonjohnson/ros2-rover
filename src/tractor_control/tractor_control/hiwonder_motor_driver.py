@@ -674,10 +674,11 @@ class HiwonderMotorDriver(Node):
 
         # Log slip detection for debugging
         if estimate.slip_detected:
-            self.get_logger().warn(
-                f'Wheel slip detected! Using {estimate.source} estimate (confidence: {estimate.confidence:.2f})',
-                throttle_duration_sec=5.0
-            )
+            # self.get_logger().warn(
+            #     f'Wheel slip detected! Using {estimate.source} estimate (confidence: {estimate.confidence:.2f})',
+            #     throttle_duration_sec=5.0
+            # )
+            pass
 
         # Update pose (integrate velocities)
         dt = 1.0 / 100.0  # 100Hz sensor callback frequency (10ms)

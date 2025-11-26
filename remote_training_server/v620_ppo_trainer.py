@@ -228,7 +228,9 @@ class V620PPOTrainer:
         self.update_count = 0
         self.best_reward = -float('inf')
         self.model_version = 0  # Start at 0 to trigger rover warmup sequence
+        self.model_version = 0  # Start at 0 to trigger rover warmup sequence
         self.is_training = False
+        self.training_requested = False  # Flag for manual training trigger
 
         # KL warm-up: start with higher target_kl for first few updates (cold start)
         self.kl_warmup_updates = 10  # Warm up for first 10 updates
@@ -388,8 +390,10 @@ class V620PPOTrainer:
         """Background training loop."""
         print("🧵 Training thread started")
         while True:
-            # Wait for enough data (rollout_steps)
-            if self.buffer.size >= self.args.rollout_steps:
+            # Wait for trigger (manual or buffer full safety cap)
+            if self.training_requested or self.buffer.size >= self.args.buffer_size:
+                print(f"🔔 Training triggered! (Requested: {self.training_requested}, Buffer: {self.buffer.size})")
+                self.training_requested = False  # Reset flag
                 self.is_training = True
                 # Run training step
                 with self.training_lock:
@@ -831,10 +835,18 @@ class V620PPOTrainer:
                         response['model_bytes'] = model_bytes
                         response['model_version'] = self.model_version
                         print(f"📤 Sent ONNX model v{self.model_version} ({len(model_bytes)} bytes)")
+
                     else:
                         # Silent fail if not ready yet (to avoid log spam)
                         # print("⚠ No ONNX model found yet")
                         response['error'] = 'No model available'
+
+                elif message['type'] == 'start_training':
+                    # Rover explicitly requesting training start
+                    print("🔔 Rover requested training start!")
+                    self.training_requested = True
+                    response['status'] = 'training_queued'
+                    response['wait_for_training'] = True
                 
                 self.socket.send_pyobj(response)
                 
