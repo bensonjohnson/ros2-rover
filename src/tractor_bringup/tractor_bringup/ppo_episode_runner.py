@@ -227,11 +227,16 @@ class PPOEpisodeRunner(Node):
             if self._prev_linear_cmds[-1] * self._prev_linear_cmds[-2] < -0.01:
                 reward -= 8.0
 
-        # 10. Spinning Without Moving (moderate penalty -8.0)
-        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.5:
-            reward -= 8.0
+        # 10. Spinning Without Moving (INCREASED PENALTY)
+        # Penalize high angular velocity when linear velocity is low
+        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.3:
+            reward -= 10.0 + (abs(angular_vel) * 5.0)
 
-        # 11. Smooth Forward + Turning Bonus (obstacle flow)
+        # 11. General Angular Penalty (Prevent excessive spinning)
+        # Always penalize angular velocity slightly to encourage straight driving when possible
+        reward -= abs(angular_vel) * 0.5
+
+        # 12. Smooth Forward + Turning Bonus (obstacle flow)
         if forward_vel > 0.08 and abs(angular_vel) > 0.2 and clearance < 0.8:
             # Smooth navigation around obstacles
             action_diff = np.abs(action - self._prev_action)

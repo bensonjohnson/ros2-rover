@@ -109,6 +109,54 @@ class PPOBuffer:
             'values': self.values[indices].to(self.device),
         }
 
+    def compute_gae(self, value_head, encoder, gamma=0.99, lam=0.95):
+        """Compute Generalized Advantage Estimation (GAE)."""
+        # 1. Compute values for all states in buffer
+        self.values = torch.zeros(self.size, device=self.device)
+        
+        # Process in batches to avoid OOM
+        batch_size = 512
+        with torch.no_grad():
+            for i in range(0, self.size, batch_size):
+                end = min(i + batch_size, self.size)
+                
+                # Prepare batch
+                rgb = self.rgb[i:end].to(self.device).float() / 255.0
+                rgb = rgb.permute(0, 3, 1, 2)
+                depth = self.depth[i:end].to(self.device).float().unsqueeze(1)
+                proprio = self.proprio[i:end].to(self.device)
+                
+                # Forward pass
+                features = encoder(rgb, depth)
+                vals = value_head(features, proprio)
+                self.values[i:end] = vals.squeeze()
+
+        # 2. Compute GAE
+        # We need next_values. For the last step, we assume value is 0 (or we could bootstrap if not done)
+        # Since we don't have the "next_state" for the very last step in the buffer readily available 
+        # (unless we store it), we'll assume 0 for the very last step if not done.
+        
+        advantages = torch.zeros(self.size, device=self.device)
+        last_gae_lam = 0
+        
+        # Iterate backwards
+        for t in reversed(range(self.size)):
+            if t == self.size - 1:
+                next_non_terminal = 1.0 - self.dones[t].float().item()
+                next_value = 0.0 # Could be better if we had bootstrap value
+            else:
+                next_non_terminal = 1.0 - self.dones[t].float().item()
+                next_value = self.values[t+1]
+                
+            delta = self.rewards[t].to(self.device) + gamma * next_value * next_non_terminal - self.values[t]
+            last_gae_lam = delta + gamma * lam * next_non_terminal * last_gae_lam
+            advantages[t] = last_gae_lam
+            
+        # Compute returns
+        returns = advantages + self.values
+        
+        return advantages, returns
+
     def clear(self):
         """Clear buffer after update (PPO is on-policy)."""
         self.ptr = 0
@@ -412,8 +460,17 @@ class V620PPOTrainer:
             
             gpu_proprio = self.buffer.proprio[valid_slice].to(self.device)
             gpu_actions = self.buffer.actions[valid_slice].to(self.device)
-            gpu_rewards = self.buffer.rewards[valid_slice].to(self.device)
             gpu_log_probs = self.buffer.log_probs[valid_slice].to(self.device)
+            
+            # Compute GAE and Returns
+            print("  🧮 Computing GAE...")
+            gpu_advantages, gpu_returns = self.buffer.compute_gae(
+                self.value_head, self.encoder, gamma=0.99, lam=0.95
+            )
+            
+            # Normalize advantages
+            gpu_advantages = (gpu_advantages - gpu_advantages.mean()) / (gpu_advantages.std() + 1e-8)
+
         
         # Use tqdm for progress bar
         pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False, file=sys.stdout)
@@ -434,7 +491,8 @@ class V620PPOTrainer:
                         'depth': gpu_depth[batch_indices],
                         'proprio': gpu_proprio[batch_indices],
                         'actions': gpu_actions[batch_indices],
-                        'rewards': gpu_rewards[batch_indices],
+                        'returns': gpu_returns[batch_indices],
+                        'advantages': gpu_advantages[batch_indices],
                         'log_probs': gpu_log_probs[batch_indices]
                     }
                     
@@ -476,18 +534,17 @@ class V620PPOTrainer:
                         # Clip fraction (percentage of samples being clipped)
                         clip_fraction = ((ratios - 1.0).abs() > self.args.clip_eps).float().mean()
 
-                    # Advantages (with more stable normalization)
-                    advantages = batch['rewards'] - values.squeeze().detach()
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
+                    # Advantages (already computed via GAE)
+                    advantages = batch['advantages']
 
                     # Policy Loss
                     surr1 = ratios * advantages
                     surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
                     policy_loss = -torch.min(surr1, surr2).mean()
 
-                    # Value Loss (simple MSE with gradient scaling to prevent divergence)
+                    # Value Loss (MSE against GAE returns)
                     values_pred = values.squeeze()
-                    value_loss = 0.5 * (values_pred - batch['rewards']).pow(2).mean()
+                    value_loss = 0.5 * (values_pred - batch['returns']).pow(2).mean()
 
                     # Detach and rescale if loss is too high (soft prevention)
                     if value_loss.item() > 100.0:
