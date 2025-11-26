@@ -82,15 +82,26 @@ class PPOBuffer:
         """Helper to add a slice of data to buffer."""
         length = end_idx - start_idx
         
-        # Convert numpy arrays to tensors
-        self.rgb[buffer_idx:buffer_idx+length] = torch.from_numpy(data['rgb'][start_idx:end_idx])
-        self.depth[buffer_idx:buffer_idx+length] = torch.from_numpy(data['depth'][start_idx:end_idx])
-        self.proprio[buffer_idx:buffer_idx+length] = torch.from_numpy(data['proprio'][start_idx:end_idx])
-        self.actions[buffer_idx:buffer_idx+length] = torch.from_numpy(data['actions'][start_idx:end_idx])
-        self.rewards[buffer_idx:buffer_idx+length] = torch.from_numpy(data['rewards'][start_idx:end_idx])
-        self.dones[buffer_idx:buffer_idx+length] = torch.from_numpy(data['dones'][start_idx:end_idx])
-        self.log_probs[buffer_idx:buffer_idx+length] = torch.from_numpy(data['log_probs'][start_idx:end_idx])
-        self.values[buffer_idx:buffer_idx+length] = torch.from_numpy(data['values'][start_idx:end_idx])
+        # Debug shapes
+        # print(f"DEBUG: _add_slice: start={start_idx}, end={end_idx}, len={length}, buffer_idx={buffer_idx}")
+        # print(f"DEBUG: Source shape: {data['rewards'].shape}")
+        
+        try:
+            # Convert numpy arrays to tensors (use as_tensor to handle both arrays and lists)
+            self.rgb[buffer_idx:buffer_idx+length] = torch.as_tensor(data['rgb'][start_idx:end_idx])
+            self.depth[buffer_idx:buffer_idx+length] = torch.as_tensor(data['depth'][start_idx:end_idx])
+            self.proprio[buffer_idx:buffer_idx+length] = torch.as_tensor(data['proprio'][start_idx:end_idx])
+            self.actions[buffer_idx:buffer_idx+length] = torch.as_tensor(data['actions'][start_idx:end_idx])
+            self.rewards[buffer_idx:buffer_idx+length] = torch.as_tensor(data['rewards'][start_idx:end_idx])
+            self.dones[buffer_idx:buffer_idx+length] = torch.as_tensor(data['dones'][start_idx:end_idx])
+            self.log_probs[buffer_idx:buffer_idx+length] = torch.as_tensor(data['log_probs'][start_idx:end_idx])
+            self.values[buffer_idx:buffer_idx+length] = torch.as_tensor(data['values'][start_idx:end_idx])
+        except Exception as e:
+            print(f"❌ Error in _add_slice: {e}")
+            print(f"   Indices: start={start_idx}, end={end_idx}, len={length}, buffer_idx={buffer_idx}")
+            print(f"   Source shape: {np.shape(data['rewards'])}")
+            print(f"   Slice shape: {np.shape(data['rewards'][start_idx:end_idx])}")
+            raise e
 
     def get_batch(self, indices):
         """Get batch by indices."""
