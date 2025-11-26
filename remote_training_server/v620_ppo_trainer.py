@@ -132,9 +132,9 @@ class PPOBuffer:
                 self.values[i:end] = vals.squeeze()
 
         # 2. Compute GAE
-        # We need next_values. For the last step, we assume value is 0 (or we could bootstrap if not done)
-        # Since we don't have the "next_state" for the very last step in the buffer readily available 
-        # (unless we store it), we'll assume 0 for the very last step if not done.
+        # Move rewards and dones to GPU once to avoid transfer overhead in loop
+        rewards_gpu = self.rewards[:self.size].to(self.device)
+        dones_gpu = self.dones[:self.size].to(self.device).float()
         
         advantages = torch.zeros(self.size, device=self.device)
         last_gae_lam = 0
@@ -142,13 +142,13 @@ class PPOBuffer:
         # Iterate backwards
         for t in reversed(range(self.size)):
             if t == self.size - 1:
-                next_non_terminal = 1.0 - self.dones[t].float().item()
-                next_value = 0.0 # Could be better if we had bootstrap value
+                next_non_terminal = 1.0 - dones_gpu[t]
+                next_value = 0.0 
             else:
-                next_non_terminal = 1.0 - self.dones[t].float().item()
+                next_non_terminal = 1.0 - dones_gpu[t]
                 next_value = self.values[t+1]
                 
-            delta = self.rewards[t].to(self.device) + gamma * next_value * next_non_terminal - self.values[t]
+            delta = rewards_gpu[t] + gamma * next_value * next_non_terminal - self.values[t]
             last_gae_lam = delta + gamma * lam * next_non_terminal * last_gae_lam
             advantages[t] = last_gae_lam
             
