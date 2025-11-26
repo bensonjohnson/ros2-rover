@@ -805,7 +805,8 @@ class V620PPOTrainer:
                             response['model_version'] = self.model_version
                             
                             # Tell rover to wait if we are about to train
-                            if self.buffer.size >= self.args.rollout_steps:
+                            # Tell rover to wait if we are about to train
+                            if self.is_training or self.training_requested:
                                 response['wait_for_training'] = True
                         finally:
                             self.training_lock.release()
