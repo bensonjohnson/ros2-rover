@@ -190,6 +190,13 @@ class V620PPOTrainer:
             self.device = torch.device('cpu')
             print("⚠ Using CPU (slow)")
             
+        # DIAGNOSTIC: Check MIOpen/cuDNN status
+        if torch.cuda.is_available():
+            print(f"🔍 MIOpen/cuDNN Enabled: {torch.backends.cudnn.enabled}")
+            print(f"   Version: {torch.backends.cudnn.version()}")
+            print(f"   Benchmark: {torch.backends.cudnn.benchmark}")
+            print(f"   Deterministic: {torch.backends.cudnn.deterministic}")
+            
         # Model setup
         self.rgb_shape = (3, 240, 424)  # C, H, W
         self.depth_shape = (240, 424)   # H, W
