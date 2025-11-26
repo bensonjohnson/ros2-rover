@@ -11,14 +11,18 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
 from std_msgs.msg import Float32MultiArray, Float32
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Imu
 from nav_msgs.msg import Odometry
+from std_srvs.srv import Trigger
 import tf2_ros
 import smbus
 import time
 import struct
 import math
 from threading import Lock
+
+# Hybrid velocity estimation
+from .velocity_estimator import HybridVelocityEstimator
 
 
 class HiwonderMotorDriver(Node):
@@ -171,6 +175,17 @@ class HiwonderMotorDriver(Node):
         self.y = 0.0
         self.theta = 0.0
 
+        # IMU data for hybrid velocity estimation
+        self._latest_imu_ax = None
+        self._latest_imu_wz = None
+
+        # Hybrid velocity estimator
+        self.velocity_estimator = HybridVelocityEstimator(
+            wheel_radius=self.wheel_radius,
+            wheel_separation=self.wheel_separation,
+            encoder_ppr=self.encoder_ppr
+        )
+
         # Watchdog tracking
         self.last_cmd_vel_msg_time = time.time()
         self.watchdog_last_active = True  # motors considered active until proven idle
@@ -178,6 +193,9 @@ class HiwonderMotorDriver(Node):
         # Subscribers
         self.cmd_vel_sub = self.create_subscription(
             Twist, "cmd_vel", self.cmd_vel_callback, 10
+        )
+        self.imu_sub = self.create_subscription(
+            Imu, "/imu/data", self.imu_callback, 10
         )
 
         # Publishers
@@ -197,6 +215,8 @@ class HiwonderMotorDriver(Node):
 
         self.odom_pub = self.create_publisher(Odometry, "odom", 10)
 
+        self.velocity_confidence_pub = self.create_publisher(Float32, "velocity_confidence", 10)
+
         # TF broadcaster
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
@@ -213,6 +233,12 @@ class HiwonderMotorDriver(Node):
             self.watchdog_timer = self.create_timer(1.0 / self.watchdog_check_hz, self.watchdog_check)
         else:
             self.watchdog_timer = None
+
+        # Episode reset service for PPO training
+        self.reset_episode_srv = self.create_service(
+            Trigger, 'reset_episode', self.reset_episode_callback
+        )
+        self.get_logger().info('Episode reset service available at /reset_episode')
 
         self.get_logger().info("Hiwonder Motor Driver initialized")
 
@@ -340,6 +366,44 @@ class HiwonderMotorDriver(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to reset/initialize encoders: {e}")
 
+    def reset_episode_callback(self, request, response):
+        """Reset encoder baselines and odometry for new episode.
+
+        Called by PPO training system between episodes to ensure encoder
+        values start fresh and don't accumulate across episodes.
+        """
+        try:
+            self.get_logger().info('Resetting episode state (encoders + odometry + velocity estimator)')
+
+            # Re-baseline encoders (calls hardware or software reset)
+            self.reset_encoders()
+
+            # Reset odometry state
+            self.x = 0.0
+            self.y = 0.0
+            self.theta = 0.0
+
+            # Reset velocity tracking
+            with self.encoder_lock:
+                self.prev_left_encoder = 0
+                self.prev_right_encoder = 0
+                self.left_velocity = 0.0
+                self.right_velocity = 0.0
+
+            # Reset hybrid velocity estimator (clears IMU integration drift)
+            self.velocity_estimator.reset()
+
+            response.success = True
+            response.message = f'Reset complete. Baselines: L={self.encoder_baseline_left}, R={self.encoder_baseline_right}'
+            self.get_logger().info(f'Episode reset: {response.message}')
+
+        except Exception as e:
+            response.success = False
+            response.message = f'Reset failed: {e}'
+            self.get_logger().error(response.message)
+
+        return response
+
     def write_byte(self, val):
         """Write a single byte to I2C device"""
         try:
@@ -444,6 +508,11 @@ class HiwonderMotorDriver(Node):
 
         # Update watchdog timestamp
         self.last_cmd_vel_msg_time = time.time()
+
+    def imu_callback(self, msg):
+        """Store IMU data for hybrid velocity estimation."""
+        self._latest_imu_ax = msg.linear_acceleration.x
+        self._latest_imu_wz = msg.angular_velocity.z
 
     def send_motor_speeds(self, left_speed, right_speed):
         """Send motor speeds via I2C using corrected protocol with rate limiting
@@ -585,19 +654,30 @@ class HiwonderMotorDriver(Node):
             return
 
     def publish_odometry(self):
-        """Calculate and publish wheel odometry"""
+        """Calculate and publish wheel odometry with hybrid velocity estimation"""
         import rclpy
         if not rclpy.ok():
             return
-        # Tank steering kinematics (fixed coordinate frame orientation)
-        linear_vel = (
-            (self.left_velocity + self.right_velocity) * self.wheel_radius / 2.0
+
+        # Get hybrid velocity estimate (encoder + IMU fusion)
+        estimate = self.velocity_estimator.update(
+            w_left=self.left_velocity,
+            w_right=self.right_velocity,
+            imu_ax=self._latest_imu_ax,
+            imu_wz=self._latest_imu_wz,
+            dt=1.0/100.0  # 100Hz
         )
-        angular_vel = (
-            -(self.left_velocity - self.right_velocity)
-            * self.wheel_radius
-            / self.wheel_separation
-        )
+
+        # Use hybrid estimate for odometry
+        linear_vel = estimate.linear
+        angular_vel = estimate.angular
+
+        # Log slip detection for debugging
+        if estimate.slip_detected:
+            self.get_logger().warn(
+                f'Wheel slip detected! Using {estimate.source} estimate (confidence: {estimate.confidence:.2f})',
+                throttle_duration_sec=5.0
+            )
 
         # Update pose (integrate velocities)
         dt = 1.0 / 100.0  # 100Hz sensor callback frequency (10ms)
@@ -650,6 +730,11 @@ class HiwonderMotorDriver(Node):
             self.odom_pub.publish(odom_msg)
         except Exception:
             return
+
+        # Publish velocity confidence for PPO proprioception
+        confidence_msg = Float32()
+        confidence_msg.data = float(estimate.confidence)
+        self.velocity_confidence_pub.publish(confidence_msg)
 
         # Publish TF transform (odom -> base_footprint, base_footprint ->
         # base_link is in URDF)

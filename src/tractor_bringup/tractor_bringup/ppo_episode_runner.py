@@ -29,6 +29,7 @@ from sensor_msgs.msg import Image, Imu, JointState, MagneticField
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Bool
 from geometry_msgs.msg import Twist
+from std_srvs.srv import Trigger
 
 # RKNN Support
 try:
@@ -66,7 +67,8 @@ class PPOEpisodeRunner(Node):
         self._latest_wheel_vels = None
         self._min_forward_dist = 10.0
         self._safety_override = False
-        
+        self._velocity_confidence = 1.0  # Velocity estimate confidence (0.0-1.0)
+
         # Curriculum State (updated by server)
         self._curriculum_collision_dist = 0.5
         self._curriculum_max_speed = 0.1
@@ -124,7 +126,10 @@ class PPOEpisodeRunner(Node):
         
         # Inference Timer
         self.create_timer(1.0 / self.inference_rate, self._control_loop)
-        
+
+        # Episode reset client for encoder baseline reset
+        self.reset_episode_client = self.create_client(Trigger, '/reset_episode')
+
         self.get_logger().info('🚀 PPO Runner Initialized')
 
     def _setup_subscribers(self):
@@ -136,6 +141,7 @@ class PPOEpisodeRunner(Node):
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
         self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10)
         self.create_subscription(Bool, '/safety_monitor_status', self._safety_cb, 10)
+        self.create_subscription(Float32, '/velocity_confidence', self._vel_conf_cb, 10)
 
     def _setup_publishers(self):
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
@@ -150,98 +156,95 @@ class PPOEpisodeRunner(Node):
         self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
     def _imu_cb(self, msg): self._latest_imu = (msg.linear_acceleration.x, msg.linear_acceleration.y, msg.angular_velocity.z)
     def _mag_cb(self, msg): self._latest_mag = (msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z)
-    def _joint_cb(self, msg): 
+    def _joint_cb(self, msg):
         if len(msg.velocity) >= 4: self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
     def _dist_cb(self, msg): self._min_forward_dist = msg.data
     def _safety_cb(self, msg): self._safety_override = msg.data
+    def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
     def _compute_reward(self, action, linear_vel, angular_vel, clearance, collision):
-        """Compute dense reward with hybrid MAP-Elites approach for tank driving.
+        """Tank-steering optimized reward with conditional spinning penalty.
 
-        Goals:
-        - Maximize forward motion (never reward backward)
-        - Maintain centered path (balance left/right clearance)
-        - Smooth turning (penalize jerky steering)
-        - Moderate penalty for stationary spinning
-        - Strong penalties for collisions and oscillation
+        Key improvements for tank steering:
+        - Conditional spinning penalty based on environment
+        - Allows point-turns in tight spaces
+        - Rewards turning toward open space
+        - Higher weight on centering for corridor navigation
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward Progress Bonus (ONLY reward positive velocity)
-        forward_vel = max(0.0, linear_vel)  # Clip negative (backward) to zero
+        # 1. Forward Progress Bonus (quadratic for max speed)
+        forward_vel = max(0.0, linear_vel)
         if forward_vel > 0.01:
-            speed_reward = (forward_vel / target_speed) * 3.0
+            speed_reward = (forward_vel / target_speed) ** 2 * 5.0
             reward += speed_reward
-
-            # Extra bonus for good speed
             if forward_vel > 0.08:
-                reward += 2.0
+                reward += 3.0
 
-        # 2. Penalize Backward Motion (never go backward)
+        # 2. Backward Motion Penalty
         if linear_vel < -0.01:
-            reward -= abs(linear_vel) * 15.0
+            reward -= abs(linear_vel) * 20.0
 
-        # 3. Stationary Penalty (force continuous motion)
-        if abs(linear_vel) < 0.02 and abs(angular_vel) < 0.1:
-            reward -= 3.0
+        # 3. CONDITIONAL Spinning Penalty (Context-Aware for Tank Steering)
+        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.3:
+            min_side_clearance = min(self._left_clearance, self._right_clearance)
 
-        # 4. Forward Action Bonus (reward intent to move forward)
-        if action[0] > 0.3:  # Strong forward action
-            reward += (action[0] - 0.3) * 4.0
+            if clearance > 1.0 and min_side_clearance > 0.8:
+                # Wide open space - penalize stationary spinning
+                reward -= 12.0 + (abs(angular_vel) * 3.0)
+            elif clearance < 0.5 or min_side_clearance < 0.4:
+                # Tight space - ALLOW point-turns (energy cost only)
+                reward -= abs(angular_vel) * 0.5
+                # Bonus for turning toward open space
+                if (self._left_clearance < self._right_clearance and angular_vel > 0) or \
+                   (self._right_clearance < self._left_clearance and angular_vel < 0):
+                    reward += 2.0
+            else:
+                # Medium clearance - moderate penalty
+                reward -= abs(angular_vel) * 3.0
 
-        # 5. Clearance Adaptation (context-aware speed)
-        if clearance > 1.5:  # Safe - encourage max speed
-            reward += forward_vel * 2.0
-        elif clearance < 0.5:  # Risky - encourage slowing
+        # 4. Clearance Adaptation
+        if clearance > 1.5:
+            reward += forward_vel * 2.0  # Safe - encourage speed
+        elif clearance < 0.5:
             if forward_vel > 0.05:
-                reward -= forward_vel * 3.0
+                reward -= forward_vel * 3.0  # Risky - slow down
 
-        # 6. Centering Reward (balance left/right clearance like MAP-Elites)
+        # 5. Centering Reward
         if self._left_clearance < 2.0 or self._right_clearance < 2.0:
-            # Penalize imbalance (hugging walls)
-            diff = abs(self._left_clearance - self._right_clearance)
-            if diff > 0.2:
-                reward -= diff * 3.0
+            balance_diff = abs(self._left_clearance - self._right_clearance)
+            if balance_diff > 0.3:
+                reward -= balance_diff * 4.0
 
-        # Reward staying in widest part of path
-        min_side_clearance = min(self._left_clearance, self._right_clearance)
-        if min_side_clearance > 0.3:
-            reward += (min_side_clearance - 0.3) * 2.0
+            min_side = min(self._left_clearance, self._right_clearance)
+            if min_side > 0.4:
+                reward += (min_side - 0.4) * 3.0
 
-        # 7. Collision Penalty (huge)
+        # 6. Collision Penalty
         if collision or self._safety_override:
             reward -= 50.0
 
-        # 8. Action Smoothness (penalize jerky angular changes)
+        # 7. Action Smoothness
         if len(self._prev_angular_actions) > 0:
-            angular_diff = abs(action[1] - self._prev_angular_actions[-1])
-            if angular_diff > 0.3:
-                reward -= angular_diff * 5.0  # Penalize jerky steering
-
-        # Track angular action for next step
+            angular_jerk = abs(action[1] - self._prev_angular_actions[-1])
+            if angular_jerk > 0.4:
+                reward -= angular_jerk * 6.0
         self._prev_angular_actions.append(action[1])
 
-        # 9. Oscillation Penalty (increased from -5.0 to -8.0)
+        # 8. Oscillation Penalty
         if len(self._prev_linear_cmds) > 2:
             if self._prev_linear_cmds[-1] * self._prev_linear_cmds[-2] < -0.01:
-                reward -= 8.0
+                reward -= 10.0
 
-        # 10. Spinning Without Moving (INCREASED PENALTY)
-        # Penalize high angular velocity when linear velocity is low
-        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.3:
-            reward -= 10.0 + (abs(angular_vel) * 5.0)
-
-        # 11. General Angular Penalty (Prevent excessive spinning)
-        # Always penalize angular velocity slightly to encourage straight driving when possible
-        reward -= abs(angular_vel) * 0.5
-
-        # 12. Smooth Forward + Turning Bonus (obstacle flow)
+        # 9. Smooth Obstacle Navigation Bonus
         if forward_vel > 0.08 and abs(angular_vel) > 0.2 and clearance < 0.8:
-            # Smooth navigation around obstacles
             action_diff = np.abs(action - self._prev_action)
-            if np.sum(action_diff) < 0.15:  # Smooth motion
-                reward += 5.0
+            if np.sum(action_diff) < 0.15:
+                reward += 6.0
+
+        # 10. General angular penalty (prefer straight) - REDUCED from 0.5 to 0.3
+        reward -= abs(angular_vel) * 0.3
 
         return reward
 
@@ -304,8 +307,10 @@ class PPOEpisodeRunner(Node):
         # Get IMU data
         ax, ay, gz = self._latest_imu if self._latest_imu else (0,0,0)
 
-        # Construct 6D proprio: [lin_vel, ang_vel, ax, ay, gz, min_dist]
-        proprio = np.array([[lin_vel, ang_vel, ax, ay, gz, self._min_forward_dist]], dtype=np.float32)
+        # Construct 7D proprio: [lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence]
+        proprio = np.array([[
+            lin_vel, ang_vel, ax, ay, gz, self._min_forward_dist, self._velocity_confidence
+        ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
         # Returns: [action_mean] (value head not exported in actor ONNX)
@@ -446,9 +451,34 @@ class PPOEpisodeRunner(Node):
                     proprio=proprio[0]
                 )
             
+        # Trigger episode reset on collision
+        if collision:
+            self._trigger_episode_reset()
+
         # Update state
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
+
+    def _trigger_episode_reset(self):
+        """Call motor driver to reset encoder baselines."""
+        if not self.reset_episode_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('Episode reset service unavailable')
+            return
+
+        request = Trigger.Request()
+        future = self.reset_episode_client.call_async(request)
+
+        def _log_response(fut):
+            try:
+                response = fut.result()
+                if response.success:
+                    self.get_logger().info(f'Episode reset: {response.message}')
+                else:
+                    self.get_logger().warn(f'Episode reset failed: {response.message}')
+            except Exception as e:
+                self.get_logger().error(f'Episode reset error: {e}')
+
+        future.add_done_callback(_log_response)
 
     def _sync_loop(self):
         """Background thread to sync with server."""
