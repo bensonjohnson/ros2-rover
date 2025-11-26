@@ -193,7 +193,7 @@ class V620PPOTrainer:
         # Model setup
         self.rgb_shape = (3, 240, 424)  # C, H, W
         self.depth_shape = (240, 424)   # H, W
-        self.proprio_dim = 6  # Changed from 9 to match rover: [lin_vel, ang_vel, roll, pitch, accel_mag, min_dist]
+        self.proprio_dim = 7  # PPO: [lin_vel, ang_vel, ax, ay, gz, min_dist, vel_confidence]
         
         self.encoder = RGBDEncoder().to(self.device)
         # Disable LSTM for stateless PPO (fixes MIOpen backward error and ONNX export)
@@ -234,6 +234,11 @@ class V620PPOTrainer:
         self.kl_warmup_updates = 10  # Warm up for first 10 updates
         self.kl_warmup_start = 2.0   # Start VERY permissive for cold start (allows KL up to 2.0)
         self.kl_warmup_end = args.target_kl  # End at configured target
+
+        # Entropy decay schedule for exploration
+        self.entropy_warmup_updates = 100  # First 100 updates
+        self.entropy_start = 0.05  # High exploration initially
+        self.entropy_end = args.entropy_coef  # Decay to configured value (0.01)
         
         # ZMQ Setup
         self.context = zmq.Context()
@@ -289,16 +294,16 @@ class V620PPOTrainer:
 
     def find_latest_checkpoint(self):
         """Find the latest checkpoint file."""
-        checkpoints = list(Path(self.args.checkpoint_dir).glob('ppo_update_*.pt'))
+        checkpoints = list(Path(self.args.checkpoint_dir).glob('ppo_step_*.pt'))
         if not checkpoints:
             return None
-        # Sort by update number
-        def get_update_num(path):
+        # Sort by step number
+        def get_step_num(path):
             try:
                 return int(path.stem.split('_')[-1])
             except:
                 return 0
-        return max(checkpoints, key=get_update_num)
+        return max(checkpoints, key=get_step_num)
 
     def load_checkpoint(self, filepath):
         """Load checkpoint and restore state."""
@@ -353,6 +358,14 @@ class V620PPOTrainer:
         else:
             return self.kl_warmup_end
 
+    def get_entropy_coef(self):
+        """Get current entropy coefficient with linear decay schedule."""
+        if self.update_count < self.entropy_warmup_updates:
+            # Linear decay from high exploration to final value
+            alpha = self.update_count / self.entropy_warmup_updates
+            return self.entropy_start * (1 - alpha) + self.entropy_end * alpha
+        return self.entropy_end
+
     def update_curriculum(self):
         """Update difficulty based on performance."""
         # Simple curriculum: every 100k steps, make it harder
@@ -388,11 +401,13 @@ class V620PPOTrainer:
                     # Log metrics
                     if self.update_count % 10 == 0:
                         current_target_kl = self.get_target_kl()
+                        current_entropy_coef = self.get_entropy_coef()
                         warmup_str = f" [KL target: {current_target_kl:.4f}]" if self.update_count < self.kl_warmup_updates else ""
                         print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}{warmup_str}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
                         self.writer.add_scalar(f'train/target_kl', current_target_kl, self.total_steps)
+                        self.writer.add_scalar(f'train/entropy_coef', current_entropy_coef, self.total_steps)
 
                     # Save checkpoint every batch (as requested)
                     self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
@@ -561,8 +576,9 @@ class V620PPOTrainer:
                          if epoch == 0 and start_idx == 0:
                              print(f"⚠️  High value loss ({value_loss.item():.1f}) - this is normal at start.")
 
-                    # Total Loss
-                    loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
+                    # Total Loss (with dynamic entropy coefficient)
+                    current_entropy_coef = self.get_entropy_coef()
+                    loss = policy_loss + self.args.value_coef * value_loss - current_entropy_coef * entropy
 
                     # Check for NaN in loss
                     if torch.isnan(loss) or torch.isinf(loss):
@@ -649,15 +665,16 @@ class V620PPOTrainer:
         """Save model checkpoint."""
         path = os.path.join(self.args.checkpoint_dir, filename)
         torch.save({
-            'encoder': self.encoder.state_dict(),
-            'policy': self.policy_head.state_dict(),
-            'value': self.value_head.state_dict(),
+            'encoder_state_dict': self.encoder.state_dict(),
+            'policy_head_state_dict': self.policy_head.state_dict(),
+            'value_head_state_dict': self.value_head.state_dict(),
             'log_std': self.log_std,
-            'optimizer': self.optimizer.state_dict(),
-            'steps': self.total_steps
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'total_steps': self.total_steps,
+            'update_count': self.update_count
         }, path)
         print(f"💾 Saved checkpoint: {path}")
-        
+
         # Also export ONNX whenever we save a checkpoint
         self.export_onnx()
 
