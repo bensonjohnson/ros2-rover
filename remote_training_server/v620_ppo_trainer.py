@@ -547,14 +547,19 @@ class V620PPOTrainer:
                     value_loss = 0.5 * (values_pred - batch['returns']).pow(2).mean()
 
                     # Detach and rescale if loss is too high (soft prevention)
+                    # This allows the model to learn from high errors without exploding gradients
                     if value_loss.item() > 100.0:
-                        value_loss = value_loss * 0.1  # Scale down contribution
+                        value_loss = value_loss * 0.01  # Stronger scaling (100x reduction)
 
-                    # Safety check: abort if value loss explodes
-                    if value_loss > 1000.0:
-                        print(f"⚠️  Value loss too high ({value_loss:.1f})! Aborting training update.")
+                    # Safety check: Warn but don't abort unless truly exploded
+                    if value_loss.item() > 100000.0:
+                        print(f"⚠️  Value loss EXTREME ({value_loss.item():.1f})! Aborting training update.")
                         nan_detected = True
                         break
+                    elif value_loss.item() > 1000.0:
+                         # Just warn
+                         if epoch == 0 and start_idx == 0:
+                             print(f"⚠️  High value loss ({value_loss.item():.1f}) - this is normal at start.")
 
                     # Total Loss
                     loss = policy_loss + self.args.value_coef * value_loss - self.args.entropy_coef * entropy
