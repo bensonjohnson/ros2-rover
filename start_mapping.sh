@@ -110,7 +110,7 @@ get_map_name() {
   local map_name
   
   while true; do
-    echo -n -e "${YELLOW}${prompt}: ${NC}"
+    echo -n -e "${YELLOW}${prompt}: ${NC}" >&2
     read -r map_name
     
     # Validate map name
