@@ -143,7 +143,7 @@ def generate_launch_description():
         executable="rgbd_sync",
         name="rgbd_sync",
         output="screen",
-        parameters=[{"approx_sync": True, "queue_size": 50, "sync_queue_size": 50, "use_sim_time": use_sim_time}],
+        parameters=[{"approx_sync": True, "approx_sync_max_interval": 0.05, "queue_size": 50, "sync_queue_size": 50, "use_sim_time": use_sim_time}],
         remappings=[
             ("rgb/image", "/camera/camera/color/image_raw"),
             ("depth/image", "/camera/camera/aligned_depth_to_color/image_raw"),
