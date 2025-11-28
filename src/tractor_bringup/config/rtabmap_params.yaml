@@ -61,7 +61,7 @@ rtabmap:
     Mem/UseOdomFeatures: "false"
 
     # Grid map (2D occupancy) - optimized for indoor spaces
-    Grid/Sensor: "0"                 # 0=depth camera, 1=scan
+    Grid/Sensor: "1"                 # 0=laser scan, 1=depth camera
     Grid/DepthDecimation: "2"        # Reduced for better resolution
     Grid/RangeMax: "4.0"             # Reduced for indoor spaces
     Grid/MinClusterSize: "5"          # Reduced for small indoor obstacles
