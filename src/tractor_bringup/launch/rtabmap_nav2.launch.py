@@ -253,19 +253,20 @@ def generate_launch_description():
 
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_safety_monitor.py",
-        name="safety_monitor",
+        executable="simple_depth_safety_monitor.py",
+        name="simple_depth_safety_monitor",
         output="screen",
         parameters=[
             {
-                "use_sim_time": use_sim_time,
-                "max_speed_limit": max_speed,
-                "emergency_stop_distance": 0.25,
-                "hard_stop_distance": 0.08,
-                "warning_distance": 0.20,
-                "pointcloud_topic": "/camera/camera/depth/color/points",
+                "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
                 "input_cmd_topic": "cmd_vel_nav",
                 "output_cmd_topic": "cmd_vel_safe",
+                "emergency_stop_distance": 0.25,
+                "hard_stop_distance": 0.12,
+                "depth_scale": 0.001,
+                "forward_roi_width_ratio": 0.6,
+                "forward_roi_height_ratio": 0.5,
+                "max_eval_distance": 5.0,
             }
         ],
         condition=IfCondition(with_safety),
