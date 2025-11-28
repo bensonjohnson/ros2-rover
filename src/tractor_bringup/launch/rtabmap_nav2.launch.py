@@ -107,7 +107,17 @@ def generate_launch_description():
             "camera_name": "camera",
             "camera_namespace": "camera",
             "device_type": "435i",
-            "config_file": os.path.join(pkg_tractor_bringup, "config", "realsense_config.yaml"),
+            "depth_module.depth_profile": "640x480x30",
+            "rgb_camera.color_profile": "640x480x30",
+            "enable_color": "true",
+            "enable_depth": "true",
+            "enable_sync": "true",
+            "align_depth.enable": "true",
+            "pointcloud.enable": "true",
+            "initial_reset": "true",
+            "enable_gyro": "false",
+            "enable_accel": "false",
+            "enable_imu": "false",
         }.items(),
     )
 
