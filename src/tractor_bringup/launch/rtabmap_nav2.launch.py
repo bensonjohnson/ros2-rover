@@ -8,7 +8,7 @@ Keeps Nav2 obstacle layers on RealSense pointcloud.
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
@@ -209,9 +209,10 @@ def generate_launch_description():
         output="screen",
         parameters=[nav2_params_file, {"use_sim_time": use_sim_time}],
         remappings=[("cmd_vel_in", "cmd_vel_smoothed"), ("cmd_vel_out", "cmd_vel_safe")],
+        condition=UnlessCondition(with_safety),
     )
 
-    nav2_lifecycle_manager = Node(
+    nav2_lifecycle_manager_collision = Node(
         package="nav2_lifecycle_manager",
         executable="lifecycle_manager",
         name="lifecycle_manager_navigation",
@@ -231,6 +232,29 @@ def generate_launch_description():
             },
             {"bond_timeout": 60.0},
         ],
+        condition=UnlessCondition(with_safety),
+    )
+
+    nav2_lifecycle_manager_no_collision = Node(
+        package="nav2_lifecycle_manager",
+        executable="lifecycle_manager",
+        name="lifecycle_manager_navigation",
+        output="screen",
+        parameters=[
+            {"use_sim_time": use_sim_time},
+            {"autostart": True},
+            {
+                "node_names": [
+                    "controller_server",
+                    "planner_server",
+                    "behavior_server",
+                    "bt_navigator",
+                    "velocity_smoother",
+                ]
+            },
+            {"bond_timeout": 60.0},
+        ],
+        condition=IfCondition(with_safety),
     )
 
     # 9) Simple autonomous mapper and safety monitor (reuse your existing nodes)
@@ -259,7 +283,7 @@ def generate_launch_description():
         parameters=[
             {
                 "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
-                "input_cmd_topic": "cmd_vel_nav",
+                "input_cmd_topic": "cmd_vel_smoothed",
                 "output_cmd_topic": "cmd_vel_safe",
                 "emergency_stop_distance": 0.25,
                 "hard_stop_distance": 0.12,
@@ -319,7 +343,8 @@ def generate_launch_description():
         collision_monitor_node,
     ]):
         ld.add_action(TimerAction(period=nav2_start_time + 0.5 * t, actions=[node]))
-    ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager]))
+    ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager_collision]))
+    ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager_no_collision]))
 
     # Safety + exploration - start after everything else is ready
     ld.add_action(TimerAction(period=25.0, actions=[safety_monitor_node]))
