@@ -50,6 +50,7 @@ class SimpleDepthSafetyMonitor(Node):
         self._commands_blocked = 0
         self._emergency_stops = 0
         self._last_estop_state = False
+        self._last_depth_time = self.get_clock().now()
 
         self.bridge = CvBridge()
 
@@ -75,6 +76,7 @@ class SimpleDepthSafetyMonitor(Node):
 
     def depth_callback(self, msg: Image) -> None:
         """Process depth image and compute minimum forward distance."""
+        self._last_depth_time = self.get_clock().now()
         try:
             # Convert to numpy array
             depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -129,7 +131,19 @@ class SimpleDepthSafetyMonitor(Node):
 
         # Safety gating - only apply to forward motion
         if msg.linear.x > 0.01:  # Moving forward
-            if self._min_forward_dist < self.hard_stop_distance:
+            # Check for stale data
+            time_since_depth = (self.get_clock().now() - self._last_depth_time).nanoseconds / 1e9
+            
+            if time_since_depth > 0.5:
+                # Stale data - treat as hard stop
+                out_cmd.linear.x = 0.0
+                out_cmd.linear.y = 0.0
+                estop_active = True
+                self._commands_blocked += 1
+                if self._commands_received % 20 == 0:
+                    self.get_logger().warn(f'STALE DATA: Last depth {time_since_depth:.2f}s ago - stopping')
+
+            elif self._min_forward_dist < self.hard_stop_distance:
                 # Hard stop - stop forward motion, allow rotation and reverse to escape
                 out_cmd.linear.x = 0.0
                 out_cmd.linear.y = 0.0
