@@ -10,7 +10,7 @@
 
     # Stream profiles - minimal bandwidth configuration
     depth_module:
-      depth_profile: "640x480x15"
+      depth_profile: "640x480x6"
       enable_auto_exposure: true
       auto_exposure_limit: 100000
       emitter_enabled: 0  # Disabled to reduce USB bandwidth (0=off, 1=on, 2=auto)
@@ -18,7 +18,7 @@
       accuracy: 2
 
     rgb_camera:
-      color_profile: "640x480x15"
+      color_profile: "640x480x6"
       enable_auto_exposure: true
       auto_exposure_limit: 100000
       brightness: 0
@@ -82,6 +82,6 @@
     clip_distance: 6.0
 
     # USB stability
-    initial_reset: false
+    initial_reset: true
     wait_for_device_timeout: 10.0
     reconnect_timeout: 5.0
