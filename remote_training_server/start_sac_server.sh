@@ -124,8 +124,15 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo "✓ ROCm environment variables set"
 fi
 
-# Increase file descriptor limit for MIOpen compilation
-ulimit -n 65535 || echo "⚠ Could not raise ulimit, MIOpen might fail"
+# Check and warn about file descriptor limits
+CURRENT_ULIMIT=$(ulimit -n)
+echo ""
+echo "Checking file descriptor limits..."
+echo "  Current ulimit: ${CURRENT_ULIMIT}"
+if [ ${CURRENT_ULIMIT} -lt 65535 ]; then
+  echo "  ⚠ Warning: ulimit is below recommended 65535 for MIOpen benchmark"
+  echo "  Attempting to raise limit for training process..."
+fi
 
 # Start TensorBoard
 echo "Starting TensorBoard..."
@@ -135,12 +142,13 @@ echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
 LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
-python3 -u v620_sac_trainer.py \
+# Launch Python with proper ulimit applied to the process
+bash -c "ulimit -n 65535 && exec python3 -u v620_sac_trainer.py \
   --port ${PORT} \
   --checkpoint_dir ${CHECKPOINT_DIR} \
   --log_dir ${LOG_DIR} \
-  "$@" \
-  2>&1 | tee "${LOG_FILE}" &
+  $* \
+  2>&1" | tee "${LOG_FILE}" &
 
 TRAINER_PID=$!
 

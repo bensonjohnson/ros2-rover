@@ -1,4 +1,0 @@
-Initializing V620 PPO Trainer...
-ROCm GPU detected: AMD Radeon PRO V620
-Training server listening on port 5555
-Episode finished | Reward: -2464.92 | Avg (100): -2464.92 | Total steps: 492

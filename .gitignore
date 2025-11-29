@@ -49,3 +49,11 @@ models/
 *.pkl
 *.model
 *.bin
+
+# Training logs and checkpoints
+remote_training_server/logs/
+remote_training_server/logs_sac/
+remote_training_server/logs_ppo/
+remote_training_server/checkpoints/
+remote_training_server/checkpoints_sac/
+remote_training_server/checkpoints_ppo/
