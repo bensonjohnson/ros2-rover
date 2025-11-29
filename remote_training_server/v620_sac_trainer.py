@@ -501,6 +501,14 @@ class V620SACTrainer:
                         response['model_bytes'] = f.read()
                     response['model_version'] = self.model_version
                     
+                elif msg['type'] == 'start_training':
+                    # SAC trains continuously, so we just ack
+                    # The rover will pause, check status (which is always ready), and resume.
+                    # This acts as a periodic sync/checkpoint.
+                    response['status'] = 'training_queued'
+                    # Force a checkpoint save here so rover gets fresh model
+                    self.save_checkpoint() 
+                    
                 self.socket.send_pyobj(response)
             except Exception as e:
                 print(f"Error: {e}")
