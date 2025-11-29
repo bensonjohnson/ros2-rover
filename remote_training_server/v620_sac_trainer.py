@@ -291,7 +291,13 @@ class V620SACTrainer:
         self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
         
         self.total_steps = ckpt['total_steps']
-        self.model_version = self.total_steps // 1000 # Rough versioning
+        # Ensure version is at least 1 if we have steps, or use step count directly as version?
+        # Rover expects integer version. Let's just use total_steps as version if > 0.
+        # But rover logic compares > current.
+        # If we use steps, it will be fine.
+        # But wait, we export ONNX with increment_version=True/False.
+        # Let's explicitly save/load model_version in checkpoint.
+        self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100)) 
 
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
@@ -308,7 +314,8 @@ class V620SACTrainer:
             'actor_opt': self.actor_optimizer.state_dict(),
             'critic_opt': self.critic_optimizer.state_dict(),
             'alpha_opt': self.alpha_optimizer.state_dict(),
-            'total_steps': self.total_steps
+            'total_steps': self.total_steps,
+            'model_version': self.model_version
         }, path)
         print(f"💾 Saved {path}")
         self.export_onnx()
