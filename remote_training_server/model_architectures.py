@@ -7,6 +7,7 @@ training dependencies, making it safe to import on the rover for model conversio
 
 import torch
 import torch.nn as nn
+from typing import Tuple
 
 
 class RGBDEncoder(nn.Module):
@@ -198,9 +199,42 @@ class CriticNetwork(nn.Module):
             nn.Linear(128, 1)
         )
 
-    def forward(self, rgb, depth, proprio, action):
-        features = self.encoder(rgb, depth)
-        proprio_feat = self.proprio_encoder(proprio)
-        
         combined = torch.cat([features, proprio_feat, action], dim=1)
         return self.q_net(combined)
+
+
+class GaussianPolicyHead(nn.Module):
+    """SAC Policy head that outputs mean and log_std for continuous actions."""
+
+    def __init__(self, feature_dim: int, proprio_dim: int, action_dim: int = 2, hidden_size: int = 256):
+        super().__init__()
+        
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 64),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim + 64, hidden_size),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(inplace=True),
+        )
+        
+        self.mean_layer = nn.Linear(hidden_size, action_dim)
+        self.log_std_layer = nn.Linear(hidden_size, action_dim)
+
+    def forward(self, features: torch.Tensor, proprio: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        proprio_feat = self.proprio_encoder(proprio)
+        combined = torch.cat([features, proprio_feat], dim=1)
+        
+        x = self.net(combined)
+        mean = self.mean_layer(x)
+        log_std = self.log_std_layer(x)
+        
+        # Clamp log_std for stability
+        log_std = torch.clamp(log_std, -20, 2)
+        
+        return mean, log_std
