@@ -126,7 +126,7 @@ fi
 
 # Start TensorBoard
 echo "Starting TensorBoard..."
-tensorboard --logdir ${LOG_DIR} --port 6006 --bind_all > /dev/null 2>&1 &
+tensorboard --logdir "$(pwd)/${LOG_DIR}" --port 6006 --bind_all > /dev/null 2>&1 &
 TB_PID=$!
 echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
