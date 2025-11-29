@@ -132,7 +132,7 @@ echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
 LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
-python3 v620_sac_trainer.py \
+python3 -u v620_sac_trainer.py \
   --port ${PORT} \
   --checkpoint_dir ${CHECKPOINT_DIR} \
   --log_dir ${LOG_DIR} \
