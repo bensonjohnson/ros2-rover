@@ -124,6 +124,9 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo "✓ ROCm environment variables set"
 fi
 
+# Increase file descriptor limit for MIOpen compilation
+ulimit -n 65535 || echo "⚠ Could not raise ulimit, MIOpen might fail"
+
 # Start TensorBoard
 echo "Starting TensorBoard..."
 tensorboard --logdir "$(pwd)/${LOG_DIR}" --port 6006 --bind_all > /dev/null 2>&1 &
