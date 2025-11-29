@@ -551,7 +551,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
     parser.add_argument('--buffer_size', type=int, default=50000)
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=1024) # Increased for 30GB VRAM
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
