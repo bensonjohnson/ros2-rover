@@ -159,23 +159,23 @@ class ReplayBuffer:
         indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
         
         # Retrieve s
-        rgb = self.rgb[indices].to(self.device).float() / 255.0
+        rgb = self.rgb[indices].to(self.device, non_blocking=True).float() / 255.0
         rgb = rgb.permute(0, 3, 1, 2) # NHWC -> NCHW
         
-        depth = self.depth[indices].to(self.device).float().unsqueeze(1)
-        proprio = self.proprio[indices].to(self.device)
-        actions = self.actions[indices].to(self.device)
-        rewards = self.rewards[indices].to(self.device)
-        dones = self.dones[indices].to(self.device)
+        depth = self.depth[indices].to(self.device, non_blocking=True).float().unsqueeze(1)
+        proprio = self.proprio[indices].to(self.device, non_blocking=True)
+        actions = self.actions[indices].to(self.device, non_blocking=True)
+        rewards = self.rewards[indices].to(self.device, non_blocking=True)
+        dones = self.dones[indices].to(self.device, non_blocking=True)
         
         # Retrieve s' (next index)
         next_indices = (indices + 1) % self.capacity
         
-        next_rgb = self.rgb[next_indices].to(self.device).float() / 255.0
+        next_rgb = self.rgb[next_indices].to(self.device, non_blocking=True).float() / 255.0
         next_rgb = next_rgb.permute(0, 3, 1, 2)
         
-        next_depth = self.depth[next_indices].to(self.device).float().unsqueeze(1)
-        next_proprio = self.proprio[next_indices].to(self.device)
+        next_depth = self.depth[next_indices].to(self.device, non_blocking=True).float().unsqueeze(1)
+        next_proprio = self.proprio[next_indices].to(self.device, non_blocking=True)
         
         return {
             'rgb': rgb, 'depth': depth, 'proprio': proprio,
@@ -193,6 +193,8 @@ class V620SACTrainer:
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+            torch.backends.cudnn.benchmark = True # Optimize for fixed input size
+            print("✓ Enabled cuDNN benchmark")
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU")
@@ -558,7 +560,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
     parser.add_argument('--buffer_size', type=int, default=50000)
-    parser.add_argument('--batch_size', type=int, default=1024) # Increased for 30GB VRAM
+    parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
