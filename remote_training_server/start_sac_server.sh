@@ -120,7 +120,7 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo "Applying ROCm optimizations..."
   export HSA_FORCE_FINE_GRAIN_PCIE=1
   export MIOPEN_FIND_ENFORCE=NONE
-  export MIOPEN_DISABLE_CACHE=1
+  export MIOPEN_DISABLE_CACHE=0 # Enable cache to speed up startup after first run
   echo "✓ ROCm environment variables set"
 fi
 
