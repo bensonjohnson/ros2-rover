@@ -342,7 +342,11 @@ class V620SACTrainer:
                 opset_version=11,
                 input_names=['rgb', 'depth', 'proprio'],
                 output_names=['action'],
-                export_params=True
+                export_params=True,
+                do_constant_folding=True,
+                keep_initializers_as_inputs=False,
+                verbose=True,
+                dynamo=False  # Force legacy exporter
             )
             
             if increment_version:
