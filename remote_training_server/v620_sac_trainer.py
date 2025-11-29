@@ -50,12 +50,13 @@ class ReplayBuffer:
         
         # Storage (CPU RAM to save GPU memory, move to GPU during sampling)
         # Using uint8 for images to save RAM
-        self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
-        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16) # Optimized to float16
-        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
-        self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
-        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32)
-        self.dones = torch.zeros((capacity, 1), dtype=torch.float32)
+        # Enable pin_memory for faster CPU->GPU transfer
+        self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8, pin_memory=True)
+        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16, pin_memory=True) # Optimized to float16
+        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, pin_memory=True)
+        self.actions = torch.zeros((capacity, 2), dtype=torch.float32, pin_memory=True)
+        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, pin_memory=True)
+        self.dones = torch.zeros((capacity, 1), dtype=torch.float32, pin_memory=True)
         
     def add_batch(self, batch_data: Dict):
         """Add a batch of sequential data and construct transitions."""
@@ -193,8 +194,8 @@ class V620SACTrainer:
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-            torch.backends.cudnn.benchmark = True # Optimize for fixed input size
-            print("✓ Enabled cuDNN benchmark")
+            torch.backends.cudnn.benchmark = False # Disabled per user request (stability)
+            # print("✓ Enabled cuDNN benchmark")
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU")
