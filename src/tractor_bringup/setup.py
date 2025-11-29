@@ -43,6 +43,7 @@ setup(
             "convert_onnx_to_rknn.py = tractor_bringup.convert_onnx_to_rknn:main",
             "map_elites_episode_runner.py = tractor_bringup.map_elites_episode_runner:main",
             "ppo_episode_runner = tractor_bringup.ppo_episode_runner:main",
+            "sac_episode_runner = tractor_bringup.sac_episode_runner:main",
         ],
     },
 )
