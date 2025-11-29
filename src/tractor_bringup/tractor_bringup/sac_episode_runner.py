@@ -223,14 +223,15 @@ class SACEpisodeRunner(Node):
             if forward_vel > 0.05:
                 reward -= forward_vel * 3.0  # Risky - slow down
 
-        # 5. Centering Reward
+        # 5. Centering Reward (FIXED: Require forward motion for positive rewards)
         if self._left_clearance < 2.0 or self._right_clearance < 2.0:
             balance_diff = abs(self._left_clearance - self._right_clearance)
             if balance_diff > 0.3:
-                reward -= balance_diff * 4.0
+                reward -= balance_diff * 4.0  # Penalty always applies
 
             min_side = min(self._left_clearance, self._right_clearance)
-            if min_side > 0.4:
+            # Only reward good clearance if moving forward (prevent turning-to-face-open-space exploit)
+            if min_side > 0.4 and forward_vel > 0.05:
                 reward += (min_side - 0.4) * 3.0
 
         # 6. Collision Penalty
