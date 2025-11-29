@@ -352,7 +352,7 @@ class V620SACTrainer:
                 export_params=True,
                 do_constant_folding=True,
                 keep_initializers_as_inputs=False,
-                verbose=True,
+                verbose=False,
                 dynamo=False  # Force legacy exporter
             )
             
@@ -366,7 +366,7 @@ class V620SACTrainer:
     def _training_loop(self):
         print("🧵 Training thread started")
         while True:
-            if self.buffer.size > self.args.batch_size * 5: # Wait for some data
+            if self.buffer.size > self.args.batch_size * 2: # Wait for minimal data (reduced from 5)
                 with self.lock:
                     metrics = self.train_step()
                 
@@ -376,6 +376,7 @@ class V620SACTrainer:
                         print(f"Step {self.total_steps} | A_Loss: {metrics['actor_loss']:.3f} C_Loss: {metrics['critic_loss']:.3f} Alpha: {metrics['alpha']:.3f}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(k, v, self.total_steps)
+                        self.writer.flush() # Ensure data is written to disk
                             
                     if self.total_steps % 5000 == 0:
                         self.save_checkpoint()
