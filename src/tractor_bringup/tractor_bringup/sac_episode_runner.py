@@ -178,35 +178,40 @@ class SACEpisodeRunner(Node):
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward Progress Bonus (quadratic for max speed)
+        # 1. Forward Progress Bonus (quadratic for max speed) - IMPROVED
         forward_vel = max(0.0, linear_vel)
         if forward_vel > 0.01:
-            speed_reward = (forward_vel / target_speed) ** 2 * 5.0
+            # Increased from 5.0 to 15.0 for stronger forward motion incentive
+            speed_reward = (forward_vel / target_speed) ** 2 * 15.0
             reward += speed_reward
-            if forward_vel > 0.08:
-                reward += 3.0
+
+            # Speed milestone bonuses
+            if forward_vel > 0.05:
+                reward += 2.0  # Milestone: half speed
+            if forward_vel > 0.10:
+                reward += 3.0  # Milestone: 60% speed
+            if forward_vel > target_speed * 0.8:
+                reward += 4.0  # Milestone: near-max speed
 
         # 2. Backward Motion Penalty
         if linear_vel < -0.01:
             reward -= abs(linear_vel) * 20.0
 
-        # 3. CONDITIONAL Spinning Penalty (Context-Aware for Tank Steering)
-        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.3:
+        # 3. Spinning Penalty (IMPROVED - Tighter control, smart avoidance)
+        if abs(angular_vel) > 0.3:  # Any significant turning
             min_side_clearance = min(self._left_clearance, self._right_clearance)
 
-            if clearance > 1.0 and min_side_clearance > 0.8:
-                # Wide open space - penalize stationary spinning
-                reward -= 12.0 + (abs(angular_vel) * 3.0)
-            elif clearance < 0.5 or min_side_clearance < 0.4:
-                # Tight space - ALLOW point-turns (energy cost only)
-                reward -= abs(angular_vel) * 0.5
-                # Bonus for turning toward open space
-                if (self._left_clearance < self._right_clearance and angular_vel > 0) or \
-                   (self._right_clearance < self._left_clearance and angular_vel < 0):
-                    reward += 2.0
-            else:
-                # Medium clearance - moderate penalty
-                reward -= abs(angular_vel) * 3.0
+            # Base spinning penalty (always applied, increased from 0.5 to 2.0)
+            reward -= abs(angular_vel) * 2.0
+
+            # Additional penalty if unnecessary (open space + not avoiding)
+            if clearance > 1.0 and min_side_clearance > 0.6:
+                reward -= abs(angular_vel) * 3.0  # Further penalize in safe open space
+
+            # Allow gentle turning for obstacle avoidance only
+            if linear_vel > 0.05 and 0.15 < abs(angular_vel) < 0.4:
+                if min_side_clearance < 0.6:  # Only reward if necessary
+                    reward += 2.0  # Small bonus for smart avoidance
 
         # 4. Clearance Adaptation
         if clearance > 1.5:
@@ -249,6 +254,29 @@ class SACEpisodeRunner(Node):
 
         # 10. General angular penalty (prefer straight) - REDUCED from 0.5 to 0.3
         reward -= abs(angular_vel) * 0.3
+
+        # 11. Speed Regulation (prevent extreme speeds)
+        max_safe_speed = 0.12  # Conservative upper limit
+        if linear_vel > max_safe_speed:
+            overspeed_penalty = (linear_vel - max_safe_speed) ** 2 * 10.0
+            reward -= overspeed_penalty
+
+        # 12. Angular Velocity Regulation
+        max_safe_angular = 0.8  # rad/s
+        if abs(angular_vel) > max_safe_angular:
+            angular_excess = (abs(angular_vel) - max_safe_angular) ** 2 * 5.0
+            reward -= angular_excess
+
+        # 13. Corridor Navigation Bonus
+        if self._left_clearance < 1.5 or self._right_clearance < 1.5:
+            # In corridor - reward staying centered
+            clearance_diff = abs(self._left_clearance - self._right_clearance)
+            if clearance_diff < 0.2:
+                reward += 4.0  # Strong bonus for centering
+
+            # Reward smooth forward progress in corridor
+            if forward_vel > 0.08 and abs(angular_vel) < 0.2:
+                reward += 3.0  # Bonus for smooth corridor driving
 
         return reward
 
