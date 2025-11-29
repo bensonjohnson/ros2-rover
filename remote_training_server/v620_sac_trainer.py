@@ -423,7 +423,9 @@ class V620SACTrainer:
                 time.sleep(1.0) # Wait for data
 
     def train_step(self):
+        t0 = time.time()
         batch = self.buffer.sample(self.args.batch_size)
+        t1 = time.time()
         
         # Unpack
         state_rgb = batch['rgb']
@@ -470,6 +472,8 @@ class V620SACTrainer:
         critic_loss.backward()
         self.critic_optimizer.step()
         
+        t2 = time.time()
+        
         # --- Actor Update ---
         # Re-compute features for actor (gradient flows through encoder)
         actor_features = self.actor_encoder(state_rgb, state_depth)
@@ -483,17 +487,6 @@ class V620SACTrainer:
         log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
         
         # Use critic to evaluate action
-        # We detach critic encoder here? Usually yes, or no?
-        # In standard SAC, actor loss does NOT update critic parameters.
-        # But if we pass (actor_features) to critic, we are mixing.
-        # We should use critic_encoder(state) for Q evaluation.
-        # But we want gradients to flow from Q to Actor.
-        # So we pass current_action to critic.
-        
-        # We need Q(s, pi(s)).
-        # We should use the CRITIC encoder for the state input to Q.
-        # But we don't want to update Critic Encoder with Actor Loss.
-        # So we detach the features from critic encoder.
         with torch.no_grad():
             q_features = self.critic_encoder(state_rgb, state_depth)
             
@@ -507,6 +500,8 @@ class V620SACTrainer:
         actor_loss.backward()
         self.actor_optimizer.step()
         
+        t3 = time.time()
+        
         # --- Alpha Update ---
         alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
         
@@ -518,6 +513,11 @@ class V620SACTrainer:
         self.soft_update(self.critic_encoder, self.target_critic_encoder)
         self.soft_update(self.critic1, self.target_critic1)
         self.soft_update(self.critic2, self.target_critic2)
+        
+        t4 = time.time()
+        
+        if (t4 - t0) > 1.0:
+            tqdm.write(f"⏱️ Timing: Sample={t1-t0:.3f}s, Critic={t2-t1:.3f}s, Actor={t3-t2:.3f}s, Misc={t4-t3:.3f}s")
         
         return {
             'actor_loss': actor_loss.item(),
