@@ -178,9 +178,9 @@ class QNetwork(nn.Module):
     
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
-    def __init__(self, proprio_dim: int = 6, action_dim: int = 2):
+    def __init__(self, feature_dim: int, proprio_dim: int = 6, action_dim: int = 2):
         super().__init__()
-        self.encoder = RGBDEncoder()
+        # self.encoder = RGBDEncoder() # Removed: using shared encoder
         
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
@@ -192,13 +192,17 @@ class QNetwork(nn.Module):
         
         # Q-network: takes (features + proprio + action)
         self.q_net = nn.Sequential(
-            nn.Linear(self.encoder.output_dim + 64 + action_dim, 256),
+            nn.Linear(feature_dim + 64 + action_dim, 256),
             nn.ReLU(inplace=True),
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 1)
         )
 
+    def forward(self, features, proprio, action):
+        # features = self.encoder(rgb, depth) # Removed
+        proprio_feat = self.proprio_encoder(proprio)
+        
         combined = torch.cat([features, proprio_feat, action], dim=1)
         return self.q_net(combined)
 
