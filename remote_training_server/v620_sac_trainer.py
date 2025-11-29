@@ -50,13 +50,12 @@ class ReplayBuffer:
         
         # Storage (CPU RAM to save GPU memory, move to GPU during sampling)
         # Using uint8 for images to save RAM
-        # Enable pin_memory for faster CPU->GPU transfer
-        self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8, pin_memory=True)
-        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16, pin_memory=True) # Optimized to float16
-        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, pin_memory=True)
-        self.actions = torch.zeros((capacity, 2), dtype=torch.float32, pin_memory=True)
-        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, pin_memory=True)
-        self.dones = torch.zeros((capacity, 1), dtype=torch.float32, pin_memory=True)
+        self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
+        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16) # Optimized to float16
+        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
+        self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
+        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32)
+        self.dones = torch.zeros((capacity, 1), dtype=torch.float32)
         
     def add_batch(self, batch_data: Dict):
         """Add a batch of sequential data and construct transitions."""
@@ -386,7 +385,11 @@ class V620SACTrainer:
                     pbar = tqdm(initial=self.total_steps, desc="🚀 Training", unit="step", dynamic_ncols=True)
 
                 with self.lock:
+                    t0 = time.time()
                     metrics = self.train_step()
+                    t1 = time.time()
+                    if (t1 - t0) > 1.0:
+                        tqdm.write(f"⚠️ Slow step: {t1-t0:.2f}s")
                 
                 if metrics:
                     self.total_steps += 1
