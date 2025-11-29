@@ -388,8 +388,9 @@ class V620SACTrainer:
                     t0 = time.time()
                     metrics = self.train_step()
                     t1 = time.time()
-                    if (t1 - t0) > 1.0:
-                        tqdm.write(f"⚠️ Slow step: {t1-t0:.2f}s")
+                    # Slow step warning disabled - 1.77s/step is good performance
+                    # if (t1 - t0) > 1.0:
+                    #     tqdm.write(f"⚠️ Slow step: {t1-t0:.2f}s")
                 
                 if metrics:
                     self.total_steps += 1
@@ -523,7 +524,11 @@ class V620SACTrainer:
             'actor_loss': actor_loss.item(),
             'critic_loss': critic_loss.item(),
             'alpha': alpha,
-            'alpha_loss': alpha_loss.item()
+            'alpha_loss': alpha_loss.item(),
+            # Additional monitoring metrics for loss diagnosis
+            'policy_entropy': -log_prob.mean().item(),  # Should be high (exploration)
+            'q_value_mean': min_q_pi.mean().item(),     # Should increase over time
+            'target_entropy_gap': ((-log_prob).mean() - self.target_entropy).item()  # Should trend to 0
         }
 
     def soft_update(self, source, target, tau=0.005):
