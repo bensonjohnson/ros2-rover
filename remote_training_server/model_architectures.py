@@ -173,8 +173,8 @@ class ValueHead(nn.Module):
         return self.value(combined).squeeze(-1)
 
 
-class CriticNetwork(nn.Module):
-    """Critic network for PGA-MAP-Elites (Q-function).
+class QNetwork(nn.Module):
+    """Critic network for SAC (Q-function).
     
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
