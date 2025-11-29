@@ -19,6 +19,8 @@ import json
 import argparse
 import threading
 import queue
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 import copy
@@ -364,19 +366,43 @@ class V620SACTrainer:
             print(f"❌ Export failed: {e}")
 
     def _training_loop(self):
-        print("🧵 Training thread started")
+        print("🧵 Training thread started (Waiting for data...)")
+        pbar = None
+        
         while True:
-            if self.buffer.size > self.args.batch_size * 2: # Wait for minimal data (reduced from 5)
+            if self.buffer.size > self.args.batch_size * 2: # Wait for minimal data
+                
+                # Initialize display on first batch
+                if pbar is None:
+                    # Clear screen: \033[H (home) \033[J (clear down)
+                    print("\033[H\033[J", end="") 
+                    print("==================================================")
+                    print("         SAC TRAINING DASHBOARD (V620)            ")
+                    print("==================================================")
+                    pbar = tqdm(initial=self.total_steps, desc="🚀 Training", unit="step", dynamic_ncols=True)
+
                 with self.lock:
                     metrics = self.train_step()
                 
                 if metrics:
                     self.total_steps += 1
+                    pbar.update(1)
+                    
+                    # Update stats every 10 steps for smooth display
+                    if self.total_steps % 10 == 0:
+                        pbar.set_postfix({
+                            'Actor': f"{metrics['actor_loss']:.2f}",
+                            'Critic': f"{metrics['critic_loss']:.2f}",
+                            'Alpha': f"{metrics['alpha']:.3f}",
+                            'Buffer': f"{self.buffer.size}",
+                            'Ver': f"v{self.model_version}"
+                        })
+
+                    # Log to TensorBoard every 100 steps
                     if self.total_steps % 100 == 0:
-                        print(f"Step {self.total_steps} | A_Loss: {metrics['actor_loss']:.3f} C_Loss: {metrics['critic_loss']:.3f} Alpha: {metrics['alpha']:.3f}")
                         for k, v in metrics.items():
                             self.writer.add_scalar(k, v, self.total_steps)
-                        self.writer.flush() # Ensure data is written to disk
+                        self.writer.flush()
                             
                     if self.total_steps % 5000 == 0:
                         self.save_checkpoint()
