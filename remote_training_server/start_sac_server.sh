@@ -124,32 +124,11 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo "✓ ROCm environment variables set"
 fi
 
-# Set up signal handling
-cleanup() {
-  echo ""
-  echo "🛑 Shutting down SAC server..."
-  kill $TRAINER_PID 2>/dev/null || true
-  echo "✅ Shutdown complete"
-  exit 0
-}
-
-trap cleanup SIGINT SIGTERM
-
-# Start SAC server
-echo ""
-echo "=================================================="
-echo "Starting SAC Trainer"
-echo "=================================================="
-echo ""
-echo "Listening for experience batches on port ${PORT}"
-echo "Checkpoints: ${CHECKPOINT_DIR}"
-echo "Logs: ${LOG_DIR}"
-echo ""
-echo "Monitor training with:"
-echo "  tensorboard --logdir ${LOG_DIR}"
-echo ""
-echo "Press Ctrl+C to stop"
-echo ""
+# Start TensorBoard
+echo "Starting TensorBoard..."
+tensorboard --logdir ${LOG_DIR} --port 6006 --bind_all > /dev/null 2>&1 &
+TB_PID=$!
+echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
 LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
@@ -165,6 +144,18 @@ TRAINER_PID=$!
 echo "SAC server PID: ${TRAINER_PID}"
 echo "Log file: ${LOG_FILE}"
 echo ""
+
+# Set up signal handling
+cleanup() {
+  echo ""
+  echo "🛑 Shutting down SAC server..."
+  kill $TRAINER_PID 2>/dev/null || true
+  kill $TB_PID 2>/dev/null || true
+  echo "✅ Shutdown complete"
+  exit 0
+}
+
+trap cleanup SIGINT SIGTERM
 
 # Wait for trainer
 wait $TRAINER_PID
