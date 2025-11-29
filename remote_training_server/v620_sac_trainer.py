@@ -543,7 +543,9 @@ class V620SACTrainer:
                 response = {'type': 'ack'}
                 
                 if msg['type'] == 'data_batch':
-                    self.buffer.add_batch(msg['data'])
+                    # Thread-safe buffer access to prevent race condition with training loop
+                    with self.lock:
+                        self.buffer.add_batch(msg['data'])
                     response['curriculum'] = {'collision_dist': 0.5, 'max_speed': 0.18}
                 elif msg['type'] == 'check_status':
                     response['status'] = 'ready'
