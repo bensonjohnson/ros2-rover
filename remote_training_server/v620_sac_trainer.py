@@ -319,7 +319,7 @@ class V620SACTrainer:
             'total_steps': self.total_steps,
             'model_version': self.model_version
         }, path)
-        print(f"💾 Saved {path}")
+        tqdm.write(f"💾 Saved {path}")
         self.export_onnx()
 
     def export_onnx(self, increment_version=True):
@@ -360,14 +360,15 @@ class V620SACTrainer:
             
             if increment_version:
                 self.model_version += 1
-            print(f"📦 Exported ONNX (v{self.model_version})")
+            tqdm.write(f"📦 Exported ONNX (v{self.model_version})")
             
         except Exception as e:
-            print(f"❌ Export failed: {e}")
+            tqdm.write(f"❌ Export failed: {e}")
 
     def _training_loop(self):
         print("🧵 Training thread started (Waiting for data...)")
         pbar = None
+        last_time = time.time()
         
         while True:
             if self.buffer.size > self.args.batch_size * 2: # Wait for minimal data
@@ -390,11 +391,17 @@ class V620SACTrainer:
                     
                     # Update stats every 10 steps for smooth display
                     if self.total_steps % 10 == 0:
+                        current_time = time.time()
+                        dt = current_time - last_time
+                        last_time = current_time
+                        steps_per_sec = 10 / dt if dt > 0 else 0
+                        samples_per_sec = steps_per_sec * self.args.batch_size
+                        
                         pbar.set_postfix({
-                            'Actor': f"{metrics['actor_loss']:.2f}",
-                            'Critic': f"{metrics['critic_loss']:.2f}",
+                            'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
                             'Alpha': f"{metrics['alpha']:.3f}",
-                            'Buffer': f"{self.buffer.size}",
+                            'S/s': f"{int(samples_per_sec)}", # Samples per second
+                            'Buf': f"{self.buffer.size}",
                             'Ver': f"v{self.model_version}"
                         })
 
