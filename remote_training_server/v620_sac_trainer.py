@@ -49,7 +49,7 @@ class ReplayBuffer:
         # Storage (CPU RAM to save GPU memory, move to GPU during sampling)
         # Using uint8 for images to save RAM
         self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
-        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float32)
+        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float16) # Optimized to float16
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32)
@@ -124,7 +124,7 @@ class ReplayBuffer:
         end_idx = start_idx + count
         
         self.rgb[buffer_idx:buffer_idx+count] = torch.as_tensor(rgb[start_idx:end_idx])
-        self.depth[buffer_idx:buffer_idx+count] = torch.as_tensor(depth[start_idx:end_idx])
+        self.depth[buffer_idx:buffer_idx+count] = torch.as_tensor(depth[start_idx:end_idx]).to(torch.float16) # Convert to float16
         self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx])
         self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx])
         self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx]).unsqueeze(1)
@@ -504,7 +504,7 @@ class V620SACTrainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
-    parser.add_argument('--buffer_size', type=int, default=100000)
+    parser.add_argument('--buffer_size', type=int, default=50000)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
