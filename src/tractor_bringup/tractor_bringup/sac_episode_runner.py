@@ -385,38 +385,29 @@ class SACEpisodeRunner(Node):
             action = np.zeros(2) # Initialize action to avoid UnboundLocalError
             value = 0.0
 
-        # INTELLIGENT WARMUP SEQUENCE (Model 0)
-        # This overrides any model output if we are in warmup phase
-        if self._current_model_version == 0:
-            if not self._warmup_active:
-                self._warmup_active = True
-                self.get_logger().info('🔥 Starting Continuous Warmup: Driving Straight until Model 1...')
-
-            # Always drive forward
-            action = np.array([0.8, 0.0], dtype=np.float32)
-            
-        elif self._warmup_active:
-             # Just switched from 0 to >0
-             self.get_logger().info('✅ Warmup Complete (Model loaded). Switching to policy.')
-             self._warmup_active = False
+        # WARMUP DISABLED - New reward function provides strong forward motion incentive
+        # Old warmup forced straight driving during model version 0
+        # With 3x stronger forward rewards (24 max vs 8 old), this is no longer needed
+        # if self._current_model_version == 0:
+        #     if not self._warmup_active:
+        #         self._warmup_active = True
+        #         self.get_logger().info('🔥 Starting Continuous Warmup: Driving Straight until Model 1...')
+        #     action = np.array([0.8, 0.0], dtype=np.float32)
+        # elif self._warmup_active:
+        #     self.get_logger().info('✅ Warmup Complete (Model loaded). Switching to policy.')
+        #     self._warmup_active = False
 
         # 3. Add Exploration Noise (Gaussian)
-        # Skip noise during warmup (Model 0)
-        if self._current_model_version == 0:
-             # During warmup, action is deterministic and hardcoded
-             # We set action_mean to action so log_prob calculation works (it will be 0 distance)
-             action_mean = action
-             # No noise added
-        else:
-            # We use a fixed std dev for exploration on rover, or could receive it from server
-            noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
-            action = np.clip(action_mean + noise, -1.0, 1.0)
+        # Noise is always applied (warmup disabled, no exception needed)
+        # We use a fixed std dev for exploration on rover, or could receive it from server
+        noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
+        action = np.clip(action_mean + noise, -1.0, 1.0)
 
-            # Safety check: if action_mean has NaN, use zero and warn
-            if np.isnan(action_mean).any():
-                self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
-                action_mean = np.zeros(2)
-                action = np.clip(noise, -1.0, 1.0)  # Pure random
+        # Safety check: if action_mean has NaN, use zero and warn
+        if np.isnan(action_mean).any():
+            self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
+            action_mean = np.zeros(2)
+            action = np.clip(noise, -1.0, 1.0)  # Pure random
 
         # 4. Execute Action
         cmd = Twist()
