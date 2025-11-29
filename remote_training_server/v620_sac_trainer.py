@@ -193,8 +193,8 @@ class V620SACTrainer:
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-            torch.backends.cudnn.benchmark = False # Disabled per user request (stability)
-            # print("✓ Enabled cuDNN benchmark")
+            torch.backends.cudnn.benchmark = True # REQUIRED for speed
+            print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU")
