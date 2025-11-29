@@ -197,12 +197,15 @@ class SACEpisodeRunner(Node):
         if linear_vel < -0.01:
             reward -= abs(linear_vel) * 20.0
 
-        # 3. Spinning Penalty (IMPROVED - Tighter control, smart avoidance)
+        # 3. Spinning Penalty (IMPROVED - Prevent spinning in place exploit)
         if abs(angular_vel) > 0.3:  # Any significant turning
             min_side_clearance = min(self._left_clearance, self._right_clearance)
 
-            # Base spinning penalty (always applied, increased from 0.5 to 2.0)
-            reward -= abs(angular_vel) * 2.0
+            # Base spinning penalty - stronger when stationary to prevent exploit
+            if forward_vel < 0.05:  # SPINNING IN PLACE
+                reward -= abs(angular_vel) * 4.0  # Strong penalty for stationary spinning
+            else:
+                reward -= abs(angular_vel) * 2.0  # Lighter penalty while moving forward
 
             # Additional penalty if unnecessary (open space + not avoiding)
             if clearance > 1.0 and min_side_clearance > 0.6:
@@ -252,8 +255,8 @@ class SACEpisodeRunner(Node):
             if np.sum(action_diff) < 0.15:
                 reward += 6.0
 
-        # 10. General angular penalty (prefer straight) - REDUCED from 0.5 to 0.3
-        reward -= abs(angular_vel) * 0.3
+        # 10. General angular penalty (prefer straight) - INCREASED from 0.3 to 0.5
+        reward -= abs(angular_vel) * 0.5
 
         # 11. Speed Regulation (prevent extreme speeds)
         max_safe_speed = 0.12  # Conservative upper limit
@@ -267,12 +270,12 @@ class SACEpisodeRunner(Node):
             angular_excess = (abs(angular_vel) - max_safe_angular) ** 2 * 5.0
             reward -= angular_excess
 
-        # 13. Corridor Navigation Bonus
+        # 13. Corridor Navigation Bonus (FIXED: Require forward motion to prevent spinning exploit)
         if self._left_clearance < 1.5 or self._right_clearance < 1.5:
-            # In corridor - reward staying centered
+            # In corridor - reward staying centered ONLY while moving forward
             clearance_diff = abs(self._left_clearance - self._right_clearance)
-            if clearance_diff < 0.2:
-                reward += 4.0  # Strong bonus for centering
+            if clearance_diff < 0.2 and forward_vel > 0.05:  # REQUIRE forward motion
+                reward += 4.0  # Strong bonus for centering while moving
 
             # Reward smooth forward progress in corridor
             if forward_vel > 0.08 and abs(angular_vel) < 0.2:
