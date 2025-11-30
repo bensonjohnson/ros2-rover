@@ -528,6 +528,8 @@ class SACEpisodeRunner(Node):
             if server_version > self._current_model_version:
                 self._current_model_version = -1  # Force download
                 self._model_update_needed = True
+                self.get_logger().info("🚀 Triggering initial model download...")
+                asyncio.create_task(self._download_model())
         except Exception as e:
             self.get_logger().info(f"ℹ No model metadata yet: {e}")
 
