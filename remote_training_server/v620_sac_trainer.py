@@ -114,7 +114,7 @@ class ReplayBuffer:
             second_part = batch_size - first_part
             
             self._add_slice(rgb, depth, proprio, actions, rewards, dones, 0, first_part, self.ptr)
-            self._add_slice(rgb, depth, proprio, actions, rewards, dones, first_part, batch_size, 0)
+            self._add_slice(rgb, depth, proprio, actions, rewards, dones, first_part, second_part, 0)
             
             self.ptr = second_part
             self.full = True
