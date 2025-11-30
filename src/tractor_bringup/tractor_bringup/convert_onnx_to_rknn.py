@@ -268,7 +268,7 @@ def convert_onnx_to_rknn(
         print(f"  Size: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
 
         # Cleanup
-        rknn.release()
+        # rknn.release() # Avoid double free on exit
 
         return True
 
