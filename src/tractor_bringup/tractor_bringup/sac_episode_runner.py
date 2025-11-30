@@ -78,7 +78,7 @@ class SACEpisodeRunner(Node):
         print("==================================================")
         print("         SAC ROVER RUNNER (V620)                  ")
         print("==================================================")
-        self.pbar = tqdm(total=self.batch_size, desc="🚜 Collecting", unit="step", dynamic_ncols=True)
+        self.pbar = tqdm(total=200, desc="⏳ Server Training", unit="step", dynamic_ncols=True)
         self.total_steps = 0
         self.episode_reward = 0.0
 
@@ -442,7 +442,7 @@ class SACEpisodeRunner(Node):
             # Update Dashboard
             self.total_steps += 1
             self.episode_reward += reward
-            self.pbar.update(1)
+            # self.pbar.update(1) # Pbar now tracks server progress
             self.pbar.set_postfix({
                 'Rew': f"{reward:.2f}",
                 'Vel': f"{current_linear:.2f}",
@@ -506,6 +506,9 @@ class SACEpisodeRunner(Node):
 
             # Subscribe to model metadata updates
             await self.nc.subscribe("models.sac.metadata", cb=self._on_model_metadata)
+            
+            # Subscribe to server status
+            await self.nc.subscribe("server.sac.status", cb=self._on_server_status)
 
             # Start publishing experience batches in background
             asyncio.create_task(self._publish_experience_loop())
@@ -582,6 +585,27 @@ class SACEpisodeRunner(Node):
 
         except Exception as e:
             self.get_logger().error(f"Model metadata callback error: {e}")
+
+    async def _on_server_status(self, msg):
+        """Callback for server status updates."""
+        try:
+            status = deserialize_status(msg.data)
+            total_steps = status.get("total_steps", 0)
+            
+            # Update progress bar to show steps towards next model (modulo 200)
+            progress = total_steps % 200
+            self.pbar.n = progress
+            self.pbar.refresh()
+            
+            # Update description if model version changed
+            server_ver = status.get("model_version", 0)
+            if server_ver > self._current_model_version:
+                 self.pbar.set_description(f"🚀 New Model v{server_ver} Ready!")
+            else:
+                 self.pbar.set_description(f"⏳ Training v{server_ver}")
+
+        except Exception as e:
+            pass # Don't spam errors on status updates
 
     async def _download_model(self):
         """Download and convert the latest model from JetStream."""
@@ -696,7 +720,7 @@ class SACEpisodeRunner(Node):
                     # self.pbar.write(f"✅ Batch published (seq={ack.seq})") # Reduce spam
                     
                     # Reset pbar for next batch
-                    self.pbar.reset()
+                    # self.pbar.reset() # Don't reset, we track server progress now
 
             except Exception as e:
                 self.get_logger().error(f"Experience publish error: {type(e).__name__}: {e}")
