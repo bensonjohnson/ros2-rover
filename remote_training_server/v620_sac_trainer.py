@@ -375,8 +375,8 @@ class V620SACTrainer:
             tqdm.write(f"📦 Exported ONNX (v{self.model_version})")
 
             # Schedule model publish to NATS (if connected)
-            if self.nc is not None and self.js is not None:
-                asyncio.create_task(self.publish_model_update())
+            if self.nc is not None and self.js is not None and self.loop is not None:
+                asyncio.run_coroutine_threadsafe(self.publish_model_update(), self.loop)
 
         except Exception as e:
             tqdm.write(f"❌ Export failed: {e}")
@@ -754,6 +754,9 @@ class V620SACTrainer:
     async def run(self):
         """Main NATS event loop."""
         print(f"🚀 SAC Server starting with NATS at {self.nats_server}")
+        
+        # Capture event loop for threadsafe calls
+        self.loop = asyncio.get_running_loop()
 
         # Initialize NATS connection
         await self.setup_nats()
