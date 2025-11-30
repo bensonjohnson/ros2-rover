@@ -137,12 +137,12 @@ class ReplayBuffer:
         
         end_idx = start_idx + count
         
-        self.rgb[buffer_idx:buffer_idx+count] = torch.as_tensor(rgb[start_idx:end_idx])
-        self.depth[buffer_idx:buffer_idx+count] = torch.as_tensor(depth[start_idx:end_idx]).to(torch.float16) # Convert to float16
-        self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx])
-        self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx])
-        self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx]).unsqueeze(1)
-        self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx]).unsqueeze(1)
+        self.rgb[buffer_idx:buffer_idx+count] = torch.as_tensor(rgb[start_idx:end_idx].copy())
+        self.depth[buffer_idx:buffer_idx+count] = torch.as_tensor(depth[start_idx:end_idx].copy()).to(torch.float16) # Convert to float16
+        self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy())
+        self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy())
+        self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1)
+        self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx].copy()).unsqueeze(1)
         
         # We don't store next_state explicitly to save RAM.
         # We store sequential data.
