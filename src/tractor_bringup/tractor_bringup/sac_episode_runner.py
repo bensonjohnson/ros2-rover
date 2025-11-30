@@ -16,6 +16,7 @@ import asyncio
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict
 from collections import deque
+from tqdm import tqdm
 
 import numpy as np
 import rclpy
@@ -137,6 +138,15 @@ class SACEpisodeRunner(Node):
 
         # Episode reset client for encoder baseline reset
         self.reset_episode_client = self.create_client(Trigger, '/reset_episode')
+
+        # TQDM Dashboard
+        print("\033[H\033[J", end="") # Clear screen
+        print("==================================================")
+        print("         SAC ROVER RUNNER (V620)                  ")
+        print("==================================================")
+        self.pbar = tqdm(total=self.batch_size, desc="🚜 Collecting", unit="step", dynamic_ncols=True)
+        self.total_steps = 0
+        self.episode_reward = 0.0
 
         self.get_logger().info('🚀 SAC Runner Initialized')
 
@@ -420,6 +430,18 @@ class SACEpisodeRunner(Node):
             self._data_buffer['rewards'].append(reward)
             self._data_buffer['dones'].append(collision)
             
+            # Update Dashboard
+            self.total_steps += 1
+            self.episode_reward += reward
+            self.pbar.update(1)
+            self.pbar.set_postfix({
+                'Rew': f"{reward:.2f}",
+                'Vel': f"{current_linear:.2f}",
+                'Conf': f"{self._velocity_confidence:.2f}",
+                'Mod': f"v{self._current_model_version}",
+                'Buf': f"{len(self._data_buffer['rewards'])}"
+            })
+            
         # Save calibration data (keep ~100 samples)
         # We save occasionally to avoid disk I/O spam
         if np.random.rand() < 0.1: # 10% chance to save sample
@@ -455,9 +477,9 @@ class SACEpisodeRunner(Node):
             try:
                 response = fut.result()
                 if response.success:
-                    self.get_logger().info(f'Episode reset: {response.message}')
+                    self.pbar.write(f'Episode reset: {response.message}')
                 else:
-                    self.get_logger().warn(f'Episode reset failed: {response.message}')
+                    self.pbar.write(f'Episode reset failed: {response.message}')
             except Exception as e:
                 self.get_logger().error(f'Episode reset error: {e}')
 
@@ -496,13 +518,13 @@ class SACEpisodeRunner(Node):
 
     async def _connect_nats(self):
         """Connect to NATS server with auto-reconnect."""
-        self.get_logger().info(f"🔌 Connecting to NATS at {self.nats_server}...")
+        self.pbar.write(f"🔌 Connecting to NATS at {self.nats_server}...")
 
         async def on_disconnected():
-            self.get_logger().warn("⚠ NATS disconnected")
+            self.pbar.write("⚠ NATS disconnected")
 
         async def on_reconnected():
-            self.get_logger().info("✅ NATS reconnected")
+            self.pbar.write("✅ NATS reconnected")
 
         self.nc = await nats.connect(
             servers=[self.nats_server],
@@ -516,14 +538,14 @@ class SACEpisodeRunner(Node):
         )
 
         self.js = self.nc.jetstream()
-        self.get_logger().info("✅ Connected to NATS")
+        self.pbar.write("✅ Connected to NATS")
 
         # Try to get latest model metadata
         try:
             msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.metadata")
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
-            self.get_logger().info(f"✅ Server has model v{server_version}")
+            self.pbar.write(f"✅ Server has model v{server_version}")
 
             if server_version > self._current_model_version:
                 self._current_model_version = -1  # Force download
@@ -538,15 +560,16 @@ class SACEpisodeRunner(Node):
         try:
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
-            self.get_logger().info(f"📨 Received metadata: Server has v{server_version}, Local has v{self._current_model_version}")
+            # self.pbar.write(f"📨 Received metadata: Server has v{server_version}, Local has v{self._current_model_version}")
 
             if server_version > self._current_model_version:
-                self.get_logger().info(f"🔔 New model v{server_version} available (current: v{self._current_model_version})")
+                self.pbar.write(f"🔔 New model v{server_version} available (current: v{self._current_model_version})")
                 self._model_update_needed = True
                 # Download model in background
                 asyncio.create_task(self._download_model())
             else:
-                self.get_logger().info(f"✓ Local model is up to date (v{self._current_model_version})")
+                pass
+                # self.pbar.write(f"✓ Local model is up to date (v{self._current_model_version})")
 
         except Exception as e:
             self.get_logger().error(f"Model metadata callback error: {e}")
@@ -557,18 +580,18 @@ class SACEpisodeRunner(Node):
             return
 
         try:
-            self.get_logger().info("📥 Downloading model from NATS...")
+            self.pbar.write("📥 Downloading model from NATS...")
 
             # Get latest model from stream
             msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.update")
-            self.get_logger().info(f"📦 Received model message: {len(msg.data)} bytes")
+            # self.pbar.write(f"📦 Received model message: {len(msg.data)} bytes")
             
             model_data = deserialize_model_update(msg.data)
 
             onnx_bytes = model_data["onnx_bytes"]
             model_version = model_data["version"]
             
-            self.get_logger().info(f"📦 Deserialized model v{model_version}, ONNX size: {len(onnx_bytes)} bytes")
+            self.pbar.write(f"📦 Deserialized model v{model_version}, ONNX size: {len(onnx_bytes)} bytes")
 
             # Save ONNX to temp file
             onnx_path = self._temp_dir / "latest_model.onnx"
@@ -577,64 +600,61 @@ class SACEpisodeRunner(Node):
                 f.flush()
                 os.fsync(f.fileno())
 
-            self.get_logger().info(f"💾 Saved ONNX model v{model_version} to {onnx_path}")
+            self.pbar.write(f"💾 Saved ONNX model v{model_version} to {onnx_path}")
 
             # Convert to RKNN
             if HAS_RKNN:
-                self.get_logger().info("🔄 Converting to RKNN (this may take a minute)...")
+                self.pbar.write("🔄 Converting to RKNN (this may take a minute)...")
                 rknn_path = str(onnx_path).replace('.onnx', '.rknn')
 
                 # Call conversion script
                 cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path), str(self._calibration_dir)]
-                self.get_logger().info(f"🛠 Executing: {' '.join(cmd)}")
+                self.pbar.write(f"🛠 Executing: {' '.join(cmd)}")
 
                 if not os.path.exists("convert_onnx_to_rknn.sh"):
-                    self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found in current directory!")
-                    # Try absolute path or relative to package? 
-                    # The user said @[start_sac_rover.sh] is in root, so likely running from root.
-                    # Let's check if it exists in expected location
+                    self.pbar.write("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
                     if os.path.exists("/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"):
                          cmd[0] = "/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"
-                         self.get_logger().info(f"✓ Found script at {cmd[0]}")
+                         self.pbar.write(f"✓ Found script at {cmd[0]}")
                     else:
                          self.get_logger().error("❌ Conversion script missing!")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 
                 if result.returncode != 0:
-                    self.get_logger().error(f"❌ RKNN Conversion failed with code {result.returncode}")
-                    self.get_logger().error(f"Stdout: {result.stdout}")
-                    self.get_logger().error(f"Stderr: {result.stderr}")
+                    self.pbar.write(f"❌ RKNN Conversion failed with code {result.returncode}")
+                    self.pbar.write(f"Stdout: {result.stdout}")
+                    self.pbar.write(f"Stderr: {result.stderr}")
                 elif os.path.exists(rknn_path):
-                    self.get_logger().info("✅ RKNN Conversion successful")
+                    self.pbar.write("✅ RKNN Conversion successful")
 
                     # Load new model
-                    self.get_logger().info("🔄 Loading new RKNN model...")
+                    self.pbar.write("🔄 Loading new RKNN model...")
                     new_runtime = RKNNLite()
                     ret = new_runtime.load_rknn(rknn_path)
                     if ret != 0:
-                        self.get_logger().error(f"Load RKNN failed: {ret}")
+                        self.pbar.write(f"Load RKNN failed: {ret}")
                     else:
                         ret = new_runtime.init_runtime()
                         if ret != 0:
-                            self.get_logger().error(f"Init RKNN runtime failed: {ret}")
+                            self.pbar.write(f"Init RKNN runtime failed: {ret}")
                         else:
                             # Swap runtime
                             self._rknn_runtime = new_runtime
                             self._current_model_version = model_version
                             self._model_ready = True
                             self._model_update_needed = False
-                            self.get_logger().info(f"🚀 New model v{model_version} loaded and active!")
+                            self.pbar.write(f"🚀 New model v{model_version} loaded and active!")
                 else:
-                    self.get_logger().error(f"RKNN Conversion failed: Output file {rknn_path} not found")
+                    self.pbar.write(f"RKNN Conversion failed: Output file {rknn_path} not found")
             else:
                 # If no RKNN (e.g. testing on PC), just mark as updated
-                self.get_logger().info("⚠ RKNN not available, skipping conversion (simulating success)")
+                self.pbar.write("⚠ RKNN not available, skipping conversion (simulating success)")
                 self._current_model_version = model_version
                 self._model_update_needed = False
 
         except Exception as e:
-            self.get_logger().error(f"Model download failed: {e}")
+            self.pbar.write(f"Model download failed: {e}")
             import traceback
             traceback.print_exc()
 
@@ -657,14 +677,17 @@ class SACEpisodeRunner(Node):
                     msg_bytes = serialize_batch(batch_to_send)
                     msg_size_mb = len(msg_bytes) / (1024 * 1024)
 
-                    self.get_logger().info(f"📤 Publishing batch of {len(batch_to_send['rewards'])} steps, size: {msg_size_mb:.2f} MB ({len(msg_bytes):,} bytes)")
+                    self.pbar.write(f"📤 Publishing batch of {len(batch_to_send['rewards'])} steps, size: {msg_size_mb:.2f} MB")
 
                     ack = await self.js.publish(
                         subject="rover.experience",
                         payload=msg_bytes,
                         timeout=10.0
                     )
-                    self.get_logger().info(f"✅ Batch published (seq={ack.seq})")
+                    # self.pbar.write(f"✅ Batch published (seq={ack.seq})") # Reduce spam
+                    
+                    # Reset pbar for next batch
+                    self.pbar.reset()
 
             except Exception as e:
                 self.get_logger().error(f"Experience publish error: {type(e).__name__}: {e}")
