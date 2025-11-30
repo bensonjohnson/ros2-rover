@@ -253,6 +253,14 @@ class V620SACTrainer:
         # ZMQ
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
+        # Prevent stale connections from blocking new requests
+        self.socket.setsockopt(zmq.LINGER, 0)  # Close immediately
+        self.socket.setsockopt(zmq.RCVTIMEO, 30000)  # 30s receive timeout
+        # TCP keepalive to detect dead connections (Linux-specific)
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE, 1)  # Enable keepalive
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 60)  # Start after 60s idle
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10)  # Probe every 10s
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3)  # 3 failed probes = dead
         self.socket.bind(f"tcp://*:{args.port}")
         
         # Logging
@@ -574,6 +582,13 @@ class V620SACTrainer:
         except:
             pass
         self.socket = self.context.socket(zmq.REP)
+        # Reapply socket options
+        self.socket.setsockopt(zmq.LINGER, 0)
+        self.socket.setsockopt(zmq.RCVTIMEO, 30000)
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 60)
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10)
+        self.socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3)
         self.socket.bind(f"tcp://*:{self.args.port}")
         print(f"🔄 ZMQ socket recreated on port {self.args.port}")
 
@@ -583,9 +598,6 @@ class V620SACTrainer:
 
         while True:
             try:
-                # Set receive timeout to detect hung connections
-                self.socket.setsockopt(zmq.RCVTIMEO, 30000)  # 30 second timeout
-
                 msg = self.socket.recv_pyobj()
                 response = {'type': 'ack'}
 
