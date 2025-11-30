@@ -475,7 +475,12 @@ class SACEpisodeRunner(Node):
                         self._initial_sync_done.set()
                         break
                 else:
-                    self.get_logger().warn("⏳ Waiting for server response...")
+                    # Timeout - socket is now in bad state waiting for response
+                    self.get_logger().warn("⏳ Server not responding. Recreating socket and retrying...")
+                    self.zmq_socket.close()
+                    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+                    self.zmq_socket.connect(self.server_addr)
+                    time.sleep(1.0)
             except Exception as e:
                 self.get_logger().warn(f"Handshake failed: {e}. Recreating socket and retrying...")
                 # Recreate socket to recover from bad state (e.g., after Ctrl+C restart)
