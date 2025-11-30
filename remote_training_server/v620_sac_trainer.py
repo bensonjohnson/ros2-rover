@@ -81,7 +81,9 @@ class ReplayBuffer:
         dones = batch_data['dones']
         
         num_steps = len(rewards)
+        print(f"DEBUG: add_batch called with {num_steps} steps")
         if num_steps < 2:
+            print(f"DEBUG: Batch too small ({num_steps} < 2), ignoring.")
             return # Need at least 2 steps to form a transition
             
         # We can form (num_steps - 1) transitions from a single batch
@@ -681,6 +683,7 @@ class V620SACTrainer:
                 for msg in msgs:
                     try:
                         # Deserialize batch
+                        print(f"DEBUG: Received NATS msg, data size: {len(msg.data)} bytes")
                         batch = deserialize_batch(msg.data)
 
                         # Add to replay buffer (thread-safe)
