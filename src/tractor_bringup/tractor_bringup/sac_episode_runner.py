@@ -654,12 +654,12 @@ class SACEpisodeRunner(Node):
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 
-                if result.returncode != 0:
-                    self.pbar.write(f"❌ RKNN Conversion failed with code {result.returncode}")
-                    self.pbar.write(f"Stdout: {result.stdout}")
-                    self.pbar.write(f"Stderr: {result.stderr}")
-                elif os.path.exists(rknn_path):
-                    self.pbar.write("✅ RKNN Conversion successful")
+                # Check if output file was created despite potential crash (e.g. double free on exit)
+                if os.path.exists(rknn_path):
+                    if result.returncode != 0:
+                        self.pbar.write(f"⚠ RKNN Conversion script crashed (code {result.returncode}) but output file exists. Assuming success.")
+                    else:
+                        self.pbar.write("✅ RKNN Conversion successful")
 
                     # Load new model
                     self.pbar.write("🔄 Loading new RKNN model...")
@@ -679,7 +679,9 @@ class SACEpisodeRunner(Node):
                             self._model_update_needed = False
                             self.pbar.write(f"🚀 New model v{model_version} loaded and active!")
                 else:
-                    self.pbar.write(f"RKNN Conversion failed: Output file {rknn_path} not found")
+                    self.pbar.write(f"❌ RKNN Conversion failed with code {result.returncode}")
+                    self.pbar.write(f"Stdout: {result.stdout}")
+                    self.pbar.write(f"Stderr: {result.stderr}")
             else:
                 # If no RKNN (e.g. testing on PC), just mark as updated
                 self.pbar.write("⚠ RKNN not available, skipping conversion (simulating success)")
