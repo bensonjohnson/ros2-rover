@@ -567,13 +567,28 @@ class V620SACTrainer:
         for param, target_param in zip(source.parameters(), target.parameters()):
             target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
+    def _recreate_socket(self):
+        """Recreate ZMQ socket to recover from corrupted state."""
+        try:
+            self.socket.close()
+        except:
+            pass
+        self.socket = self.context.socket(zmq.REP)
+        self.socket.bind(f"tcp://*:{self.args.port}")
+        print(f"🔄 ZMQ socket recreated on port {self.args.port}")
+
     def run(self):
         print(f"🚀 SAC Server running on {self.args.port}")
+        consecutive_errors = 0
+
         while True:
             try:
+                # Set receive timeout to detect hung connections
+                self.socket.setsockopt(zmq.RCVTIMEO, 30000)  # 30 second timeout
+
                 msg = self.socket.recv_pyobj()
                 response = {'type': 'ack'}
-                
+
                 if msg['type'] == 'data_batch':
                     # Thread-safe buffer access to prevent race condition with training loop
                     with self.lock:
@@ -586,18 +601,35 @@ class V620SACTrainer:
                     with open(os.path.join(self.args.checkpoint_dir, "latest_actor.onnx"), 'rb') as f:
                         response['model_bytes'] = f.read()
                     response['model_version'] = self.model_version
-                    
+
                 elif msg['type'] == 'start_training':
                     # SAC trains continuously, so we just ack
                     # The rover will pause, check status (which is always ready), and resume.
                     # This acts as a periodic sync/checkpoint.
                     response['status'] = 'training_queued'
                     # Force a checkpoint save here so rover gets fresh model
-                    self.save_checkpoint() 
-                    
+                    self.save_checkpoint()
+
                 self.socket.send_pyobj(response)
+                consecutive_errors = 0  # Reset error counter on success
+
+            except zmq.Again:
+                # Timeout - no message received, this is normal
+                consecutive_errors = 0
+                continue
+
             except Exception as e:
-                print(f"Error: {e}")
+                consecutive_errors += 1
+                print(f"❌ Message handler error ({consecutive_errors}/5): {e}")
+                import traceback
+                traceback.print_exc()
+
+                # If we get 5 consecutive errors, recreate the socket (watchdog)
+                if consecutive_errors >= 5:
+                    print(f"🔥 Too many consecutive errors! Recreating socket (watchdog triggered)...")
+                    self._recreate_socket()
+                    consecutive_errors = 0
+                    time.sleep(1.0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
