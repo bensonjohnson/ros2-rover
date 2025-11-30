@@ -73,6 +73,15 @@ class SACEpisodeRunner(Node):
         self.batch_size = int(self.get_parameter('batch_size').value)
         self.collection_duration = float(self.get_parameter('collection_duration').value)
 
+        # TQDM Dashboard (Initialize FIRST to avoid race conditions with threads)
+        print("\033[H\033[J", end="") # Clear screen
+        print("==================================================")
+        print("         SAC ROVER RUNNER (V620)                  ")
+        print("==================================================")
+        self.pbar = tqdm(total=self.batch_size, desc="🚜 Collecting", unit="step", dynamic_ncols=True)
+        self.total_steps = 0
+        self.episode_reward = 0.0
+
         # State
         self._latest_rgb = None
         self._latest_depth = None
@@ -136,9 +145,6 @@ class SACEpisodeRunner(Node):
         # Inference Timer
         self.create_timer(1.0 / self.inference_rate, self._control_loop)
 
-        # Episode reset client for encoder baseline reset
-        self.reset_episode_client = self.create_client(Trigger, '/reset_episode')
-
         # TQDM Dashboard
         print("\033[H\033[J", end="") # Clear screen
         print("==================================================")
@@ -147,6 +153,9 @@ class SACEpisodeRunner(Node):
         self.pbar = tqdm(total=self.batch_size, desc="🚜 Collecting", unit="step", dynamic_ncols=True)
         self.total_steps = 0
         self.episode_reward = 0.0
+
+        # Episode reset client for encoder baseline reset
+        self.reset_episode_client = self.create_client(Trigger, '/reset_episode')
 
         self.get_logger().info('🚀 SAC Runner Initialized')
 
