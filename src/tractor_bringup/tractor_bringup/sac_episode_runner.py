@@ -298,6 +298,9 @@ class SACEpisodeRunner(Node):
         depth = cv2.resize(self._latest_depth, (424, 240))
 
         # Gap Following Analysis
+        h, w = depth.shape
+        roi_y_start = h // 2  # Bottom half only
+
         # Divide depth into 7 vertical strips to find the "deepest" direction
         num_strips = 7
         strip_width = w // num_strips
