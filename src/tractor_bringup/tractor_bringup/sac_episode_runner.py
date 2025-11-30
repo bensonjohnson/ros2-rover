@@ -193,22 +193,22 @@ class SACEpisodeRunner(Node):
             if forward_vel > target_speed * 0.8:
                 reward += 4.0  # Milestone: near-max speed
 
-        # 2. Backward Motion Penalty
+        # 2. Backward Motion Penalty (STRENGTHENED - was 20.0, now 50.0)
         if linear_vel < -0.01:
-            reward -= abs(linear_vel) * 20.0
+            reward -= abs(linear_vel) * 50.0  # Backwards is catastrophic, strong penalty
 
-        # 3. Spinning Penalty (IMPROVED - Prevent spinning in place exploit)
+        # 3. Spinning Penalty (STRENGTHENED - prevent trajectory exploitation)
         if abs(angular_vel) > 0.3:  # Any significant turning
             min_side_clearance = min(self._left_clearance, self._right_clearance)
 
-            # Base spinning penalty - stronger when stationary to prevent exploit
+            # Base spinning penalty - doubled from 4.0 to 8.0 when stationary
             if forward_vel < 0.05:  # SPINNING IN PLACE
-                reward -= abs(angular_vel) * 4.0  # Strong penalty for stationary spinning
+                reward -= abs(angular_vel) * 8.0  # Very strong penalty for stationary spinning
             else:
                 reward -= abs(angular_vel) * 2.0  # Lighter penalty while moving forward
 
-            # Additional penalty if unnecessary (open space + not avoiding)
-            if clearance > 1.0 and min_side_clearance > 0.6:
+            # Additional penalty if unnecessary (FIXED: >= instead of > to catch clearance=1.0)
+            if clearance >= 1.0 and min_side_clearance > 0.6:
                 reward -= abs(angular_vel) * 3.0  # Further penalize in safe open space
 
             # Allow gentle turning for obstacle avoidance only
