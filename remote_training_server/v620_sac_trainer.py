@@ -585,6 +585,12 @@ class V620SACTrainer:
         """Initialize NATS connection and JetStream."""
         print(f"🔌 Connecting to NATS at {self.nats_server}...")
 
+        async def on_disconnected():
+            print("⚠ NATS disconnected")
+
+        async def on_reconnected():
+            print("✅ NATS reconnected")
+
         self.nc = await nats.connect(
             servers=[self.nats_server],
             name="sac-training-server",
@@ -592,8 +598,8 @@ class V620SACTrainer:
             reconnect_time_wait=2,       # 2s between attempts
             ping_interval=20,            # Ping every 20s
             max_outstanding_pings=3,     # Disconnect after 3 missed
-            disconnected_cb=self._on_disconnected,
-            reconnected_cb=self._on_reconnected,
+            disconnected_cb=on_disconnected,
+            reconnected_cb=on_reconnected,
         )
 
         self.js = self.nc.jetstream()
@@ -658,12 +664,6 @@ class V620SACTrainer:
         except Exception as e:
             if "stream name already in use" not in str(e).lower():
                 print(f"⚠ Stream setup: {e}")
-
-    def _on_disconnected(self):
-        print("⚠ NATS disconnected")
-
-    def _on_reconnected(self):
-        print("✅ NATS reconnected")
 
     async def consume_experience(self):
         """Consume experience batches from rovers."""
