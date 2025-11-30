@@ -386,15 +386,21 @@ class V620SACTrainer:
 
                 with self.lock:
                     t0 = time.time()
-                    metrics = self.train_step()
+                    # Perform 4 gradient steps per iteration for better sample efficiency
+                    for _ in range(4):
+                        metrics = self.train_step()
+                        self.total_steps += 1
+
+                        # Log every step to TensorBoard
+                        if metrics:
+                            for k, v in metrics.items():
+                                self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+
+                        pbar.update(1)
                     t1 = time.time()
                     # Slow step warning disabled - 1.77s/step is good performance
                     # if (t1 - t0) > 1.0:
                     #     tqdm.write(f"⚠️ Slow step: {t1-t0:.2f}s")
-                
-                if metrics:
-                    self.total_steps += 1
-                    pbar.update(1)
                     
                     # Update stats every 10 steps for smooth display
                     if self.total_steps % 10 == 0:
@@ -412,12 +418,10 @@ class V620SACTrainer:
                             'Ver': f"v{self.model_version}"
                         })
 
-                    # Log to TensorBoard every 100 steps
+                    # Flush TensorBoard every 100 steps (logging happens in loop above)
                     if self.total_steps % 100 == 0:
-                        for k, v in metrics.items():
-                            self.writer.add_scalar(k, v, self.total_steps)
                         self.writer.flush()
-                            
+
                     if self.total_steps % 5000 == 0:
                         self.save_checkpoint()
             else:
@@ -528,10 +532,38 @@ class V620SACTrainer:
             # Additional monitoring metrics for loss diagnosis
             'policy_entropy': -log_prob.mean().item(),  # Should be high (exploration)
             'q_value_mean': min_q_pi.mean().item(),     # Should increase over time
-            'target_entropy_gap': ((-log_prob).mean() - self.target_entropy).item()  # Should trend to 0
+            'target_entropy_gap': ((-log_prob).mean() - self.target_entropy).item(),  # Should trend to 0
+
+            # NEW: Reward statistics
+            'reward_mean': reward.mean().item(),
+            'reward_std': reward.std().item(),
+            'reward_max': reward.max().item(),
+            'reward_min': reward.min().item(),
+
+            # NEW: Q-value diagnostics
+            'q1_mean': q1.mean().item(),
+            'q2_mean': q2.mean().item(),
+            'q_target_mean': next_q_value.mean().item(),
+            'q_diff': (q1 - q2).abs().mean().item(),
+
+            # NEW: Policy diagnostics
+            'action_mean': current_action.mean().item(),
+            'action_std': current_action.std().item(),
+
+            # NEW: Gradient norms
+            'actor_grad_norm': torch.nn.utils.clip_grad_norm_(
+                list(self.actor_encoder.parameters()) + list(self.actor_head.parameters()),
+                float('inf')
+            ),
+            'critic_grad_norm': torch.nn.utils.clip_grad_norm_(
+                list(self.critic_encoder.parameters()) +
+                list(self.critic1.parameters()) +
+                list(self.critic2.parameters()),
+                float('inf')
+            ),
         }
 
-    def soft_update(self, source, target, tau=0.005):
+    def soft_update(self, source, target, tau=0.001):
         for param, target_param in zip(source.parameters(), target.parameters()):
             target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
@@ -570,10 +602,10 @@ class V620SACTrainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5556)
-    parser.add_argument('--buffer_size', type=int, default=50000)
+    parser.add_argument('--buffer_size', type=int, default=10000)
     parser.add_argument('--batch_size', type=int, default=512)
-    parser.add_argument('--lr', type=float, default=3e-4)
-    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--lr', type=float, default=3e-5)
+    parser.add_argument('--gamma', type=float, default=0.97)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
     args = parser.parse_args()

@@ -167,120 +167,66 @@ class SACEpisodeRunner(Node):
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
     def _compute_reward(self, action, linear_vel, angular_vel, clearance, collision):
-        """Tank-steering optimized reward with conditional spinning penalty.
+        """Simplified reward function with 5 core components.
 
-        Key improvements for tank steering:
-        - Conditional spinning penalty based on environment
-        - Allows point-turns in tight spaces
-        - Rewards turning toward open space
-        - Higher weight on centering for corridor navigation
+        Normalized to [-1, 1] range for stable SAC training.
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward Progress Bonus (quadratic for max speed) - IMPROVED
+        # 1. Forward Progress (Linear, not quadratic)
         forward_vel = max(0.0, linear_vel)
         if forward_vel > 0.01:
-            # Increased from 5.0 to 15.0 for stronger forward motion incentive
-            speed_reward = (forward_vel / target_speed) ** 2 * 15.0
+            # Normalize by target speed → [0, 1]
+            speed_reward = (forward_vel / target_speed) * 0.4
             reward += speed_reward
 
-            # Speed milestone bonuses
-            if forward_vel > 0.05:
-                reward += 2.0  # Milestone: half speed
-            if forward_vel > 0.10:
-                reward += 3.0  # Milestone: 60% speed
-            if forward_vel > target_speed * 0.8:
-                reward += 4.0  # Milestone: near-max speed
-
-        # 2. Backward Motion Penalty (STRENGTHENED - was 20.0, now 50.0)
+        # Backward penalty
         if linear_vel < -0.01:
-            reward -= abs(linear_vel) * 50.0  # Backwards is catastrophic, strong penalty
+            reward -= abs(linear_vel / target_speed) * 0.3
 
-        # 3. Spinning Penalty (STRENGTHENED - prevent trajectory exploitation)
-        if abs(angular_vel) > 0.3:  # Any significant turning
-            min_side_clearance = min(self._left_clearance, self._right_clearance)
-
-            # Base spinning penalty - doubled from 4.0 to 8.0 when stationary
-            if forward_vel < 0.05:  # SPINNING IN PLACE
-                reward -= abs(angular_vel) * 8.0  # Very strong penalty for stationary spinning
-            else:
-                reward -= abs(angular_vel) * 2.0  # Lighter penalty while moving forward
-
-            # Additional penalty if unnecessary (FIXED: >= instead of > to catch clearance=1.0)
-            if clearance >= 1.0 and min_side_clearance > 0.6:
-                reward -= abs(angular_vel) * 3.0  # Further penalize in safe open space
-
-            # Allow gentle turning for obstacle avoidance only
-            if linear_vel > 0.05 and 0.15 < abs(angular_vel) < 0.4:
-                if min_side_clearance < 0.6:  # Only reward if necessary
-                    reward += 2.0  # Small bonus for smart avoidance
-
-        # 4. Clearance Adaptation
-        if clearance > 1.5:
-            reward += forward_vel * 2.0  # Safe - encourage speed
-        elif clearance < 0.5:
-            if forward_vel > 0.05:
-                reward -= forward_vel * 3.0  # Risky - slow down
-
-        # 5. Centering Reward (FIXED: Require forward motion for positive rewards)
-        if self._left_clearance < 2.0 or self._right_clearance < 2.0:
-            balance_diff = abs(self._left_clearance - self._right_clearance)
-            if balance_diff > 0.3:
-                reward -= balance_diff * 4.0  # Penalty always applies
-
-            min_side = min(self._left_clearance, self._right_clearance)
-            # Only reward good clearance if moving forward (prevent turning-to-face-open-space exploit)
-            if min_side > 0.4 and forward_vel > 0.05:
-                reward += (min_side - 0.4) * 3.0
-
-        # 6. Collision Penalty
+        # 2. Collision Penalty
         if collision or self._safety_override:
-            reward -= 50.0
+            reward -= 1.0  # Maximum negative reward
 
-        # 7. Action Smoothness
+        # 3. Centering Reward (only in corridors)
+        if self._left_clearance < 2.0 or self._right_clearance < 2.0:
+            # In corridor
+            clearance_diff = abs(self._left_clearance - self._right_clearance)
+            min_side = min(self._left_clearance, self._right_clearance)
+
+            # Penalty for being off-center
+            if clearance_diff > 0.3:
+                reward -= min(clearance_diff * 0.2, 0.3)
+
+            # Bonus for good clearance while moving forward
+            if min_side > 0.4 and forward_vel > 0.05:
+                reward += min((min_side - 0.4) * 0.15, 0.2)
+
+        # 4. Action Smoothness
         if len(self._prev_angular_actions) > 0:
             angular_jerk = abs(action[1] - self._prev_angular_actions[-1])
             if angular_jerk > 0.4:
-                reward -= angular_jerk * 6.0
+                reward -= min(angular_jerk * 0.3, 0.3)
         self._prev_angular_actions.append(action[1])
 
-        # 8. Oscillation Penalty
-        if len(self._prev_linear_cmds) > 2:
-            if self._prev_linear_cmds[-1] * self._prev_linear_cmds[-2] < -0.01:
-                reward -= 10.0
+        # 5. Angular Velocity Penalty (prefer straight motion)
+        # Lighter penalty when turning is necessary
+        min_side_clearance = min(self._left_clearance, self._right_clearance)
+        if abs(angular_vel) > 0.2:
+            # Base penalty
+            ang_penalty = abs(angular_vel) * 0.2
 
-        # 9. Smooth Obstacle Navigation Bonus
-        if forward_vel > 0.08 and abs(angular_vel) > 0.2 and clearance < 0.8:
-            action_diff = np.abs(action - self._prev_action)
-            if np.sum(action_diff) < 0.15:
-                reward += 6.0
+            # Stronger penalty if stationary or in open space
+            if forward_vel < 0.05:
+                ang_penalty *= 2.0  # Spinning in place
+            elif clearance >= 1.0 and min_side_clearance > 0.6:
+                ang_penalty *= 1.5  # Unnecessary turning in open space
 
-        # 10. General angular penalty (prefer straight) - INCREASED from 0.3 to 0.5
-        reward -= abs(angular_vel) * 0.5
+            reward -= min(ang_penalty, 0.4)
 
-        # 11. Speed Regulation (prevent extreme speeds)
-        max_safe_speed = 0.12  # Conservative upper limit
-        if linear_vel > max_safe_speed:
-            overspeed_penalty = (linear_vel - max_safe_speed) ** 2 * 10.0
-            reward -= overspeed_penalty
-
-        # 12. Angular Velocity Regulation
-        max_safe_angular = 0.8  # rad/s
-        if abs(angular_vel) > max_safe_angular:
-            angular_excess = (abs(angular_vel) - max_safe_angular) ** 2 * 5.0
-            reward -= angular_excess
-
-        # 13. Corridor Navigation Bonus (FIXED: Require forward motion to prevent spinning exploit)
-        if self._left_clearance < 1.5 or self._right_clearance < 1.5:
-            # In corridor - reward staying centered ONLY while moving forward
-            clearance_diff = abs(self._left_clearance - self._right_clearance)
-            if clearance_diff < 0.2 and forward_vel > 0.05:  # REQUIRE forward motion
-                reward += 4.0  # Strong bonus for centering while moving
-
-            # Reward smooth forward progress in corridor
-            if forward_vel > 0.08 and abs(angular_vel) < 0.2:
-                reward += 3.0  # Bonus for smooth corridor driving
+        # Final normalization: ensure [-1, 1] range
+        reward = np.clip(reward, -1.0, 1.0)
 
         return reward
 
@@ -446,8 +392,8 @@ class SACEpisodeRunner(Node):
             self._min_forward_dist, collision
         )
 
-        # Clip reward to prevent extreme values
-        reward = np.clip(reward, -100.0, 100.0)
+        # Clip reward to prevent extreme values (already clipped in _compute_reward, but keep as safety)
+        reward = np.clip(reward, -1.0, 1.0)
 
         # Safety check: NaN in reward
         if np.isnan(reward) or np.isinf(reward):
