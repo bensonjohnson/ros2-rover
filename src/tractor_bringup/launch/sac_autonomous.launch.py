@@ -120,7 +120,7 @@ def generate_launch_description():
             'max_linear_speed': LaunchConfiguration('max_speed'),
             'max_angular_speed': 1.0,
             'inference_rate_hz': 30.0,
-            'batch_size': 128
+            'batch_size': 64
         }]
     )
     

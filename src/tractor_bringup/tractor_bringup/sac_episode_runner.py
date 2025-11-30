@@ -61,7 +61,7 @@ class SACEpisodeRunner(Node):
         self.declare_parameter('max_linear_speed', 0.18)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('inference_rate_hz', 30.0)
-        self.declare_parameter('batch_size', 128)  # Send data every N steps
+        self.declare_parameter('batch_size', 64)  # Send data every N steps
         self.declare_parameter('collection_duration', 180.0) # Seconds to collect before triggering training
 
         self.nats_server = str(self.get_parameter('nats_server').value)
