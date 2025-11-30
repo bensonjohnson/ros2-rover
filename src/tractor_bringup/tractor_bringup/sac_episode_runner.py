@@ -122,9 +122,9 @@ class SACEpisodeRunner(Node):
         self._prev_linear_cmds = deque(maxlen=20) # For oscillation detection
         self._prev_angular_actions = deque(maxlen=10) # For action smoothness tracking
 
-        # Clearance tracking for centering rewards
-        self._left_clearance = 5.0
-        self._right_clearance = 5.0
+        # Gap Following State
+        self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right)
+        self._max_depth_val = 0.0
 
         # NATS Setup (will be initialized in background thread)
         self.nc = None
@@ -219,19 +219,23 @@ class SACEpisodeRunner(Node):
         if collision or self._safety_override:
             reward -= 1.0  # Maximum negative reward
 
-        # 3. Centering Reward (only in corridors)
-        if self._left_clearance < 2.0 or self._right_clearance < 2.0:
-            # In corridor
-            clearance_diff = abs(self._left_clearance - self._right_clearance)
-            min_side = min(self._left_clearance, self._right_clearance)
-
-            # Penalty for being off-center
-            if clearance_diff > 0.3:
-                reward -= min(clearance_diff * 0.2, 0.3)
-
-            # Bonus for good clearance while moving forward
-            if min_side > 0.4 and forward_vel > 0.05:
-                reward += min((min_side - 0.4) * 0.15, 0.2)
+        # 3. Gap Alignment Reward (Follow the opening)
+        # self._target_heading is updated in _control_loop based on depth
+        # action[1] is angular velocity (steering), roughly -1 to 1
+        
+        # Calculate alignment error
+        # We want action[1] to match self._target_heading
+        alignment_error = abs(action[1] - self._target_heading)
+        
+        # Reward for aligning with the gap
+        # If error is 0, reward is +0.4
+        # If error is 2.0 (max), reward is -0.4
+        alignment_reward = (0.5 - alignment_error) * 0.8
+        reward += alignment_reward
+        
+        # Bonus for moving forward WHILE aligned
+        if alignment_error < 0.3 and forward_vel > 0.05:
+             reward += 0.2 * (forward_vel / target_speed)
 
         # 4. Action Smoothness
         if len(self._prev_angular_actions) > 0:
@@ -293,20 +297,31 @@ class SACEpisodeRunner(Node):
 
         depth = cv2.resize(self._latest_depth, (424, 240))
 
-        # Calculate left/right clearance for centering rewards (like MAP-Elites)
-        h, w = depth.shape
-        roi_y_start = h // 2  # Bottom half only
-
-        # Left 30% and Right 30%
-        left_roi = depth[roi_y_start:, :int(w*0.3)]
-        right_roi = depth[roi_y_start:, int(w*0.7):]
-
-        # Filter valid depths (>0.1m) and cap at 5.0m
-        valid_left = left_roi[(left_roi > 0.1) & (left_roi < 5.0)]
-        valid_right = right_roi[(right_roi > 0.1) & (right_roi < 5.0)]
-
-        self._left_clearance = float(np.min(valid_left)) if len(valid_left) > 0 else 5.0
-        self._right_clearance = float(np.min(valid_right)) if len(valid_right) > 0 else 5.0
+        # Gap Following Analysis
+        # Divide depth into 7 vertical strips to find the "deepest" direction
+        num_strips = 7
+        strip_width = w // num_strips
+        strip_depths = []
+        
+        # Analyze each strip (using 90th percentile depth to be robust to noise)
+        for i in range(num_strips):
+            strip = depth[roi_y_start:, i*strip_width:(i+1)*strip_width]
+            valid_pixels = strip[(strip > 0.1) & (strip < 6.0)]
+            if len(valid_pixels) > 0:
+                # Use 90th percentile to find "how deep does this path go"
+                d_val = np.percentile(valid_pixels, 90)
+            else:
+                d_val = 0.0
+            strip_depths.append(d_val)
+            
+        # Find best strip
+        best_strip_idx = np.argmax(strip_depths)
+        self._max_depth_val = strip_depths[best_strip_idx]
+        
+        # Map strip index to steering value [-1, 1]
+        # 0 -> -1.0 (Left), 3 -> 0.0 (Center), 6 -> 1.0 (Right)
+        self._target_heading = (best_strip_idx - (num_strips // 2)) / (num_strips // 2)
+        
         # CRITICAL: Normalize depth from [0,6m] to [0,1] to match RKNN calibration
         depth_normalized = depth / 6.0
         depth_input = depth_normalized[None, None, ...] # (1, 1, 240, 424)
@@ -446,8 +461,7 @@ class SACEpisodeRunner(Node):
             self.pbar.set_postfix({
                 'Rew': f"{reward:.2f}",
                 'Vel': f"{current_linear:.2f}",
-                'Conf': f"{self._velocity_confidence:.2f}",
-                'Mod': f"v{self._current_model_version}",
+                'Tgt': f"{self._target_heading:.1f}", # Show target heading
                 'Buf': f"{len(self._data_buffer['rewards'])}"
             })
             
