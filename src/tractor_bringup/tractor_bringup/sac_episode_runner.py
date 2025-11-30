@@ -630,10 +630,12 @@ class SACEpisodeRunner(Node):
                             self._data_buffer[k] = []
 
                 if batch_to_send:
-                    self.get_logger().info(f"📤 Publishing batch of {len(batch_to_send['rewards'])} steps")
-
                     # Serialize and publish
                     msg_bytes = serialize_batch(batch_to_send)
+                    msg_size_mb = len(msg_bytes) / (1024 * 1024)
+
+                    self.get_logger().info(f"📤 Publishing batch of {len(batch_to_send['rewards'])} steps, size: {msg_size_mb:.2f} MB ({len(msg_bytes):,} bytes)")
+
                     ack = await self.js.publish(
                         subject="rover.experience",
                         payload=msg_bytes,
