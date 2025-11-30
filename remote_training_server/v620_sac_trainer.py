@@ -436,7 +436,7 @@ class V620SACTrainer:
                     if self.total_steps % 100 == 0:
                         self.writer.flush()
 
-                    if self.total_steps % 5000 == 0:
+                    if self.total_steps % 200 == 0:
                         self.save_checkpoint()
             else:
                 time.sleep(1.0) # Wait for data
