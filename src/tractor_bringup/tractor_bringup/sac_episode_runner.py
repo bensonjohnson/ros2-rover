@@ -27,7 +27,7 @@ import cv2
 from cv_bridge import CvBridge
 
 # Import serialization utilities
-from serialization_utils import (
+from tractor_bringup.serialization_utils import (
     serialize_batch, deserialize_batch,
     serialize_model_update, deserialize_model_update,
     serialize_metadata, deserialize_metadata,
