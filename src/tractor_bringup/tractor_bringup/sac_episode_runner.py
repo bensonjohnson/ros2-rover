@@ -536,12 +536,15 @@ class SACEpisodeRunner(Node):
         try:
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
+            self.get_logger().info(f"📨 Received metadata: Server has v{server_version}, Local has v{self._current_model_version}")
 
             if server_version > self._current_model_version:
                 self.get_logger().info(f"🔔 New model v{server_version} available (current: v{self._current_model_version})")
                 self._model_update_needed = True
                 # Download model in background
                 asyncio.create_task(self._download_model())
+            else:
+                self.get_logger().info(f"✓ Local model is up to date (v{self._current_model_version})")
 
         except Exception as e:
             self.get_logger().error(f"Model metadata callback error: {e}")
@@ -556,10 +559,14 @@ class SACEpisodeRunner(Node):
 
             # Get latest model from stream
             msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.update")
+            self.get_logger().info(f"📦 Received model message: {len(msg.data)} bytes")
+            
             model_data = deserialize_model_update(msg.data)
 
             onnx_bytes = model_data["onnx_bytes"]
             model_version = model_data["version"]
+            
+            self.get_logger().info(f"📦 Deserialized model v{model_version}, ONNX size: {len(onnx_bytes)} bytes")
 
             # Save ONNX to temp file
             onnx_path = self._temp_dir / "latest_model.onnx"
@@ -568,7 +575,7 @@ class SACEpisodeRunner(Node):
                 f.flush()
                 os.fsync(f.fileno())
 
-            self.get_logger().info(f"💾 Received ONNX model v{model_version} ({len(onnx_bytes)} bytes)")
+            self.get_logger().info(f"💾 Saved ONNX model v{model_version} to {onnx_path}")
 
             # Convert to RKNN
             if HAS_RKNN:
@@ -577,36 +584,50 @@ class SACEpisodeRunner(Node):
 
                 # Call conversion script
                 cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path), str(self._calibration_dir)]
+                self.get_logger().info(f"🛠 Executing: {' '.join(cmd)}")
 
                 if not os.path.exists("convert_onnx_to_rknn.sh"):
-                    self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
-                else:
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-
-                    if result.returncode == 0 and os.path.exists(rknn_path):
-                        self.get_logger().info("✅ RKNN Conversion successful")
-
-                        # Load new model
-                        self.get_logger().info("🔄 Loading new RKNN model...")
-                        new_runtime = RKNNLite()
-                        ret = new_runtime.load_rknn(rknn_path)
-                        if ret != 0:
-                            self.get_logger().error("Load RKNN failed")
-                        else:
-                            ret = new_runtime.init_runtime()
-                            if ret != 0:
-                                self.get_logger().error("Init RKNN runtime failed")
-                            else:
-                                # Swap runtime
-                                self._rknn_runtime = new_runtime
-                                self._current_model_version = model_version
-                                self._model_ready = True
-                                self._model_update_needed = False
-                                self.get_logger().info(f"🚀 New model v{model_version} loaded and active!")
+                    self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found in current directory!")
+                    # Try absolute path or relative to package? 
+                    # The user said @[start_sac_rover.sh] is in root, so likely running from root.
+                    # Let's check if it exists in expected location
+                    if os.path.exists("/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"):
+                         cmd[0] = "/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"
+                         self.get_logger().info(f"✓ Found script at {cmd[0]}")
                     else:
-                        self.get_logger().error(f"RKNN Conversion failed: {result.stderr}")
+                         self.get_logger().error("❌ Conversion script missing!")
+                
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    self.get_logger().error(f"❌ RKNN Conversion failed with code {result.returncode}")
+                    self.get_logger().error(f"Stdout: {result.stdout}")
+                    self.get_logger().error(f"Stderr: {result.stderr}")
+                elif os.path.exists(rknn_path):
+                    self.get_logger().info("✅ RKNN Conversion successful")
+
+                    # Load new model
+                    self.get_logger().info("🔄 Loading new RKNN model...")
+                    new_runtime = RKNNLite()
+                    ret = new_runtime.load_rknn(rknn_path)
+                    if ret != 0:
+                        self.get_logger().error(f"Load RKNN failed: {ret}")
+                    else:
+                        ret = new_runtime.init_runtime()
+                        if ret != 0:
+                            self.get_logger().error(f"Init RKNN runtime failed: {ret}")
+                        else:
+                            # Swap runtime
+                            self._rknn_runtime = new_runtime
+                            self._current_model_version = model_version
+                            self._model_ready = True
+                            self._model_update_needed = False
+                            self.get_logger().info(f"🚀 New model v{model_version} loaded and active!")
+                else:
+                    self.get_logger().error(f"RKNN Conversion failed: Output file {rknn_path} not found")
             else:
                 # If no RKNN (e.g. testing on PC), just mark as updated
+                self.get_logger().info("⚠ RKNN not available, skipping conversion (simulating success)")
                 self._current_model_version = model_version
                 self._model_update_needed = False
 
