@@ -498,6 +498,12 @@ class SACEpisodeRunner(Node):
         """Connect to NATS server with auto-reconnect."""
         self.get_logger().info(f"🔌 Connecting to NATS at {self.nats_server}...")
 
+        async def on_disconnected():
+            self.get_logger().warn("⚠ NATS disconnected")
+
+        async def on_reconnected():
+            self.get_logger().info("✅ NATS reconnected")
+
         self.nc = await nats.connect(
             servers=[self.nats_server],
             name="rover-sac-client",
@@ -505,8 +511,8 @@ class SACEpisodeRunner(Node):
             reconnect_time_wait=2,       # 2s between attempts
             ping_interval=20,            # Ping every 20s
             max_outstanding_pings=3,     # Disconnect after 3 missed
-            disconnected_cb=lambda: self.get_logger().warn("⚠ NATS disconnected"),
-            reconnected_cb=lambda: self.get_logger().info("✅ NATS reconnected"),
+            disconnected_cb=on_disconnected,
+            reconnected_cb=on_reconnected,
         )
 
         self.js = self.nc.jetstream()
