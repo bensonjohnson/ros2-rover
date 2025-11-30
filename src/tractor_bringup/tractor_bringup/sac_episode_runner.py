@@ -246,16 +246,16 @@ class SACEpisodeRunner(Node):
 
         # 5. Angular Velocity Penalty (prefer straight motion)
         # Lighter penalty when turning is necessary
-        min_side_clearance = min(self._left_clearance, self._right_clearance)
         if abs(angular_vel) > 0.2:
             # Base penalty
             ang_penalty = abs(angular_vel) * 0.2
 
-            # Stronger penalty if stationary or in open space
+            # Stronger penalty if stationary
             if forward_vel < 0.05:
                 ang_penalty *= 2.0  # Spinning in place
-            elif clearance >= 1.0 and min_side_clearance > 0.6:
-                ang_penalty *= 1.5  # Unnecessary turning in open space
+            # Reduced penalty if we have good clearance (don't punish exploring open space)
+            elif clearance >= 1.0:
+                ang_penalty *= 1.0 
 
             reward -= min(ang_penalty, 0.4)
 
