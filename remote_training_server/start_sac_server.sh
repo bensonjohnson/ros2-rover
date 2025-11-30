@@ -10,12 +10,12 @@ echo "SAC Training Server (V620)"
 echo "=================================================="
 
 # Configuration
-PORT=${1:-5556}
+NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
 
 echo "Configuration:"
-echo "  ZeroMQ Port: ${PORT}"
+echo "  NATS Server: ${NATS_SERVER}"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
 echo ""
@@ -94,9 +94,9 @@ fi
 
 echo "✓ All required packages installed"
 
-# Check network port availability
+# Check for existing processes
 echo ""
-echo "Checking port availability..."
+echo "Checking for existing processes..."
 
 if pgrep -f v620_sac_trainer > /dev/null; then
   echo "⚠ Found old v620_sac_trainer process(es), killing..."
@@ -104,15 +104,7 @@ if pgrep -f v620_sac_trainer > /dev/null; then
   sleep 2
 fi
 
-if netstat -tuln 2>/dev/null | grep -q ":${PORT} "; then
-  echo "⚠ Warning: Port ${PORT} still in use after cleanup"
-  if command -v lsof &> /dev/null; then
-    lsof -ti:${PORT} | xargs kill -9 2>/dev/null || true
-    sleep 1
-  fi
-fi
-
-echo "✓ Port ${PORT} available"
+echo "✓ Ready to start"
 
 # ROCm optimizations (environment variables)
 if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
@@ -144,7 +136,7 @@ LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
 # Launch Python with proper ulimit applied to the process
 bash -c "ulimit -n 65535 && exec python3 -u v620_sac_trainer.py \
-  --port ${PORT} \
+  --nats_server ${NATS_SERVER} \
   --checkpoint_dir ${CHECKPOINT_DIR} \
   --log_dir ${LOG_DIR} \
   $* \

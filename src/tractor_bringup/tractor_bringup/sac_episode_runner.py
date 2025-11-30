@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""PPO Autonomous Episode Runner for Rover.
+"""SAC Autonomous Episode Runner for Rover.
 
-Runs continuous PPO inference on NPU, collects experience tuples,
-calculates dense rewards, and asynchronously syncs with V620 server.
+Runs continuous SAC inference on NPU, collects experience tuples,
+calculates dense rewards, and asynchronously syncs with V620 server via NATS.
 """
 
 import os
@@ -12,17 +12,27 @@ import threading
 import queue
 import tempfile
 import subprocess
+import asyncio
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict
+from collections import deque
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-import zmq
+import nats
 import cv2
 from cv_bridge import CvBridge
+
+# Import serialization utilities
+from serialization_utils import (
+    serialize_batch, deserialize_batch,
+    serialize_model_update, deserialize_model_update,
+    serialize_metadata, deserialize_metadata,
+    serialize_status, deserialize_status
+)
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField
@@ -46,14 +56,16 @@ class SACEpisodeRunner(Node):
         super().__init__('sac_episode_runner')
 
         # Parameters
-        self.declare_parameter('server_addr', 'tcp://10.0.0.200:5556')
+        self.declare_parameter('nats_server', 'nats://nats.gokickrocks.org:4222')
+        self.declare_parameter('algorithm', 'sac')
         self.declare_parameter('max_linear_speed', 0.18)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('inference_rate_hz', 30.0)
         self.declare_parameter('batch_size', 256)  # Send data every N steps
         self.declare_parameter('collection_duration', 180.0) # Seconds to collect before triggering training
 
-        self.server_addr = str(self.get_parameter('server_addr').value)
+        self.nats_server = str(self.get_parameter('nats_server').value)
+        self.algorithm = str(self.get_parameter('algorithm').value)
         self.max_linear = float(self.get_parameter('max_linear_speed').value)
         self.max_angular = float(self.get_parameter('max_angular_speed').value)
         self.inference_rate = float(self.get_parameter('inference_rate_hz').value)
@@ -104,18 +116,16 @@ class SACEpisodeRunner(Node):
         self._left_clearance = 5.0
         self._right_clearance = 5.0
 
-        # ZMQ Setup
-        self.zmq_context = zmq.Context()
-        self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-        self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately to avoid stale connections
-        self.zmq_socket.connect(self.server_addr)
-        
+        # NATS Setup (will be initialized in background thread)
+        self.nc = None
+        self.js = None
+
         # Background Threads
         self._stop_event = threading.Event()
-        self._initial_sync_done = threading.Event() # Wait for server handshake
+        self._initial_sync_done = threading.Event() # Wait for NATS connection
         self._last_model_update = 0.0
-        self._sync_thread = threading.Thread(target=self._sync_loop)
-        self._sync_thread.start()
+        self._nats_thread = threading.Thread(target=self._run_nats_loop, daemon=True)
+        self._nats_thread.start()
 
         # ROS2 Setup
         self.bridge = CvBridge()
@@ -453,272 +463,189 @@ class SACEpisodeRunner(Node):
 
         future.add_done_callback(_log_response)
 
-    def _sync_loop(self):
-        """Background thread to sync with server."""
+    def _run_nats_loop(self):
+        """Entry point for NATS background thread."""
+        asyncio.run(self._nats_main())
 
-        # Initial Handshake: Query server state before doing anything
-        self.get_logger().info("🤝 Connecting to server to sync state...")
+    async def _nats_main(self):
+        """Main NATS async event loop."""
+        try:
+            # Connect to NATS
+            await self._connect_nats()
+
+            # Subscribe to model metadata updates
+            await self.nc.subscribe("models.sac.metadata", cb=self._on_model_metadata)
+
+            # Start publishing experience batches in background
+            asyncio.create_task(self._publish_experience_loop())
+
+            # Mark as connected
+            self._initial_sync_done.set()
+
+            # Keep running until stopped
+            while not self._stop_event.is_set():
+                await asyncio.sleep(0.1)
+
+        except Exception as e:
+            self.get_logger().error(f"NATS loop error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if self.nc:
+                await self.nc.close()
+
+    async def _connect_nats(self):
+        """Connect to NATS server with auto-reconnect."""
+        self.get_logger().info(f"🔌 Connecting to NATS at {self.nats_server}...")
+
+        self.nc = await nats.connect(
+            servers=[self.nats_server],
+            name="rover-sac-client",
+            max_reconnect_attempts=-1,  # Infinite reconnects
+            reconnect_time_wait=2,       # 2s between attempts
+            ping_interval=20,            # Ping every 20s
+            max_outstanding_pings=3,     # Disconnect after 3 missed
+            disconnected_cb=lambda: self.get_logger().warn("⚠ NATS disconnected"),
+            reconnected_cb=lambda: self.get_logger().info("✅ NATS reconnected"),
+        )
+
+        self.js = self.nc.jetstream()
+        self.get_logger().info("✅ Connected to NATS")
+
+        # Try to get latest model metadata
+        try:
+            msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.metadata")
+            metadata = deserialize_metadata(msg.data)
+            server_version = metadata.get("latest_version", 0)
+            self.get_logger().info(f"✅ Server has model v{server_version}")
+
+            if server_version > self._current_model_version:
+                self._current_model_version = -1  # Force download
+                self._model_update_needed = True
+        except Exception as e:
+            self.get_logger().info(f"ℹ No model metadata yet: {e}")
+
+    async def _on_model_metadata(self, msg):
+        """Callback when new model metadata is published."""
+        try:
+            metadata = deserialize_metadata(msg.data)
+            server_version = metadata.get("latest_version", 0)
+
+            if server_version > self._current_model_version:
+                self.get_logger().info(f"🔔 New model v{server_version} available (current: v{self._current_model_version})")
+                self._model_update_needed = True
+                # Download model in background
+                asyncio.create_task(self._download_model())
+
+        except Exception as e:
+            self.get_logger().error(f"Model metadata callback error: {e}")
+
+    async def _download_model(self):
+        """Download and convert the latest model from JetStream."""
+        if not self._model_update_needed:
+            return
+
+        try:
+            self.get_logger().info("📥 Downloading model from NATS...")
+
+            # Get latest model from stream
+            msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.update")
+            model_data = deserialize_model_update(msg.data)
+
+            onnx_bytes = model_data["onnx_bytes"]
+            model_version = model_data["version"]
+
+            # Save ONNX to temp file
+            onnx_path = self._temp_dir / "latest_model.onnx"
+            with open(onnx_path, 'wb') as f:
+                f.write(onnx_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+
+            self.get_logger().info(f"💾 Received ONNX model v{model_version} ({len(onnx_bytes)} bytes)")
+
+            # Convert to RKNN
+            if HAS_RKNN:
+                self.get_logger().info("🔄 Converting to RKNN (this may take a minute)...")
+                rknn_path = str(onnx_path).replace('.onnx', '.rknn')
+
+                # Call conversion script
+                cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path), str(self._calibration_dir)]
+
+                if not os.path.exists("convert_onnx_to_rknn.sh"):
+                    self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
+                else:
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+
+                    if result.returncode == 0 and os.path.exists(rknn_path):
+                        self.get_logger().info("✅ RKNN Conversion successful")
+
+                        # Load new model
+                        self.get_logger().info("🔄 Loading new RKNN model...")
+                        new_runtime = RKNNLite()
+                        ret = new_runtime.load_rknn(rknn_path)
+                        if ret != 0:
+                            self.get_logger().error("Load RKNN failed")
+                        else:
+                            ret = new_runtime.init_runtime()
+                            if ret != 0:
+                                self.get_logger().error("Init RKNN runtime failed")
+                            else:
+                                # Swap runtime
+                                self._rknn_runtime = new_runtime
+                                self._current_model_version = model_version
+                                self._model_ready = True
+                                self._model_update_needed = False
+                                self.get_logger().info(f"🚀 New model v{model_version} loaded and active!")
+                    else:
+                        self.get_logger().error(f"RKNN Conversion failed: {result.stderr}")
+            else:
+                # If no RKNN (e.g. testing on PC), just mark as updated
+                self._current_model_version = model_version
+                self._model_update_needed = False
+
+        except Exception as e:
+            self.get_logger().error(f"Model download failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def _publish_experience_loop(self):
+        """Periodically publish experience batches to NATS."""
         while not self._stop_event.is_set():
             try:
-                self.zmq_socket.send_pyobj({'type': 'check_status'})
-                # Wait for response with timeout
-                if self.zmq_socket.poll(timeout=2000):
-                    response = self.zmq_socket.recv_pyobj()
-                    if 'model_version' in response:
-                        server_version = response['model_version']
-                        self.get_logger().info(f"✅ Connected! Server is at v{server_version}")
-                        self._current_model_version = server_version
-
-                        # If server has a trained model, we need to fetch it
-                        if server_version > 0:
-                            self._model_update_needed = True
-
-                        self._initial_sync_done.set()
-                        break
-                else:
-                    # Timeout - socket is now in bad state waiting for response
-                    self.get_logger().warn("⏳ Server not responding. Recreating socket and retrying...")
-                    self.zmq_socket.close()
-                    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-                    self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately
-                    self.zmq_socket.connect(self.server_addr)
-                    time.sleep(1.0)
-            except Exception as e:
-                self.get_logger().warn(f"Handshake failed: {e}. Recreating socket and retrying...")
-                # Recreate socket to recover from bad state (e.g., after Ctrl+C restart)
-                self.zmq_socket.close()
-                self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-                self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately
-                self.zmq_socket.connect(self.server_addr)
-                time.sleep(1.0)
-        
-        while not self._stop_event.is_set():
-            # 1. Check if we have enough data to send
-            batch_to_send = None
-            with self._buffer_lock:
-                if len(self._data_buffer['rewards']) >= self.batch_size:
-                    # Extract batch
-                    batch_to_send = {k: np.array(v) for k, v in self._data_buffer.items()}
-                    # Clear buffer
-                    for k in self._data_buffer:
-                        self._data_buffer[k] = []
-            
-            # Check if collection duration exceeded
-            time_based_trigger = False
-            if time.time() - self._collection_start_time > self.collection_duration:
-                time_based_trigger = True
-                self.get_logger().info(f"⏰ Collection duration ({self.collection_duration}s) exceeded. Triggering training...")
-                
-                # Force flush remaining data even if < batch_size
+                # Check if we have enough data to send
+                batch_to_send = None
                 with self._buffer_lock:
-                    if len(self._data_buffer['rewards']) > 0:
-                        if batch_to_send is None:
-                            batch_to_send = {k: np.array(v) for k, v in self._data_buffer.items()}
-                        else:
-                            # Append to existing batch
-                            for k, v in self._data_buffer.items():
-                                batch_to_send[k] = np.concatenate([batch_to_send[k], np.array(v)])
-                        
+                    if len(self._data_buffer['rewards']) >= self.batch_size:
+                        # Extract batch
+                        batch_to_send = {k: np.array(v) for k, v in self._data_buffer.items()}
                         # Clear buffer
                         for k in self._data_buffer:
                             self._data_buffer[k] = []
 
-            if batch_to_send:
-                try:
-                    self.get_logger().info(f"📤 Sending batch of {len(batch_to_send['rewards'])} steps")
-                    self.zmq_socket.send_pyobj({
-                        'type': 'data_batch',
-                        'data': batch_to_send
-                    })
-                    
-                    # Receive response (curriculum updates)
-                    response = self.zmq_socket.recv_pyobj()
-                    if 'curriculum' in response:
-                        curr = response['curriculum']
-                        self._curriculum_collision_dist = curr['collision_dist']
-                        self._curriculum_max_speed = curr['max_speed']
-                        self.get_logger().info(f"🎓 Curriculum: Dist={self._curriculum_collision_dist:.2f}, Speed={self._curriculum_max_speed:.2f}")
-                    
-                    # Check for wait signal (Server is training)
-                    if response.get('wait_for_training', False):
-                        self.get_logger().info("🛑 Server is training. Pausing rover...")
-                        self._model_ready = False # Stop inference loop
-                        
-                        # Stop robot immediately
-                        stop_cmd = Twist()
-                        self.cmd_pub.publish(stop_cmd)
-                        
-                        # Poll until ready
-                        while not self._stop_event.is_set():
-                            time.sleep(1.0)
-                            try:
-                                self.zmq_socket.send_pyobj({'type': 'check_status'})
-                                status_resp = self.zmq_socket.recv_pyobj()
-                                
-                                if status_resp.get('status') == 'ready':
-                                    self.get_logger().info("✅ Server training complete. Resuming...")
-                                    # Check if we need to update model
-                                    if status_resp.get('model_version', -1) > self._current_model_version:
-                                        self._model_update_needed = True
-                                    else:
-                                        self._model_ready = True # Resume if no update needed
-                                    break
-                                else:
-                                    self.get_logger().info("⏳ Waiting for training to finish...")
-                            except Exception as e:
-                                self.get_logger().error(f"Polling failed: {e}")
-                                time.sleep(1.0)
+                if batch_to_send:
+                    self.get_logger().info(f"📤 Publishing batch of {len(batch_to_send['rewards'])} steps")
 
-                    # Check for explicit error from server
-                    if response.get('type') == 'error':
-                        self.get_logger().error(f"❌ Server reported error: {response.get('msg')}")
+                    # Serialize and publish
+                    msg_bytes = serialize_batch(batch_to_send)
+                    ack = await self.js.publish(
+                        subject="rover.experience",
+                        payload=msg_bytes,
+                        timeout=10.0
+                    )
+                    self.get_logger().info(f"✅ Batch published (seq={ack.seq})")
 
-                    # Check for model update notification
-                    if 'model_version' in response:
-                        server_version = response['model_version']
-                        if server_version > self._current_model_version:
-                            self.get_logger().info(f"🔔 New model available: v{server_version} (Current: v{self._current_model_version})")
-                            self.get_logger().info(f"🔔 New model available: v{server_version} (Current: v{self._current_model_version})")
-                            self._model_update_needed = True
-                        
-                except Exception as e:
-                    self.get_logger().error(f"Sync failed: {e}")
-            
-            # 1.5 Send Manual Trigger if time-based
-            if time_based_trigger:
-                try:
-                    self.get_logger().info("🛑 Stopping robot and requesting training start...")
-                    self._model_ready = False # Stop inference
-                    
-                    # Stop robot
-                    stop_cmd = Twist()
-                    self.cmd_pub.publish(stop_cmd)
-                    
-                    # Send trigger
-                    self.zmq_socket.send_pyobj({'type': 'start_training'})
-                    response = self.zmq_socket.recv_pyobj()
-                    
-                    if response.get('status') == 'training_queued':
-                        self.get_logger().info("✅ Training queued successfully. Waiting for completion...")
-                        
-                        # Wait loop
-                        while not self._stop_event.is_set():
-                            time.sleep(1.0)
-                            try:
-                                self.zmq_socket.send_pyobj({'type': 'check_status'})
-                                status_resp = self.zmq_socket.recv_pyobj()
-                                
-                                if status_resp.get('status') == 'ready':
-                                    self.get_logger().info("✅ Training complete!")
-                                    if status_resp.get('model_version', -1) > self._current_model_version:
-                                        self._model_update_needed = True
-                                    
-                                    # Reset timer and resume
-                                    self._collection_start_time = time.time()
-                                    self._model_ready = True
-                                    break
-                                else:
-                                    self.get_logger().info("⏳ Training in progress...")
-                            except Exception as e:
-                                self.get_logger().error(f"Polling error: {e}")
-                                time.sleep(1.0)
-                    else:
-                        self.get_logger().warn(f"Trigger failed: {response}")
-                        # Reset timer anyway to avoid loop
-                        self._collection_start_time = time.time()
-                        self._model_ready = True
-                        
-                except Exception as e:
-                    self.get_logger().error(f"Failed to trigger training: {e}")
-                    self._collection_start_time = time.time() # Reset to avoid stuck loop
-            
-            # 2. Request new model if notified
-            if self._model_update_needed:
-                try:
-                    # SKIP download for Model 0 (Warmup Model)
-                    # We don't need a neural network for the hardcoded warmup sequence
-                    if self._current_model_version == -1 and response.get('model_version', -1) == 0:
-                         # We are initializing to Model 0
-                         self.get_logger().info("🔥 Initializing Warmup Sequence (Model 0) - Skipping download")
-                         self._current_model_version = 0
-                         self._model_ready = True
-                         self._model_update_needed = False
-                         # Ensure we don't try to download
-                         continue
+            except Exception as e:
+                self.get_logger().error(f"Experience publish error: {e}")
 
-                    self.get_logger().info("📥 Requesting model update...")
-                    self.zmq_socket.send_pyobj({'type': 'get_model'})
-                    
-                    response = self.zmq_socket.recv_pyobj()
-                    if 'model_bytes' in response:
-                        # Save ONNX to temp file
-                        onnx_path = self._temp_dir / "latest_model.onnx"
-                        with open(onnx_path, 'wb') as f:
-                            f.write(response['model_bytes'])
-                            f.flush()
-                            os.fsync(f.fileno())
-                            
-                        self.get_logger().info(f"💾 Received ONNX model ({len(response['model_bytes'])} bytes)")
-                        
-                        # Update version tracking
-                        if 'model_version' in response:
-                            self._current_model_version = response['model_version']
-                        
-                        # Convert to RKNN
-                        if HAS_RKNN:
-                            self.get_logger().info("🔄 Converting to RKNN (this may take a minute)...")
-                            rknn_path = str(onnx_path).replace('.onnx', '.rknn')
-                            
-                            # Call conversion script
-                            cmd = ["./convert_onnx_to_rknn.sh", str(onnx_path), str(self._calibration_dir)]
-                            
-                            if not os.path.exists("convert_onnx_to_rknn.sh"):
-                                self.get_logger().warn("⚠ convert_onnx_to_rknn.sh not found, skipping conversion")
-                            else:
-                                result = subprocess.run(cmd, capture_output=True, text=True)
-
-                                # Log conversion output for debugging
-                                if result.stdout:
-                                    for line in result.stdout.strip().split('\n'):
-                                        if 'Test output:' in line or 'RKNN model produces' in line or 'Range:' in line:
-                                            self.get_logger().info(f"[RKNN] {line.strip()}")
-
-                                if result.returncode == 0 and os.path.exists(rknn_path):
-                                    self.get_logger().info("✅ RKNN Conversion successful")
-                                    
-                                    # Load new model
-                                    self.get_logger().info("🔄 Loading new RKNN model...")
-                                    new_runtime = RKNNLite()
-                                    ret = new_runtime.load_rknn(rknn_path)
-                                    if ret != 0:
-                                        self.get_logger().error("Load RKNN failed")
-                                    else:
-                                        ret = new_runtime.init_runtime()
-                                        if ret != 0:
-                                            self.get_logger().error("Init RKNN runtime failed")
-                                        else:
-                                            # Swap runtime
-                                            self._rknn_runtime = new_runtime
-                                            self._model_ready = True
-                                            self._model_update_needed = False # Reset flag only on success
-                                            self.get_logger().info(f"🚀 New model v{self._current_model_version} loaded and active!")
-                                else:
-                                    self.get_logger().error(f"RKNN Conversion failed: {result.stderr}")
-                        else:
-                            # If no RKNN (e.g. testing on PC), just mark as updated
-                            self._model_update_needed = False
-                        
-                except Exception as e:
-                    self.get_logger().error(f"Model update failed: {e}")
-
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
 
     def destroy_node(self):
         self._stop_event.set()
-        self._sync_thread.join()
+        if self._nats_thread.is_alive():
+            self._nats_thread.join(timeout=2.0)
         super().destroy_node()
 
-from collections import deque
 
 def main(args=None):
     rclpy.init(args=args)

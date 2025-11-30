@@ -13,12 +13,18 @@ def generate_launch_description():
     tractor_sensors_dir = get_package_share_directory('tractor_sensors')
     
     # Launch arguments
-    server_addr_arg = DeclareLaunchArgument(
-        'server_addr',
-        default_value='tcp://10.0.0.200:5556',
-        description='Address of V620 training server'
+    nats_server_arg = DeclareLaunchArgument(
+        'nats_server',
+        default_value='nats://nats.gokickrocks.org:4222',
+        description='NATS server URL for training communication'
     )
-    
+
+    algorithm_arg = DeclareLaunchArgument(
+        'algorithm',
+        default_value='sac',
+        description='RL algorithm to use (sac, ppo, etc.)'
+    )
+
     max_speed_arg = DeclareLaunchArgument(
         'max_speed',
         default_value='0.18',
@@ -109,7 +115,8 @@ def generate_launch_description():
         name='sac_episode_runner',
         output='screen',
         parameters=[{
-            'server_addr': LaunchConfiguration('server_addr'),
+            'nats_server': LaunchConfiguration('nats_server'),
+            'algorithm': LaunchConfiguration('algorithm'),
             'max_linear_speed': LaunchConfiguration('max_speed'),
             'max_angular_speed': 1.0,
             'inference_rate_hz': 30.0,
@@ -119,7 +126,8 @@ def generate_launch_description():
     
     # Build Launch Description with Timers for orderly startup
     return LaunchDescription([
-        server_addr_arg,
+        nats_server_arg,
+        algorithm_arg,
         max_speed_arg,
         collision_dist_arg,
         
