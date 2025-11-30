@@ -454,7 +454,7 @@ class SACEpisodeRunner(Node):
 
     def _sync_loop(self):
         """Background thread to sync with server."""
-        
+
         # Initial Handshake: Query server state before doing anything
         self.get_logger().info("🤝 Connecting to server to sync state...")
         while not self._stop_event.is_set():
@@ -467,17 +467,21 @@ class SACEpisodeRunner(Node):
                         server_version = response['model_version']
                         self.get_logger().info(f"✅ Connected! Server is at v{server_version}")
                         self._current_model_version = server_version
-                        
+
                         # If server has a trained model, we need to fetch it
                         if server_version > 0:
                             self._model_update_needed = True
-                            
+
                         self._initial_sync_done.set()
                         break
                 else:
                     self.get_logger().warn("⏳ Waiting for server response...")
             except Exception as e:
-                self.get_logger().warn(f"Handshake failed: {e}. Retrying...")
+                self.get_logger().warn(f"Handshake failed: {e}. Recreating socket and retrying...")
+                # Recreate socket to recover from bad state (e.g., after Ctrl+C restart)
+                self.zmq_socket.close()
+                self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+                self.zmq_socket.connect(self.server_addr)
                 time.sleep(1.0)
         
         while not self._stop_event.is_set():
