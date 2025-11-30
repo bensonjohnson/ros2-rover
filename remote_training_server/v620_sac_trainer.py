@@ -377,8 +377,23 @@ class V620SACTrainer:
             tqdm.write(f"📦 Exported ONNX (v{self.model_version})")
 
             # Schedule model publish to NATS (if connected)
-            if self.nc is not None and self.js is not None and self.loop is not None:
-                asyncio.run_coroutine_threadsafe(self.publish_model_update(), self.loop)
+            # Check if attributes exist first to avoid AttributeError on startup
+            nc = getattr(self, 'nc', None)
+            js = getattr(self, 'js', None)
+            loop = getattr(self, 'loop', None)
+
+            if nc is not None and js is not None and loop is not None:
+                tqdm.write("🔄 Scheduling model publish task...")
+                future = asyncio.run_coroutine_threadsafe(self.publish_model_update(), loop)
+                # Add callback to log any errors from the task
+                def log_error(fut):
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        tqdm.write(f"❌ Model publish task failed: {e}")
+                future.add_done_callback(log_error)
+            else:
+                tqdm.write(f"⚠️ Skipping model publish: nc={nc is not None}, js={js is not None}, loop={loop is not None}")
 
         except Exception as e:
             tqdm.write(f"❌ Export failed: {e}")
