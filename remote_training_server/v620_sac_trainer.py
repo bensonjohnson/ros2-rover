@@ -415,52 +415,50 @@ class V620SACTrainer:
                     print("==================================================")
                     pbar = tqdm(initial=self.total_steps, desc="🚀 Training", unit="step", dynamic_ncols=True)
 
-                with self.lock:
-                    t0 = time.time()
-                    # Perform 4 gradient steps per iteration for better sample efficiency
-                    for _ in range(4):
-                        metrics = self.train_step()
-                        self.total_steps += 1
+                # REMOVED: with self.lock: (Locking scope reduced to buffer access only)
+                t0 = time.time()
+                # Perform 4 gradient steps per iteration for better sample efficiency
+                for _ in range(4):
+                    metrics = self.train_step()
+                    self.total_steps += 1
 
-                        # Log every step to TensorBoard
-                        if metrics:
-                            for k, v in metrics.items():
-                                self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                    # Log every step to TensorBoard
+                    if metrics:
+                        for k, v in metrics.items():
+                            self.writer.add_scalar(f'train/{k}', v, self.total_steps)
 
-                        pbar.update(1)
-                    t1 = time.time()
-                    # Slow step warning disabled - 1.77s/step is good performance
-                    # if (t1 - t0) > 1.0:
-                    #     tqdm.write(f"⚠️ Slow step: {t1-t0:.2f}s")
+                    pbar.update(1)
+                t1 = time.time()
+                
+                # Update stats every 10 steps for smooth display
+                if self.total_steps % 10 == 0:
+                    current_time = time.time()
+                    dt = current_time - last_time
+                    last_time = current_time
+                    steps_per_sec = 10 / dt if dt > 0 else 0
+                    samples_per_sec = steps_per_sec * self.args.batch_size
                     
-                    # Update stats every 10 steps for smooth display
-                    if self.total_steps % 10 == 0:
-                        current_time = time.time()
-                        dt = current_time - last_time
-                        last_time = current_time
-                        steps_per_sec = 10 / dt if dt > 0 else 0
-                        samples_per_sec = steps_per_sec * self.args.batch_size
-                        
-                        pbar.set_postfix({
-                            'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
-                            'Alpha': f"{metrics['alpha']:.3f}",
-                            'S/s': f"{int(samples_per_sec)}", # Samples per second
-                            'Buf': f"{self.buffer.size}",
-                            'Ver': f"v{self.model_version}"
-                        })
+                    pbar.set_postfix({
+                        'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
+                        'Alpha': f"{metrics['alpha']:.3f}",
+                        'S/s': f"{int(samples_per_sec)}", # Samples per second
+                        'Buf': f"{self.buffer.size}",
+                        'Ver': f"v{self.model_version}"
+                    })
 
-                    # Flush TensorBoard every 100 steps (logging happens in loop above)
-                    if self.total_steps % 100 == 0:
-                        self.writer.flush()
+                # Flush TensorBoard every 100 steps (logging happens in loop above)
+                if self.total_steps % 100 == 0:
+                    self.writer.flush()
 
-                    if self.total_steps % 200 == 0:
-                        self.save_checkpoint()
+                if self.total_steps % 200 == 0:
+                    self.save_checkpoint()
             else:
                 time.sleep(1.0) # Wait for data
 
     def train_step(self):
         t0 = time.time()
-        batch = self.buffer.sample(self.args.batch_size)
+        with self.lock:
+            batch = self.buffer.sample(self.args.batch_size)
         t1 = time.time()
         
         # Unpack
@@ -726,6 +724,9 @@ class V620SACTrainer:
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
+            
+            if time.time() % 10 < 1.0:
+                 tqdm.write("💓 Consumer alive")
 
     async def publish_status(self):
         """Periodically publish training status."""
@@ -796,7 +797,8 @@ class V620SACTrainer:
 
         # Keep running
         while True:
-            await asyncio.sleep(1.0)
+            tqdm.write("💓 Event loop alive")
+            await asyncio.sleep(5.0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
