@@ -644,7 +644,9 @@ class SACEpisodeRunner(Node):
                     self.get_logger().info(f"✅ Batch published (seq={ack.seq})")
 
             except Exception as e:
-                self.get_logger().error(f"Experience publish error: {e}")
+                self.get_logger().error(f"Experience publish error: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
 
             await asyncio.sleep(0.1)
 
