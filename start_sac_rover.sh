@@ -13,11 +13,13 @@ if [ ! -f "install/setup.bash" ]; then
 fi
 
 # Configuration
-SERVER_ADDR=${1:-"tcp://10.0.0.200:5556"}
+NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 MAX_SPEED=${2:-"0.18"}
+ALGORITHM="sac"
 
 echo "Configuration:"
-echo "  V620 Server: ${SERVER_ADDR}"
+echo "  NATS Server: ${NATS_SERVER}"
+echo "  Algorithm: ${ALGORITHM}"
 echo "  Max Speed: ${MAX_SPEED} m/s"
 
 echo ""
@@ -66,7 +68,8 @@ mkdir -p log
 LOG_FILE="log/sac_rover_$(date +%Y%m%d_%H%M%S).log"
 
 ros2 launch tractor_bringup sac_autonomous.launch.py \
-  server_addr:=${SERVER_ADDR} \
+  nats_server:=${NATS_SERVER} \
+  algorithm:=${ALGORITHM} \
   max_speed:=${MAX_SPEED} \
   2>&1 | tee "$LOG_FILE" &
 

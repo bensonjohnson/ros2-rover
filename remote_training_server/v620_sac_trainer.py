@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """V620 ROCm SAC Training Server for Remote Rover Training.
 
-This server receives RGB-D observations from the rover via ZeroMQ,
+This server receives RGB-D observations from the rover via NATS JetStream,
 trains a SAC (Soft Actor-Critic) policy using PyTorch with ROCm acceleration,
 and exports trained models in ONNX format for the rover.
 
 Features:
 - Off-policy learning (Replay Buffer)
 - Entropy maximization (Exploration)
-- Asynchronous training
+- Asynchronous training with NATS persistence
 - Automatic Entropy Tuning (Alpha)
 """
 
@@ -19,6 +19,7 @@ import json
 import argparse
 import threading
 import queue
+import asyncio
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from pathlib import Path
@@ -27,7 +28,8 @@ import copy
 
 import numpy as np
 import cv2
-import zmq
+import nats
+from nats.js.api import StreamConfig, ConsumerConfig
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -37,6 +39,14 @@ from tqdm import tqdm
 
 # Import model architectures
 from model_architectures import RGBDEncoder, GaussianPolicyHead, QNetwork
+
+# Import serialization utilities
+from serialization_utils import (
+    serialize_batch, deserialize_batch,
+    serialize_model_update, deserialize_model_update,
+    serialize_metadata, deserialize_metadata,
+    serialize_status, deserialize_status
+)
 
 class ReplayBuffer:
     """Experience Replay Buffer for SAC."""
@@ -249,19 +259,11 @@ class V620SACTrainer:
         self.total_steps = 0
         self.model_version = 0
         self.training_active = False
-        
-        # ZMQ
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        # Prevent stale connections from blocking new requests
-        self.socket.setsockopt(zmq.LINGER, 0)  # Close immediately
-        self.socket.setsockopt(zmq.RCVTIMEO, 30000)  # 30s receive timeout
-        # TCP keepalive to detect dead connections (Linux-specific)
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE, 1)  # Enable keepalive
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 60)  # Start after 60s idle
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10)  # Probe every 10s
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3)  # 3 failed probes = dead
-        self.socket.bind(f"tcp://*:{args.port}")
+
+        # NATS connection (will be initialized in async setup)
+        self.nc = None
+        self.js = None
+        self.nats_server = args.nats_server
         
         # Logging
         self.writer = SummaryWriter(args.log_dir)
@@ -371,7 +373,11 @@ class V620SACTrainer:
             if increment_version:
                 self.model_version += 1
             tqdm.write(f"📦 Exported ONNX (v{self.model_version})")
-            
+
+            # Schedule model publish to NATS (if connected)
+            if self.nc is not None and self.js is not None:
+                asyncio.create_task(self.publish_model_update())
+
         except Exception as e:
             tqdm.write(f"❌ Export failed: {e}")
 
@@ -575,77 +581,194 @@ class V620SACTrainer:
         for param, target_param in zip(source.parameters(), target.parameters()):
             target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
 
-    def _recreate_socket(self):
-        """Recreate ZMQ socket to recover from corrupted state."""
-        try:
-            self.socket.close()
-        except:
-            pass
-        self.socket = self.context.socket(zmq.REP)
-        # Reapply socket options
-        self.socket.setsockopt(zmq.LINGER, 0)
-        self.socket.setsockopt(zmq.RCVTIMEO, 30000)
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 60)
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10)
-        self.socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3)
-        self.socket.bind(f"tcp://*:{self.args.port}")
-        print(f"🔄 ZMQ socket recreated on port {self.args.port}")
+    async def setup_nats(self):
+        """Initialize NATS connection and JetStream."""
+        print(f"🔌 Connecting to NATS at {self.nats_server}...")
 
-    def run(self):
-        print(f"🚀 SAC Server running on {self.args.port}")
-        consecutive_errors = 0
+        self.nc = await nats.connect(
+            servers=[self.nats_server],
+            name="sac-training-server",
+            max_reconnect_attempts=-1,  # Infinite reconnects
+            reconnect_time_wait=2,       # 2s between attempts
+            ping_interval=20,            # Ping every 20s
+            max_outstanding_pings=3,     # Disconnect after 3 missed
+            disconnected_cb=self._on_disconnected,
+            reconnected_cb=self._on_reconnected,
+        )
+
+        self.js = self.nc.jetstream()
+
+        # Ensure streams exist
+        await self._ensure_streams()
+
+        print(f"✅ Connected to NATS")
+
+    async def _ensure_streams(self):
+        """Create NATS JetStream streams if they don't exist."""
+        try:
+            # Experience stream
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_EXPERIENCE",
+                subjects=["rover.experience"],
+                retention="limits",
+                max_msgs=1000,
+                max_bytes=10 * 1024 * 1024 * 1024,  # 10 GB
+                max_age=7 * 24 * 3600 * 1_000_000_000,  # 7 days in nanoseconds
+                max_msg_size=200 * 1024 * 1024,  # 200 MB
+                storage="file",
+                discard="old",
+            ))
+            print("✅ ROVER_EXPERIENCE stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"⚠ Stream setup: {e}")
+
+        try:
+            # Model stream
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_MODELS",
+                subjects=["models.sac.update", "models.sac.metadata"],
+                retention="limits",
+                max_msgs=100,
+                max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
+                max_age=30 * 24 * 3600 * 1_000_000_000,  # 30 days
+                max_msg_size=50 * 1024 * 1024,  # 50 MB
+                storage="file",
+                discard="old",
+            ))
+            print("✅ ROVER_MODELS stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"⚠ Stream setup: {e}")
+
+        try:
+            # Control stream
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_CONTROL",
+                subjects=["rover.status", "rover.heartbeat", "server.sac.status"],
+                retention="limits",
+                max_msgs=10000,
+                max_bytes=100 * 1024 * 1024,  # 100 MB
+                max_age=24 * 3600 * 1_000_000_000,  # 24 hours
+                max_msg_size=1 * 1024 * 1024,  # 1 MB
+                storage="file",
+                discard="old",
+            ))
+            print("✅ ROVER_CONTROL stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"⚠ Stream setup: {e}")
+
+    def _on_disconnected(self):
+        print("⚠ NATS disconnected")
+
+    def _on_reconnected(self):
+        print("✅ NATS reconnected")
+
+    async def consume_experience(self):
+        """Consume experience batches from rovers."""
+        print("📡 Starting experience consumer...")
+
+        # Create durable consumer
+        psub = await self.js.pull_subscribe(
+            subject="rover.experience",
+            durable="sac_trainer"
+        )
 
         while True:
             try:
-                msg = self.socket.recv_pyobj()
-                response = {'type': 'ack'}
+                msgs = await psub.fetch(batch=1, timeout=1.0)
+                for msg in msgs:
+                    try:
+                        # Deserialize batch
+                        batch = deserialize_batch(msg.data)
 
-                if msg['type'] == 'data_batch':
-                    # Thread-safe buffer access to prevent race condition with training loop
-                    with self.lock:
-                        self.buffer.add_batch(msg['data'])
-                    response['curriculum'] = {'collision_dist': 0.5, 'max_speed': 0.18}
-                elif msg['type'] == 'check_status':
-                    response['status'] = 'ready'
-                    response['model_version'] = self.model_version
-                elif msg['type'] == 'get_model':
-                    with open(os.path.join(self.args.checkpoint_dir, "latest_actor.onnx"), 'rb') as f:
-                        response['model_bytes'] = f.read()
-                    response['model_version'] = self.model_version
+                        # Add to replay buffer (thread-safe)
+                        with self.lock:
+                            self.buffer.add_batch(batch)
 
-                elif msg['type'] == 'start_training':
-                    # SAC trains continuously, so we just ack
-                    # The rover will pause, check status (which is always ready), and resume.
-                    # This acts as a periodic sync/checkpoint.
-                    response['status'] = 'training_queued'
-                    # Force a checkpoint save here so rover gets fresh model
-                    self.save_checkpoint()
+                        # Acknowledge message
+                        await msg.ack()
 
-                self.socket.send_pyobj(response)
-                consecutive_errors = 0  # Reset error counter on success
+                        print(f"📥 Received batch: {len(batch['rewards'])} steps, buffer size: {self.buffer.size}")
 
-            except zmq.Again:
-                # Timeout - no message received, this is normal
-                consecutive_errors = 0
+                    except Exception as e:
+                        print(f"❌ Error processing batch: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        # Negative ack for redelivery
+                        await msg.nak()
+
+            except nats.errors.TimeoutError:
+                # No messages available, continue waiting
+                await asyncio.sleep(0.1)
                 continue
-
             except Exception as e:
-                consecutive_errors += 1
-                print(f"❌ Message handler error ({consecutive_errors}/5): {e}")
+                print(f"❌ Consumer error: {e}")
                 import traceback
                 traceback.print_exc()
+                await asyncio.sleep(1.0)
 
-                # If we get 5 consecutive errors, recreate the socket (watchdog)
-                if consecutive_errors >= 5:
-                    print(f"🔥 Too many consecutive errors! Recreating socket (watchdog triggered)...")
-                    self._recreate_socket()
-                    consecutive_errors = 0
-                    time.sleep(1.0)
+    async def publish_status(self):
+        """Periodically publish training status."""
+        while True:
+            try:
+                status_msg = serialize_status(
+                    status='ready' if not self.training_active else 'training',
+                    model_version=self.model_version,
+                    buffer_size=self.buffer.size,
+                    total_steps=self.total_steps
+                )
+
+                await self.js.publish("server.sac.status", status_msg)
+                await asyncio.sleep(5.0)  # Publish every 5 seconds
+
+            except Exception as e:
+                print(f"❌ Status publish error: {e}")
+                await asyncio.sleep(5.0)
+
+    async def publish_model_update(self):
+        """Publish model update when checkpoint is saved."""
+        # This will be called after save_checkpoint()
+        try:
+            # Read ONNX model
+            onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+            with open(onnx_path, 'rb') as f:
+                onnx_bytes = f.read()
+
+            # Publish model
+            model_msg = serialize_model_update(onnx_bytes, self.model_version)
+            await self.js.publish("models.sac.update", model_msg)
+
+            # Publish metadata
+            metadata_msg = serialize_metadata(self.model_version, time.time())
+            await self.js.publish("models.sac.metadata", metadata_msg)
+
+            print(f"📤 Published model version {self.model_version}")
+
+        except Exception as e:
+            print(f"❌ Model publish error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def run(self):
+        """Main NATS event loop."""
+        print(f"🚀 SAC Server starting with NATS at {self.nats_server}")
+
+        # Initialize NATS connection
+        await self.setup_nats()
+
+        # Start consumer and status publisher in background
+        asyncio.create_task(self.consume_experience())
+        asyncio.create_task(self.publish_status())
+
+        # Keep running
+        while True:
+            await asyncio.sleep(1.0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=5556)
+    parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
     parser.add_argument('--buffer_size', type=int, default=10000)
     parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--lr', type=float, default=3e-5)
@@ -653,6 +776,8 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
     args = parser.parse_args()
-    
+
     trainer = V620SACTrainer(args)
-    trainer.run()
+
+    # Run async event loop
+    asyncio.run(trainer.run())
