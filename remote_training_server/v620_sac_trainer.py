@@ -737,7 +737,7 @@ class V620SACTrainer:
                 )
 
                 await self.js.publish("server.sac.status", status_msg)
-                await asyncio.sleep(5.0)  # Publish every 5 seconds
+                await asyncio.sleep(1.0)  # Publish every 1 second for smooth UI  # Publish every 5 seconds
 
             except Exception as e:
                 print(f"❌ Status publish error: {e}")
