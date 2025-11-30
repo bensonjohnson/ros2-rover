@@ -619,7 +619,7 @@ class V620SACTrainer:
                 retention="limits",
                 max_msgs=1000,
                 max_bytes=10 * 1024 * 1024 * 1024,  # 10 GB
-                max_age=7 * 24 * 3600 * 1_000_000_000,  # 7 days in nanoseconds
+                max_age=604800,  # 7 days in seconds
                 max_msg_size=200 * 1024 * 1024,  # 200 MB
                 storage="file",
                 discard="old",
@@ -637,7 +637,7 @@ class V620SACTrainer:
                 retention="limits",
                 max_msgs=100,
                 max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
-                max_age=30 * 24 * 3600 * 1_000_000_000,  # 30 days
+                max_age=2592000,  # 30 days in seconds
                 max_msg_size=50 * 1024 * 1024,  # 50 MB
                 storage="file",
                 discard="old",
@@ -655,7 +655,7 @@ class V620SACTrainer:
                 retention="limits",
                 max_msgs=10000,
                 max_bytes=100 * 1024 * 1024,  # 100 MB
-                max_age=24 * 3600 * 1_000_000_000,  # 24 hours
+                max_age=86400,  # 24 hours in seconds
                 max_msg_size=1 * 1024 * 1024,  # 1 MB
                 storage="file",
                 discard="old",
