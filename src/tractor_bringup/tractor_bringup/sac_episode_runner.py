@@ -107,6 +107,7 @@ class SACEpisodeRunner(Node):
         # ZMQ Setup
         self.zmq_context = zmq.Context()
         self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+        self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately to avoid stale connections
         self.zmq_socket.connect(self.server_addr)
         
         # Background Threads
@@ -479,6 +480,7 @@ class SACEpisodeRunner(Node):
                     self.get_logger().warn("⏳ Server not responding. Recreating socket and retrying...")
                     self.zmq_socket.close()
                     self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+                    self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately
                     self.zmq_socket.connect(self.server_addr)
                     time.sleep(1.0)
             except Exception as e:
@@ -486,6 +488,7 @@ class SACEpisodeRunner(Node):
                 # Recreate socket to recover from bad state (e.g., after Ctrl+C restart)
                 self.zmq_socket.close()
                 self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+                self.zmq_socket.setsockopt(zmq.LINGER, 0)  # Close immediately
                 self.zmq_socket.connect(self.server_addr)
                 time.sleep(1.0)
         
