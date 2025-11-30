@@ -724,9 +724,6 @@ class V620SACTrainer:
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
-            
-            if time.time() % 10 < 1.0:
-                 tqdm.write("💓 Consumer alive")
 
     async def publish_status(self):
         """Periodically publish training status."""
@@ -797,8 +794,7 @@ class V620SACTrainer:
 
         # Keep running
         while True:
-            tqdm.write("💓 Event loop alive")
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(1.0)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
