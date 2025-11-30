@@ -788,6 +788,10 @@ class V620SACTrainer:
         # Initialize NATS connection
         await self.setup_nats()
 
+        # Publish initial model (in case we resumed from checkpoint)
+        tqdm.write("🚀 Publishing initial model state...")
+        await self.publish_model_update()
+
         # Start consumer and status publisher in background
         asyncio.create_task(self.consume_experience())
         asyncio.create_task(self.publish_status())
