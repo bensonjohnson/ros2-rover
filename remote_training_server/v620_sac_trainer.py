@@ -598,7 +598,6 @@ class V620SACTrainer:
             reconnect_time_wait=2,       # 2s between attempts
             ping_interval=20,            # Ping every 20s
             max_outstanding_pings=3,     # Disconnect after 3 missed
-            max_payload=200 * 1024 * 1024,  # 200 MB max payload
             disconnected_cb=on_disconnected,
             reconnected_cb=on_reconnected,
         )
