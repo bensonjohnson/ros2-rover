@@ -736,18 +736,28 @@ class V620SACTrainer:
         try:
             # Read ONNX model
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+            if not os.path.exists(onnx_path):
+                print(f"❌ ONNX file not found at {onnx_path}")
+                return
+
             with open(onnx_path, 'rb') as f:
                 onnx_bytes = f.read()
+            
+            print(f"📦 Read ONNX model: {len(onnx_bytes)} bytes")
 
             # Publish model
             model_msg = serialize_model_update(onnx_bytes, self.model_version)
-            await self.js.publish("models.sac.update", model_msg)
+            print(f"📤 Publishing model update v{self.model_version} to 'models.sac.update'...")
+            
+            ack = await self.js.publish("models.sac.update", model_msg, timeout=10.0)
+            print(f"✅ Model publish acknowledged: seq={ack.seq}")
 
             # Publish metadata
             metadata_msg = serialize_metadata(self.model_version, time.time())
             await self.js.publish("models.sac.metadata", metadata_msg)
+            print(f"✅ Metadata published for v{self.model_version}")
 
-            print(f"📤 Published model version {self.model_version}")
+            print(f"🚀 Published model version {self.model_version} successfully")
 
         except Exception as e:
             print(f"❌ Model publish error: {e}")
