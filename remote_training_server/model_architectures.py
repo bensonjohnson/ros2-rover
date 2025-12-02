@@ -212,33 +212,98 @@ class GaussianPolicyHead(nn.Module):
 
     def __init__(self, feature_dim: int, proprio_dim: int, action_dim: int = 2, hidden_size: int = 256):
         super().__init__()
-        
+
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 64),
             nn.ReLU(inplace=True),
             nn.Linear(64, 64),
             nn.ReLU(inplace=True),
         )
-        
+
         self.net = nn.Sequential(
             nn.Linear(feature_dim + 64, hidden_size),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(inplace=True),
         )
-        
+
         self.mean_layer = nn.Linear(hidden_size, action_dim)
         self.log_std_layer = nn.Linear(hidden_size, action_dim)
 
     def forward(self, features: torch.Tensor, proprio: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         proprio_feat = self.proprio_encoder(proprio)
         combined = torch.cat([features, proprio_feat], dim=1)
-        
+
         x = self.net(combined)
         mean = self.mean_layer(x)
         log_std = self.log_std_layer(x)
-        
+
         # Clamp log_std for stability
         log_std = torch.clamp(log_std, -20, 2)
-        
+
         return mean, log_std
+
+
+class AsymmetricQNetwork(nn.Module):
+    """Asymmetric Critic network for SAC with privileged semantic information.
+
+    During training, the critic has access to rich semantic features from the
+    self-supervised vision model. The actor does not see these features, remaining
+    lightweight for deployment.
+
+    This allows the critic to provide better guidance during training using
+    server-side compute, while the actor stays efficient for rover inference.
+    """
+
+    def __init__(self,
+                 feature_dim: int,
+                 proprio_dim: int = 10,
+                 action_dim: int = 2,
+                 semantic_dim: int = 128):
+        super().__init__()
+
+        # Proprioception encoder
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 64),
+            nn.ReLU(inplace=True),
+        )
+
+        # Semantic feature encoder (privileged information)
+        self.semantic_encoder = nn.Sequential(
+            nn.Linear(semantic_dim, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        # Q-network: takes (visual features + proprio + semantic + action)
+        # Total input: feature_dim + 64 (proprio) + 128 (semantic) + action_dim
+        self.q_net = nn.Sequential(
+            nn.Linear(feature_dim + 64 + 128 + action_dim, 512),
+            nn.ReLU(inplace=True),
+            nn.Linear(512, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 1)
+        )
+
+    def forward(self, features, proprio, action, semantic_features):
+        """Forward pass with semantic features.
+
+        Args:
+            features: (B, feature_dim) visual features from RGBDEncoder
+            proprio: (B, proprio_dim) proprioception
+            action: (B, action_dim) action
+            semantic_features: (B, semantic_dim) privileged semantic features
+        Returns:
+            q_value: (B, 1) Q-value estimate
+        """
+        proprio_feat = self.proprio_encoder(proprio)
+        semantic_feat = self.semantic_encoder(semantic_features)
+
+        # Concatenate all inputs
+        combined = torch.cat([features, proprio_feat, semantic_feat, action], dim=1)
+        return self.q_net(combined)

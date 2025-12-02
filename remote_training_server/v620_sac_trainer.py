@@ -38,7 +38,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import model architectures
-from model_architectures import RGBDEncoder, GaussianPolicyHead, QNetwork
+from model_architectures import RGBDEncoder, GaussianPolicyHead, QNetwork, AsymmetricQNetwork
 
 # Import serialization utilities
 from serialization_utils import (
@@ -48,16 +48,20 @@ from serialization_utils import (
     serialize_status, deserialize_status
 )
 
+# Import self-supervised semantic model
+from self_supervised_vision import SelfSupervisedVisionModel, train_self_supervised_step
+from semantic_feature_extractor import extract_semantic_features, augment_reward
+
 class ReplayBuffer:
     """Experience Replay Buffer for SAC."""
-    
-    def __init__(self, capacity: int, rgb_shape: Tuple, depth_shape: Tuple, proprio_dim: int, device: torch.device):
+
+    def __init__(self, capacity: int, rgb_shape: Tuple, depth_shape: Tuple, proprio_dim: int, device: torch.device, semantic_dim: int = 128):
         self.capacity = capacity
         self.device = device
         self.ptr = 0
         self.size = 0
         self.full = False
-        
+
         # Storage (CPU RAM to save GPU memory, move to GPU during sampling)
         # Using uint8 for images to save RAM
         self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
@@ -66,83 +70,93 @@ class ReplayBuffer:
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32)
         self.dones = torch.zeros((capacity, 1), dtype=torch.float32)
+
+        # Semantic features (privileged information for critic)
+        self.semantic_features = torch.zeros((capacity, semantic_dim), dtype=torch.float16)
         
     def add_batch(self, batch_data: Dict):
         """Add a batch of sequential data and construct transitions."""
         # batch_data contains lists/arrays of s, a, r, d
         # We need to construct (s, a, r, s', d)
         # Since data is sequential, s'[t] = s[t+1]
-        
+
         rgb = batch_data['rgb']
         depth = batch_data['depth']
         proprio = batch_data['proprio']
         actions = batch_data['actions']
         rewards = batch_data['rewards']
         dones = batch_data['dones']
-        
+
+        # Semantic features (optional, will be added during reward augmentation)
+        semantic_features = batch_data.get('semantic_features', None)
+        if semantic_features is None:
+            # Create dummy zeros if not provided
+            semantic_features = np.zeros((len(rewards), 128), dtype=np.float32)
+
         num_steps = len(rewards)
         print(f"DEBUG: add_batch called with {num_steps} steps")
         if num_steps < 2:
             print(f"DEBUG: Batch too small ({num_steps} < 2), ignoring.")
             return # Need at least 2 steps to form a transition
-            
+
         # We can form (num_steps - 1) transitions from a single batch
         # unless we cache the last observation from the previous batch.
         # For simplicity, we'll just use the transitions within this batch.
         # This loses 1 transition per batch (negligible).
-        
+
         # Current states: 0 to N-1
         # Next states: 1 to N
-        
+
         # Indices for current step
         curr_slice = slice(0, num_steps - 1)
         # Indices for next step
         next_slice = slice(1, num_steps)
-        
+
         # Count valid transitions
         # If done[t] is True, then s[t+1] is start of new episode, NOT next state of s[t]
         # But here we are storing (s, a, r, s', d).
         # If d[t] is True, s'[t] doesn't matter (masked by 1-d).
         # So we can just take s[t+1] as s'[t] blindly.
-        
+
         batch_size = num_steps - 1
-        
+
         # Handle wrap-around
         if self.ptr + batch_size > self.capacity:
             # Split
             first_part = self.capacity - self.ptr
             second_part = batch_size - first_part
-            
-            self._add_slice(rgb, depth, proprio, actions, rewards, dones, 0, first_part, self.ptr)
-            self._add_slice(rgb, depth, proprio, actions, rewards, dones, first_part, second_part, 0)
-            
+
+            self._add_slice(rgb, depth, proprio, actions, rewards, dones, semantic_features, 0, first_part, self.ptr)
+            self._add_slice(rgb, depth, proprio, actions, rewards, dones, semantic_features, first_part, second_part, 0)
+
             self.ptr = second_part
             self.full = True
         else:
-            self._add_slice(rgb, depth, proprio, actions, rewards, dones, 0, batch_size, self.ptr)
+            self._add_slice(rgb, depth, proprio, actions, rewards, dones, semantic_features, 0, batch_size, self.ptr)
             self.ptr += batch_size
             if self.ptr >= self.capacity:
                 self.full = True
                 self.ptr = self.ptr % self.capacity
-                
+
         self.size = self.capacity if self.full else self.ptr
 
-    def _add_slice(self, rgb, depth, proprio, actions, rewards, dones, start_idx, count, buffer_idx):
+    def _add_slice(self, rgb, depth, proprio, actions, rewards, dones, semantic_features, start_idx, count, buffer_idx):
         """Helper to add slice."""
         # Source indices: start_idx to start_idx + count
         # BUT for next_state, we need +1
-        
+
         # s, a, r, d come from [start_idx : start_idx + count]
         # s' comes from [start_idx + 1 : start_idx + count + 1]
-        
+
         end_idx = start_idx + count
-        
+
         self.rgb[buffer_idx:buffer_idx+count] = torch.as_tensor(rgb[start_idx:end_idx].copy())
         self.depth[buffer_idx:buffer_idx+count] = torch.as_tensor(depth[start_idx:end_idx].copy()).to(torch.float16) # Convert to float16
         self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy())
         self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy())
         self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1)
         self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx].copy()).unsqueeze(1)
+        self.semantic_features[buffer_idx:buffer_idx+count] = torch.as_tensor(semantic_features[start_idx:end_idx].copy()).to(torch.float16)
         
         # We don't store next_state explicitly to save RAM.
         # We store sequential data.
@@ -169,30 +183,38 @@ class ReplayBuffer:
     def sample(self, batch_size):
         """Sample a batch of transitions."""
         indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
-        
+
         # Retrieve s
         rgb = self.rgb[indices].to(self.device, non_blocking=True).float() / 255.0
         rgb = rgb.permute(0, 3, 1, 2) # NHWC -> NCHW
-        
+
         depth = self.depth[indices].to(self.device, non_blocking=True).float().unsqueeze(1)
         proprio = self.proprio[indices].to(self.device, non_blocking=True)
         actions = self.actions[indices].to(self.device, non_blocking=True)
         rewards = self.rewards[indices].to(self.device, non_blocking=True)
         dones = self.dones[indices].to(self.device, non_blocking=True)
-        
+
+        # Retrieve semantic features
+        semantic_features = self.semantic_features[indices].to(self.device, non_blocking=True).float()
+
         # Retrieve s' (next index)
         next_indices = (indices + 1) % self.capacity
-        
+
         next_rgb = self.rgb[next_indices].to(self.device, non_blocking=True).float() / 255.0
         next_rgb = next_rgb.permute(0, 3, 1, 2)
-        
+
         next_depth = self.depth[next_indices].to(self.device, non_blocking=True).float().unsqueeze(1)
         next_proprio = self.proprio[next_indices].to(self.device, non_blocking=True)
-        
+
+        # Next semantic features
+        next_semantic_features = self.semantic_features[next_indices].to(self.device, non_blocking=True).float()
+
         return {
             'rgb': rgb, 'depth': depth, 'proprio': proprio,
             'action': actions, 'reward': rewards, 'done': dones,
-            'next_rgb': next_rgb, 'next_depth': next_depth, 'next_proprio': next_proprio
+            'semantic_features': semantic_features,
+            'next_rgb': next_rgb, 'next_depth': next_depth, 'next_proprio': next_proprio,
+            'next_semantic_features': next_semantic_features
         }
 
 class V620SACTrainer:
@@ -221,13 +243,25 @@ class V620SACTrainer:
         self.actor_encoder = RGBDEncoder().to(self.device)
         self.actor_head = GaussianPolicyHead(self.actor_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
         
-        # --- Critics ---
+        # --- Self-Supervised Semantic Model ---
+        self.semantic_model = SelfSupervisedVisionModel().to(self.device)
+        self.use_semantic_augmentation = args.use_semantic_augmentation
+        print(f"✓ Semantic augmentation: {'enabled' if self.use_semantic_augmentation else 'disabled'}")
+
+        # --- Critics (Asymmetric with Semantic Features) ---
         # Shared encoder for critics? Or separate?
         # To save memory, let's share one encoder for both critics, but separate from actor.
         self.critic_encoder = RGBDEncoder().to(self.device)
-        self.critic1 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
-        self.critic2 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
-        
+
+        # Use AsymmetricQNetwork if semantic augmentation is enabled
+        if self.use_semantic_augmentation:
+            semantic_dim = 128  # Global features from semantic model
+            self.critic1 = AsymmetricQNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim, semantic_dim).to(self.device)
+            self.critic2 = AsymmetricQNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim, semantic_dim).to(self.device)
+        else:
+            self.critic1 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
+            self.critic2 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
+
         # --- Target Critics ---
         self.target_critic_encoder = copy.deepcopy(self.critic_encoder)
         self.target_critic1 = copy.deepcopy(self.critic1)
@@ -247,7 +281,10 @@ class V620SACTrainer:
         self.target_entropy = -float(self.action_dim)
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=args.lr)
-        
+
+        # Semantic Model Optimizer
+        self.semantic_optimizer = optim.Adam(self.semantic_model.parameters(), lr=args.semantic_lr)
+
         # Replay Buffer
         self.buffer = ReplayBuffer(
             capacity=args.buffer_size,
@@ -287,11 +324,11 @@ class V620SACTrainer:
         if not checkpoints:
             print("🆕 No checkpoint found. Starting fresh.")
             return
-            
+
         latest = max(checkpoints, key=lambda p: int(p.stem.split('_')[-1]))
         print(f"🔄 Resuming from {latest}")
         ckpt = torch.load(latest, map_location=self.device)
-        
+
         self.actor_encoder.load_state_dict(ckpt['actor_encoder'])
         self.actor_head.load_state_dict(ckpt['actor_head'])
         self.critic_encoder.load_state_dict(ckpt['critic_encoder'])
@@ -301,11 +338,17 @@ class V620SACTrainer:
         self.target_critic1.load_state_dict(ckpt['target_critic1'])
         self.target_critic2.load_state_dict(ckpt['target_critic2'])
         self.log_alpha.data = ckpt['log_alpha']
-        
+
         self.actor_optimizer.load_state_dict(ckpt['actor_opt'])
         self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
         self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
-        
+
+        # Load semantic model if present
+        if 'semantic_model' in ckpt and self.use_semantic_augmentation:
+            self.semantic_model.load_state_dict(ckpt['semantic_model'])
+            self.semantic_optimizer.load_state_dict(ckpt['semantic_opt'])
+            print("✓ Loaded semantic model from checkpoint")
+
         self.total_steps = ckpt['total_steps']
         # Ensure version is at least 1 if we have steps, or use step count directly as version?
         # Rover expects integer version. Let's just use total_steps as version if > 0.
@@ -317,7 +360,7 @@ class V620SACTrainer:
 
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
-        torch.save({
+        checkpoint = {
             'actor_encoder': self.actor_encoder.state_dict(),
             'actor_head': self.actor_head.state_dict(),
             'critic_encoder': self.critic_encoder.state_dict(),
@@ -332,7 +375,14 @@ class V620SACTrainer:
             'alpha_opt': self.alpha_optimizer.state_dict(),
             'total_steps': self.total_steps,
             'model_version': self.model_version
-        }, path)
+        }
+
+        # Add semantic model if enabled
+        if self.use_semantic_augmentation:
+            checkpoint['semantic_model'] = self.semantic_model.state_dict()
+            checkpoint['semantic_opt'] = self.semantic_optimizer.state_dict()
+
+        torch.save(checkpoint, path)
         tqdm.write(f"💾 Saved {path}")
         self.export_onnx()
 
@@ -460,7 +510,7 @@ class V620SACTrainer:
         with self.lock:
             batch = self.buffer.sample(self.args.batch_size)
         t1 = time.time()
-        
+
         # Unpack
         state_rgb = batch['rgb']
         state_depth = batch['depth']
@@ -471,9 +521,13 @@ class V620SACTrainer:
         next_rgb = batch['next_rgb']
         next_depth = batch['next_depth']
         next_proprio = batch['next_proprio']
-        
+
+        # Semantic features (privileged information for critic)
+        state_semantic = batch['semantic_features']
+        next_semantic = batch['next_semantic_features']
+
         alpha = self.log_alpha.exp().item()
-        
+
         # --- Critic Update ---
         with torch.no_grad():
             # Get next action from target policy
@@ -483,29 +537,37 @@ class V620SACTrainer:
             dist = torch.distributions.Normal(next_mean, next_std)
             next_action_sample = dist.rsample()
             next_action = torch.tanh(next_action_sample)
-            
+
             # Compute log prob for entropy
             next_log_prob = dist.log_prob(next_action_sample).sum(dim=-1, keepdim=True)
             next_log_prob -= (2 * (np.log(2) - next_action_sample - F.softplus(-2 * next_action_sample))).sum(dim=1, keepdim=True)
-            
-            # Target Q
+
+            # Target Q (with semantic features if enabled)
             target_features = self.target_critic_encoder(next_rgb, next_depth)
-            q1_target = self.target_critic1(target_features, next_proprio, next_action)
-            q2_target = self.target_critic2(target_features, next_proprio, next_action)
+            if self.use_semantic_augmentation:
+                q1_target = self.target_critic1(target_features, next_proprio, next_action, next_semantic)
+                q2_target = self.target_critic2(target_features, next_proprio, next_action, next_semantic)
+            else:
+                q1_target = self.target_critic1(target_features, next_proprio, next_action)
+                q2_target = self.target_critic2(target_features, next_proprio, next_action)
             min_q_target = torch.min(q1_target, q2_target) - alpha * next_log_prob
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
-            
-        # Current Q
+
+        # Current Q (with semantic features if enabled)
         curr_features = self.critic_encoder(state_rgb, state_depth)
-        q1 = self.critic1(curr_features, state_proprio, action)
-        q2 = self.critic2(curr_features, state_proprio, action)
-        
+        if self.use_semantic_augmentation:
+            q1 = self.critic1(curr_features, state_proprio, action, state_semantic)
+            q2 = self.critic2(curr_features, state_proprio, action, state_semantic)
+        else:
+            q1 = self.critic1(curr_features, state_proprio, action)
+            q2 = self.critic2(curr_features, state_proprio, action)
+
         critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
-        
+
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-        
+
         t2 = time.time()
         
         # --- Actor Update ---
@@ -516,24 +578,28 @@ class V620SACTrainer:
         dist = torch.distributions.Normal(mean, std)
         action_sample = dist.rsample()
         current_action = torch.tanh(action_sample)
-        
+
         log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
         log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
-        
-        # Use critic to evaluate action
+
+        # Use critic to evaluate action (with semantic features if enabled)
         with torch.no_grad():
             q_features = self.critic_encoder(state_rgb, state_depth)
-            
-        q1_pi = self.critic1(q_features, state_proprio, current_action)
-        q2_pi = self.critic2(q_features, state_proprio, current_action)
+
+        if self.use_semantic_augmentation:
+            q1_pi = self.critic1(q_features, state_proprio, current_action, state_semantic)
+            q2_pi = self.critic2(q_features, state_proprio, current_action, state_semantic)
+        else:
+            q1_pi = self.critic1(q_features, state_proprio, current_action)
+            q2_pi = self.critic2(q_features, state_proprio, current_action)
         min_q_pi = torch.min(q1_pi, q2_pi)
-        
+
         actor_loss = ((alpha * log_prob) - min_q_pi).mean()
-        
+
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
-        
+
         t3 = time.time()
         
         # --- Alpha Update ---
@@ -624,6 +690,65 @@ class V620SACTrainer:
 
         print(f"✅ Connected to NATS")
 
+    def _augment_batch_semantic(self, batch):
+        """Augment batch with semantic features and rewards.
+
+        This runs in a thread pool to avoid blocking the async event loop.
+        """
+        try:
+            # Convert batch to tensors
+            num_steps = len(batch['rewards'])
+            rgb_batch = torch.from_numpy(batch['rgb']).float() / 255.0  # (N, H, W, 3)
+            rgb_batch = rgb_batch.permute(0, 3, 1, 2).to(self.device)  # (N, 3, H, W)
+
+            depth_batch = torch.from_numpy(batch['depth']).float().unsqueeze(1).to(self.device)  # (N, 1, H, W)
+
+            # Extract semantic features for entire batch
+            semantic_features_list = []
+            reward_augmentation_list = []
+
+            # Process in mini-batches to avoid OOM
+            mini_batch_size = 32
+            for i in range(0, num_steps, mini_batch_size):
+                end_idx = min(i + mini_batch_size, num_steps)
+                rgb_mini = rgb_batch[i:end_idx]
+                depth_mini = depth_batch[i:end_idx]
+
+                # Extract semantic features
+                sem_features = extract_semantic_features(
+                    rgb_mini, depth_mini, self.semantic_model
+                )
+
+                # Store global features for critic
+                semantic_features_list.append(sem_features['global_features'].cpu().numpy())
+
+                # Compute reward augmentation
+                base_rewards = torch.from_numpy(batch['rewards'][i:end_idx]).to(self.device)
+                augmented_rewards, _ = augment_reward(
+                    base_rewards,
+                    sem_features,
+                    weights={
+                        'traversability': self.args.semantic_reward_traversability,
+                        'obstacle': self.args.semantic_reward_obstacle,
+                        'roughness': self.args.semantic_reward_roughness
+                    }
+                )
+
+                reward_augmentation_list.append(augmented_rewards.cpu().numpy())
+
+            # Concatenate all mini-batches
+            batch['semantic_features'] = np.concatenate(semantic_features_list, axis=0)
+            batch['rewards'] = np.concatenate(reward_augmentation_list, axis=0)
+
+            return batch
+
+        except Exception as e:
+            print(f"❌ Semantic augmentation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return original batch if augmentation fails
+            return batch
+
     async def _ensure_streams(self):
         """Create NATS JetStream streams if they don't exist."""
         try:
@@ -698,6 +823,12 @@ class V620SACTrainer:
                         # Deserialize batch
                         print(f"DEBUG: Received NATS msg, data size: {len(msg.data)} bytes")
                         batch = deserialize_batch(msg.data)
+
+                        # Extract semantic features and augment rewards (if enabled)
+                        if self.use_semantic_augmentation:
+                            batch = await asyncio.get_event_loop().run_in_executor(
+                                None, self._augment_batch_semantic, batch
+                            )
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
@@ -809,6 +940,21 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.97)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
+
+    # Semantic augmentation options
+    parser.add_argument('--use_semantic_augmentation', action='store_true', default=True,
+                        help='Enable self-supervised semantic augmentation (enabled by default)')
+    parser.add_argument('--no_semantic_augmentation', dest='use_semantic_augmentation', action='store_false',
+                        help='Disable semantic augmentation (for baseline comparison)')
+    parser.add_argument('--semantic_lr', type=float, default=1e-4,
+                        help='Learning rate for semantic model')
+    parser.add_argument('--semantic_reward_traversability', type=float, default=0.1,
+                        help='Weight for traversability reward component')
+    parser.add_argument('--semantic_reward_obstacle', type=float, default=-0.2,
+                        help='Weight for obstacle proximity penalty')
+    parser.add_argument('--semantic_reward_roughness', type=float, default=-0.05,
+                        help='Weight for terrain roughness penalty')
+
     args = parser.parse_args()
 
     trainer = V620SACTrainer(args)
