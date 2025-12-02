@@ -210,8 +210,13 @@ def extract_semantic_features(rgb: torch.Tensor,
         # Extract outputs
         global_features = outputs['global_features']  # (B, 128)
         spatial_features = outputs['spatial_features']  # (B, 128, H/16, W/16)
-        depth_pred = outputs['depth_pred']  # (B, 1, H, W)
-        edge_pred = outputs['edge_pred']  # (B, 1, H, W)
+        depth_pred = outputs['depth_pred']  # (B, 1, H_pred, W_pred)
+        edge_pred = outputs['edge_pred']  # (B, 1, H_pred, W_pred)
+
+        # Resize predictions to match input depth size (in case of slight size mismatch)
+        if depth_pred.shape != depth.shape:
+            depth_pred = F.interpolate(depth_pred, size=depth.shape[2:], mode='bilinear', align_corners=False)
+            edge_pred = F.interpolate(edge_pred, size=depth.shape[2:], mode='bilinear', align_corners=False)
 
         # Compute depth statistics
         depth_variance = compute_local_variance(depth, kernel_size=15)
