@@ -208,56 +208,66 @@ class SACEpisodeRunner(Node):
         forward_vel = max(0.0, linear_vel)
         if forward_vel > 0.01:
             # Normalize by target speed → [0, 1]
-            speed_reward = (forward_vel / target_speed) * 0.4
+            # Increased from 0.4 to 0.7 to make forward motion dominant
+            speed_reward = (forward_vel / target_speed) * 0.7
             reward += speed_reward
 
         # Backward penalty
         if linear_vel < -0.01:
-            reward -= abs(linear_vel / target_speed) * 0.3
+            # Increased from 0.3 to 0.5 to discourage backing up
+            reward -= abs(linear_vel / target_speed) * 0.5
 
         # 2. Collision Penalty
         if collision or self._safety_override:
             reward -= 1.0  # Maximum negative reward
 
         # 3. Gap Alignment Reward (Follow the opening)
-        # self._target_heading is updated in _control_loop based on depth
-        # action[1] is angular velocity (steering), roughly -1 to 1
-        
-        # Calculate alignment error
-        # We want action[1] to match self._target_heading
+        # FIXED: Only reward alignment when actually moving forward
+        # This prevents the policy from learning to spin in place
         alignment_error = abs(action[1] - self._target_heading)
-        
-        # Reward for aligning with the gap
-        # If error is 0, reward is +0.4
-        # If error is 2.0 (max), reward is -0.4
-        alignment_reward = (0.5 - alignment_error) * 0.8
-        reward += alignment_reward
-        
-        # Bonus for moving forward WHILE aligned
-        if alignment_error < 0.3 and forward_vel > 0.05:
-             reward += 0.2 * (forward_vel / target_speed)
 
-        # 4. Action Smoothness
+        if forward_vel > 0.05:
+            # Only reward alignment when moving forward
+            # Reduced weight from 0.8 to 0.5 (max reward from 0.4 to 0.25)
+            alignment_reward = (0.5 - alignment_error) * 0.5
+            reward += alignment_reward
+
+            # Bonus for moving forward WHILE aligned
+            if alignment_error < 0.3:
+                reward += 0.2 * (forward_vel / target_speed)
+        else:
+            # Penalty for turning while stationary (discourages spinning in place)
+            alignment_reward = -abs(action[1]) * 0.3
+            reward += alignment_reward
+
+        # 4. Straightness Bonus (NEW)
+        # Reward driving straight (low angular velocity while moving forward)
+        if forward_vel > 0.08 and abs(angular_vel) < 0.3:
+            straightness_bonus = 0.3 * (forward_vel / target_speed)
+            reward += straightness_bonus
+
+        # 5. Action Smoothness
         if len(self._prev_angular_actions) > 0:
             angular_jerk = abs(action[1] - self._prev_angular_actions[-1])
             if angular_jerk > 0.4:
                 reward -= min(angular_jerk * 0.3, 0.3)
         self._prev_angular_actions.append(action[1])
 
-        # 5. Angular Velocity Penalty (prefer straight motion)
-        # Lighter penalty when turning is necessary
+        # 6. Angular Velocity Penalty (prefer straight motion)
+        # STRENGTHENED: Increase penalty to discourage spinning
         if abs(angular_vel) > 0.2:
-            # Base penalty
-            ang_penalty = abs(angular_vel) * 0.2
+            # Base penalty increased from 0.2 to 0.4
+            ang_penalty = abs(angular_vel) * 0.4
 
-            # Stronger penalty if stationary
+            # Stronger penalty if stationary (increased from 2.0x to 3.0x)
             if forward_vel < 0.05:
-                ang_penalty *= 2.0  # Spinning in place
+                ang_penalty *= 3.0  # Heavily penalize spinning in place
             # Reduced penalty if we have good clearance (don't punish exploring open space)
             elif clearance >= 1.0:
-                ang_penalty *= 1.0 
+                ang_penalty *= 1.0
 
-            reward -= min(ang_penalty, 0.4)
+            # Increased cap from 0.4 to 0.6 to allow stronger penalties
+            reward -= min(ang_penalty, 0.6)
 
         # Final normalization: ensure [-1, 1] range
         reward = np.clip(reward, -1.0, 1.0)

@@ -644,7 +644,17 @@ class V620SACTrainer:
         self.soft_update(self.critic_encoder, self.target_critic_encoder)
         self.soft_update(self.critic1, self.target_critic1)
         self.soft_update(self.critic2, self.target_critic2)
-        
+
+        # --- Diagnostic Logging (TensorBoard) ---
+        if self.total_steps % 10 == 0:
+            self.writer.add_scalar('train/action_linear_mean', mean[:, 0].mean().item(), self.total_steps)
+            self.writer.add_scalar('train/action_angular_mean', mean[:, 1].mean().item(), self.total_steps)
+            self.writer.add_scalar('train/action_linear_std', std[:, 0].mean().item(), self.total_steps)
+            self.writer.add_scalar('train/action_angular_std', std[:, 1].mean().item(), self.total_steps)
+            self.writer.add_scalar('train/q1_mean', q1.mean().item(), self.total_steps)
+            self.writer.add_scalar('train/q2_mean', q2.mean().item(), self.total_steps)
+            self.writer.add_scalar('train/alpha', alpha, self.total_steps)
+
         t4 = time.time()
         
         if (t4 - t0) > 1.0:
