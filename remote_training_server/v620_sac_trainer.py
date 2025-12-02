@@ -727,12 +727,12 @@ class V620SACTrainer:
         This runs in a thread pool to avoid blocking the async event loop.
         """
         try:
-            # Convert batch to tensors
+            # Convert batch to tensors (copy to make writable)
             num_steps = len(batch['rewards'])
-            rgb_batch = torch.from_numpy(batch['rgb']).float() / 255.0  # (N, H, W, 3)
+            rgb_batch = torch.from_numpy(batch['rgb'].copy()).float() / 255.0  # (N, H, W, 3)
             rgb_batch = rgb_batch.permute(0, 3, 1, 2).to(self.device)  # (N, 3, H, W)
 
-            depth_batch = torch.from_numpy(batch['depth']).float().unsqueeze(1).to(self.device)  # (N, 1, H, W)
+            depth_batch = torch.from_numpy(batch['depth'].copy()).float().unsqueeze(1).to(self.device)  # (N, 1, H, W)
 
             # Extract semantic features for entire batch
             semantic_features_list = []
@@ -754,7 +754,7 @@ class V620SACTrainer:
                 semantic_features_list.append(sem_features['global_features'].cpu().numpy())
 
                 # Compute reward augmentation
-                base_rewards = torch.from_numpy(batch['rewards'][i:end_idx]).to(self.device)
+                base_rewards = torch.from_numpy(batch['rewards'][i:end_idx].copy()).to(self.device)
                 augmented_rewards, _ = augment_reward(
                     base_rewards,
                     sem_features,
