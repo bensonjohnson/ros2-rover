@@ -533,6 +533,10 @@ class V620SACTrainer:
 
                 if self.total_steps % 200 == 0:
                     self.save_checkpoint()
+
+                # Small delay to allow async NATS consumer to process incoming batches
+                # Without this, training monopolizes GPU and prevents experience collection
+                time.sleep(0.01)  # 10ms delay = max ~100 train steps/sec (still fast!)
             else:
                 time.sleep(1.0) # Wait for data
 
