@@ -329,34 +329,65 @@ class V620SACTrainer:
         print(f"🔄 Resuming from {latest}")
         ckpt = torch.load(latest, map_location=self.device)
 
-        self.actor_encoder.load_state_dict(ckpt['actor_encoder'])
-        self.actor_head.load_state_dict(ckpt['actor_head'])
-        self.critic_encoder.load_state_dict(ckpt['critic_encoder'])
-        self.critic1.load_state_dict(ckpt['critic1'])
-        self.critic2.load_state_dict(ckpt['critic2'])
-        self.target_critic_encoder.load_state_dict(ckpt['target_critic_encoder'])
-        self.target_critic1.load_state_dict(ckpt['target_critic1'])
-        self.target_critic2.load_state_dict(ckpt['target_critic2'])
-        self.log_alpha.data = ckpt['log_alpha']
+        # Check if this is an old checkpoint (without semantic model)
+        is_old_checkpoint = 'semantic_model' not in ckpt
 
-        self.actor_optimizer.load_state_dict(ckpt['actor_opt'])
-        self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
-        self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
+        if is_old_checkpoint and self.use_semantic_augmentation:
+            print("⚠️  Checkpoint is from old version (without semantic augmentation)")
+            print("   Loading actor and encoder weights, reinitializing critics for new architecture...")
 
-        # Load semantic model if present
-        if 'semantic_model' in ckpt and self.use_semantic_augmentation:
-            self.semantic_model.load_state_dict(ckpt['semantic_model'])
-            self.semantic_optimizer.load_state_dict(ckpt['semantic_opt'])
-            print("✓ Loaded semantic model from checkpoint")
+            # Load actor (unchanged architecture)
+            self.actor_encoder.load_state_dict(ckpt['actor_encoder'])
+            self.actor_head.load_state_dict(ckpt['actor_head'])
 
-        self.total_steps = ckpt['total_steps']
-        # Ensure version is at least 1 if we have steps, or use step count directly as version?
-        # Rover expects integer version. Let's just use total_steps as version if > 0.
-        # But rover logic compares > current.
-        # If we use steps, it will be fine.
-        # But wait, we export ONNX with increment_version=True/False.
-        # Let's explicitly save/load model_version in checkpoint.
-        self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100)) 
+            # Load critic encoder only (shared part)
+            self.critic_encoder.load_state_dict(ckpt['critic_encoder'])
+            self.target_critic_encoder.load_state_dict(ckpt['target_critic_encoder'])
+
+            # Don't load critics - they have different architecture now (AsymmetricQNetwork)
+            print("   ⚠️  Reinitializing critics with AsymmetricQNetwork (this is expected)")
+
+            # Load alpha
+            self.log_alpha.data = ckpt['log_alpha']
+
+            # Load actor optimizer only (critic optimizer params won't match)
+            self.actor_optimizer.load_state_dict(ckpt['actor_opt'])
+            # Note: Not loading critic_optimizer or alpha_optimizer to avoid mismatch
+
+            # Semantic model and optimizer start fresh (already initialized)
+            print("   ✓ Semantic model starting fresh")
+
+            # Preserve training progress
+            self.total_steps = ckpt['total_steps']
+            self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100))
+
+            print(f"   ✓ Resumed from step {self.total_steps} with new architecture")
+            print("   ℹ️  Critics will warm up over next ~100 steps")
+
+        else:
+            # New checkpoint format or semantic disabled - load everything normally
+            self.actor_encoder.load_state_dict(ckpt['actor_encoder'])
+            self.actor_head.load_state_dict(ckpt['actor_head'])
+            self.critic_encoder.load_state_dict(ckpt['critic_encoder'])
+            self.critic1.load_state_dict(ckpt['critic1'])
+            self.critic2.load_state_dict(ckpt['critic2'])
+            self.target_critic_encoder.load_state_dict(ckpt['target_critic_encoder'])
+            self.target_critic1.load_state_dict(ckpt['target_critic1'])
+            self.target_critic2.load_state_dict(ckpt['target_critic2'])
+            self.log_alpha.data = ckpt['log_alpha']
+
+            self.actor_optimizer.load_state_dict(ckpt['actor_opt'])
+            self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
+            self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
+
+            # Load semantic model if present
+            if 'semantic_model' in ckpt and self.use_semantic_augmentation:
+                self.semantic_model.load_state_dict(ckpt['semantic_model'])
+                self.semantic_optimizer.load_state_dict(ckpt['semantic_opt'])
+                print("✓ Loaded semantic model from checkpoint")
+
+            self.total_steps = ckpt['total_steps']
+            self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100)) 
 
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
