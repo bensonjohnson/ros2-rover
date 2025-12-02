@@ -2,6 +2,21 @@
 
 # SAC Training Server Startup Script for V620
 # Trains a continuous SAC policy using ROCm acceleration
+#
+# Usage:
+#   ./start_sac_server.sh [nats_server] [checkpoint_dir] [log_dir] [additional_args...]
+#
+# Examples:
+#   # Basic usage (semantic augmentation ENABLED by default)
+#   ./start_sac_server.sh
+#
+#   # Disable semantic augmentation (for baseline comparison)
+#   ./start_sac_server.sh nats://nats.gokickrocks.org:4222 ./checkpoints_sac ./logs_sac --no_semantic_augmentation
+#
+#   # Tune semantic reward weights
+#   ./start_sac_server.sh nats://nats.gokickrocks.org:4222 ./checkpoints_sac ./logs_sac \
+#     --semantic_reward_traversability 0.2 \
+#     --semantic_reward_obstacle -0.3
 
 set -e
 
@@ -18,6 +33,8 @@ echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
+echo "  🧠 Semantic Augmentation: ENABLED by default"
+echo "     (use --no_semantic_augmentation to disable)"
 echo ""
 
 # Check we're in the right directory
