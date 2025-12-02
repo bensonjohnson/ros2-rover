@@ -480,28 +480,51 @@ class V620SACTrainer:
             tqdm.write(f"❌ Export failed: {e}")
 
     def _training_loop(self):
-        print("🧵 Training thread started (Waiting for data...)")
+        """Staged training loop: alternates between collection and training phases."""
+        print("🧵 Training thread started (STAGED MODE: collect → train → repeat)")
         pbar = None
         last_time = time.time()
-        
-        while True:
-            if self.buffer.size > self.args.batch_size * 2: # Wait for minimal data
-                
-                # Initialize display on first batch
-                if pbar is None:
-                    # Clear screen: \033[H (home) \033[J (clear down)
-                    print("\033[H\033[J", end="") 
-                    print("==================================================")
-                    print("         SAC TRAINING DASHBOARD (V620)            ")
-                    print("==================================================")
-                    pbar = tqdm(initial=self.total_steps, desc="🚀 Training", unit="step", dynamic_ncols=True)
 
-                # REMOVED: with self.lock: (Locking scope reduced to buffer access only)
+        training_burst_size = 50  # Train for 50 steps (200 gradient steps), then pause
+        min_buffer_size = 2000    # Need at least 2000 samples to start training
+
+        while True:
+            # Phase 1: COLLECTION - Wait for buffer to grow
+            if self.buffer.size < min_buffer_size:
+                if pbar:
+                    pbar.set_description(f"📥 Collecting (need {min_buffer_size - self.buffer.size} more)")
+                time.sleep(1.0)
+                continue
+
+            # Initialize display on first training
+            if pbar is None:
+                print("\033[H\033[J", end="")
+                print("==================================================")
+                print("    SAC TRAINING DASHBOARD (STAGED MODE)        ")
+                print("==================================================")
+                pbar = tqdm(initial=self.total_steps, desc="🎯 Training", unit="step", dynamic_ncols=True)
+
+            # Phase 2: TRAINING BURST - Train for N iterations without new batches
+            pbar.set_description(f"🎯 Training burst ({training_burst_size} iters)")
+
+            for burst_iter in range(training_burst_size):
+                # Check if we still have enough data
+                if self.buffer.size < self.args.batch_size * 4:
+                    pbar.write(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
+                    break
+
                 t0 = time.time()
                 # Perform 4 gradient steps per iteration for better sample efficiency
                 for _ in range(4):
                     metrics = self.train_step()
                     self.total_steps += 1
+
+                    # Train semantic model if enabled (every 4 steps to save compute)
+                    if self.use_semantic_augmentation and self.total_steps % 4 == 0:
+                        semantic_metrics = self._train_semantic_step()
+                        # Log semantic losses
+                        for k, v in semantic_metrics.items():
+                            self.writer.add_scalar(f'semantic/{k}', v, self.total_steps)
 
                     # Log every step to TensorBoard
                     if metrics:
@@ -510,7 +533,7 @@ class V620SACTrainer:
 
                     pbar.update(1)
                 t1 = time.time()
-                
+
                 # Update stats every 10 steps for smooth display
                 if self.total_steps % 10 == 0:
                     current_time = time.time()
@@ -518,27 +541,58 @@ class V620SACTrainer:
                     last_time = current_time
                     steps_per_sec = 10 / dt if dt > 0 else 0
                     samples_per_sec = steps_per_sec * self.args.batch_size
-                    
+
                     pbar.set_postfix({
                         'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
                         'Alpha': f"{metrics['alpha']:.3f}",
-                        'S/s': f"{int(samples_per_sec)}", # Samples per second
+                        'S/s': f"{int(samples_per_sec)}",
                         'Buf': f"{self.buffer.size}",
                         'Ver': f"v{self.model_version}"
                     })
 
-                # Flush TensorBoard every 100 steps (logging happens in loop above)
+                # Flush TensorBoard every 100 steps
                 if self.total_steps % 100 == 0:
                     self.writer.flush()
 
                 if self.total_steps % 200 == 0:
                     self.save_checkpoint()
 
-                # Small delay to allow async NATS consumer to process incoming batches
-                # Without this, training monopolizes GPU and prevents experience collection
-                time.sleep(0.01)  # 10ms delay = max ~100 train steps/sec (still fast!)
-            else:
-                time.sleep(1.0) # Wait for data
+            # Phase 3: PAUSE - Give NATS consumer time to process batches
+            pbar.set_description("⏸️  Paused for collection")
+            pbar.write(f"✅ Training burst complete ({training_burst_size} iters = {training_burst_size * 4} steps). Pausing for 3s...")
+            time.sleep(3.0)  # 3 second pause between bursts for batch ingestion
+
+    def _train_semantic_step(self):
+        """Train the self-supervised semantic model.
+
+        Uses the same RGB-D data from replay buffer to train:
+        1. Depth prediction from RGB
+        2. Edge detection (depth discontinuities)
+        3. Temporal consistency (consecutive frames)
+        """
+        # Sample a batch for semantic training (smaller batch to save compute)
+        semantic_batch_size = min(128, self.args.batch_size // 2)
+
+        with self.lock:
+            batch = self.buffer.sample(semantic_batch_size)
+
+        # Extract RGB and depth
+        rgb = batch['rgb']  # (B, 3, H, W) normalized [0, 1]
+        depth = batch['depth']  # (B, 1, H, W) normalized [0, 1]
+
+        # For temporal consistency, use next_rgb if available
+        rgb_next = batch.get('next_rgb', None)
+
+        # Train semantic model
+        losses = train_self_supervised_step(
+            self.semantic_model,
+            self.semantic_optimizer,
+            rgb,
+            depth,
+            rgb_next
+        )
+
+        return losses
 
     def train_step(self):
         t0 = time.time()
