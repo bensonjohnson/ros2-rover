@@ -583,9 +583,7 @@ class V620SACTrainer:
                         'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
                         'Alpha': f"{metrics['alpha']:.3f}",
                         'S/s': f"{int(samples_per_sec)}",
-                        'S/s': f"{int(samples_per_sec)}",
                         'Buf': f"{self.buffer.size}",
-                        'Ver': f"v{self.model_version}"
                         'Ver': f"v{self.model_version}"
                     })
 
