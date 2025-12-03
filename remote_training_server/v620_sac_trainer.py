@@ -20,6 +20,7 @@ import argparse
 import threading
 import queue
 import asyncio
+import traceback
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from pathlib import Path
@@ -558,10 +559,19 @@ class V620SACTrainer:
 
                     # Train semantic model if enabled (every 4 steps to save compute)
                     if self.use_semantic_augmentation and self.total_steps % 4 == 0:
-                        semantic_metrics = self._train_semantic_step()
-                        # Log semantic losses
-                        for k, v in semantic_metrics.items():
-                            self.writer.add_scalar(f'semantic/{k}', v, self.total_steps)
+                        try:
+                            semantic_metrics = self._train_semantic_step()
+                            # Log semantic losses
+                            for k, v in semantic_metrics.items():
+                                self.writer.add_scalar(f'semantic/{k}', v, self.total_steps)
+                        except Exception as e:
+                            logger.error(f"Semantic training step failed: {e}")
+                            logger.error(f"Traceback: {traceback.format_exc()}")
+                            # Clear GPU cache to recover from potential OOM
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                                torch.cuda.synchronize()
+                            # Continue training without semantic augmentation for this step
 
                     # Log every step to TensorBoard
                     if metrics:
@@ -833,6 +843,10 @@ class V620SACTrainer:
         This runs in a thread pool to avoid blocking the async event loop.
         """
         try:
+            # Synchronize GPU to detect any prior errors before proceeding
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
             # Convert batch to tensors (copy to make writable)
             num_steps = len(batch['rewards'])
             rgb_batch = torch.from_numpy(batch['rgb'].copy()).float() / 255.0  # (N, H, W, 3)
@@ -882,8 +896,16 @@ class V620SACTrainer:
 
         except Exception as e:
             print(f"❌ Semantic augmentation failed: {e}")
-            import traceback
             traceback.print_exc()
+
+            # Clear GPU cache to recover from potential memory/state issues
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                try:
+                    torch.cuda.synchronize()
+                except:
+                    pass  # GPU might be in bad state, continue anyway
+
             # Return original batch if augmentation fails
             return batch
 
@@ -964,9 +986,8 @@ class V620SACTrainer:
 
                         # Extract semantic features and augment rewards (if enabled)
                         if self.use_semantic_augmentation:
-                            batch = await asyncio.get_event_loop().run_in_executor(
-                                None, self._augment_batch_semantic, batch
-                            )
+                            # Don't use executor - GPU operations must run in main thread
+                            batch = self._augment_batch_semantic(batch)
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
