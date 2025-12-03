@@ -100,6 +100,7 @@ python3 -c "import torch" 2>/dev/null || MISSING_PACKAGES+=("torch")
 python3 -c "import zmq" 2>/dev/null || MISSING_PACKAGES+=("pyzmq")
 python3 -c "import numpy" 2>/dev/null || MISSING_PACKAGES+=("numpy")
 python3 -c "import tensorboard" 2>/dev/null || MISSING_PACKAGES+=("tensorboard")
+python3 -c "import flask" 2>/dev/null || MISSING_PACKAGES+=("flask")
 
 if [ ${#MISSING_PACKAGES[@]} -ne 0 ]; then
   echo "❌ Missing packages: ${MISSING_PACKAGES[@]}"
