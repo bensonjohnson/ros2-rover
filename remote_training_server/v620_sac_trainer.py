@@ -52,6 +52,9 @@ from serialization_utils import (
 from self_supervised_vision import SelfSupervisedVisionModel, train_self_supervised_step
 from semantic_feature_extractor import extract_semantic_features, augment_reward
 
+# Import dashboard
+from dashboard_app import TrainingDashboard
+
 class ReplayBuffer:
     """Experience Replay Buffer for SAC."""
 
@@ -310,6 +313,7 @@ class V620SACTrainer:
         
         # Threading
         self.lock = threading.Lock()
+        self.semantic_lock = threading.Lock() # Lock for semantic model
         self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self.training_thread.start()
         
@@ -318,6 +322,10 @@ class V620SACTrainer:
         
         # Export initial model
         self.export_onnx(increment_version=False)
+
+        # Start Dashboard
+        self.dashboard = TrainingDashboard(self)
+        self.dashboard.start()
 
     def load_latest_checkpoint(self):
         checkpoints = list(Path(self.args.checkpoint_dir).glob('sac_step_*.pt'))
@@ -583,14 +591,15 @@ class V620SACTrainer:
         # For temporal consistency, use next_rgb if available
         rgb_next = batch.get('next_rgb', None)
 
-        # Train semantic model
-        losses = train_self_supervised_step(
-            self.semantic_model,
-            self.semantic_optimizer,
-            rgb,
-            depth,
-            rgb_next
-        )
+        # Train semantic model (Thread-safe)
+        with self.semantic_lock:
+            losses = train_self_supervised_step(
+                self.semantic_model,
+                self.semantic_optimizer,
+                rgb,
+                depth,
+                rgb_next
+            )
 
         return losses
 
@@ -814,9 +823,10 @@ class V620SACTrainer:
                 depth_mini = depth_batch[i:end_idx]
 
                 # Extract semantic features
-                sem_features = extract_semantic_features(
-                    rgb_mini, depth_mini, self.semantic_model
-                )
+                with self.semantic_lock:
+                    sem_features = extract_semantic_features(
+                        rgb_mini, depth_mini, self.semantic_model
+                    )
 
                 # Store global features for critic
                 semantic_features_list.append(sem_features['global_features'].cpu().numpy())
