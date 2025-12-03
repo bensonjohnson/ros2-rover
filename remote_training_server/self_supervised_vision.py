@@ -239,12 +239,33 @@ class SelfSupervisedVisionModel(nn.Module):
 
         # 1. Depth prediction loss (L1)
         depth_pred = outputs['depth_pred']
+
+        # Resize depth_pred to match depth_gt dimensions if needed
+        # (encoder/decoder may not preserve exact dimensions for non-16-divisible sizes)
+        if depth_pred.shape != depth_gt.shape:
+            depth_pred = F.interpolate(
+                depth_pred,
+                size=(depth_gt.shape[2], depth_gt.shape[3]),
+                mode='bilinear',
+                align_corners=False
+            )
+
         depth_loss = F.l1_loss(depth_pred, depth_gt)
 
         # 2. Edge detection loss (derived from depth gradients)
         # Compute ground truth edges from depth using Sobel filter
         edge_gt = self._compute_depth_edges(depth_gt)
         edge_pred = outputs['edge_pred']
+
+        # Resize edge_pred to match edge_gt dimensions if needed
+        if edge_pred.shape != edge_gt.shape:
+            edge_pred = F.interpolate(
+                edge_pred,
+                size=(edge_gt.shape[2], edge_gt.shape[3]),
+                mode='bilinear',
+                align_corners=False
+            )
+
         edge_loss = F.binary_cross_entropy(edge_pred, edge_gt)
 
         # 3. Temporal consistency loss (if next frame provided)
