@@ -220,6 +220,21 @@ class ReplayBuffer:
             'next_semantic_features': next_semantic_features
         }
 
+    def copy_state_from(self, other):
+        """Deep copy state from another buffer."""
+        self.ptr = other.ptr
+        self.size = other.size
+        self.full = other.full
+
+        # Copy tensors
+        self.rgb.copy_(other.rgb)
+        self.depth.copy_(other.depth)
+        self.proprio.copy_(other.proprio)
+        self.actions.copy_(other.actions)
+        self.rewards.copy_(other.rewards)
+        self.dones.copy_(other.dones)
+        self.semantic_features.copy_(other.semantic_features)
+
 class V620SACTrainer:
     """SAC Trainer optimized for V620 ROCm."""
     
@@ -290,6 +305,15 @@ class V620SACTrainer:
 
         # Replay Buffer
         self.buffer = ReplayBuffer(
+            capacity=args.buffer_size,
+            rgb_shape=self.rgb_shape,
+            depth_shape=self.depth_shape,
+            proprio_dim=self.proprio_dim,
+            device=self.device
+        )
+        
+        # Training Buffer (Double Buffering)
+        self.training_buffer = ReplayBuffer(
             capacity=args.buffer_size,
             rgb_shape=self.rgb_shape,
             depth_shape=self.depth_shape,
@@ -515,10 +539,15 @@ class V620SACTrainer:
             # Phase 2: TRAINING BURST - Train for N iterations without new batches
             pbar.set_description(f"🎯 Training burst ({training_burst_size} iters)")
 
+            # Snapshot buffer for training (Double Buffering)
+            # This minimizes lock contention: we only lock to copy, then train on the copy
+            with self.lock:
+                self.training_buffer.copy_state_from(self.buffer)
+
             for burst_iter in range(training_burst_size):
                 # Check if we still have enough data
-                if self.buffer.size < self.args.batch_size * 4:
-                    pbar.write(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
+                if self.training_buffer.size < self.args.batch_size * 4:
+                    pbar.write(f"⚠️  Buffer depleted ({self.training_buffer.size}), pausing training...")
                     break
 
                 t0 = time.time()
@@ -554,7 +583,9 @@ class V620SACTrainer:
                         'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
                         'Alpha': f"{metrics['alpha']:.3f}",
                         'S/s': f"{int(samples_per_sec)}",
+                        'S/s': f"{int(samples_per_sec)}",
                         'Buf': f"{self.buffer.size}",
+                        'Ver': f"v{self.model_version}"
                         'Ver': f"v{self.model_version}"
                     })
 
@@ -581,8 +612,8 @@ class V620SACTrainer:
         # Sample a batch for semantic training (smaller batch to save compute)
         semantic_batch_size = min(128, self.args.batch_size // 2)
 
-        with self.lock:
-            batch = self.buffer.sample(semantic_batch_size)
+        # Sample from training buffer (no lock needed)
+        batch = self.training_buffer.sample(semantic_batch_size)
 
         # Extract RGB and depth
         rgb = batch['rgb']  # (B, 3, H, W) normalized [0, 1]
@@ -605,8 +636,8 @@ class V620SACTrainer:
 
     def train_step(self):
         t0 = time.time()
-        with self.lock:
-            batch = self.buffer.sample(self.args.batch_size)
+        # Sample from training buffer (no lock needed)
+        batch = self.training_buffer.sample(self.args.batch_size)
         t1 = time.time()
 
         # Unpack
