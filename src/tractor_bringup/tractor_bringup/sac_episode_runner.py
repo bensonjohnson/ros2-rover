@@ -169,7 +169,7 @@ class SACEpisodeRunner(Node):
 
     def _setup_subscribers(self):
         # self.create_subscription(Image, '/camera/camera/color/image_raw', self._rgb_cb, qos_profile_sensor_data)
-        self.create_subscription(Image, '/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
+        self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odom', self._odom_cb, 10)
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data)
