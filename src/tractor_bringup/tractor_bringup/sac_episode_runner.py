@@ -334,19 +334,12 @@ class SACEpisodeRunner(Node):
         col_scores = np.convolve(col_scores, np.ones(5)/5, mode='same')
         
         best_col = np.argmax(col_scores)
-        
-        # Map col 0..63 to -1..1
-        # Col 0 is Left (max Y), Col 63 is Right (min Y)
-        # So 0 -> 1.0, 63 -> -1.0
-        # Wait, in processor:
-        # grid_cols = Center + Y * scale
-        # Y positive is Left.
-        # So Col > Center is Left.
-        # Col < Center is Right.
-        # 32 is Center.
-        # 63 is Left. 0 is Right.
-        
-        self._target_heading = (best_col - 32) / 32.0
+
+        # Map col 0..63 to heading -1..1
+        # With corrected grid: Col 0 = LEFT, Col 63 = RIGHT, Col 32 = CENTER
+        # Heading: +1.0 = turn left, -1.0 = turn right
+        # Col 0 (left) → +1.0, Col 32 (center) → 0.0, Col 63 (right) → -1.0
+        self._target_heading = (32 - best_col) / 32.0
         
         # Calculate min_forward_dist from grid (for reward function)
         # Scan center strip (width ~30cm -> 6 pixels)
