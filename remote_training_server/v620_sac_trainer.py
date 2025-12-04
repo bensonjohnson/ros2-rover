@@ -319,6 +319,15 @@ class V620SACTrainer:
         print(f"🔄 Resuming from {latest}")
         ckpt = torch.load(latest, map_location=self.device)
 
+        # Check if checkpoint is from old architecture (RGB-D / Semantic vs Occupancy Grid)
+        try:
+            # Try to check if the encoder structure matches by comparing shapes
+            actor_encoder_state = ckpt.get('actor_encoder', {})
+            # Occupancy grid encoder should have conv layers with Sequential naming (conv.0.weight, etc.)
+            is_old_checkpoint = 'conv.0.weight' not in actor_encoder_state
+        except Exception:
+            is_old_checkpoint = True
+
         if is_old_checkpoint:
             print("⚠️  Checkpoint is from old version (RGB-D / Semantic)")
             print("   Starting fresh with Occupancy Grid architecture...")
@@ -472,15 +481,23 @@ class V620SACTrainer:
                 t0 = time.time()
                 # Perform 4 gradient steps per iteration for better sample efficiency
                 for _ in range(4):
-                    metrics = self.train_step()
-                    self.total_steps += 1
+                    try:
+                        metrics = self.train_step()
+                        self.total_steps += 1
 
-                    # Log every step to TensorBoard
-                    if metrics:
-                        for k, v in metrics.items():
-                            self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                        # Log every step to TensorBoard
+                        if metrics:
+                            for k, v in metrics.items():
+                                self.writer.add_scalar(f'train/{k}', v, self.total_steps)
 
-                    pbar.update(1)
+                        pbar.update(1)
+                    except (ValueError, torch.AcceleratorError, RuntimeError) as e:
+                        tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
+                        tqdm.write(f"   Skipping this batch and continuing...")
+                        # Don't increment total_steps, but continue training
+                        # This prevents the GPU from crashing the entire process
+                        pbar.update(1)
+                        continue
                 t1 = time.time()
 
                 # Update stats every 10 steps for smooth display
@@ -511,6 +528,13 @@ class V620SACTrainer:
             pbar.write(f"✅ Training burst complete ({training_burst_size} iters = {training_burst_size * 4} steps). Pausing for 3s...")
             time.sleep(3.0)  # 3 second pause between bursts for batch ingestion
 
+    def _validate_tensor(self, tensor, name):
+        """Validate tensor for NaN/Inf values."""
+        if torch.isnan(tensor).any():
+            raise ValueError(f"{name} contains NaN values")
+        if torch.isinf(tensor).any():
+            raise ValueError(f"{name} contains Inf values")
+
     def train_step(self):
         t0 = time.time()
         # Sample from training buffer (no lock needed)
@@ -526,6 +550,21 @@ class V620SACTrainer:
         next_grid = batch['next_grid']
         next_proprio = batch['next_proprio']
 
+        # Validate batch data
+        try:
+            self._validate_tensor(state_grid, "state_grid")
+            self._validate_tensor(state_proprio, "state_proprio")
+            self._validate_tensor(next_grid, "next_grid")
+            self._validate_tensor(next_proprio, "next_proprio")
+        except ValueError as e:
+            tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
+            # Return dummy metrics to keep training loop happy
+            return {
+                'actor_loss': 0.0, 'critic_loss': 0.0, 'alpha': 0.0,
+                'alpha_loss': 0.0, 'policy_entropy': 0.0, 'q_value_mean': 0.0,
+                'target_entropy_gap': 0.0, 'reward_mean': 0.0, 'reward_std': 0.0
+            }
+
         alpha = self.log_alpha.exp().item()
 
         # --- Critic Update ---
@@ -533,9 +572,32 @@ class V620SACTrainer:
             # Get next action from target policy
             next_features = self.actor_encoder(next_grid)
             next_mean, next_log_std = self.actor_head(next_features, next_proprio)
+
+            # Validate policy outputs before creating distribution
+            self._validate_tensor(next_mean, "next_mean")
+            self._validate_tensor(next_log_std, "next_log_std")
+
+            # Additional safety: clamp log_std (redundant with model, but belt-and-suspenders)
+            next_log_std = torch.clamp(next_log_std, -20, 2)
             next_std = next_log_std.exp()
+
+            # ROCm stability: Add small epsilon to prevent std from being too close to zero
+            # This helps avoid edge cases in ROCm kernels for Normal distribution
+            next_std = next_std + 1e-6
+
+            # Final validation of std values
+            self._validate_tensor(next_std, "next_std")
+
+            # Force GPU sync to catch errors at exact point of failure (ROCm debugging)
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()
+
             dist = torch.distributions.Normal(next_mean, next_std)
             next_action_sample = dist.rsample()
+
+            # Validate sampled actions (ROCm rsample can sometimes produce NaN)
+            self._validate_tensor(next_action_sample, "next_action_sample")
+
             next_action = torch.tanh(next_action_sample)
 
             # Compute log prob for entropy
@@ -558,17 +620,45 @@ class V620SACTrainer:
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.critic_encoder.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
+
         self.critic_optimizer.step()
 
         t2 = time.time()
-        
+
         # --- Actor Update ---
         # Re-compute features for actor (gradient flows through encoder)
         actor_features = self.actor_encoder(state_grid)
         mean, log_std = self.actor_head(actor_features, state_proprio)
+
+        # Validate policy outputs before creating distribution
+        self._validate_tensor(mean, "mean")
+        self._validate_tensor(log_std, "log_std")
+
+        # Additional safety: clamp log_std (redundant with model, but belt-and-suspenders)
+        log_std = torch.clamp(log_std, -20, 2)
         std = log_std.exp()
+
+        # ROCm stability: Add small epsilon to prevent std from being too close to zero
+        std = std + 1e-6
+
+        # Final validation of std values
+        self._validate_tensor(std, "std")
+
+        # Force GPU sync to catch errors at exact point of failure (ROCm debugging)
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize()
+
         dist = torch.distributions.Normal(mean, std)
         action_sample = dist.rsample()
+
+        # Validate sampled actions (ROCm rsample can sometimes produce NaN)
+        self._validate_tensor(action_sample, "action_sample")
+
         current_action = torch.tanh(action_sample)
 
         log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
@@ -586,6 +676,11 @@ class V620SACTrainer:
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+
+        # Gradient clipping to prevent exploding gradients
+        torch.nn.utils.clip_grad_norm_(self.actor_encoder.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.actor_head.parameters(), max_norm=1.0)
+
         self.actor_optimizer.step()
 
         t3 = time.time()
