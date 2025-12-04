@@ -144,8 +144,10 @@ class SACEpisodeRunner(Node):
         self.bridge = CvBridge()
         self.occupancy_processor = DepthToOccupancy(
             width=424, height=240,
-            camera_height=0.15, # Verify this on actual rover
-            camera_tilt_deg=0.0
+            camera_height=0.123, # Calculated from URDF: 0.029 + 0.08025 + 0.01375
+            camera_tilt_deg=0.0,
+            obstacle_height_thresh=0.1,
+            floor_thresh=0.08
         )
         self._setup_subscribers()
         self._setup_publishers()

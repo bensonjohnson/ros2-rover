@@ -22,12 +22,12 @@ class DepthToOccupancy:
                  fy=386.0, 
                  cx=212.0, 
                  cy=120.0,
-                 camera_height=0.15, # meters
+                 camera_height=0.123, # meters (calculated from URDF)
                  camera_tilt_deg=0.0, # degrees down from horizontal
                  grid_size=64,
                  grid_range=3.0, # meters (forward/side range)
-                 obstacle_height_thresh=0.05, # meters above ground to be obstacle
-                 floor_thresh=0.05 # meters +/- ground to be floor
+                 obstacle_height_thresh=0.1, # meters above ground to be obstacle (increased to 10cm to reduce noise)
+                 floor_thresh=0.08 # meters +/- ground to be floor (increased to 8cm)
                  ):
         
         self.width = width
