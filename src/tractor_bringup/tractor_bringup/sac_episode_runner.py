@@ -211,50 +211,49 @@ class SACEpisodeRunner(Node):
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
     def _compute_reward(self, action, linear_vel, angular_vel, clearance, collision):
-        """Simplified reward function with 5 core components.
+        """Aggressive reward function that DEMANDS forward movement.
 
         Normalized to [-1, 1] range for stable SAC training.
+        Core principle: Forward movement is THE primary objective.
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward Progress (Linear, not quadratic)
+        # 1. Forward Progress - DOMINANT REWARD (up to 1.0)
         forward_vel = max(0.0, linear_vel)
         if forward_vel > 0.01:
-            # Normalize by target speed → [0, 1]
-            # Increased from 0.4 to 0.7 to make forward motion dominant
-            speed_reward = (forward_vel / target_speed) * 0.7
+            # Strong reward for forward motion - this should be the main signal
+            speed_reward = (forward_vel / target_speed) * 1.0
             reward += speed_reward
+        else:
+            # IDLE PENALTY: Penalize not moving forward
+            # This prevents the "safe but useless" behavior of sitting still
+            reward -= 0.4
 
-        # Backward penalty
+        # Backward penalty - MATCH collision penalty strength
         if linear_vel < -0.01:
-            # Increased from 0.3 to 0.5 to discourage backing up
-            reward -= abs(linear_vel / target_speed) * 0.5
+            # Driving backwards is as bad as a collision!
+            reward -= abs(linear_vel / target_speed) * 1.0
 
         # 2. Collision Penalty
         if collision or self._safety_override:
             reward -= 1.0  # Maximum negative reward
 
-        # 3. Gap Alignment Reward (Follow the opening)
-        # FIXED: Only reward alignment when actually moving forward
-        # This prevents the policy from learning to spin in place
+        # 3. Gap Alignment Reward - ONLY when making good forward progress
+        # This prevents rewarding spinning in place to "align"
         alignment_error = abs(action[1] - self._target_heading)
 
-        if forward_vel > 0.05:
-            # Only reward alignment when moving forward
-            # Reduced weight from 0.8 to 0.5 (max reward from 0.4 to 0.25)
-            alignment_reward = (0.5 - alignment_error) * 0.5
+        if forward_vel > 0.1:  # Increased threshold from 0.05 to 0.1
+            # Only reward alignment when moving at meaningful speed
+            alignment_reward = (0.5 - alignment_error) * 0.3
             reward += alignment_reward
 
-            # Bonus for moving forward WHILE aligned
+            # Strong bonus for moving forward WHILE aligned
             if alignment_error < 0.3:
-                reward += 0.2 * (forward_vel / target_speed)
-        else:
-            # Penalty for turning while stationary (discourages spinning in place)
-            alignment_reward = -abs(action[1]) * 0.3
-            reward += alignment_reward
+                reward += 0.3 * (forward_vel / target_speed)
+        # NO reward/penalty when not moving - let idle penalty handle it
 
-        # 4. Straightness Bonus (NEW)
+        # 4. Straightness Bonus
         # Reward driving straight (low angular velocity while moving forward)
         if forward_vel > 0.08 and abs(angular_vel) < 0.3:
             straightness_bonus = 0.3 * (forward_vel / target_speed)
@@ -268,20 +267,19 @@ class SACEpisodeRunner(Node):
         self._prev_angular_actions.append(action[1])
 
         # 6. Angular Velocity Penalty (prefer straight motion)
-        # STRENGTHENED: Increase penalty to discourage spinning
+        # Strong penalty for excessive turning, especially when stationary
         if abs(angular_vel) > 0.2:
-            # Base penalty increased from 0.2 to 0.4
-            ang_penalty = abs(angular_vel) * 0.4
+            # Base penalty for turning
+            ang_penalty = abs(angular_vel) * 0.3
 
-            # Stronger penalty if stationary (increased from 2.0x to 3.0x)
+            # MASSIVE penalty if stationary - we want forward motion, not spinning!
             if forward_vel < 0.05:
-                ang_penalty *= 3.0  # Heavily penalize spinning in place
-            # Reduced penalty if we have good clearance (don't punish exploring open space)
-            elif clearance >= 1.0:
-                ang_penalty *= 1.0
+                ang_penalty *= 5.0  # Spinning in place is nearly useless
+            # Reduced penalty if we have good clearance and moving forward
+            elif clearance >= 1.0 and forward_vel > 0.1:
+                ang_penalty *= 0.5  # Allow exploration when safe and moving
 
-            # Increased cap from 0.4 to 0.6 to allow stronger penalties
-            reward -= min(ang_penalty, 0.6)
+            reward -= min(ang_penalty, 0.8)
 
         # Final normalization: ensure [-1, 1] range
         reward = np.clip(reward, -1.0, 1.0)
