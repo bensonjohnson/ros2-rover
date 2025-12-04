@@ -843,10 +843,6 @@ class V620SACTrainer:
         This runs in a thread pool to avoid blocking the async event loop.
         """
         try:
-            # Synchronize GPU to detect any prior errors before proceeding
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-
             # Convert batch to tensors (copy to make writable)
             num_steps = len(batch['rewards'])
             rgb_batch = torch.from_numpy(batch['rgb'].copy()).float() / 255.0  # (N, H, W, 3)
@@ -898,13 +894,13 @@ class V620SACTrainer:
             print(f"❌ Semantic augmentation failed: {e}")
             traceback.print_exc()
 
-            # Clear GPU cache to recover from potential memory/state issues
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                try:
-                    torch.cuda.synchronize()
-                except:
-                    pass  # GPU might be in bad state, continue anyway
+            # Try to clear GPU cache, but don't fail if GPU is corrupted
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except:
+                print("⚠ Could not clear GPU cache (GPU may be in corrupted state)")
+                pass
 
             # Return original batch if augmentation fails
             return batch
