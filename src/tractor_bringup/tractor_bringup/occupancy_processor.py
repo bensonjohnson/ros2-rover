@@ -184,16 +184,12 @@ class DepthToOccupancy:
         grid_rows = self.grid_size - 1 - (x_r * scale).astype(np.int32)
         
         # Map Y_r (Left) to Image Cols (Center to Left/Right)
-        # col = W/2 + (y_r * scale)  <-- Y_r positive is Left.
-        # Usually image col 0 is left.
-        # So if Y_r is positive (left), we want col < center?
-        # Standard: Y left positive.
-        # Image: Col 0 is left.
-        # So Col = Center + Y_r * scale?
-        # If Y_r = 1m (Left), Col should be e.g. 0.
-        # If Y_r = -1m (Right), Col should be e.g. 63.
-        # So Col = Center + Y_r * scale.
-        grid_cols = (self.grid_size // 2) + (y_r * scale).astype(np.int32)
+        # Y_r positive = LEFT in rover frame
+        # Col 0 = LEFT in image, Col 63 = RIGHT in image
+        # If Y_r = +1m (Left), Col should be low (e.g. 0)
+        # If Y_r = -1m (Right), Col should be high (e.g. 63)
+        # Therefore: Col = Center - Y_r * scale
+        grid_cols = (self.grid_size // 2) - (y_r * scale).astype(np.int32)
         
         # Clip to grid bounds
         valid_indices = (grid_rows >= 0) & (grid_rows < self.grid_size) & \
