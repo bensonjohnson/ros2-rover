@@ -61,50 +61,27 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
         for i, file_path in enumerate(calibration_files):
             try:
                 data = np.load(file_path)
-                rgb = data['rgb']  # (H, W, 3) uint8
-                depth = data['depth']  # (H, W) float32
+                grid = data['grid']  # (64, 64) uint8
                 proprio = data['proprio']  # (7,) float32
 
-                # Sanitize Depth
-                depth = np.nan_to_num(depth, nan=6.0, posinf=6.0, neginf=0.0)
-                depth = np.clip(depth, 0.0, 6.0)
-                # Normalize Depth (0-6m -> 0-1)
-                depth = depth / 6.0
-                
                 # Sanitize Proprio
                 proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
 
-                # Save as .npy
-                # RKNN expects NCHW or NHWC? 
-                # For .npy, it usually expects the shape that matches input_size_list.
-                # input_size_list is [1, 3, 240, 424] for RGB.
-                # So we should save as (1, 3, 240, 424) or (3, 240, 424)?
-                # Usually (1, ...) is safer if batch=1.
-                
-                # RGB: (H, W, 3) -> (1, 3, H, W) is standard for PyTorch ONNX, 
-                # BUT we configured mean/std on channel dim.
-                # If we pass (H, W, 3) to RKNN with NCHW model, RKNN might be confused or handle it.
-                # Let's match the input_size_list exactly: [1, 3, 240, 424]
-                
-                # Transpose RGB to NCHW
-                rgb_nchw = np.transpose(rgb, (2, 0, 1))[None, ...] # (1, 3, 240, 424)
-                
-                # Depth to NCHW
-                depth_nchw = depth[None, None, ...] # (1, 1, 240, 424)
+                # Grid to NCHW
+                # Grid is (H, W), add batch and channel dims -> (1, 1, 64, 64)
+                grid_nchw = grid[None, None, ...] 
                 
                 # Proprio
                 proprio_batch = proprio[None, ...] # (1, 7)
                 
-                rgb_path = os.path.abspath(os.path.join(dataset_dir, f"rgb_{i}.npy"))
-                depth_path = os.path.abspath(os.path.join(dataset_dir, f"depth_{i}.npy"))
+                grid_path = os.path.abspath(os.path.join(dataset_dir, f"grid_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
                 
-                np.save(rgb_path, rgb_nchw)
-                np.save(depth_path, depth_nchw)
+                np.save(grid_path, grid_nchw)
                 np.save(proprio_path, proprio_batch)
                 
                 # Write to dataset.txt (space separated)
-                f.write(f"{rgb_path} {depth_path} {proprio_path}\n")
+                f.write(f"{grid_path} {proprio_path}\n")
                 
                 valid_samples += 1
                 
@@ -173,13 +150,11 @@ def convert_onnx_to_rknn(
             # Disable RKNN normalization - we'll normalize in calibration generator
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
-                [0, 0, 0],           # RGB (will be pre-normalized to [0,1] in generator)
-                [0],                 # Depth (will be pre-normalized to [0,1] in generator)
+                [0],                 # Grid (will be pre-normalized to [0,1] in generator)
                 [0] * 10,            # Proprio (10 values: ax, ay, az, gx, gy, gz, mx, my, mz, min_dist)
             ],
             'std_values': [
-                [255, 255, 255],     # RGB: [0, 255] -> [0, 1] (std=255)
-                [1],                 # Depth (no scaling)
+                [255],               # Grid: [0, 255] -> [0, 1] (std=255)
                 [1] * 10,            # Proprio (no scaling)
             ],
             'target_platform': target_platform,
@@ -199,11 +174,10 @@ def convert_onnx_to_rknn(
         # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
         ret = rknn.load_onnx(
             model=onnx_path,
-            inputs=['rgb', 'depth', 'proprio'],
+            inputs=['grid', 'proprio'],
             input_size_list=[
-                [1, 3, 240, 424],   # RGB
-                [1, 1, 240, 424],   # Depth
-                [1, 10],            # Proprio (ax, ay, az, gx, gy, gz, mx, my, mz, min_dist)
+                [1, 1, 64, 64],     # Grid
+                [1, 10],            # Proprio
             ]
         )
         if ret != 0:
@@ -235,12 +209,11 @@ def convert_onnx_to_rknn(
             else:
                 # Create test inputs (normalized like rover)
                 # RKNN inference expects NHWC format for images by default
-                test_rgb = np.random.rand(1, 240, 424, 3).astype(np.float32)  # [0, 1]
-                test_depth = np.random.rand(1, 240, 424, 1).astype(np.float32)  # [0, 1]
+                test_grid = np.random.rand(1, 64, 64, 1).astype(np.float32)  # [0, 1]
                 test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference
-                outputs = rknn.inference(inputs=[test_rgb, test_depth, test_proprio])
+                outputs = rknn.inference(inputs=[test_grid, test_proprio])
 
                 if outputs and len(outputs) > 0:
                     test_output = outputs[0]
