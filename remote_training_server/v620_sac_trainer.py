@@ -461,13 +461,13 @@ class V620SACTrainer:
             with self.lock:
                 self.training_buffer.copy_state_from(self.buffer)
 
-            for burst_iter in range(training_burst_size):
-                # Train in bursts to allow data collection to catch up
-                # Now that we have a larger batch size and faster collection, we can train more per burst
-                for _ in range(500):
-                    if self.buffer.size < self.args.batch_size:
-                        print(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
-                        break
+            # Train in bursts to allow data collection to catch up
+            # Now that we have a larger batch size and faster collection, we can train more per burst
+            # We use a fixed large burst size (500) to maximize GPU utilization
+            for burst_iter in range(500):
+                if self.buffer.size < self.args.batch_size:
+                    print(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
+                    break
 
                 t0 = time.time()
                 # Perform 4 gradient steps per iteration for better sample efficiency
