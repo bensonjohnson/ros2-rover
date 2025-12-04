@@ -44,7 +44,8 @@ class TrainingDashboard:
                 'buffer_percent': (self.trainer.buffer.size / self.trainer.buffer.capacity) * 100,
                 'device': str(self.trainer.device),
                 'nats_connected': self.trainer.nc.is_connected if self.trainer.nc else False,
-                'semantic_augmentation': self.trainer.use_semantic_augmentation,
+                'batch_size': self.trainer.args.batch_size,
+                'perception_mode': 'Occupancy Grid (64x64)',
             }
             return jsonify(stats)
         except Exception as e:
@@ -135,7 +136,7 @@ class TrainingDashboard:
     </style>
 </head>
 <body>
-    <h1>🚀 SAC Training Dashboard (V620)</h1>
+    <h1>🚀 SAC Training Dashboard (Occupancy Grid)</h1>
     
     <div class="container">
         <!-- Status Card -->
@@ -154,8 +155,12 @@ class TrainingDashboard:
                 <span id="device" class="stat-value">...</span>
             </div>
             <div class="stat-row">
-                <span>Semantic Augmentation:</span>
-                <span id="semantic-aug" class="stat-value">...</span>
+                <span>Perception Mode:</span>
+                <span id="perception-mode" class="stat-value">...</span>
+            </div>
+            <div class="stat-row">
+                <span>Batch Size:</span>
+                <span id="batch-size" class="stat-value">...</span>
             </div>
         </div>
 
@@ -197,7 +202,8 @@ class TrainingDashboard:
                     document.getElementById('nats-status').style.color = data.nats_connected ? '#03dac6' : '#cf6679';
                     
                     document.getElementById('device').textContent = data.device;
-                    document.getElementById('semantic-aug').textContent = data.semantic_augmentation ? 'Enabled' : 'Disabled';
+                    document.getElementById('perception-mode').textContent = data.perception_mode;
+                    document.getElementById('batch-size').textContent = data.batch_size;
                     
                     document.getElementById('total-steps').textContent = data.total_steps.toLocaleString();
                     document.getElementById('model-version').textContent = 'v' + data.model_version;
