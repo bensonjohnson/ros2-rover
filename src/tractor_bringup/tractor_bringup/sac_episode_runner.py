@@ -35,6 +35,8 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
+from tractor_bringup.occupancy_processor import DepthToOccupancy
+
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField
 from nav_msgs.msg import Odometry
@@ -83,8 +85,9 @@ class SACEpisodeRunner(Node):
         self.episode_reward = 0.0
 
         # State
-        self._latest_rgb = None
+        self._latest_rgb = None # Keep for debug/logging if needed, but not used for model
         self._latest_depth = None
+        self._latest_grid = None # (64, 64) uint8
         self._latest_odom = None
         self._latest_imu = None
         self._latest_mag = None
@@ -99,7 +102,7 @@ class SACEpisodeRunner(Node):
 
         # Buffers for batching
         self._data_buffer = {
-            'rgb': [], 'depth': [], 'proprio': [], 
+            'grid': [], 'proprio': [], 
             'actions': [], 'rewards': [], 'dones': []
         }
         self._buffer_lock = threading.Lock()
@@ -139,6 +142,11 @@ class SACEpisodeRunner(Node):
 
         # ROS2 Setup
         self.bridge = CvBridge()
+        self.occupancy_processor = DepthToOccupancy(
+            width=424, height=240,
+            camera_height=0.15, # Verify this on actual rover
+            camera_tilt_deg=0.0
+        )
         self._setup_subscribers()
         self._setup_publishers()
         
@@ -160,8 +168,8 @@ class SACEpisodeRunner(Node):
         self.get_logger().info('🚀 SAC Runner Initialized')
 
     def _setup_subscribers(self):
-        self.create_subscription(Image, '/camera/camera/color/image_raw', self._rgb_cb, qos_profile_sensor_data)
-        self.create_subscription(Image, '/camera/camera/aligned_depth_to_color/image_raw', self._depth_cb, qos_profile_sensor_data)
+        # self.create_subscription(Image, '/camera/camera/color/image_raw', self._rgb_cb, qos_profile_sensor_data)
+        self.create_subscription(Image, '/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odom', self._odom_cb, 10)
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data)
@@ -177,11 +185,16 @@ class SACEpisodeRunner(Node):
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
 
     # Callbacks
-    def _rgb_cb(self, msg): self._latest_rgb = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
+    def _rgb_cb(self, msg): pass # self._latest_rgb = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
     def _depth_cb(self, msg): 
+        # Use passthrough to get raw 16-bit depth
         d = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
-        if d.dtype == np.uint16: d = d.astype(np.float32) * 0.001
         self._latest_depth = d
+        
+        # Process to grid immediately (or in control loop? Control loop is better for rate limiting)
+        # But doing it here ensures we always have fresh grid
+        # Let's do it in control loop to save CPU if inference is slower than camera
+        pass
     def _odom_cb(self, msg): 
         self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
     def _imu_cb(self, msg): 
@@ -285,59 +298,56 @@ class SACEpisodeRunner(Node):
         if not self._model_ready:
             return
 
-        if self._latest_rgb is None:
-            # self.get_logger().warn('Waiting for RGB data...', throttle_duration_sec=5.0)
-            return
-
         if self._latest_depth is None:
             # self.get_logger().warn('Waiting for depth data...', throttle_duration_sec=5.0)
             return
 
         # 1. Prepare Inputs
-        rgb = cv2.resize(self._latest_rgb, (424, 240)) # Resize to model input
-        # CRITICAL: Pass uint8 [0,255] to RKNN (it handles normalization via config)
-        # rgb = rgb.astype(np.float32) / 255.0  <-- REMOVED
-        rgb_input = rgb[None, ...] # (1, 240, 424, 3) - RKNN expects NHWC for uint8 input usually, but let's check config
-        # Actually, RKNN API usually expects NHWC for images.
-        # But our model was exported with NCHW input layout in PyTorch.
-        # RKNN config 'mean_values' applies to channel dimension.
-        # If we pass NHWC uint8, RKNN converts to NCHW float internally if model expects it.
-        # Let's keep it simple: Pass NHWC uint8.
-        rgb_input = rgb[None, ...] # (1, 240, 424, 3)
-
-        depth = cv2.resize(self._latest_depth, (424, 240))
-
-        # Gap Following Analysis
-        h, w = depth.shape
-        roi_y_start = h // 2  # Bottom half only
-
-        # Divide depth into 7 vertical strips to find the "deepest" direction
-        num_strips = 7
-        strip_width = w // num_strips
-        strip_depths = []
+        # Process Depth -> Occupancy Grid
+        t0 = time.time()
+        grid = self.occupancy_processor.process(self._latest_depth)
+        self._latest_grid = grid
         
-        # Analyze each strip (using 90th percentile depth to be robust to noise)
-        for i in range(num_strips):
-            strip = depth[roi_y_start:, i*strip_width:(i+1)*strip_width]
-            valid_pixels = strip[(strip > 0.1) & (strip < 6.0)]
-            if len(valid_pixels) > 0:
-                # Use 90th percentile to find "how deep does this path go"
-                d_val = np.percentile(valid_pixels, 90)
-            else:
-                d_val = 0.0
-            strip_depths.append(d_val)
-            
-        # Find best strip
-        best_strip_idx = np.argmax(strip_depths)
-        self._max_depth_val = strip_depths[best_strip_idx]
+        # Grid Input for Model: (1, 1, 64, 64)
+        # Normalize to [0, 1] for model
+        grid_normalized = grid.astype(np.float32) / 255.0
+        grid_input = grid_normalized[None, None, ...] 
         
-        # Map strip index to steering value [-1, 1]
-        # 0 -> -1.0 (Left), 3 -> 0.0 (Center), 6 -> 1.0 (Right)
-        self._target_heading = (best_strip_idx - (num_strips // 2)) / (num_strips // 2)
+        # Gap Following Analysis (using Grid now!)
+        # Find best heading from grid
+        # Simple approach: Find column with most "free" space (128)
+        # Scan rows from bottom up
         
-        # CRITICAL: Normalize depth from [0,6m] to [0,1] to match RKNN calibration
-        depth_normalized = depth / 6.0
-        depth_input = depth_normalized[None, None, ...] # (1, 1, 240, 424)
+        # ... (Keep existing gap logic or adapt to grid? Existing used raw depth strips)
+        # Let's adapt to grid for consistency
+        
+        # Sum free space in columns
+        # Grid: 0=Unknown, 128=Free, 255=Occupied
+        # We want columns with 128 and NO 255 close to robot
+        
+        # Simple heuristic: Sum of (is_free) - Sum of (is_occupied * penalty)
+        free_mask = (grid == 128).astype(np.float32)
+        occ_mask = (grid == 255).astype(np.float32)
+        
+        col_scores = np.sum(free_mask, axis=0) - np.sum(occ_mask * 5, axis=0)
+        
+        # Smooth scores
+        col_scores = np.convolve(col_scores, np.ones(5)/5, mode='same')
+        
+        best_col = np.argmax(col_scores)
+        
+        # Map col 0..63 to -1..1
+        # Col 0 is Left (max Y), Col 63 is Right (min Y)
+        # So 0 -> 1.0, 63 -> -1.0
+        # Wait, in processor:
+        # grid_cols = Center + Y * scale
+        # Y positive is Left.
+        # So Col > Center is Left.
+        # Col < Center is Right.
+        # 32 is Center.
+        # 63 is Left. 0 is Right.
+        
+        self._target_heading = (best_col - 32) / 32.0
         
         # Proprioception (10 values: 9-axis IMU + min_dist)
         # Get IMU data
@@ -361,7 +371,8 @@ class SACEpisodeRunner(Node):
         # Returns: [action_mean] (value head not exported in actor ONNX)
         if self._rknn_runtime:
             # Stateless inference (LSTM removed for export compatibility)
-            outputs = self._rknn_runtime.inference(inputs=[rgb_input, depth_input, proprio])
+            # Input: [grid, proprio]
+            outputs = self._rknn_runtime.inference(inputs=[grid_input, proprio])
 
             # Output 0 is action (1, 2)
             action_mean = outputs[0][0] # (2,)
@@ -380,8 +391,7 @@ class SACEpisodeRunner(Node):
             if np.isnan(action).any() or np.isinf(action).any():
                 self.get_logger().error(f"❌ RKNN model output contains NaN/Inf!")
                 self.get_logger().error(f"   action: {action}")
-                self.get_logger().error(f"   RGB input range: [{rgb_input.min():.3f}, {rgb_input.max():.3f}]")
-                self.get_logger().error(f"   Depth input range: [{depth_input.min():.3f}, {depth_input.max():.3f}]")
+                self.get_logger().error(f"   Grid input range: [{grid_input.min():.3f}, {grid_input.max():.3f}]")
                 self.get_logger().error(f"   Proprio input: {proprio}")
                 # Use zeros and continue
                 action_mean = np.zeros(2)
@@ -460,8 +470,7 @@ class SACEpisodeRunner(Node):
 
         # 6. Store Transition
         with self._buffer_lock:
-            self._data_buffer['rgb'].append(rgb)
-            self._data_buffer['depth'].append(depth)
+            self._data_buffer['grid'].append(self._latest_grid)
             self._data_buffer['proprio'].append(proprio[0])
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
@@ -487,8 +496,7 @@ class SACEpisodeRunner(Node):
                 save_path = self._calibration_dir / f"calib_{timestamp}.npz"
                 np.savez_compressed(
                     save_path,
-                    rgb=rgb,
-                    depth=depth,
+                    grid=self._latest_grid,
                     proprio=proprio[0]
                 )
             

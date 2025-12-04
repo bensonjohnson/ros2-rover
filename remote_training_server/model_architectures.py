@@ -10,59 +10,38 @@ import torch.nn as nn
 from typing import Tuple
 
 
-class RGBDEncoder(nn.Module):
-    """Vision encoder for RGB-D inputs.
+class OccupancyGridEncoder(nn.Module):
+    """Vision encoder for Top-Down Occupancy Grid.
 
-    Takes RGB (3 channels) and Depth (1 channel) and fuses them through CNN.
+    Takes 64x64 Occupancy Grid (1 channel) and encodes it.
     """
 
-    def __init__(self, rgb_channels: int = 3, depth_channels: int = 1):
+    def __init__(self, input_channels: int = 1):
         super().__init__()
 
-        # Separate encoders for RGB and depth
-        self.rgb_conv = nn.Sequential(
-            nn.Conv2d(rgb_channels, 32, kernel_size=5, stride=2, padding=2),
+        self.conv = nn.Sequential(
+            # Input: (B, 1, 64, 64)
+            nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1), # -> (32, 32, 32)
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), # -> (64, 16, 16)
             nn.ReLU(inplace=True),
-        )
-
-        self.depth_conv = nn.Sequential(
-            nn.Conv2d(depth_channels, 16, kernel_size=5, stride=2, padding=2),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # -> (128, 8, 8)
             nn.ReLU(inplace=True),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-        )
-
-        # Fused feature encoder
-        self.fusion_conv = nn.Sequential(
-            nn.Conv2d(96, 128, kernel_size=3, stride=2, padding=1),  # 64 + 32 = 96
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # -> (256, 4, 4)
             nn.ReLU(inplace=True),
         )
 
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.output_dim = 128
+        self.output_dim = 256
 
-    def forward(self, rgb: torch.Tensor, depth: torch.Tensor) -> torch.Tensor:
+    def forward(self, grid: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            rgb: (B, 3, H, W) normalized to [0, 1]
-            depth: (B, 1, H, W) normalized to [0, 1]
+            grid: (B, 1, 64, 64) normalized to [0, 1]
         Returns:
-            features: (B, 128)
+            features: (B, 256)
         """
-        rgb_feat = self.rgb_conv(rgb)
-        depth_feat = self.depth_conv(depth)
-        fused = torch.cat([rgb_feat, depth_feat], dim=1)
-        features = self.fusion_conv(fused)
-        
-        # Spatial Attention
-        # Compute attention map from features
-        attention = torch.sigmoid(torch.mean(features, dim=1, keepdim=True))
-        features = features * attention
-        
+        features = self.conv(grid)
         features = self.pool(features)
         return features.view(features.size(0), -1)
 
@@ -180,7 +159,6 @@ class QNetwork(nn.Module):
     """
     def __init__(self, feature_dim: int, proprio_dim: int = 6, action_dim: int = 2):
         super().__init__()
-        # self.encoder = RGBDEncoder() # Removed: using shared encoder
         
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
@@ -200,9 +178,7 @@ class QNetwork(nn.Module):
         )
 
     def forward(self, features, proprio, action):
-        # features = self.encoder(rgb, depth) # Removed
         proprio_feat = self.proprio_encoder(proprio)
-        
         combined = torch.cat([features, proprio_feat, action], dim=1)
         return self.q_net(combined)
 
@@ -242,68 +218,3 @@ class GaussianPolicyHead(nn.Module):
         log_std = torch.clamp(log_std, -20, 2)
 
         return mean, log_std
-
-
-class AsymmetricQNetwork(nn.Module):
-    """Asymmetric Critic network for SAC with privileged semantic information.
-
-    During training, the critic has access to rich semantic features from the
-    self-supervised vision model. The actor does not see these features, remaining
-    lightweight for deployment.
-
-    This allows the critic to provide better guidance during training using
-    server-side compute, while the actor stays efficient for rover inference.
-    """
-
-    def __init__(self,
-                 feature_dim: int,
-                 proprio_dim: int = 10,
-                 action_dim: int = 2,
-                 semantic_dim: int = 128):
-        super().__init__()
-
-        # Proprioception encoder
-        self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 64),
-            nn.ReLU(inplace=True),
-            nn.Linear(64, 64),
-            nn.ReLU(inplace=True),
-        )
-
-        # Semantic feature encoder (privileged information)
-        self.semantic_encoder = nn.Sequential(
-            nn.Linear(semantic_dim, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 128),
-            nn.ReLU(inplace=True),
-        )
-
-        # Q-network: takes (visual features + proprio + semantic + action)
-        # Total input: feature_dim + 64 (proprio) + 128 (semantic) + action_dim
-        self.q_net = nn.Sequential(
-            nn.Linear(feature_dim + 64 + 128 + action_dim, 512),
-            nn.ReLU(inplace=True),
-            nn.Linear(512, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 128),
-            nn.ReLU(inplace=True),
-            nn.Linear(128, 1)
-        )
-
-    def forward(self, features, proprio, action, semantic_features):
-        """Forward pass with semantic features.
-
-        Args:
-            features: (B, feature_dim) visual features from RGBDEncoder
-            proprio: (B, proprio_dim) proprioception
-            action: (B, action_dim) action
-            semantic_features: (B, semantic_dim) privileged semantic features
-        Returns:
-            q_value: (B, 1) Q-value estimate
-        """
-        proprio_feat = self.proprio_encoder(proprio)
-        semantic_feat = self.semantic_encoder(semantic_features)
-
-        # Concatenate all inputs
-        combined = torch.cat([features, proprio_feat, semantic_feat, action], dim=1)
-        return self.q_net(combined)
