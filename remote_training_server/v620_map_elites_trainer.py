@@ -689,8 +689,9 @@ class MAPElitesTrainer:
             torch.cuda.empty_cache()
 
             # Calculate optimal batch size with conservative margin
-            # Use 85% of total memory (15% headroom for spikes and overhead)
-            target_memory_gb = total_memory_gb * 0.85
+            # Use 70% of total memory (30% headroom for MIOpen/PyTorch overhead)
+            # Reduced from 85% due to new PyTorch/ROCm memory usage
+            target_memory_gb = total_memory_gb * 0.70
             optimal_batch_size = int(target_memory_gb / memory_per_sample_gb)
 
             # Clamp to reasonable range

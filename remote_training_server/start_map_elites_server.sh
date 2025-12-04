@@ -129,10 +129,18 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo ""
   echo "Applying ROCm optimizations..."
   export HSA_FORCE_FINE_GRAIN_PCIE=1
+
   # Disable MIOpen auto-tuning completely (use default kernels)
   export MIOPEN_FIND_ENFORCE=NONE
   export MIOPEN_DISABLE_CACHE=1
+
+  # Additional memory management for new PyTorch/ROCm versions
+  export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
+  export HIP_VISIBLE_DEVICES=0  # Use only first GPU
+  export MIOPEN_LOG_LEVEL=3     # Reduce MIOpen verbosity
+
   echo "✓ ROCm environment variables set (MIOpen auto-tuning disabled)"
+  echo "✓ Memory management: max_split_size_mb=512"
 fi
 
 # Set up signal handling
