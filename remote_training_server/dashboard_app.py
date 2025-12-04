@@ -1,8 +1,11 @@
 import threading
 import time
 import logging
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, Response
 import torch
+import cv2
+import numpy as np
+import io
 
 # Disable Flask banner
 cli = logging.getLogger('flask.cli')
@@ -21,6 +24,7 @@ class TrainingDashboard:
         # Register routes
         self.app.add_url_rule('/', 'index', self.index)
         self.app.add_url_rule('/api/stats', 'get_stats', self.get_stats)
+        self.app.add_url_rule('/api/grid', 'get_grid', self.get_grid)
 
     def start(self):
         """Start the dashboard in a background thread."""
@@ -50,6 +54,45 @@ class TrainingDashboard:
             return jsonify(stats)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
+    def get_grid(self):
+        """Return the latest occupancy grid as a PNG image."""
+        try:
+            grid = self.trainer.latest_grid_vis
+            if grid is None:
+                # Return a placeholder black image
+                grid = np.zeros((64, 64), dtype=np.uint8)
+            
+            # Resize for better visibility (nearest neighbor to keep pixels sharp)
+            grid_vis = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
+            
+            # Colorize: 0=Unknown(Gray), 128=Free(White), 255=Occupied(Black)
+            # Map: 0->127, 128->255, 255->0
+            # Let's make a nice colormap
+            # 0 (Unknown) -> Gray [127, 127, 127]
+            # 128 (Free) -> White [255, 255, 255]
+            # 255 (Occupied) -> Red [0, 0, 255] (BGR)
+            
+            color_grid = np.zeros((256, 256, 3), dtype=np.uint8)
+            
+            # Resize original grid first to avoid interpolation artifacts on values
+            grid_large = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
+            
+            mask_unknown = (grid_large == 0)
+            mask_free = (grid_large == 128)
+            mask_occupied = (grid_large == 255)
+            
+            color_grid[mask_unknown] = [50, 50, 50]   # Dark Gray
+            color_grid[mask_free] = [200, 200, 200]   # Light Gray/White
+            color_grid[mask_occupied] = [0, 0, 255]   # Red
+            
+            # Encode to PNG
+            _, buffer = cv2.imencode('.png', color_grid)
+            return Response(buffer.tobytes(), mimetype='image/png')
+            
+        except Exception as e:
+            print(f"Error serving grid: {e}")
+            return Response(status=500)
 
     def index(self):
         """Render the main dashboard page."""
@@ -157,7 +200,17 @@ class TrainingDashboard:
             <div class="stat-row">
                 <span>Perception Mode:</span>
                 <span id="perception-mode" class="stat-value">...</span>
+                <div class="stat-row">
+                <span>Batch Size:</span>
+                <span id="batch-size" class="stat-value">...</span>
             </div>
+        </div>
+
+        <!-- Live Grid -->
+        <div class="card" style="text-align: center;">
+            <h2>Live Occupancy Grid</h2>
+            <img id="grid-img" src="/api/grid" alt="Occupancy Grid" style="width: 256px; height: 256px; border: 2px solid #333; image-rendering: pixelated;">
+        </div>
             <div class="stat-row">
                 <span>Batch Size:</span>
                 <span id="batch-size" class="stat-value">...</span>
@@ -214,8 +267,15 @@ class TrainingDashboard:
                 .catch(err => console.error('Error fetching stats:', err));
         }
 
-        // Update every 1 second
+        // Update stats every 1 second
         setInterval(updateStats, 1000);
+        
+        // Update grid image every 0.5 seconds
+        setInterval(() => {
+            const img = document.getElementById('grid-img');
+            img.src = '/api/grid?t=' + new Date().getTime();
+        }, 500);
+        
         updateStats();
     </script>
 </body>

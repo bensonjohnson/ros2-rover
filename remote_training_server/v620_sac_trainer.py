@@ -228,6 +228,9 @@ class V620SACTrainer:
         self.proprio_dim = 10
         self.action_dim = 2
         
+        # Visualization state
+        self.latest_grid_vis = None
+        
         # --- Actor ---
         self.actor_encoder = OccupancyGridEncoder().to(self.device)
         self.actor_head = GaussianPolicyHead(self.actor_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
@@ -459,10 +462,12 @@ class V620SACTrainer:
                 self.training_buffer.copy_state_from(self.buffer)
 
             for burst_iter in range(training_burst_size):
-                # Check if we still have enough data
-                if self.training_buffer.size < self.args.batch_size * 4:
-                    pbar.write(f"⚠️  Buffer depleted ({self.training_buffer.size}), pausing training...")
-                    break
+                # Train in bursts to allow data collection to catch up
+                # Now that we have a larger batch size and faster collection, we can train more per burst
+                for _ in range(500):
+                    if self.buffer.size < self.args.batch_size:
+                        print(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
+                        break
 
                 t0 = time.time()
                 # Perform 4 gradient steps per iteration for better sample efficiency
@@ -758,7 +763,9 @@ class V620SACTrainer:
                         print(f"DEBUG: Received NATS msg, data size: {len(msg.data)} bytes")
                         batch = deserialize_batch(msg.data)
 
-
+                        # Update visualization state (take last frame of batch)
+                        if len(batch['grid']) > 0:
+                            self.latest_grid_vis = batch['grid'][-1].copy()
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
