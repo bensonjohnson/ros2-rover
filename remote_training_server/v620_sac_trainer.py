@@ -438,16 +438,15 @@ class V620SACTrainer:
             tqdm.write(f"❌ Export failed: {e}")
 
     def _training_loop(self):
-        """Staged training loop: alternates between collection and training phases."""
-        print("🧵 Training thread started (STAGED MODE: collect → train → repeat)")
+        """Continuous training loop: trains constantly while data streams in."""
+        print("🧵 Training thread started (CONTINUOUS MODE: train while collecting)")
         pbar = None
         last_time = time.time()
 
-        training_burst_size = 50  # Train for 50 steps (200 gradient steps), then pause
         min_buffer_size = 2000    # Need at least 2000 samples to start training
 
         while True:
-            # Phase 1: COLLECTION - Wait for buffer to grow
+            # Wait for initial buffer warmup
             if self.buffer.size < min_buffer_size:
                 if pbar:
                     pbar.set_description(f"📥 Collecting (need {min_buffer_size - self.buffer.size} more)")
@@ -458,75 +457,66 @@ class V620SACTrainer:
             if pbar is None:
                 print("\033[H\033[J", end="")
                 print("==================================================")
-                print("    SAC TRAINING DASHBOARD (STAGED MODE)        ")
+                print("   SAC TRAINING DASHBOARD (CONTINUOUS MODE)     ")
                 print("==================================================")
                 pbar = tqdm(initial=self.total_steps, desc="🎯 Training", unit="step", dynamic_ncols=True)
 
-            # Phase 2: TRAINING BURST - Train for N iterations without new batches
-            pbar.set_description(f"🎯 Training burst ({training_burst_size} iters)")
+            # CONTINUOUS TRAINING: No bursts, no pauses
+            # Just train continuously while data streams in from rover
+            if self.buffer.size < self.args.batch_size:
+                # Buffer too small, wait a bit
+                pbar.set_description(f"⏸️  Waiting for data ({self.buffer.size}/{self.args.batch_size})")
+                time.sleep(0.1)
+                continue
 
-            # Snapshot buffer for training (Double Buffering)
-            # This minimizes lock contention: we only lock to copy, then train on the copy
-            with self.lock:
-                self.training_buffer.copy_state_from(self.buffer)
+            pbar.set_description("🎯 Training")
 
-            # Train in bursts to allow data collection to catch up
-            # Now that we have a larger batch size and faster collection, we can train more per burst
-            # We use a fixed large burst size (500) to maximize GPU utilization
-            for burst_iter in range(500):
-                if self.buffer.size < self.args.batch_size:
-                    print(f"⚠️  Buffer depleted ({self.buffer.size}), pausing training...")
-                    break
+            try:
+                # Single training step (samples directly from buffer)
+                metrics = self.train_step()
+                self.total_steps += 1
 
-                t0 = time.time()
-                # Perform 4 gradient steps per iteration for better sample efficiency
-                for _ in range(4):
-                    try:
-                        metrics = self.train_step()
-                        self.total_steps += 1
+                # Log to TensorBoard
+                if metrics:
+                    for k, v in metrics.items():
+                        self.writer.add_scalar(f'train/{k}', v, self.total_steps)
 
-                        # Log every step to TensorBoard
-                        if metrics:
-                            for k, v in metrics.items():
-                                self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                pbar.update(1)
 
-                        pbar.update(1)
-                    except (ValueError, torch.AcceleratorError, RuntimeError) as e:
-                        tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
-                        tqdm.write(f"   Skipping this batch and continuing...")
-                        # Don't increment total_steps, but continue training
-                        # This prevents the GPU from crashing the entire process
-                        pbar.update(1)
-                        continue
-                t1 = time.time()
+            except (ValueError, torch.AcceleratorError, RuntimeError) as e:
+                tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
+                tqdm.write(f"   Skipping this batch and continuing...")
+                # Don't increment total_steps, but continue training
+                pbar.update(1)
+                continue
 
-                # Update stats every 10 steps for smooth display
-                if self.total_steps % 10 == 0:
-                    current_time = time.time()
-                    dt = current_time - last_time
-                    last_time = current_time
-                    steps_per_sec = 10 / dt if dt > 0 else 0
-                    samples_per_sec = steps_per_sec * self.args.batch_size
+            # Update stats every 10 steps for smooth display
+            if self.total_steps % 10 == 0:
+                current_time = time.time()
+                dt = current_time - last_time
+                last_time = current_time
+                steps_per_sec = 10 / dt if dt > 0 else 0
+                samples_per_sec = steps_per_sec * self.args.batch_size
 
-                    pbar.set_postfix({
-                        'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
-                        'Alpha': f"{metrics['alpha']:.3f}",
-                        'S/s': f"{int(samples_per_sec)}",
-                        'Buf': f"{self.buffer.size}",
-                        'Ver': f"v{self.model_version}"
-                    })
+                pbar.set_postfix({
+                    'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
+                    'Alpha': f"{metrics['alpha']:.3f}",
+                    'S/s': f"{int(samples_per_sec)}",
+                    'Buf': f"{self.buffer.size}",
+                    'Ver': f"v{self.model_version}"
+                })
 
-                # Flush TensorBoard every 100 steps
-                if self.total_steps % 100 == 0:
-                    self.writer.flush()
+            # Flush TensorBoard every 100 steps
+            if self.total_steps % 100 == 0:
+                self.writer.flush()
 
-                if self.total_steps % 200 == 0:
-                    self.save_checkpoint()
+            # Checkpoint every 200 steps
+            if self.total_steps % 200 == 0:
+                self.save_checkpoint()
 
-            # Phase 3: PAUSE - Give NATS consumer time to process batches
-            pbar.set_description("⏸️  Paused for collection")
-            pbar.write(f"✅ Training burst complete ({training_burst_size} iters = {training_burst_size * 4} steps). Pausing for 3s...")
-            time.sleep(3.0)  # 3 second pause between bursts for batch ingestion
+            # Periodic GPU memory cleanup (prevents fragmentation)
+            if self.total_steps % 1000 == 0:
+                torch.cuda.empty_cache()
 
     def _validate_tensor(self, tensor, name):
         """Validate tensor for NaN/Inf values."""
@@ -537,8 +527,9 @@ class V620SACTrainer:
 
     def train_step(self):
         t0 = time.time()
-        # Sample from training buffer (no lock needed)
-        batch = self.training_buffer.sample(self.args.batch_size)
+        # Sample directly from main buffer (continuous mode)
+        with self.lock:
+            batch = self.buffer.sample(self.args.batch_size)
         t1 = time.time()
 
         # Unpack
