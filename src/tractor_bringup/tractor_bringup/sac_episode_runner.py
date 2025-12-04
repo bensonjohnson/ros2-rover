@@ -176,7 +176,7 @@ class SACEpisodeRunner(Node):
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data)
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
-        self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10)
+        # self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10) # Calculated locally now
         self.create_subscription(Bool, '/safety_monitor_status', self._safety_cb, 10)
         self.create_subscription(Float32, '/velocity_confidence', self._vel_conf_cb, 10)
         
@@ -207,7 +207,6 @@ class SACEpisodeRunner(Node):
     def _mag_cb(self, msg): self._latest_mag = (msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z)
     def _joint_cb(self, msg):
         if len(msg.velocity) >= 4: self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
-    def _dist_cb(self, msg): self._min_forward_dist = msg.data
     def _safety_cb(self, msg): self._safety_override = msg.data
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
@@ -351,6 +350,24 @@ class SACEpisodeRunner(Node):
         
         self._target_heading = (best_col - 32) / 32.0
         
+        # Calculate min_forward_dist from grid (for reward function)
+        # Scan center strip (width ~30cm -> 6 pixels)
+        # Grid resolution: 3.0m / 64px = 0.047m/px
+        # Center col is 32. 32 +/- 3 = 29..35
+        center_strip = grid[:, 29:35]
+        # Find obstacles (255)
+        obs_rows, _ = np.where(center_strip == 255)
+        
+        if len(obs_rows) > 0:
+            # Closest obstacle is the one with largest row index (closest to bottom/robot)
+            closest_obs_row = np.max(obs_rows)
+            # Distance in pixels
+            dist_px = 63 - closest_obs_row
+            # Distance in meters
+            self._min_forward_dist = dist_px * (3.0 / 64.0)
+        else:
+            self._min_forward_dist = 3.0 # Max range
+            
         # Proprioception (10 values: 9-axis IMU + min_dist)
         # Get IMU data
         if self._latest_imu:
