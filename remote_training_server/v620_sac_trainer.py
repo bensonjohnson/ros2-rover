@@ -683,74 +683,6 @@ class V620SACTrainer:
 
         print(f"✅ Connected to NATS")
 
-    def _augment_batch_semantic(self, batch):
-        """Augment batch with semantic features and rewards.
-
-        This runs in a thread pool to avoid blocking the async event loop.
-        """
-        try:
-            # Convert batch to tensors (copy to make writable)
-            num_steps = len(batch['rewards'])
-            rgb_batch = torch.from_numpy(batch['rgb'].copy()).float() / 255.0  # (N, H, W, 3)
-            rgb_batch = rgb_batch.permute(0, 3, 1, 2).to(self.device)  # (N, 3, H, W)
-
-            depth_batch = torch.from_numpy(batch['depth'].copy()).float().unsqueeze(1).to(self.device)  # (N, 1, H, W)
-
-            # Extract semantic features for entire batch
-            semantic_features_list = []
-            reward_augmentation_list = []
-
-            # Process in mini-batches to avoid OOM
-            mini_batch_size = 32
-            for i in range(0, num_steps, mini_batch_size):
-                end_idx = min(i + mini_batch_size, num_steps)
-                rgb_mini = rgb_batch[i:end_idx]
-                depth_mini = depth_batch[i:end_idx]
-
-                # Extract semantic features
-                with self.semantic_lock:
-                    sem_features = extract_semantic_features(
-                        rgb_mini, depth_mini, self.semantic_model
-                    )
-
-                # Store global features for critic
-                semantic_features_list.append(sem_features['global_features'].cpu().numpy())
-
-                # Compute reward augmentation
-                base_rewards = torch.from_numpy(batch['rewards'][i:end_idx].copy()).to(self.device)
-                augmented_rewards, _ = augment_reward(
-                    base_rewards,
-                    sem_features,
-                    weights={
-                        'traversability': self.args.semantic_reward_traversability,
-                        'obstacle': self.args.semantic_reward_obstacle,
-                        'roughness': self.args.semantic_reward_roughness
-                    }
-                )
-
-                reward_augmentation_list.append(augmented_rewards.cpu().numpy())
-
-            # Concatenate all mini-batches
-            batch['semantic_features'] = np.concatenate(semantic_features_list, axis=0)
-            batch['rewards'] = np.concatenate(reward_augmentation_list, axis=0)
-
-            return batch
-
-        except Exception as e:
-            print(f"❌ Semantic augmentation failed: {e}")
-            traceback.print_exc()
-
-            # Try to clear GPU cache, but don't fail if GPU is corrupted
-            try:
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except:
-                print("⚠ Could not clear GPU cache (GPU may be in corrupted state)")
-                pass
-
-            # Return original batch if augmentation fails
-            return batch
-
     async def _ensure_streams(self):
         """Create NATS JetStream streams if they don't exist."""
         try:
@@ -826,10 +758,7 @@ class V620SACTrainer:
                         print(f"DEBUG: Received NATS msg, data size: {len(msg.data)} bytes")
                         batch = deserialize_batch(msg.data)
 
-                        # Extract semantic features and augment rewards (if enabled)
-                        if self.use_semantic_augmentation:
-                            # Don't use executor - GPU operations must run in main thread
-                            batch = self._augment_batch_semantic(batch)
+
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
@@ -935,26 +864,14 @@ class V620SACTrainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
-    parser.add_argument('--buffer_size', type=int, default=10000)
-    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--buffer_size', type=int, default=100000) # Increased buffer size too since data is smaller
+    parser.add_argument('--batch_size', type=int, default=2048)
     parser.add_argument('--lr', type=float, default=3e-5)
     parser.add_argument('--gamma', type=float, default=0.97)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
 
-    # Semantic augmentation options
-    parser.add_argument('--use_semantic_augmentation', action='store_true', default=True,
-                        help='Enable self-supervised semantic augmentation (enabled by default)')
-    parser.add_argument('--no_semantic_augmentation', dest='use_semantic_augmentation', action='store_false',
-                        help='Disable semantic augmentation (for baseline comparison)')
-    parser.add_argument('--semantic_lr', type=float, default=1e-4,
-                        help='Learning rate for semantic model')
-    parser.add_argument('--semantic_reward_traversability', type=float, default=0.1,
-                        help='Weight for traversability reward component')
-    parser.add_argument('--semantic_reward_obstacle', type=float, default=-0.2,
-                        help='Weight for obstacle proximity penalty')
-    parser.add_argument('--semantic_reward_roughness', type=float, default=-0.05,
-                        help='Weight for terrain roughness penalty')
+
 
     args = parser.parse_args()
 
