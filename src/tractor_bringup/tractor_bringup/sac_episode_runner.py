@@ -343,21 +343,14 @@ class SACEpisodeRunner(Node):
         self._latest_grid = grid_stitched # Update visualization/logging to use stitched map
         
         # Grid Input for Model: (1, 1, 64, 64)
-        # Normalize to [0, 1] for model
+        # We send UINT8 to server (efficiency), but Model needs FLOAT (0-1)
+        # So we normalize JUST for local inference, but store/send the raw uint8
+        
+        # Local Inference (Model expects 0-1 float)
         grid_normalized = grid_stitched.astype(np.float32) / 255.0
-        grid_input = grid_normalized[None, None, ...] 
+        grid_input_inference = grid_normalized[None, None, ...] 
         
         # Gap Following Analysis (using Grid now!)
-        # Find best heading from grid
-        # Simple approach: Find column with most "free" space (128)
-        # Scan rows from bottom up
-        
-        # ... (Keep existing gap logic or adapt to grid? Existing used raw depth strips)
-        # Let's adapt to grid for consistency
-        
-        # Sum free space in columns
-        # Grid: 0=Unknown, 128=Free, 255=Occupied
-        # We want columns with 128 and NO 255 close to robot
         
         # Simple heuristic: Sum of (is_free) - Sum of (is_occupied * penalty)
         free_mask = (grid == 128).astype(np.float32)
