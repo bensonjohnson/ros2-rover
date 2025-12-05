@@ -154,12 +154,12 @@ class ValueHead(nn.Module):
 
 class QNetwork(nn.Module):
     """Critic network for SAC (Q-function).
-    
+
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
-    def __init__(self, feature_dim: int, proprio_dim: int = 6, action_dim: int = 2):
+    def __init__(self, feature_dim: int, proprio_dim: int = 6, action_dim: int = 2, dropout: float = 0.0):
         super().__init__()
-        
+
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 64),
@@ -167,15 +167,26 @@ class QNetwork(nn.Module):
             nn.Linear(64, 64),
             nn.ReLU(inplace=True),
         )
-        
+
         # Q-network: takes (features + proprio + action)
-        self.q_net = nn.Sequential(
+        # Build with conditional dropout for DroQ
+        layers = [
             nn.Linear(feature_dim + 64 + action_dim, 256),
             nn.ReLU(inplace=True),
+        ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.extend([
             nn.Linear(256, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 1)
-        )
+        ])
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.append(nn.Linear(128, 1))
+
+        self.q_net = nn.Sequential(*layers)
 
     def forward(self, features, proprio, action):
         proprio_feat = self.proprio_encoder(proprio)

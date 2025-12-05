@@ -5,6 +5,7 @@
 # Install separately with: pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.0
 torch>=2.0.0
 torchvision>=0.15.0
+kornia>=0.7.0  # GPU-accelerated image augmentation for DroQ
 
 # Networking
 pyzmq>=25.0.0  # TODO: Remove after NATS migration complete
