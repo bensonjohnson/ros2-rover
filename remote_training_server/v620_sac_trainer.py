@@ -212,7 +212,13 @@ class V620SACTrainer:
     
     def __init__(self, args):
         self.args = args
-        
+
+        # Validate hyperparameters
+        assert 0.0 <= args.droq_dropout <= 0.1, "Dropout must be in [0.0, 0.1]"
+        assert args.droq_samples >= 1, "M must be >= 1"
+        assert args.utd_ratio >= 1, "UTD must be >= 1"
+        assert args.actor_update_freq >= 1, "Actor update freq must be >= 1"
+
         # Device setup
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
@@ -239,13 +245,27 @@ class V620SACTrainer:
         # Shared encoder for critics
         self.critic_encoder = OccupancyGridEncoder().to(self.device)
 
-        self.critic1 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
-        self.critic2 = QNetwork(self.critic_encoder.output_dim, self.proprio_dim, self.action_dim).to(self.device)
+        self.critic1 = QNetwork(
+            self.critic_encoder.output_dim,
+            self.proprio_dim,
+            self.action_dim,
+            dropout=args.droq_dropout
+        ).to(self.device)
+        self.critic2 = QNetwork(
+            self.critic_encoder.output_dim,
+            self.proprio_dim,
+            self.action_dim,
+            dropout=args.droq_dropout
+        ).to(self.device)
 
         # --- Target Critics ---
         self.target_critic_encoder = copy.deepcopy(self.critic_encoder)
         self.target_critic1 = copy.deepcopy(self.critic1)
         self.target_critic2 = copy.deepcopy(self.critic2)
+
+        # Disable dropout in target networks (deterministic targets)
+        self.target_critic1.eval()
+        self.target_critic2.eval()
         
         # Optimizers
         self.actor_optimizer = optim.Adam(
@@ -279,11 +299,33 @@ class V620SACTrainer:
             proprio_dim=self.proprio_dim,
             device=self.device
         )
-        
+
+        # Data augmentation for occupancy grids
+        if args.augment_data:
+            import kornia.augmentation as K
+            self.augmentation = nn.Sequential(
+                K.RandomAffine(
+                    degrees=15.0,              # ±15° rotation
+                    translate=(0.0625, 0.0625), # ±4 pixels (4/64 = 0.0625)
+                    scale=(0.95, 1.05),        # ±5% scale
+                    padding_mode='zeros'
+                )
+            ).to(self.device)
+            print(f"✓ Data augmentation enabled: rotate ±15°, translate ±4px")
+        else:
+            self.augmentation = None
+
         # State
         self.total_steps = 0
+        self.gradient_steps = 0  # Track actual gradient updates (for UTD > 1)
         self.model_version = 0
         self.training_active = False
+
+        # Metrics history for dashboard (circular buffer of last 500 steps)
+        from collections import deque
+        self.metrics_history = deque(maxlen=500)
+        self.last_step_time = time.time()
+        self.steps_per_sec = 0.0
 
         # NATS connection (will be initialized in async setup)
         self.nc = None
@@ -350,6 +392,7 @@ class V620SACTrainer:
         self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
 
         self.total_steps = ckpt['total_steps']
+        self.gradient_steps = ckpt.get('gradient_steps', 0)
         self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100)) 
 
     def save_checkpoint(self):
@@ -368,6 +411,7 @@ class V620SACTrainer:
             'critic_opt': self.critic_optimizer.state_dict(),
             'alpha_opt': self.alpha_optimizer.state_dict(),
             'total_steps': self.total_steps,
+            'gradient_steps': self.gradient_steps,
             'model_version': self.model_version
         }
 
@@ -476,10 +520,17 @@ class V620SACTrainer:
                 metrics = self.train_step()
                 self.total_steps += 1
 
+                # Store metrics in history for dashboard
+                if metrics:
+                    metrics['step'] = self.total_steps
+                    metrics['timestamp'] = time.time()
+                    self.metrics_history.append(metrics.copy())
+
                 # Log to TensorBoard
                 if metrics:
                     for k, v in metrics.items():
-                        self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                        if k not in ['step', 'timestamp']:  # Don't log these
+                            self.writer.add_scalar(f'train/{k}', v, self.total_steps)
 
                 pbar.update(1)
 
@@ -498,9 +549,14 @@ class V620SACTrainer:
                 steps_per_sec = 10 / dt if dt > 0 else 0
                 samples_per_sec = steps_per_sec * self.args.batch_size
 
+                # Store for dashboard
+                self.steps_per_sec = steps_per_sec
+
                 pbar.set_postfix({
                     'Loss': f"A:{metrics['actor_loss']:.2f} C:{metrics['critic_loss']:.2f}",
                     'Alpha': f"{metrics['alpha']:.3f}",
+                    'GradSteps': f"{self.gradient_steps}",
+                    'UTD': f"{self.args.utd_ratio}",
                     'S/s': f"{int(samples_per_sec)}",
                     'Buf': f"{self.buffer.size}",
                     'Ver': f"v{self.model_version}"
@@ -526,13 +582,127 @@ class V620SACTrainer:
             raise ValueError(f"{name} contains Inf values")
 
     def train_step(self):
+        """Perform one training step with UTD > 1.
+
+        This method now performs multiple gradient steps per environment step.
+        With UTD=10, this does 10 critic updates and 1 actor update.
+        """
         t0 = time.time()
-        # Sample directly from main buffer (continuous mode)
+
+        # Sample batch ONCE (reuse for all gradient steps)
         with self.lock:
             batch = self.buffer.sample(self.args.batch_size)
         t1 = time.time()
 
-        # Unpack
+        # Apply data augmentation if enabled
+        if self.args.augment_data and self.augmentation is not None:
+            batch['grid'] = self.augmentation(batch['grid'])
+            batch['next_grid'] = self.augmentation(batch['next_grid'])
+
+        # Validate batch data
+        try:
+            self._validate_tensor(batch['grid'], "state_grid")
+            self._validate_tensor(batch['proprio'], "state_proprio")
+            self._validate_tensor(batch['next_grid'], "next_grid")
+            self._validate_tensor(batch['next_proprio'], "next_proprio")
+        except ValueError as e:
+            tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
+            return self._dummy_metrics()
+
+        # Accumulators for metrics (average over UTD steps)
+        total_critic_loss = 0.0
+        total_actor_loss = 0.0
+        total_alpha_loss = 0.0
+        last_log_prob = None
+        last_q1 = None
+        last_q2 = None
+        last_q_target = None
+        last_min_q_pi = None
+
+        # --- UTD Loop: Multiple gradient steps per environment step ---
+        for grad_step in range(self.args.utd_ratio):
+            # 1. Update Critics (every step)
+            critic_loss, q1, q2, q_target = self._update_critic_droq(batch)
+            total_critic_loss += critic_loss.item()
+            last_q1 = q1
+            last_q2 = q2
+            last_q_target = q_target
+
+            # 2. Update Actor (every K steps)
+            if grad_step % self.args.actor_update_freq == 0:
+                actor_loss, log_prob, min_q_pi = self._update_actor(batch)
+                total_actor_loss += actor_loss.item()
+                last_log_prob = log_prob
+                last_min_q_pi = min_q_pi
+
+                # 3. Update Alpha (with actor)
+                alpha_loss = self._update_alpha(log_prob)
+                total_alpha_loss += alpha_loss.item()
+
+            # 4. Soft Update Targets (every step)
+            self._soft_update_targets()
+
+            # Increment gradient step counter
+            self.gradient_steps += 1
+
+        t2 = time.time()
+
+        # Average metrics over UTD steps
+        num_actor_updates = (self.args.utd_ratio + self.args.actor_update_freq - 1) // self.args.actor_update_freq
+        avg_critic_loss = total_critic_loss / self.args.utd_ratio
+        avg_actor_loss = total_actor_loss / max(num_actor_updates, 1)
+        avg_alpha_loss = total_alpha_loss / max(num_actor_updates, 1)
+
+        alpha = self.log_alpha.exp().item()
+
+        # --- Diagnostic Logging (TensorBoard) ---
+        if self.total_steps % 10 == 0 and last_log_prob is not None:
+            self.writer.add_scalar('train/gradient_steps', self.gradient_steps, self.total_steps)
+            self.writer.add_scalar('train/utd_ratio', self.args.utd_ratio, self.total_steps)
+            self.writer.add_scalar('train/q1_mean', last_q1.mean().item(), self.total_steps)
+            self.writer.add_scalar('train/q2_mean', last_q2.mean().item(), self.total_steps)
+            self.writer.add_scalar('train/alpha', alpha, self.total_steps)
+
+        t3 = time.time()
+
+        if (t3 - t0) > 1.0:
+            tqdm.write(f"⏱️ Timing: Sample={t1-t0:.3f}s, Training={t2-t1:.3f}s (UTD={self.args.utd_ratio}), Misc={t3-t2:.3f}s")
+
+        return {
+            'actor_loss': avg_actor_loss,
+            'critic_loss': avg_critic_loss,
+            'alpha': alpha,
+            'alpha_loss': avg_alpha_loss,
+            'policy_entropy': -last_log_prob.mean().item() if last_log_prob is not None else 0.0,
+            'q_value_mean': last_min_q_pi.mean().item() if last_min_q_pi is not None else 0.0,
+            'target_entropy_gap': ((-last_log_prob).mean() - self.target_entropy).item() if last_log_prob is not None else 0.0,
+            'reward_mean': batch['reward'].mean().item(),
+            'reward_std': batch['reward'].std().item(),
+            'q1_mean': last_q1.mean().item() if last_q1 is not None else 0.0,
+            'q2_mean': last_q2.mean().item() if last_q2 is not None else 0.0,
+            'q_target_mean': last_q_target.mean().item() if last_q_target is not None else 0.0,
+            'gradient_steps': self.gradient_steps,
+        }
+
+    def _dummy_metrics(self):
+        """Return dummy metrics when batch is invalid."""
+        return {
+            'actor_loss': 0.0, 'critic_loss': 0.0, 'alpha': 0.0,
+            'alpha_loss': 0.0, 'policy_entropy': 0.0, 'q_value_mean': 0.0,
+            'target_entropy_gap': 0.0, 'reward_mean': 0.0, 'reward_std': 0.0,
+            'gradient_steps': self.gradient_steps,
+        }
+
+    def _update_critic_droq(self, batch):
+        """Update critics with DroQ (M forward passes with dropout).
+
+        Args:
+            batch: Dictionary with 'grid', 'proprio', 'action', 'reward', 'done',
+                   'next_grid', 'next_proprio'
+
+        Returns:
+            tuple: (critic_loss, q1, q2, q_target)
+        """
         state_grid = batch['grid']
         state_proprio = batch['proprio']
         action = batch['action']
@@ -541,123 +711,121 @@ class V620SACTrainer:
         next_grid = batch['next_grid']
         next_proprio = batch['next_proprio']
 
-        # Validate batch data
-        try:
-            self._validate_tensor(state_grid, "state_grid")
-            self._validate_tensor(state_proprio, "state_proprio")
-            self._validate_tensor(next_grid, "next_grid")
-            self._validate_tensor(next_proprio, "next_proprio")
-        except ValueError as e:
-            tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
-            # Return dummy metrics to keep training loop happy
-            return {
-                'actor_loss': 0.0, 'critic_loss': 0.0, 'alpha': 0.0,
-                'alpha_loss': 0.0, 'policy_entropy': 0.0, 'q_value_mean': 0.0,
-                'target_entropy_gap': 0.0, 'reward_mean': 0.0, 'reward_std': 0.0
-            }
-
         alpha = self.log_alpha.exp().item()
 
-        # --- Critic Update ---
+        # --- Compute Target Q-values (no dropout, deterministic) ---
         with torch.no_grad():
-            # Get next action from target policy
+            # Get next action from actor
             next_features = self.actor_encoder(next_grid)
             next_mean, next_log_std = self.actor_head(next_features, next_proprio)
 
-            # Validate policy outputs before creating distribution
-            self._validate_tensor(next_mean, "next_mean")
-            self._validate_tensor(next_log_std, "next_log_std")
-
-            # Additional safety: clamp log_std (redundant with model, but belt-and-suspenders)
+            # Sample and validate
             next_log_std = torch.clamp(next_log_std, -20, 2)
-            next_std = next_log_std.exp()
-
-            # ROCm stability: Add small epsilon to prevent std from being too close to zero
-            # This helps avoid edge cases in ROCm kernels for Normal distribution
-            next_std = next_std + 1e-6
-
-            # Final validation of std values
+            next_std = next_log_std.exp() + 1e-6
             self._validate_tensor(next_std, "next_std")
 
-            # Force GPU sync to catch errors at exact point of failure (ROCm debugging)
             if self.device.type == 'cuda':
                 torch.cuda.synchronize()
 
             dist = torch.distributions.Normal(next_mean, next_std)
             next_action_sample = dist.rsample()
-
-            # Validate sampled actions (ROCm rsample can sometimes produce NaN)
             self._validate_tensor(next_action_sample, "next_action_sample")
-
             next_action = torch.tanh(next_action_sample)
 
-            # Compute log prob for entropy
+            # Log prob for entropy
             next_log_prob = dist.log_prob(next_action_sample).sum(dim=-1, keepdim=True)
             next_log_prob -= (2 * (np.log(2) - next_action_sample - F.softplus(-2 * next_action_sample))).sum(dim=1, keepdim=True)
 
-            # Target Q
+            # Target Q (NO dropout in target networks)
             target_features = self.target_critic_encoder(next_grid)
             q1_target = self.target_critic1(target_features, next_proprio, next_action)
             q2_target = self.target_critic2(target_features, next_proprio, next_action)
             min_q_target = torch.min(q1_target, q2_target) - alpha * next_log_prob
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
 
-        # Current Q
+        # --- Current Q with DroQ (M forward passes with dropout) ---
         curr_features = self.critic_encoder(state_grid)
-        q1 = self.critic1(curr_features, state_proprio, action)
-        q2 = self.critic2(curr_features, state_proprio, action)
 
+        if self.args.droq_samples > 1 and self.args.droq_dropout > 0.0:
+            # DroQ: Multiple forward passes with dropout
+            q1_samples = []
+            q2_samples = []
+
+            # Enable dropout
+            self.critic1.train()
+            self.critic2.train()
+
+            for _ in range(self.args.droq_samples):
+                q1_samples.append(self.critic1(curr_features, state_proprio, action))
+                q2_samples.append(self.critic2(curr_features, state_proprio, action))
+
+            # Average over samples
+            q1 = torch.stack(q1_samples).mean(dim=0)
+            q2 = torch.stack(q2_samples).mean(dim=0)
+        else:
+            # Standard SAC: single forward pass
+            q1 = self.critic1(curr_features, state_proprio, action)
+            q2 = self.critic2(curr_features, state_proprio, action)
+
+        # MSE loss against target
         critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
 
+        # Backprop
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
 
-        # Gradient clipping to prevent exploding gradients
+        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(self.critic_encoder.parameters(), max_norm=1.0)
         torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
         torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
 
         self.critic_optimizer.step()
 
-        t2 = time.time()
+        return critic_loss, q1, q2, next_q_value
 
-        # --- Actor Update ---
+    def _update_actor(self, batch):
+        """Update actor policy.
+
+        Args:
+            batch: Dictionary with state information
+
+        Returns:
+            tuple: (actor_loss, log_prob, min_q_pi)
+        """
+        state_grid = batch['grid']
+        state_proprio = batch['proprio']
+
+        alpha = self.log_alpha.exp().item()
+
         # Re-compute features for actor (gradient flows through encoder)
         actor_features = self.actor_encoder(state_grid)
         mean, log_std = self.actor_head(actor_features, state_proprio)
 
-        # Validate policy outputs before creating distribution
+        # Validate and sample
         self._validate_tensor(mean, "mean")
         self._validate_tensor(log_std, "log_std")
-
-        # Additional safety: clamp log_std (redundant with model, but belt-and-suspenders)
         log_std = torch.clamp(log_std, -20, 2)
-        std = log_std.exp()
-
-        # ROCm stability: Add small epsilon to prevent std from being too close to zero
-        std = std + 1e-6
-
-        # Final validation of std values
+        std = log_std.exp() + 1e-6
         self._validate_tensor(std, "std")
 
-        # Force GPU sync to catch errors at exact point of failure (ROCm debugging)
         if self.device.type == 'cuda':
             torch.cuda.synchronize()
 
         dist = torch.distributions.Normal(mean, std)
         action_sample = dist.rsample()
-
-        # Validate sampled actions (ROCm rsample can sometimes produce NaN)
         self._validate_tensor(action_sample, "action_sample")
-
         current_action = torch.tanh(action_sample)
 
         log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
         log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
 
-        # Use critic to evaluate action
+        # Use critic to evaluate action (NO dropout, deterministic)
         with torch.no_grad():
             q_features = self.critic_encoder(state_grid)
+
+        # Disable dropout for actor evaluation
+        self.critic1.eval()
+        self.critic2.eval()
 
         q1_pi = self.critic1(q_features, state_proprio, current_action)
         q2_pi = self.critic2(q_features, state_proprio, current_action)
@@ -665,82 +833,41 @@ class V620SACTrainer:
 
         actor_loss = ((alpha * log_prob) - min_q_pi).mean()
 
+        # Backprop
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
 
-        # Gradient clipping to prevent exploding gradients
+        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(self.actor_encoder.parameters(), max_norm=1.0)
         torch.nn.utils.clip_grad_norm_(self.actor_head.parameters(), max_norm=1.0)
 
         self.actor_optimizer.step()
 
-        t3 = time.time()
-        
-        # --- Alpha Update ---
+        return actor_loss, log_prob, min_q_pi
+
+    def _update_alpha(self, log_prob):
+        """Update entropy temperature (alpha).
+
+        Args:
+            log_prob: Policy log probabilities from actor update
+
+        Returns:
+            alpha_loss: Scalar tensor
+        """
         alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
-        
+
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
-        
-        # --- Soft Update ---
-        self.soft_update(self.critic_encoder, self.target_critic_encoder)
-        self.soft_update(self.critic1, self.target_critic1)
-        self.soft_update(self.critic2, self.target_critic2)
 
-        # --- Diagnostic Logging (TensorBoard) ---
-        if self.total_steps % 10 == 0:
-            self.writer.add_scalar('train/action_linear_mean', mean[:, 0].mean().item(), self.total_steps)
-            self.writer.add_scalar('train/action_angular_mean', mean[:, 1].mean().item(), self.total_steps)
-            self.writer.add_scalar('train/action_linear_std', std[:, 0].mean().item(), self.total_steps)
-            self.writer.add_scalar('train/action_angular_std', std[:, 1].mean().item(), self.total_steps)
-            self.writer.add_scalar('train/q1_mean', q1.mean().item(), self.total_steps)
-            self.writer.add_scalar('train/q2_mean', q2.mean().item(), self.total_steps)
-            self.writer.add_scalar('train/alpha', alpha, self.total_steps)
+        return alpha_loss
 
-        t4 = time.time()
-        
-        if (t4 - t0) > 1.0:
-            tqdm.write(f"⏱️ Timing: Sample={t1-t0:.3f}s, Critic={t2-t1:.3f}s, Actor={t3-t2:.3f}s, Misc={t4-t3:.3f}s")
-        
-        return {
-            'actor_loss': actor_loss.item(),
-            'critic_loss': critic_loss.item(),
-            'alpha': alpha,
-            'alpha_loss': alpha_loss.item(),
-            # Additional monitoring metrics for loss diagnosis
-            'policy_entropy': -log_prob.mean().item(),  # Should be high (exploration)
-            'q_value_mean': min_q_pi.mean().item(),     # Should increase over time
-            'target_entropy_gap': ((-log_prob).mean() - self.target_entropy).item(),  # Should trend to 0
-
-            # NEW: Reward statistics
-            'reward_mean': reward.mean().item(),
-            'reward_std': reward.std().item(),
-            'reward_max': reward.max().item(),
-            'reward_min': reward.min().item(),
-
-            # NEW: Q-value diagnostics
-            'q1_mean': q1.mean().item(),
-            'q2_mean': q2.mean().item(),
-            'q_target_mean': next_q_value.mean().item(),
-            'q_diff': (q1 - q2).abs().mean().item(),
-
-            # NEW: Policy diagnostics
-            'action_mean': current_action.mean().item(),
-            'action_std': current_action.std().item(),
-
-            # NEW: Gradient norms
-            'actor_grad_norm': torch.nn.utils.clip_grad_norm_(
-                list(self.actor_encoder.parameters()) + list(self.actor_head.parameters()),
-                float('inf')
-            ),
-            'critic_grad_norm': torch.nn.utils.clip_grad_norm_(
-                list(self.critic_encoder.parameters()) +
-                list(self.critic1.parameters()) +
-                list(self.critic2.parameters()),
-                float('inf')
-            ),
-        }
+    def _soft_update_targets(self):
+        """Soft update target networks."""
+        tau = 0.001  # Could make this a hyperparameter
+        self.soft_update(self.critic_encoder, self.target_critic_encoder, tau)
+        self.soft_update(self.critic1, self.target_critic1, tau)
+        self.soft_update(self.critic2, self.target_critic2, tau)
 
     def soft_update(self, source, target, tau=0.001):
         for param, target_param in zip(source.parameters(), target.parameters()):
@@ -963,6 +1090,18 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.97)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
+
+    # DroQ + UTD + Augmentation parameters
+    parser.add_argument('--droq_dropout', type=float, default=0.01,
+                        help='Dropout rate for DroQ (0.0 to disable)')
+    parser.add_argument('--droq_samples', type=int, default=2,
+                        help='Number of Q-network forward passes for DroQ (M)')
+    parser.add_argument('--utd_ratio', type=int, default=10,
+                        help='Update-to-Data ratio (gradient steps per env step)')
+    parser.add_argument('--actor_update_freq', type=int, default=10,
+                        help='Update actor every N critic updates')
+    parser.add_argument('--augment_data', action='store_true',
+                        help='Enable data augmentation for occupancy grids')
 
 
 
