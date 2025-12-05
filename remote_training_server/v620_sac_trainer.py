@@ -225,7 +225,7 @@ class V620SACTrainer:
             
         # Dimensions
         self.grid_shape = (64, 64)
-        self.proprio_dim = 10
+        self.proprio_dim = 12
         self.action_dim = 2
         
         # Visualization state
