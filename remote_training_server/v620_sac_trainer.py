@@ -55,20 +55,21 @@ from dashboard_app import TrainingDashboard
 class ReplayBuffer:
     """Experience Replay Buffer for SAC."""
 
-    def __init__(self, capacity: int, grid_shape: Tuple, proprio_dim: int, device: torch.device):
+    def __init__(self, capacity: int, grid_shape: Tuple, proprio_dim: int, device: torch.device, storage_device: torch.device = torch.device('cpu')):
         self.capacity = capacity
         self.device = device
+        self.storage_device = storage_device
         self.ptr = 0
         self.size = 0
         self.full = False
 
-        # Storage (CPU RAM to save GPU memory, move to GPU during sampling)
+        # Storage
         # Grid: 64x64, uint8
-        self.grid = torch.zeros((capacity, *grid_shape), dtype=torch.uint8)
-        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
-        self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
-        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32)
-        self.dones = torch.zeros((capacity, 1), dtype=torch.float32)
+        self.grid = torch.zeros((capacity, *grid_shape), dtype=torch.uint8, device=storage_device)
+        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, device=storage_device)
+        self.actions = torch.zeros((capacity, 2), dtype=torch.float32, device=storage_device)
+        self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
+        self.dones = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
         
     def add_batch(self, batch_data: Dict):
         """Add a batch of sequential data and construct transitions."""
@@ -139,11 +140,11 @@ class ReplayBuffer:
 
         end_idx = start_idx + count
 
-        self.grid[buffer_idx:buffer_idx+count] = torch.as_tensor(grid[start_idx:end_idx].copy())
-        self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy())
-        self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy())
-        self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1)
-        self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx].copy()).unsqueeze(1)
+        self.grid[buffer_idx:buffer_idx+count] = torch.as_tensor(grid[start_idx:end_idx].copy()).to(self.storage_device)
+        self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy()).to(self.storage_device)
+        self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy()).to(self.storage_device)
+        self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
+        self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
         
         # We don't store next_state explicitly to save RAM.
         # We store sequential data.
@@ -171,6 +172,7 @@ class ReplayBuffer:
         """Sample a batch of transitions."""
         indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
 
+        # Retrieve s
         # Retrieve s
         grid = self.grid[indices].to(self.device, non_blocking=True).float() / 255.0
         grid = grid.unsqueeze(1) # (B, 1, H, W)
@@ -227,7 +229,15 @@ class V620SACTrainer:
             print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
         else:
             self.device = torch.device('cpu')
+            self.device = torch.device('cpu')
             print("⚠ Using CPU")
+        
+        # Determine storage device for Replay Buffer
+        self.storage_device = self.device if args.gpu_buffer else torch.device('cpu')
+        if args.gpu_buffer and self.device.type != 'cpu':
+             print(f"✓ Replay Buffer will be stored on GPU memory")
+        else:
+             print(f"  Replay Buffer stored on System RAM (CPU)")
             
         # Dimensions
         self.grid_shape = (64, 64)
@@ -289,7 +299,8 @@ class V620SACTrainer:
             capacity=args.buffer_size,
             grid_shape=self.grid_shape,
             proprio_dim=self.proprio_dim,
-            device=self.device
+            device=self.device,
+            storage_device=self.storage_device
         )
         
         # Training Buffer (Double Buffering)
@@ -297,7 +308,8 @@ class V620SACTrainer:
             capacity=args.buffer_size,
             grid_shape=self.grid_shape,
             proprio_dim=self.proprio_dim,
-            device=self.device
+            device=self.device,
+            storage_device=self.storage_device
         )
 
         # Data augmentation for occupancy grids
@@ -1102,6 +1114,8 @@ if __name__ == '__main__':
                         help='Update actor every N critic updates')
     parser.add_argument('--augment_data', action='store_true',
                         help='Enable data augmentation for occupancy grids')
+    parser.add_argument('--gpu_buffer', action='store_true',
+                        help='Store replay buffer in GPU memory for faster sampling')
 
 
 
