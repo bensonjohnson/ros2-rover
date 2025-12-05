@@ -372,9 +372,10 @@ class SACEpisodeRunner(Node):
         else:
             mx, my, mz = 0.0, 0.0, 0.0
 
-        # Construct 10D proprio: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist]
+        # Construct 12D proprio: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist, prev_linear, prev_angular]
         proprio = np.array([[
-            ax, ay, az, gx, gy, gz, mx, my, mz, self._min_forward_dist
+            ax, ay, az, gx, gy, gz, mx, my, mz, self._min_forward_dist,
+            self._prev_action[0], self._prev_action[1]
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
