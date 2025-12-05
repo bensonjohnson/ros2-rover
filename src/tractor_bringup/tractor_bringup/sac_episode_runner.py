@@ -131,6 +131,10 @@ class SACEpisodeRunner(Node):
         self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right)
         self._max_depth_val = 0.0
 
+        # IMU State for Stitching
+        self._latest_imu_yaw = 0.0
+        self._prev_imu_yaw = None
+
         # NATS Setup (will be initialized in background thread)
         self.nc = None
         self.js = None
@@ -207,6 +211,13 @@ class SACEpisodeRunner(Node):
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
             msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z
         )
+        
+        # Extract Yaw from Quaternion
+        q = msg.orientation
+        # Yaw (z-axis rotation)
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+        self._latest_imu_yaw = math.atan2(siny_cosp, cosy_cosp)
     def _mag_cb(self, msg): self._latest_mag = (msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z)
     def _joint_cb(self, msg):
         if len(msg.velocity) >= 4: self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
@@ -319,7 +330,16 @@ class SACEpisodeRunner(Node):
             # Global delta
             gdx = cx - px
             gdy = cy - py
-            dtheta = cyaw - pyaw
+            
+            # Use IMU for rotation delta if available
+            if self._prev_imu_yaw is not None:
+                # Calculate shortest angular distance
+                dtheta = self._latest_imu_yaw - self._prev_imu_yaw
+                # Normalize to -pi..pi
+                dtheta = (dtheta + math.pi) % (2 * math.pi) - math.pi
+            else:
+                # Fallback to odom
+                dtheta = cyaw - pyaw
             
             # Rotate into ROBOT frame (at previous timestamp)
             # Robot was at 'pyaw'
@@ -337,6 +357,7 @@ class SACEpisodeRunner(Node):
             self.local_mapper.update(grid, 0.0, 0.0, 0.0)
             
         self._prev_odom_update = self._latest_odom
+        self._prev_imu_yaw = self._latest_imu_yaw
         
         # Get stitched input for model
         grid_stitched = self.local_mapper.get_model_input()
