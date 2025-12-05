@@ -151,7 +151,7 @@ class SACEpisodeRunner(Node):
             obstacle_height_thresh=0.1,
             floor_thresh=0.08
         )
-        self.local_mapper = LocalMapper(map_size=256)
+        self.local_mapper = LocalMapper(map_size=256, decay_rate=0.995)
         self._setup_subscribers()
         self._setup_publishers()
         
