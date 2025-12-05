@@ -413,29 +413,58 @@ class SACEpisodeRunner(Node):
             action = np.zeros(2) # Initialize action to avoid UnboundLocalError
             value = 0.0
 
-        # WARMUP DISABLED - New reward function provides strong forward motion incentive
-        # Old warmup forced straight driving during model version 0
-        # With 3x stronger forward rewards (24 max vs 8 old), this is no longer needed
-        # if self._current_model_version == 0:
-        #     if not self._warmup_active:
-        #         self._warmup_active = True
-        #         self.get_logger().info('🔥 Starting Continuous Warmup: Driving Straight until Model 1...')
-        #     action = np.array([0.8, 0.0], dtype=np.float32)
-        # elif self._warmup_active:
-        #     self.get_logger().info('✅ Warmup Complete (Model loaded). Switching to policy.')
-        #     self._warmup_active = False
+        # WARMUP / SEEDING
+        # Use heuristic "Gap Follower" for the first model version (v0)
+        # This seeds the replay buffer with "good" driving data (driving towards gaps)
+        # instead of random thrashing, helping the model learn the "drive forward" objective faster.
+        if self._current_model_version == 0:
+            if not self._warmup_active:
+                self._warmup_active = True
+                self.get_logger().info('🔥 Starting Heuristic Warmup (Gap Follower)...')
+                self.pbar.set_description("🔥 Warmup: Gap Follower")
+
+            # Heuristic Policy:
+            # 1. Steer towards _target_heading
+            # 2. Drive fast if aligned and clear, slow if turning or blocked
+            
+            # Angular action: directly map target heading (-1..1)
+            # _target_heading is already normalized: +1 (Left) to -1 (Right)
+            heuristic_angular = np.clip(self._target_heading, -1.0, 1.0)
+            
+            # Linear action:
+            # If we are aligned (abs(heading) < 0.3) and have space, go FAST
+            # If we are turning sharply, go SLOW
+            if abs(heuristic_angular) < 0.3 and self._min_forward_dist > 0.5:
+                heuristic_linear = 1.0 # Full speed ahead
+            elif abs(heuristic_angular) < 0.6:
+                heuristic_linear = 0.5 # Moderate speed
+            else:
+                heuristic_linear = 0.2 # Crawl while turning sharply
+                
+            # Override model action with heuristic
+            action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
+            
+            # Add small noise to heuristic so we don't just record identical straight lines
+            # This helps the policy learn robustness
+            noise = np.random.normal(0, 0.1, size=2) 
+            action = np.clip(action + noise, -1.0, 1.0)
+            
+        elif self._warmup_active:
+            self.get_logger().info('✅ Warmup Complete (Model v1+ loaded). Switching to learned policy.')
+            self._warmup_active = False
+            self.pbar.set_description(f"⏳ Training v{self._current_model_version}")
 
         # 3. Add Exploration Noise (Gaussian)
-        # Noise is always applied (warmup disabled, no exception needed)
-        # We use a fixed std dev for exploration on rover, or could receive it from server
-        noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
-        action = np.clip(action_mean + noise, -1.0, 1.0)
+        # Only apply standard noise if NOT in warmup (Model > 0)
+        if self._current_model_version > 0:
+            noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
+            action = np.clip(action_mean + noise, -1.0, 1.0)
 
-        # Safety check: if action_mean has NaN, use zero and warn
-        if np.isnan(action_mean).any():
-            self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
-            action_mean = np.zeros(2)
-            action = np.clip(noise, -1.0, 1.0)  # Pure random
+            # Safety check: if action_mean has NaN, use zero and warn
+            if np.isnan(action_mean).any():
+                self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
+                action_mean = np.zeros(2)
+                action = np.clip(noise, -1.0, 1.0)  # Pure random
 
         # 4. Execute Action
         cmd = Twist()
