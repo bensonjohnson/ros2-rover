@@ -567,7 +567,7 @@ class V620SACTrainer:
                 self.writer.flush()
 
             # Checkpoint every 2000 steps
-            if self.total_steps % 2000 == 0:
+            if self.total_steps % 500 == 0:
                 self.save_checkpoint()
 
             # Periodic GPU memory cleanup (prevents fragmentation)
