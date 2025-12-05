@@ -80,7 +80,7 @@ class SACEpisodeRunner(Node):
         print("==================================================")
         print("         SAC ROVER RUNNER (V620)                  ")
         print("==================================================")
-        self.pbar = tqdm(total=200, desc="⏳ Server Training", unit="step", dynamic_ncols=True)
+        self.pbar = tqdm(total=2000, desc="⏳ Server Training", unit="step", dynamic_ncols=True)
         self.total_steps = 0
         self.episode_reward = 0.0
 
@@ -667,8 +667,8 @@ class SACEpisodeRunner(Node):
             status = deserialize_status(msg.data)
             total_steps = status.get("total_steps", 0)
             
-            # Update progress bar to show steps towards next model (modulo 200)
-            progress = total_steps % 200
+            # Update progress bar to show steps towards next model (modulo 2000)
+            progress = total_steps % 2000
             self.pbar.n = progress
             self.pbar.refresh()
             
