@@ -134,6 +134,10 @@ class DepthToOccupancy:
         
         # Mark obstacles (255) - Overwrite floor if conflict
         grid[grid_rows[is_obstacle], grid_cols[is_obstacle]] = 255
+
+        # Morphological Closing to fill holes/noise
+        kernel = np.ones((3,3), np.uint8)
+        grid = cv2.morphologyEx(grid, cv2.MORPH_CLOSE, kernel)
         
         return grid
 
