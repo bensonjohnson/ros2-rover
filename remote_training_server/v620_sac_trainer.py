@@ -1084,7 +1084,7 @@ class V620SACTrainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
-    parser.add_argument('--buffer_size', type=int, default=100000) # Increased buffer size too since data is smaller
+    parser.add_argument('--buffer_size', type=int, default=1000000) # Increased buffer size too since data is smaller
     parser.add_argument('--batch_size', type=int, default=4096)
     parser.add_argument('--lr', type=float, default=3e-5)
     parser.add_argument('--gamma', type=float, default=0.97)
