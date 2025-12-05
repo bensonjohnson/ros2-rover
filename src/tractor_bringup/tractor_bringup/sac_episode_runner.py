@@ -348,7 +348,7 @@ class SACEpisodeRunner(Node):
         
         # Local Inference (Model expects 0-1 float)
         grid_normalized = grid_stitched.astype(np.float32) / 255.0
-        grid_input_inference = grid_normalized[None, None, ...] 
+        grid_input = grid_normalized[None, None, ...] 
         
         # Gap Following Analysis (using Grid now!)
         
