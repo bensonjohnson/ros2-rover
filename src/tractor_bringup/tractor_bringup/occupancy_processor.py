@@ -50,44 +50,6 @@ class DepthToOccupancy:
         # (u - cx) / fx, (v - cy) / fy
         self.x_mult = (u - cx) / fx
         self.y_mult = (v - cy) / fy
-        
-        # Pre-compute rotation matrix for camera tilt
-        # Camera frame: Z forward, X right, Y down
-        # Rover frame: X forward, Y left, Z up
-        
-        # Rotation: Pitch down by 'tilt'
-        # R_pitch = [
-        #   [1, 0, 0],
-        #   [0, cos, -sin],
-        #   [0, sin, cos]
-        # ]
-        
-        # Coordinate transform (Camera -> Rover):
-        # Rover X = Camera Z
-        # Rover Y = -Camera X
-        # Rover Z = -Camera Y + height
-        
-        # Combined transform matrix (3x3) applied to (X_c, Y_c, Z_c)
-        # We want (X_r, Y_r, Z_r)
-        
-        # Let's do it explicitly in process() for clarity first, then optimize if needed.
-        # Actually, pre-computing the rotation is better.
-        
-        c = np.cos(self.camera_tilt)
-        s = np.sin(self.camera_tilt)
-        
-        # Camera to Rover rotation
-        # If camera is untilted:
-        # X_r = Z_c
-        # Y_r = -X_c
-        # Z_r = -Y_c + h
-        
-        # With tilt (pitch down):
-        # Camera Y' = Y*c - Z*s
-        # Camera Z' = Y*s + Z*c
-        # Then map to rover
-        
-        pass
 
     def process(self, depth_image):
         """
@@ -103,11 +65,6 @@ class DepthToOccupancy:
             depth = depth_image
             
         # 1. Unproject to 3D (Camera Frame)
-        # Z_c = depth
-        # X_c = Z_c * ((u - cx) / fx)
-        # Y_c = Z_c * ((v - cy) / fy)
-        
-        # Vectorized
         z_c = depth
         x_c = z_c * self.x_mult
         y_c = z_c * self.y_mult
@@ -123,13 +80,6 @@ class DepthToOccupancy:
             return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
             
         # 2. Transform to Rover Frame
-        # Camera Frame: X right, Y down, Z forward
-        # Rover Frame: X forward, Y left, Z up
-        
-        # Apply Tilt (Rotation around X axis of camera)
-        # Y_c' = Y_c * cos(t) - Z_c * sin(t)
-        # Z_c' = Y_c * sin(t) + Z_c * cos(t)
-        
         c = np.cos(self.camera_tilt)
         s = np.sin(self.camera_tilt)
         
@@ -147,48 +97,20 @@ class DepthToOccupancy:
         z_r = -y_c_rot + self.camera_height
         
         # 3. Filter Points
-        # Floor: |z_r| < floor_thresh
-        # Obstacle: z_r > obstacle_thresh
-        
         is_floor = np.abs(z_r) < self.floor_thresh
         is_obstacle = z_r > self.obstacle_thresh
         
         # 4. Project to Grid
-        # Grid X: 0 to grid_range (mapped to 0..64)
-        # Grid Y: -grid_range/2 to grid_range/2 (mapped to 0..64)
-        
-        # Scale to grid coordinates
-        # X: [0, range] -> [63, 0] (Top-down view: Robot at bottom center)
-        # Actually, let's put robot at bottom center (row 63, col 32)
-        # X (forward) maps to rows (decreasing)
-        # Y (left) maps to cols (increasing)
-        
-        # x_grid = grid_size - (x_r / range * grid_size)
-        # y_grid = (y_r + range/2) / range * grid_size
-        
         scale = self.grid_size / self.grid_range
         
-        # Robot is at (0,0) in rover frame.
-        # In grid image:
-        # Row 0 is top (max X)
-        # Row 63 is bottom (min X, near robot)
-        # Col 0 is left (max Y)
-        # Col 63 is right (min Y)
-        
-        # Wait, Y_r is left positive.
-        # Image X is column (left-right).
-        # Image Y is row (top-down).
+        # Robot is at bottom center (row 63, col 32)
         
         # Map X_r (Forward) to Image Rows (Bottom to Top)
         # row = H - 1 - (x_r * scale)
         grid_rows = self.grid_size - 1 - (x_r * scale).astype(np.int32)
         
         # Map Y_r (Left) to Image Cols (Center to Left/Right)
-        # Y_r positive = LEFT in rover frame
-        # Col 0 = LEFT in image, Col 63 = RIGHT in image
-        # If Y_r = +1m (Left), Col should be low (e.g. 0)
-        # If Y_r = -1m (Right), Col should be high (e.g. 63)
-        # Therefore: Col = Center - Y_r * scale
+        # Col = Center - Y_r * scale
         grid_cols = (self.grid_size // 2) - (y_r * scale).astype(np.int32)
         
         # Clip to grid bounds
@@ -213,8 +135,165 @@ class DepthToOccupancy:
         # Mark obstacles (255) - Overwrite floor if conflict
         grid[grid_rows[is_obstacle], grid_cols[is_obstacle]] = 255
         
-        # Optional: Morphological operations to clean up
-        # kernel = np.ones((3,3), np.uint8)
-        # grid = cv2.morphologyEx(grid, cv2.MORPH_CLOSE, kernel)
-        
         return grid
+
+
+class LocalMapper:
+    """
+    Maintains a persistent local map by stitching successive frames using odometry.
+    
+    Features:
+    - Shifts/Rotates map based on robot motion.
+    - Fades old data to handle drift/dynamic obstacles.
+    - Crops center for model input.
+    """
+    def __init__(self, 
+                 map_size=256, 
+                 resolution=0.047, # 3.0m / 64px = 0.046875 m/px
+                 decay_rate=0.98):
+        
+        self.map_size = map_size
+        self.resolution = resolution
+        self.decay_rate = decay_rate
+        
+        # The map is centered on the robot
+        # Robot pixel = (map_size // 2, map_size // 2) ... Wait, standard convention?
+        # Let's say robot is always at center (128, 128)
+        
+        self.global_map = np.zeros((map_size, map_size), dtype=np.float32)
+        self.center = map_size // 2
+        
+    def update(self, new_observation, dx, dy, dtheta):
+        """
+        Update the map with motion and new data.
+        
+        Args:
+            new_observation: (64, 64) uint8 grid (Robot at bottom-center)
+            dx, dy: Translation in ROBOT frame (meters)
+            dtheta: Rotation in radians (counter-clockwise)
+        """
+        # 1. Shift Map (Inverse Motion Model)
+        # If robot moves forward +X, the map moves backward -X relative to robot.
+        # If robot rotates Left +Theta, the map rotates Right -Theta.
+        
+        # Convert meters to pixels
+        dx_px = dx / self.resolution
+        dy_px = dy / self.resolution
+        
+        # Define affine transform matrix
+        # Translate opposite to motion, rotate opposite to motion
+        
+        # Rotation center is the map center
+        M_rot = cv2.getRotationMatrix2D((self.center, self.center), np.degrees(dtheta), 1.0)
+        
+        # Translation (Robot Frame: X=Up, Y=Left)
+        # Map Frame (Image): Row=Down(-X), Col=Right(-Y)
+        
+        # If robot moves +X (Forward) -> Objects move Down (+Row)
+        # If robot moves +Y (Left) -> Objects move Right (+Col)
+        
+        # Wait, let's verify coord systems.
+        # new_observation: Robot at bottom center (row=63, col=32)
+        # global_map: Robot at center (row=128, col=128)
+        
+        # 1a. Rotate first (around robot center)
+        # We rotate the map "Underneath" the robot.
+        # Robot turns LEFT (+theta). World turns RIGHT (-theta).
+        # cv2 rotates CCW for positive angle. So we use -degrees(dtheta).
+        M_rot = cv2.getRotationMatrix2D((self.center, self.center), -np.degrees(dtheta), 1.0)
+        
+        # 1b. Translate
+        # Robot moves dx (forward), dy (left).
+        # World moves -dx (backward/down), -dy (right/right).
+        # Image Y (Row) = Down. Image X (Col) = Right.
+        # Forward (+dx) -> Down (+Row in image?). No.
+        # In Grid: Top is Forward. Bottom is Backward.
+        # Robot moves Forward (+dx). Objects move Backward (Down).
+        # So +Row is correct for +dx.
+        
+        # Left (+dy) -> Right (+Col).
+        # So +Col is correct for +dy.
+        
+        M_rot[0, 2] += dy_px # Col shift (from dy)
+        M_rot[1, 2] += dx_px # Row shift (from dx)
+        
+        # Apply Warp
+        self.global_map = cv2.warpAffine(
+            self.global_map, 
+            M_rot, 
+            (self.map_size, self.map_size),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0 # Fade to unknown
+        )
+        
+        # 2. Fade Map (Soft forgetting)
+        # This handles dynamic obstacles and odometry drift
+        self.global_map *= self.decay_rate
+        
+        # 3. Stamp New Observation
+        # The new observation is 64x64, robot at (63, 32).
+        # We need to place it into the global map (256, 256) at center (128, 128).
+        # Observation (63, 32) aligns with Buffer (128, 128).
+        
+        # Offsets
+        # Obs Top-Left (0,0) -> Buffer (128 - 63, 128 - 32)
+        # Row offset: 128 (center) - 63 (robot row in obs) = 65
+        # Col offset: 128 (center) - 32 (robot col in obs) = 96
+        
+        # Wait, if obs is 64x64. Robot is at row 63.
+        # We want Robot (63, 32) to be at Center (128, 128).
+        # Row start_map = 128 - 63 = 65.
+        # Row end_map   = 65 + 64 = 129.
+        # Col start_map = 128 - 32 = 96.
+        # Col end_map   = 96 + 64 = 160.
+        
+        rows = slice(65, 129)
+        cols = slice(96, 160)
+        
+        # We only overwrite KNOWN cells (128 or 255)
+        # Unknown (0) in observation should NOT overwrite known map
+        
+        obs = new_observation.astype(np.float32)
+        mask = (new_observation > 0)
+        
+        # Region Of Interest
+        roi = self.global_map[rows, cols]
+        
+        # Updates
+        roi[mask] = obs[mask]
+        
+        self.global_map[rows, cols] = roi
+        
+    def get_model_input(self):
+        """
+        Return the 64x64 center crop for the model.
+        Returns:
+            grid: (64, 64) uint8
+        """
+        # Crop 64x64 logic:
+        # We want the view AHEAD of the robot.
+        # Robot is at (128, 128).
+        # Standard observation (DepthToOccupancy) gives 3m ahead.
+        # So we want the exact same window we just stamped, effectively?
+        # NO. We want the robot at the BOTTOM of the crop, just like the raw input.
+        # Robot at (63, 32) in the crop.
+        # So Crop Center needs to be shifted Forward from Robot Center.
+        
+        # Robot at (128, 128).
+        # We want Robot to be at Row 63 in the output.
+        # So Output Row 63 = Map Row 128.
+        # Output Row 0  = Map Row 128 - 63 = 65.
+        
+        # Output Col 32 = Map Col 128.
+        # Output Col 0  = Map Col 128 - 32 = 96.
+        
+        start_row = 128 - 63 # 65
+        end_row = start_row + 64 # 129
+        
+        start_col = 128 - 32 # 96
+        end_col = start_col + 64 # 160
+        
+        crop = self.global_map[start_row:end_row, start_col:end_col]
+        
+        return crop.astype(np.uint8)

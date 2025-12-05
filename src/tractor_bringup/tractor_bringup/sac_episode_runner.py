@@ -35,7 +35,7 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
-from tractor_bringup.occupancy_processor import DepthToOccupancy
+from tractor_bringup.occupancy_processor import DepthToOccupancy, LocalMapper
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField
@@ -118,7 +118,9 @@ class SACEpisodeRunner(Node):
         
         # Warmup State
         self._warmup_start_time = 0.0
+        self._warmup_start_time = 0.0
         self._warmup_active = False
+        self._prev_odom_update = None
         
         # Previous action for smoothness reward
         self._prev_action = np.array([0.0, 0.0])
@@ -149,6 +151,7 @@ class SACEpisodeRunner(Node):
             obstacle_height_thresh=0.1,
             floor_thresh=0.08
         )
+        self.local_mapper = LocalMapper(map_size=256)
         self._setup_subscribers()
         self._setup_publishers()
         
@@ -307,9 +310,41 @@ class SACEpisodeRunner(Node):
         grid = self.occupancy_processor.process(self._latest_depth)
         self._latest_grid = grid
         
+        if self._latest_odom and self._prev_odom_update:
+            # Calculate ODometry Delta
+            # Odom: (x, y, lin, ang)
+            px, py, _, pyaw = self._prev_odom_update
+            cx, cy, _, cyaw = self._latest_odom
+            
+            # Global delta
+            gdx = cx - px
+            gdy = cy - py
+            dtheta = cyaw - pyaw
+            
+            # Rotate into ROBOT frame (at previous timestamp)
+            # Robot was at 'pyaw'
+            # dx_r = gdx * cos(-pyaw) - gdy * sin(-pyaw)
+            # dy_r = gdx * sin(-pyaw) + gdy * cos(-pyaw)
+            c = math.cos(-pyaw)
+            s = math.sin(-pyaw)
+            
+            dx_r = gdx * c - gdy * s
+            dy_r = gdx * s + gdy * c
+            
+            self.local_mapper.update(grid, dx_r, dy_r, dtheta)
+        else:
+            # First frame or no odom
+            self.local_mapper.update(grid, 0.0, 0.0, 0.0)
+            
+        self._prev_odom_update = self._latest_odom
+        
+        # Get stitched input for model
+        grid_stitched = self.local_mapper.get_model_input()
+        self._latest_grid = grid_stitched # Update visualization/logging to use stitched map
+        
         # Grid Input for Model: (1, 1, 64, 64)
         # Normalize to [0, 1] for model
-        grid_normalized = grid.astype(np.float32) / 255.0
+        grid_normalized = grid_stitched.astype(np.float32) / 255.0
         grid_input = grid_normalized[None, None, ...] 
         
         # Gap Following Analysis (using Grid now!)
