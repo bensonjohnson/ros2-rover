@@ -510,8 +510,8 @@ class V620SACTrainer:
             if self.total_steps % 100 == 0:
                 self.writer.flush()
 
-            # Checkpoint every 200 steps
-            if self.total_steps % 200 == 0:
+            # Checkpoint every 2000 steps
+            if self.total_steps % 2000 == 0:
                 self.save_checkpoint()
 
             # Periodic GPU memory cleanup (prevents fragmentation)
@@ -958,7 +958,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
     parser.add_argument('--buffer_size', type=int, default=100000) # Increased buffer size too since data is smaller
-    parser.add_argument('--batch_size', type=int, default=2048)
+    parser.add_argument('--batch_size', type=int, default=4096)
     parser.add_argument('--lr', type=float, default=3e-5)
     parser.add_argument('--gamma', type=float, default=0.97)
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
