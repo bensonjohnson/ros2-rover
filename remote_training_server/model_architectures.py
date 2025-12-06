@@ -60,6 +60,7 @@ class OccupancyGridEncoder(nn.Module):
         )
 
         # Output: 128 * 4 * 4 = 2048 features (half the original)
+        self.output_dim = 128 * 4 * 4
 
     def forward(self, grid: torch.Tensor) -> torch.Tensor:
         """
