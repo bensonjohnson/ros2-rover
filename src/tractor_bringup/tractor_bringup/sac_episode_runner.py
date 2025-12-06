@@ -189,7 +189,7 @@ class SACEpisodeRunner(Node):
         self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
 
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
-        self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data)
+        # self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data) # Removed due to noise
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
         # self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10) # Calculated locally now
         self.create_subscription(Bool, '/safety_monitor_status', self._safety_cb, 10)
@@ -241,7 +241,124 @@ class SACEpisodeRunner(Node):
     def _safety_cb(self, msg): self._safety_override = msg.data
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
-    def _compute_reward(self, action, linear_vel, angular_vel, clearance, collision):
+    def _process_lidar_metrics(self, scan_msg) -> Tuple[float, float, float]:
+        """
+        Extract key metrics from LiDAR scan.
+        Returns:
+            min_dist_all (float): Closest obstacle in 360 degrees (Safety Bubble)
+            mean_side_dist (float): Average distance on left/right (for centering/clearing)
+            gap_heading (float): Heading towards largest open space (-1..1)
+        """
+        if not scan_msg:
+            return 0.0, 0.0, 0.0
+
+        ranges = np.array(scan_msg.ranges)
+        # Filter invalid
+        valid = (ranges > 0.05) & (ranges < scan_msg.range_max)
+        if not np.any(valid):
+            return 3.0, 3.0, 0.0
+
+        # 1. Safety Bubble
+        min_dist_all = np.min(ranges[valid])
+
+        # 2. Side Clearance (Left/Right sectors)
+        # Scan is usually CCW. Angle 0 is front? Or front is middle?
+        # LD19: Usually 0 is back w.r.t wire? Need to assume standard Frame:
+        # Laser Line: X Forward. 0 deg usually X axis (Forward).
+        # ranges index corresponds to angle_min + i * increment
+        
+        # Let's assume standard ROS: 0 is Forward, +90 Left, -90 Right.
+        # Check angle_min/max in launch? default is usually -PI to PI
+        
+        # We need to map angles to indices
+        angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
+        
+        # Left Sector: 45 to 135 deg (0.78 to 2.35 rad)
+        left_mask = (angles > 0.78) & (angles < 2.35) & valid
+        # Right Sector: -135 to -45 deg (-2.35 to -0.78 rad)
+        right_mask = (angles > -2.35) & (angles < -0.78) & valid
+        
+        l_dist = np.mean(ranges[left_mask]) if np.any(left_mask) else 3.0
+        r_dist = np.mean(ranges[right_mask]) if np.any(right_mask) else 3.0
+        mean_side_dist = (l_dist + r_dist) / 2.0
+
+        # 3. Gap Finding (Simple)
+        # Find 20-degree sector with max average depth
+        # Convolve with window of size ~20 deg
+        window_size = int(np.radians(20) / scan_msg.angle_increment)
+        window_size = max(1, window_size)
+        
+        # Fill invalid with 0 for gap finding (don't go into unknown)
+        ranges_gap = ranges.copy()
+        ranges_gap[~valid] = 0.0
+        
+        # Convolution
+        smoothed = np.convolve(ranges_gap, np.ones(window_size)/window_size, mode='same')
+        best_idx = np.argmax(smoothed)
+        best_angle = angles[best_idx]
+        
+        # Map angle (-PI..PI) to Heading (-1..1), where -1 is Right (-PI/2), 1 is Left (PI/2)
+        # Clip to front-ish semi-circle (-PI/2 to PI/2) for target
+        target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
+        
+        return min_dist_all, mean_side_dist, target
+
+    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
+        """LiDAR-Enhanced Reward Function."""
+        reward = 0.0
+        target_speed = self._curriculum_max_speed
+
+        # 1. Forward Progress with Safety Scaling
+        # Learn to go fast ONLY when safe (min_dist > 0.5m)
+        forward_vel = max(0.0, linear_vel)
+        
+        # Safety Factor: 0.0 at 0.2m, 1.0 at 0.6m
+        safety_factor = np.clip((min_lidar_dist - 0.2) / 0.4, 0.0, 1.0)
+        
+        if forward_vel > 0.01:
+            # Reward speed, scaled by how safe it is
+            speed_reward = (forward_vel / target_speed) * safety_factor * 1.2
+            reward += speed_reward
+        else:
+            # Idle penalty
+            reward -= 0.3
+
+        # 2. Safety Bubble Penalty (Global)
+        # Severe penalty for getting too close to ANYTHING (approx < 25cm)
+        if min_lidar_dist < 0.25:
+            # Exponential penalty
+            prox_pen = 1.0 - (min_lidar_dist / 0.25)
+            reward -= prox_pen * 0.8
+            
+        # 3. Backward Penalty
+        if linear_vel < -0.01:
+            reward -= abs(linear_vel / target_speed) * 0.8
+
+        # 4. Collision
+        if collision or self._safety_override:
+            reward -= 2.0 
+
+        # 5. Alignment / Gap Following
+        # Reward pointing towards empty space
+        # alignment_error = abs(action[1] - self._target_heading) ... handled in main loop?
+        # Let's use the stored target heading
+        alignment_error = abs(action[1] - self._target_heading)
+        if forward_vel > 0.1:
+            reward += (0.5 - alignment_error) * 0.4
+
+        # 6. Smoothness & Stability
+        # Penalize jerky turns
+        if abs(angular_vel) > 0.5:
+             reward -= abs(angular_vel) * 0.2
+             
+        # Corner Anti-Thrash:
+        # If in tight space (low side clearance), punish rotation heavily
+        if side_clearance < 0.4 and abs(angular_vel) > 0.2:
+            reward -= abs(angular_vel) * 1.0 # Stop spinning in narrow corridors!
+
+        return np.clip(reward, -1.0, 1.0)
+
+    def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.
 
         Normalized to [-1, 1] range for stable SAC training.
@@ -367,15 +484,10 @@ class SACEpisodeRunner(Node):
             gdx = cx - px
             gdy = cy - py
             
-            # Use IMU for rotation delta if available
-            if self._prev_imu_yaw is not None:
-                # Calculate shortest angular distance
-                dtheta = self._latest_imu_yaw - self._prev_imu_yaw
-                # Normalize to -pi..pi
-                dtheta = (dtheta + math.pi) % (2 * math.pi) - math.pi
-            else:
-                # Fallback to odom
-                dtheta = cyaw - pyaw
+            # Rotation delta: Prefer Odom (RF2O) over IMU now, as IMU/Mag is noisy
+            # and RF2O is very accurate for relative rotation.
+            dtheta = cyaw - pyaw
+            dtheta = (dtheta + math.pi) % (2 * math.pi) - math.pi
             
             # Rotate into ROBOT frame (at previous timestamp)
             # Robot was at 'pyaw'
@@ -444,22 +556,26 @@ class SACEpisodeRunner(Node):
         else:
             self._min_forward_dist = 3.0 # Max range
             
-        # Proprioception (10 values: 9-axis IMU + min_dist)
+        # Proprioception (9 values: 6-axis IMU + min_dist + prev_action)
         # Get IMU data
         if self._latest_imu:
             ax, ay, az, gx, gy, gz = self._latest_imu
         else:
             ax, ay, az, gx, gy, gz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        # Get Magnetometer data
-        if self._latest_mag:
-            mx, my, mz = self._latest_mag
-        else:
-            mx, my, mz = 0.0, 0.0, 0.0
-
-        # Construct 12D proprio: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist, prev_linear, prev_angular]
+        # LiDAR Metrics for Reward
+        lidar_min, lidar_sides, gap_heading = self._process_lidar_metrics(self._latest_scan)
+        
+        # Update target heading for Gap Follower (Warmup)
+        # But ALSO usage in reward function!
+        self._target_heading = gap_heading
+        
+        # Construct 11D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, gap_heading, prev_lin, prev_ang]
         proprio = np.array([[
-            ax, ay, az, gx, gy, gz, mx, my, mz, self._min_forward_dist,
+            ax, ay, az, gx, gy, gz, 
+            self._min_forward_dist,     # Min Depth (Front)
+            lidar_min,                  # Min LiDAR (360 Safety)
+            gap_heading,                # Gap Heading
             self._prev_action[0], self._prev_action[1]
         ]], dtype=np.float32)
 
@@ -582,7 +698,7 @@ class SACEpisodeRunner(Node):
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
-            self._min_forward_dist, collision
+            lidar_min, lidar_sides, collision
         )
 
         # Clip reward to prevent extreme values (already clipped in _compute_reward, but keep as safety)

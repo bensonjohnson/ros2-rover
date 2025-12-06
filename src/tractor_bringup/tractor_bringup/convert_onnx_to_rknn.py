@@ -151,11 +151,11 @@ def convert_onnx_to_rknn(
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
                 [0],                 # Grid (will be pre-normalized to [0,1] in generator)
-                [0] * 12,            # Proprio (12 values: ax, ay, az, gx, gy, gz, mx, my, mz, min_dist, prev_lin, prev_ang)
+                [0] * 11,            # Proprio (11 values: ax, ay, az, gx, gy, gz, min_depth, min_lidar, gap, prev_lin, prev_ang)
             ],
             'std_values': [
                 [255],               # Grid: [0, 255] -> [0, 1] (std=255)
-                [1] * 12,            # Proprio (no scaling)
+                [1] * 11,            # Proprio (no scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -177,7 +177,7 @@ def convert_onnx_to_rknn(
             inputs=['grid', 'proprio'],
             input_size_list=[
                 [1, 1, 64, 64],     # Grid
-                [1, 12],            # Proprio
+                [1, 11],            # Proprio
             ]
         )
         if ret != 0:
