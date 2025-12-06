@@ -10,40 +10,73 @@ import torch.nn as nn
 from typing import Tuple
 
 
-class OccupancyGridEncoder(nn.Module):
-    """Vision encoder for Top-Down Occupancy Grid.
-
-    Takes 64x64 Occupancy Grid (1 channel) and encodes it.
+class SpatialAttention(nn.Module):
+    """
+    Learns to focus on important spatial regions (gaps, obstacles).
+    Applies channel-wise attention to emphasize relevant features.
     """
 
-    def __init__(self, input_channels: int = 1):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, 1, kernel_size=1)
+
+    def forward(self, x):
+        attention = torch.sigmoid(self.conv(x))  # (B, 1, H, W)
+        return x * attention  # Element-wise weighting
+
+
+class OccupancyGridEncoder(nn.Module):
+    """
+    Encoder for 4-channel 128×128 occupancy grid.
+    Preserves spatial structure without global pooling.
+
+    Input channels:
+    - 0: Distance to nearest obstacle [0.0, 1.0]
+    - 1: Exploration history [0.0, 1.0]
+    - 2: Obstacle confidence [0.0, 1.0]
+    - 3: Terrain height [0.0, 1.0]
+    """
+
+    def __init__(self, input_channels: int = 4):
         super().__init__()
 
+        # Input: (B, 4, 128, 128)
         self.conv = nn.Sequential(
-            # Input: (B, 1, 64, 64)
-            nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1), # -> (32, 32, 32)
+            # Stage 1: 128 → 64
+            nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), # -> (64, 16, 16)
+
+            # Stage 2: 64 → 32
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # -> (128, 8, 8)
+
+            # Stage 3: 32 → 16 (with spatial attention)
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), # -> (256, 4, 4)
+            SpatialAttention(128),  # Focus on relevant regions
+
+            # Stage 4: 16 → 8
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Stage 5: 8 → 4
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
         )
 
-        self.pool = nn.AdaptiveAvgPool2d(1)
-        self.output_dim = 256
+        # NO global pooling! Flatten spatial features
+        self.output_dim = 256 * 4 * 4  # 4096
 
     def forward(self, grid: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            grid: (B, 1, 64, 64) normalized to [0, 1]
+            grid: (B, 4, 128, 128) normalized to [0, 1]
         Returns:
-            features: (B, 256)
+            features: (B, 4096) - preserves spatial info!
         """
-        features = self.conv(grid)
-        features = self.pool(features)
-        return features.view(features.size(0), -1)
+        x = self.conv(grid)  # (B, 256, 4, 4)
+        x = x.flatten(start_dim=1)  # (B, 4096) - preserves spatial structure
+        return x
 
 
 class PolicyHead(nn.Module):
@@ -157,34 +190,32 @@ class QNetwork(nn.Module):
 
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
-    def __init__(self, feature_dim: int, proprio_dim: int = 6, action_dim: int = 2, dropout: float = 0.0):
+    def __init__(self, feature_dim: int = 4096, proprio_dim: int = 10, action_dim: int = 2, dropout: float = 0.0):
         super().__init__()
 
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 64),
-            nn.ReLU(inplace=True),
         )
 
-        # Q-network: takes (features + proprio + action)
+        # Q-function: visual (4096) + proprio (64) + action (2) = 4162
         # Build with conditional dropout for DroQ
         layers = [
-            nn.Linear(feature_dim + 64 + action_dim, 256),
+            nn.Linear(feature_dim + 64 + action_dim, 512),
             nn.ReLU(inplace=True),
         ]
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
 
         layers.extend([
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.ReLU(inplace=True),
         ])
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
 
-        layers.append(nn.Linear(128, 1))
+        layers.append(nn.Linear(256, 1))
 
         self.q_net = nn.Sequential(*layers)
 
@@ -197,9 +228,10 @@ class QNetwork(nn.Module):
 class GaussianPolicyHead(nn.Module):
     """SAC Policy head that outputs mean and log_std for continuous actions."""
 
-    def __init__(self, feature_dim: int, proprio_dim: int, action_dim: int = 2, hidden_size: int = 256):
+    def __init__(self, feature_dim: int = 4096, proprio_dim: int = 10, action_dim: int = 2, hidden_size: int = 256):
         super().__init__()
 
+        # Proprioception encoder (unchanged)
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 64),
             nn.ReLU(inplace=True),
@@ -207,10 +239,11 @@ class GaussianPolicyHead(nn.Module):
             nn.ReLU(inplace=True),
         )
 
+        # Fusion: 4096 (visual) + 64 (proprio) = 4160
         self.net = nn.Sequential(
-            nn.Linear(feature_dim + 64, hidden_size),
+            nn.Linear(feature_dim + 64, 512),  # Larger first layer
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(512, hidden_size),
             nn.ReLU(inplace=True),
         )
 

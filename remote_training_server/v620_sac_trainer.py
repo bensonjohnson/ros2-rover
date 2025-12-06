@@ -668,12 +668,33 @@ class V620SACTrainer:
         alpha = self.log_alpha.exp().item()
 
         # --- Diagnostic Logging (TensorBoard) ---
-        if self.total_steps % 10 == 0 and last_log_prob is not None:
-            self.writer.add_scalar('train/gradient_steps', self.gradient_steps, self.total_steps)
-            self.writer.add_scalar('train/utd_ratio', self.args.utd_ratio, self.total_steps)
-            self.writer.add_scalar('train/q1_mean', last_q1.mean().item(), self.total_steps)
-            self.writer.add_scalar('train/q2_mean', last_q2.mean().item(), self.total_steps)
-            self.writer.add_scalar('train/alpha', alpha, self.total_steps)
+        if self.total_steps % 100 == 0 and last_log_prob is not None:
+            # Loss metrics
+            self.writer.add_scalar('Loss/Critic', avg_critic_loss, self.total_steps)
+            self.writer.add_scalar('Loss/Actor', avg_actor_loss, self.total_steps)
+            self.writer.add_scalar('Loss/Alpha', avg_alpha_loss, self.total_steps)
+
+            # Entropy and alpha
+            self.writer.add_scalar('Entropy/Policy', -last_log_prob.mean().item(), self.total_steps)
+            self.writer.add_scalar('Alpha/Value', alpha, self.total_steps)
+
+            # Q-values
+            self.writer.add_scalar('Q_Value/Q1', last_q1.mean().item(), self.total_steps)
+            self.writer.add_scalar('Q_Value/Q2', last_q2.mean().item(), self.total_steps)
+            self.writer.add_scalar('Q_Value/Min_Q_Pi', last_min_q_pi.mean().item() if last_min_q_pi is not None else 0.0, self.total_steps)
+
+            # Reward statistics
+            self.writer.add_scalar('Reward/Mean', batch['reward'].mean().item(), self.total_steps)
+            self.writer.add_scalar('Reward/Std', batch['reward'].std().item(), self.total_steps)
+
+            # NEW: Log observation statistics for debugging
+            self.writer.add_scalar('Observation/Grid_Mean', batch['grid'].mean().item(), self.total_steps)
+            self.writer.add_scalar('Observation/Grid_Std', batch['grid'].std().item(), self.total_steps)
+            self.writer.add_scalar('Observation/Proprio_Mean', batch['proprio'].mean().item(), self.total_steps)
+
+            # Training progress
+            self.writer.add_scalar('Training/Gradient_Steps', self.gradient_steps, self.total_steps)
+            self.writer.add_scalar('Training/UTD_Ratio', self.args.utd_ratio, self.total_steps)
 
         t3 = time.time()
 
@@ -1096,22 +1117,34 @@ class V620SACTrainer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
-    parser.add_argument('--buffer_size', type=int, default=1000000) # Increased buffer size too since data is smaller
-    parser.add_argument('--batch_size', type=int, default=4096)
-    parser.add_argument('--lr', type=float, default=3e-5)
-    parser.add_argument('--gamma', type=float, default=0.97)
+
+    # Learning - Updated for improved convergence
+    parser.add_argument('--lr', type=float, default=3e-4,  # Was 3e-5 (10× too low!)
+                        help='Learning rate for Adam optimizer')
+    parser.add_argument('--batch_size', type=int, default=512,  # Was 4096
+                        help='Batch size for training (smaller = more frequent updates)')
+    parser.add_argument('--buffer_size', type=int, default=200000,  # Was 1M
+                        help='Replay buffer capacity (faster turnover)')
+
+    # SAC specific
+    parser.add_argument('--gamma', type=float, default=0.98,  # Was 0.97
+                        help='Discount factor')
+    parser.add_argument('--tau', type=float, default=0.005,  # Was 0.001
+                        help='Soft target update rate')
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
 
-    # DroQ + UTD + Augmentation parameters
-    parser.add_argument('--droq_dropout', type=float, default=0.01,
+    # DroQ + UTD + Augmentation parameters - Updated for sample efficiency
+    parser.add_argument('--droq_dropout', type=float, default=0.005,  # Was 0.01
                         help='Dropout rate for DroQ (0.0 to disable)')
-    parser.add_argument('--droq_samples', type=int, default=10,
+    parser.add_argument('--droq_samples', type=int, default=2,  # Was 10 (overkill)
                         help='Number of Q-network forward passes for DroQ (M)')
-    parser.add_argument('--utd_ratio', type=int, default=4,
+    parser.add_argument('--utd_ratio', type=int, default=20,  # Was 4 (CRITICAL!)
                         help='Update-to-Data ratio (gradient steps per env step)')
-    parser.add_argument('--actor_update_freq', type=int, default=10,
+    parser.add_argument('--actor_update_freq', type=int, default=2,  # Was 10
                         help='Update actor every N critic updates')
+    parser.add_argument('--warmup_steps', type=int, default=10000,  # Was 2000
+                        help='Minimum buffer size before training starts')
     parser.add_argument('--augment_data', action='store_true',
                         help='Enable data augmentation for occupancy grids')
     parser.add_argument('--gpu_buffer', action='store_true',
