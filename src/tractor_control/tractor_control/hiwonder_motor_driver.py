@@ -116,6 +116,10 @@ class HiwonderMotorDriver(Node):
         # NEW: Retrieve watchdog parameters
         self.cmd_vel_timeout_secs = self.get_parameter("cmd_vel_timeout_secs").value
         self.watchdog_check_hz = self.get_parameter("watchdog_check_hz").value
+        
+        # TF Publication
+        self.declare_parameter("publish_tf", True)
+        self.publish_tf = self.get_parameter("publish_tf").value
 
         # State tracking
         self.encoder_lock = Lock()
@@ -748,10 +752,11 @@ class HiwonderMotorDriver(Node):
         tf_msg.transform.translation.z = 0.0
         tf_msg.transform.rotation = odom_msg.pose.pose.orientation
 
-        try:
-            self.tf_broadcaster.sendTransform(tf_msg)
-        except Exception:
-            return
+        if self.publish_tf:
+            try:
+                self.tf_broadcaster.sendTransform(tf_msg)
+            except Exception:
+                return
 
     def battery_callback(self):
         """Read and publish battery voltage from motor controller"""

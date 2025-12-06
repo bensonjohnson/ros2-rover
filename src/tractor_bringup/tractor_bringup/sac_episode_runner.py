@@ -35,10 +35,10 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
-from tractor_bringup.occupancy_processor import DepthToOccupancy, LocalMapper
+from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper
 
 # ROS2 Messages
-from sensor_msgs.msg import Image, Imu, JointState, MagneticField
+from sensor_msgs.msg import Image, Imu, JointState, MagneticField, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Bool
 from geometry_msgs.msg import Twist
@@ -87,6 +87,7 @@ class SACEpisodeRunner(Node):
         # State
         self._latest_rgb = None # Keep for debug/logging if needed, but not used for model
         self._latest_depth = None
+        self._latest_scan = None
         self._latest_grid = None # (64, 64) uint8
         self._latest_odom = None
         self._latest_imu = None
@@ -155,6 +156,7 @@ class SACEpisodeRunner(Node):
             obstacle_height_thresh=0.1,
             floor_thresh=0.08
         )
+        self.scan_processor = ScanToOccupancy(grid_size=64, grid_range=3.0)
         self.local_mapper = LocalMapper(map_size=256, decay_rate=0.995)
         self._setup_subscribers()
         self._setup_publishers()
@@ -179,7 +181,13 @@ class SACEpisodeRunner(Node):
     def _setup_subscribers(self):
         # self.create_subscription(Image, '/camera/camera/color/image_raw', self._rgb_cb, qos_profile_sensor_data)
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
-        self.create_subscription(Odometry, '/odom', self._odom_cb, 10)
+        self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
+        
+        # Odometry: Prefer RF2O if available, otherwise Wheel Odom
+        # We subscribe to both but update logic will prioritize
+        self.create_subscription(Odometry, '/odom', self._wheel_odom_cb, 10)
+        self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
+
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data)
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
@@ -204,7 +212,16 @@ class SACEpisodeRunner(Node):
         # But doing it here ensures we always have fresh grid
         # Let's do it in control loop to save CPU if inference is slower than camera
         pass
-    def _odom_cb(self, msg): 
+    def _scan_cb(self, msg):
+        self._latest_scan = msg
+        
+    def _wheel_odom_cb(self, msg):
+        # Fallback if no RF2O
+        if not hasattr(self, '_last_rf2o_time') or (time.time() - self._last_rf2o_time > 0.5):
+            self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
+            
+    def _rf2o_odom_cb(self, msg):
+        self._last_rf2o_time = time.time()
         self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
     def _imu_cb(self, msg): 
         self._latest_imu = (
@@ -318,7 +335,26 @@ class SACEpisodeRunner(Node):
         # 1. Prepare Inputs
         # Process Depth -> Occupancy Grid
         t0 = time.time()
-        grid = self.occupancy_processor.process(self._latest_depth)
+        
+        # 1a. Depth Grid
+        grid_depth = self.occupancy_processor.process(self._latest_depth)
+        
+        # 1b. LiDAR Grid
+        grid_scan = None
+        if self._latest_scan:
+            grid_scan = self.scan_processor.process(
+                self._latest_scan.ranges, 
+                self._latest_scan.angle_min, 
+                self._latest_scan.angle_increment
+            )
+            
+        # 1c. Fusion (Max)
+        if grid_scan is not None:
+            # Fuse: 255 wins over 128 wins over 0
+            grid = np.maximum(grid_depth, grid_scan)
+        else:
+            grid = grid_depth
+            
         self._latest_grid = grid
         
         if self._latest_odom and self._prev_odom_update:

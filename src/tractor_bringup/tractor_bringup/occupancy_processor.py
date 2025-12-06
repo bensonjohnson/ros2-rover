@@ -141,6 +141,97 @@ class DepthToOccupancy:
         
         return grid
 
+class ScanToOccupancy:
+    """
+    Vectorized processor to convert 2D Laser Scan to a top-down occupancy grid.
+    
+    Logic:
+    1. Filter invalid ranges (0 or > max_range).
+    2. Convert Polar (range, angle) to Cartesian (x, y) in Robot Frame.
+    3. Project to 64x64 grid to match DepthToOccupancy.
+    """
+    def __init__(self, 
+                 grid_size=64, 
+                 grid_range=3.0, # meters
+                 resolution=0.046875 # meters/pixel
+                 ):
+        self.grid_size = grid_size
+        self.grid_range = grid_range
+        self.resolution = resolution
+        
+        # Pre-compute grid center offset
+        # Grid: 64x64. Robot at (63, 32).
+        # We need to map meters (x, y) to pixels (r, c).
+        # Pixel coordinates
+        # r = 63 - (x / resolution)
+        # c = 32 - (y / resolution)
+
+    def process(self, ranges, angle_min, angle_increment):
+        """
+        Args:
+            ranges: List or numpy array of float ranges
+            angle_min: float
+            angle_increment: float
+        Returns:
+            grid: (64, 64) numpy array, uint8 (0=unknown, 255=obstacle, 128=free)
+        """
+        ranges = np.array(ranges)
+        
+        # 1. Filter Ranges
+        # Valid: 0.05 < r < grid_range
+        valid_mask = (ranges > 0.05) & (ranges < self.grid_range)
+        
+        # 2. Polar to Cartesian
+        angles = angle_min + np.arange(len(ranges)) * angle_increment
+        
+        x = ranges * np.cos(angles)
+        y = ranges * np.sin(angles)
+        
+        # Apply mask
+        x = x[valid_mask]
+        y = y[valid_mask]
+        
+        if len(x) == 0:
+             return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+        
+        # 3. Project to Grid
+        # Robot is at bottom center (row 63, col 32)
+        # X is Forward (Up in grid) -> -Row
+        # Y is Left (Left in grid) -> +Col? No.
+        # Image convention: Col 0 is Left. Col 63 is Right.
+        # Robot Y+ is Left. So Y > 0 means Col < 32.
+        # Standard:
+        # row = H - 1 - (x / res)
+        # col = W/2 - (y / res)
+        
+        rows = self.grid_size - 1 - (x / self.resolution).astype(np.int32)
+        cols = (self.grid_size // 2) - (y / self.resolution).astype(np.int32)
+        
+        # Clip
+        valid_indices = (rows >= 0) & (rows < self.grid_size) & \
+                        (cols >= 0) & (cols < self.grid_size)
+                        
+        rows = rows[valid_indices]
+        cols = cols[valid_indices]
+        
+        # 4. Create Grid
+        grid = np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+        
+        # Mark obstacles (255)
+        # Use simple marking for now.
+        grid[rows, cols] = 255
+        
+        # Expand obstacles slightly (dilation)
+        kernel = np.ones((3,3), np.uint8)
+        grid = cv2.dilate(grid, kernel, iterations=1)
+        
+        # Ray tracing for free space is expensive in Python.
+        # We'll rely on the "decay" of the LocalMapper to clear dynamic obstacles
+        # or rely on Depth camera for free space clearing.
+        # Alternatively, we could assume everything between robot and hit is free?
+        # For now, let's just mark obstacles.
+        
+        return grid
 
 class LocalMapper:
     """
