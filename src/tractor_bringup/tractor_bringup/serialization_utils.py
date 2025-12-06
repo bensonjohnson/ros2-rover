@@ -19,7 +19,8 @@ def serialize_batch(batch: dict) -> bytes:
 
     Args:
         batch: Dictionary containing:
-            - grid: np.array of shape (N, 64, 64) uint8
+            - grid: np.array of shape (N, 4, 128, 128) float32
+                    4 channels: distance, exploration, confidence, height
             - proprio: np.array of shape (N, 10) float32
             - actions: np.array of shape (N, 2) float32
             - rewards: np.array of shape (N,) float32

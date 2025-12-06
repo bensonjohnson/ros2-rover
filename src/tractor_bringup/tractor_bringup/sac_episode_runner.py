@@ -35,7 +35,7 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
-from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper
+from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField, LaserScan
@@ -149,13 +149,17 @@ class SACEpisodeRunner(Node):
 
         # ROS2 Setup
         self.bridge = CvBridge()
-        self.occupancy_processor = DepthToOccupancy(
+        # New multi-channel occupancy processor for enhanced SAC training
+        self.occupancy_processor = MultiChannelOccupancy(
+            grid_size=128,  # Increased from 64 for better resolution
+            range_m=4.0,
             width=424, height=240,
-            camera_height=0.123, # Calculated from URDF: 0.029 + 0.08025 + 0.01375
+            camera_height=0.123,  # Calculated from URDF: 0.029 + 0.08025 + 0.01375
             camera_tilt_deg=0.0,
             obstacle_height_thresh=0.1,
             floor_thresh=0.08
         )
+        # Keep old processors for backward compatibility (can be removed later)
         self.scan_processor = ScanToOccupancy(grid_size=64, grid_range=3.0)
         self.local_mapper = LocalMapper(map_size=256, decay_rate=0.995)
         self._setup_subscribers()
@@ -304,59 +308,48 @@ class SACEpisodeRunner(Node):
         return min_dist_all, mean_side_dist, target
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
-        """LiDAR-Enhanced Reward Function."""
+        """
+        Simplified reward with 5 clear components:
+        1. Forward progress scaled by safety
+        2. Collision penalty
+        3. Exploration bonus (implicit via exploration history in observation)
+        4. Smooth control penalty
+        5. Idle penalty
+        """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward Progress with Safety Scaling
-        # Learn to go fast ONLY when safe (min_dist > 0.5m)
-        forward_vel = max(0.0, linear_vel)
-        
-        # Safety Factor: 0.0 at 0.2m, 1.0 at 0.6m
-        safety_factor = np.clip((min_lidar_dist - 0.2) / 0.4, 0.0, 1.0)
-        
-        if forward_vel > 0.01:
-            # Reward speed, scaled by how safe it is
-            speed_reward = (forward_vel / target_speed) * safety_factor * 1.2
-            reward += speed_reward
+        # Extract metrics
+        min_dist = min_lidar_dist
+
+        # 1. Forward progress with safety scaling (primary objective)
+        safety_factor = np.clip((min_dist - 0.2) / 0.4, 0.0, 1.0)  # 0 at 0.2m, 1 at 0.6m
+        if linear_vel > 0.01:
+            speed_ratio = linear_vel / target_speed
+            reward += speed_ratio * safety_factor * 2.0  # Max +2.0
         else:
-            # Idle penalty
-            reward -= 0.3
+            reward -= 0.5  # Idle penalty
 
-        # 2. Safety Bubble Penalty (Global)
-        # Severe penalty for getting too close to ANYTHING (approx < 25cm)
-        if min_lidar_dist < 0.25:
-            # Exponential penalty
-            prox_pen = 1.0 - (min_lidar_dist / 0.25)
-            reward -= prox_pen * 0.8
-            
-        # 3. Backward Penalty
-        if linear_vel < -0.01:
-            reward -= abs(linear_vel / target_speed) * 0.8
-
-        # 4. Collision
+        # 2. Collision penalty (terminal signal)
         if collision or self._safety_override:
-            reward -= 2.0 
+            reward -= 5.0
+            return np.clip(reward, -5.0, 5.0)  # Early return
 
-        # 5. Alignment / Gap Following
-        # Reward pointing towards empty space
-        # alignment_error = abs(action[1] - self._target_heading) ... handled in main loop?
-        # Let's use the stored target heading
-        alignment_error = abs(action[1] - self._target_heading)
-        if forward_vel > 0.1:
-            reward += (0.5 - alignment_error) * 0.4
+        # 3. Exploration bonus (new grid cells)
+        # This is handled by exploration_map in observation
+        # Implicit via Q-function learning: new areas → more future rewards
 
-        # 6. Smoothness & Stability
-        # Penalize jerky turns
-        if abs(angular_vel) > 0.5:
-             reward -= abs(angular_vel) * 0.2
-             
-        # Corner Anti-Thrash:
-        # If in tight space (low side clearance), punish rotation heavily
-        if side_clearance < 0.4 and abs(angular_vel) > 0.2:
-            reward -= abs(angular_vel) * 1.0 # Stop spinning in narrow corridors!
+        # 4. Smooth control (anti-jerk)
+        angular_change = abs(action[1] - self._prev_action[1])
+        if angular_change > 0.5:  # Large steering jerk
+            reward -= angular_change * 0.3
 
-        return np.clip(reward, -1.0, 1.0)
+        # 5. Proximity penalty (gradual, not cliff)
+        if min_dist < 0.3:
+            proximity_penalty = (0.3 - min_dist) / 0.3  # 0 to 1
+            reward -= proximity_penalty * 1.0
+
+        return np.clip(reward, -5.0, 5.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.
@@ -450,113 +443,59 @@ class SACEpisodeRunner(Node):
             return
 
         # 1. Prepare Inputs
-        # Process Depth -> Occupancy Grid
+        # Process Depth + LiDAR -> Multi-Channel Occupancy Grid
         t0 = time.time()
+
+        # Get robot pose for exploration history
+        robot_pose = None
+        if self._latest_odom:
+            x, y, _, yaw = self._latest_odom
+            robot_pose = (x, y, yaw)
+
+        # NEW: Use MultiChannelOccupancy processor
+        # Returns: (4, 128, 128) float32 array, already normalized to [0, 1]
+        grid_multichannel = self.occupancy_processor.process(
+            depth_img=self._latest_depth,
+            laser_scan=self._latest_scan,
+            robot_pose=robot_pose
+        )
+
+        # Grid Input for Model: (1, 4, 128, 128)
+        grid_input = grid_multichannel[None, ...]  # Add batch dimension
+
+        # For compatibility with visualization/logging, extract channel 0 (distance)
+        # and convert back to uint8 format (0-255)
+        grid_for_viz = (grid_multichannel[0] * 255).astype(np.uint8)
+        self._latest_grid = grid_for_viz 
         
-        # 1a. Depth Grid
-        grid_depth = self.occupancy_processor.process(self._latest_depth)
-        
-        # 1b. LiDAR Grid
-        grid_scan = None
-        if self._latest_scan:
-            grid_scan = self.scan_processor.process(
-                self._latest_scan.ranges, 
-                self._latest_scan.angle_min, 
-                self._latest_scan.angle_increment
-            )
-            
-        # 1c. Fusion (Max)
-        if grid_scan is not None:
-            # Fuse: 255 wins over 128 wins over 0
-            grid = np.maximum(grid_depth, grid_scan)
-        else:
-            grid = grid_depth
-            
-        self._latest_grid = grid
-        
-        if self._latest_odom and self._prev_odom_update:
-            # Calculate ODometry Delta
-            # Odom: (x, y, lin, ang)
-            px, py, _, pyaw = self._prev_odom_update
-            cx, cy, _, cyaw = self._latest_odom
-            
-            # Global delta
-            gdx = cx - px
-            gdy = cy - py
-            
-            # Rotation delta: Prefer Odom (RF2O) over IMU now, as IMU/Mag is noisy
-            # and RF2O is very accurate for relative rotation.
-            dtheta = cyaw - pyaw
-            dtheta = (dtheta + math.pi) % (2 * math.pi) - math.pi
-            
-            # Rotate into ROBOT frame (at previous timestamp)
-            # Robot was at 'pyaw'
-            # dx_r = gdx * cos(-pyaw) - gdy * sin(-pyaw)
-            # dy_r = gdx * sin(-pyaw) + gdy * cos(-pyaw)
-            c = math.cos(-pyaw)
-            s = math.sin(-pyaw)
-            
-            dx_r = gdx * c - gdy * s
-            dy_r = gdx * s + gdy * c
-            
-            self.local_mapper.update(grid, dx_r, dy_r, dtheta)
-        else:
-            # First frame or no odom
-            self.local_mapper.update(grid, 0.0, 0.0, 0.0)
-            
-        self._prev_odom_update = self._latest_odom
-        self._prev_imu_yaw = self._latest_imu_yaw
-        
-        # Get stitched input for model
-        grid_stitched = self.local_mapper.get_model_input()
-        self._latest_grid = grid_stitched # Update visualization/logging to use stitched map
-        
-        # Grid Input for Model: (1, 1, 64, 64)
-        # We send UINT8 to server (efficiency), but Model needs FLOAT (0-1)
-        # So we normalize JUST for local inference, but store/send the raw uint8
-        
-        # Local Inference (Model expects 0-1 float)
-        grid_normalized = grid_stitched.astype(np.float32) / 255.0
-        grid_input = grid_normalized[None, None, ...] 
-        
-        # Gap Following Analysis (using Grid now!)
-        
-        # Simple heuristic: Sum of (is_free) - Sum of (is_occupied * penalty)
-        free_mask = (grid == 128).astype(np.float32)
-        occ_mask = (grid == 255).astype(np.float32)
-        
-        col_scores = np.sum(free_mask, axis=0) - np.sum(occ_mask * 5, axis=0)
-        
+        # Gap Following Analysis (for heuristic warmup and reward)
+        # Use distance channel for gap finding
+        distance_channel = grid_multichannel[0]  # (128, 128) normalized [0, 1]
+
+        # Simple heuristic: find column with maximum average distance
+        # Higher values = more free space
+        col_scores = np.mean(distance_channel, axis=0)
+
         # Smooth scores
-        col_scores = np.convolve(col_scores, np.ones(5)/5, mode='same')
-        
+        col_scores = np.convolve(col_scores, np.ones(7)/7, mode='same')
+
         best_col = np.argmax(col_scores)
 
-        # Map col 0..63 to heading -1..1
-        # With corrected grid: Col 0 = LEFT, Col 63 = RIGHT, Col 32 = CENTER
+        # Map col 0..127 to heading -1..1
+        # Col 0 = LEFT, Col 127 = RIGHT, Col 64 = CENTER
         # Heading: +1.0 = turn left, -1.0 = turn right
-        # Col 0 (left) → +1.0, Col 32 (center) → 0.0, Col 63 (right) → -1.0
-        self._target_heading = (32 - best_col) / 32.0
-        
-        # Calculate min_forward_dist from grid (for reward function)
-        # Scan center strip (width ~30cm -> 6 pixels)
-        # Grid resolution: 3.0m / 64px = 0.047m/px
-        # Center col is 32. 32 +/- 3 = 29..35
-        center_strip = grid[:, 29:35]
-        # Find obstacles (255)
-        obs_rows, _ = np.where(center_strip == 255)
-        
-        if len(obs_rows) > 0:
-            # Closest obstacle is the one with largest row index (closest to bottom/robot)
-            closest_obs_row = np.max(obs_rows)
-            # Distance in pixels
-            dist_px = 63 - closest_obs_row
-            # Distance in meters
-            self._min_forward_dist = dist_px * (3.0 / 64.0)
-        else:
-            self._min_forward_dist = 3.0 # Max range
-            
-        # Proprioception (9 values: 6-axis IMU + min_dist + prev_action)
+        self._target_heading = (64 - best_col) / 64.0
+
+        # Calculate min_forward_dist from distance channel (for reward function)
+        # Scan center strip (width ~30cm -> ~10 pixels at 3.125cm/pixel)
+        # Center col is 64. 64 +/- 5 = 59..69
+        center_strip = distance_channel[:, 59:69]
+        # Find minimum distance in front (inverse of distance = obstacle proximity)
+        # Distance channel: 1.0 = far (free), 0.0 = close (occupied)
+        min_normalized_dist = np.min(center_strip)
+        # Convert back to meters (denormalize)
+        self._min_forward_dist = min_normalized_dist * 4.0  # range_m = 4.0
+
         # Get IMU data
         if self._latest_imu:
             ax, ay, az, gx, gy, gz = self._latest_imu
@@ -565,18 +504,18 @@ class SACEpisodeRunner(Node):
 
         # LiDAR Metrics for Reward
         lidar_min, lidar_sides, gap_heading = self._process_lidar_metrics(self._latest_scan)
-        
+
         # Update target heading for Gap Follower (Warmup)
-        # But ALSO usage in reward function!
         self._target_heading = gap_heading
-        
-        # Construct 11D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, gap_heading, prev_lin, prev_ang]
+
+        # Construct 10D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
+        # Note: gap_heading removed - now implicit in exploration history channel
         proprio = np.array([[
-            ax, ay, az, gx, gy, gz, 
+            ax, ay, az, gx, gy, gz,
             self._min_forward_dist,     # Min Depth (Front)
             lidar_min,                  # Min LiDAR (360 Safety)
-            gap_heading,                # Gap Heading
-            self._prev_action[0], self._prev_action[1]
+            self._prev_action[0],       # Previous linear action
+            self._prev_action[1]        # Previous angular action
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)

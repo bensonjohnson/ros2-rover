@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from scipy import ndimage
 
 class DepthToOccupancy:
     """
@@ -390,5 +391,486 @@ class LocalMapper:
         end_col = start_col + 64 # 160
         
         crop = self.global_map[start_row:end_row, start_col:end_col]
-        
+
         return crop.astype(np.uint8)
+
+
+class MultiChannelOccupancy:
+    """
+    Generates 4-channel 128x128 observation grid for enhanced SAC training:
+    - Channel 0: Distance to nearest obstacle [0.0, 1.0] normalized
+    - Channel 1: Exploration history [0.0, 1.0] with decay
+    - Channel 2: Obstacle confidence [0.0, 1.0] sensor reliability
+    - Channel 3: Terrain height [0.0, 1.0] normalized from ground plane
+
+    Improvements over binary 64x64 grid:
+    - 4x higher resolution (3.125 cm/pixel vs 4.69 cm/pixel)
+    - Continuous distance values preserve gradient information for Q-function
+    - Exploration history provides temporal context without LSTM
+    - Confidence channel handles sensor uncertainty
+    """
+
+    def __init__(self,
+                 grid_size=128,
+                 range_m=4.0,
+                 # Camera parameters (RealSense D435i)
+                 width=424,
+                 height=240,
+                 fx=386.0,
+                 fy=386.0,
+                 cx=212.0,
+                 cy=120.0,
+                 camera_height=0.123,
+                 camera_tilt_deg=0.0,
+                 # Thresholds
+                 obstacle_height_thresh=0.1,
+                 floor_thresh=0.08):
+
+        self.grid_size = grid_size
+        self.range_m = range_m
+        self.resolution = range_m / grid_size  # 3.125 cm/pixel for 128x128
+
+        # Camera intrinsics
+        self.width = width
+        self.height = height
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.camera_height = camera_height
+        self.camera_tilt = np.radians(camera_tilt_deg)
+        self.obstacle_thresh = obstacle_height_thresh
+        self.floor_thresh = floor_thresh
+
+        # Pre-compute unprojection matrices
+        u, v = np.meshgrid(np.arange(width), np.arange(height))
+        self.x_mult = (u - cx) / fx
+        self.y_mult = (v - cy) / fy
+
+        # Exploration history tracking (larger persistent map)
+        self.exploration_map = np.zeros((512, 512), dtype=np.float32)
+        self.decay_rate = 0.998  # Slower decay for larger map
+        self.exploration_center = 256  # Robot always at center
+
+        # For odometry-based stitching
+        self.last_pose = None  # (x, y, theta)
+
+    def process(self, depth_img, laser_scan, robot_pose=None):
+        """
+        Process sensor data into 4-channel observation.
+
+        Args:
+            depth_img: (H, W) numpy array, uint16 (mm) or float32 (meters)
+            laser_scan: LaserScan message or dict with 'ranges', 'angle_min', 'angle_increment'
+            robot_pose: Optional (x, y, theta) for odometry stitching
+
+        Returns:
+            obs: (4, 128, 128) float32 array, normalized to [0, 1]
+        """
+        # Channel 0: Continuous distance map
+        distance_grid = self._compute_distance_field(depth_img, laser_scan)
+
+        # Channel 1: Exploration history
+        if robot_pose is not None:
+            self._update_exploration_history(robot_pose)
+        history_crop = self._get_centered_crop(self.exploration_map, self.exploration_center, self.grid_size)
+
+        # Channel 2: Obstacle confidence
+        confidence_grid = self._compute_confidence(depth_img, laser_scan)
+
+        # Channel 3: Terrain height
+        height_grid = self._compute_terrain_height(depth_img)
+
+        # Stack channels and return
+        obs = np.stack([distance_grid, history_crop, confidence_grid, height_grid], axis=0)
+        return obs.astype(np.float32)
+
+    def _compute_distance_field(self, depth_img, laser_scan):
+        """
+        Convert depth + LiDAR to continuous distance map.
+        Returns grid where each cell contains distance to nearest obstacle.
+        Normalized to [0, 1] where 0 = obstacle at 0m, 1 = free space at range_m.
+        """
+        # Initialize with maximum distance
+        grid = np.full((self.grid_size, self.grid_size), self.range_m, dtype=np.float32)
+
+        # Process depth camera
+        if depth_img is not None and depth_img.size > 0:
+            # Handle uint16 input
+            if depth_img.dtype == np.uint16:
+                depth = depth_img.astype(np.float32) * 0.001
+            else:
+                depth = depth_img
+
+            # Unproject to 3D camera frame
+            z_c = depth
+            x_c = z_c * self.x_mult
+            y_c = z_c * self.y_mult
+
+            # Flatten for processing
+            points_c = np.stack([x_c, y_c, z_c], axis=-1).reshape(-1, 3)
+
+            # Filter valid depth
+            valid_mask = (points_c[:, 2] > 0.1) & (points_c[:, 2] < self.range_m)
+            points_c = points_c[valid_mask]
+
+            if len(points_c) > 0:
+                # Transform to rover frame
+                c = np.cos(self.camera_tilt)
+                s = np.sin(self.camera_tilt)
+
+                y_c_rot = points_c[:, 1] * c - points_c[:, 2] * s
+                z_c_rot = points_c[:, 1] * s + points_c[:, 2] * c
+                x_c_rot = points_c[:, 0]
+
+                x_r = z_c_rot
+                y_r = -x_c_rot
+                z_r = -y_c_rot + self.camera_height
+
+                # Only consider obstacles (above ground)
+                is_obstacle = z_r > self.obstacle_thresh
+
+                if np.any(is_obstacle):
+                    # Project to grid
+                    scale = self.grid_size / self.range_m
+                    grid_rows = self.grid_size - 1 - (x_r[is_obstacle] * scale).astype(np.int32)
+                    grid_cols = (self.grid_size // 2) - (y_r[is_obstacle] * scale).astype(np.int32)
+
+                    # Clip to bounds
+                    valid = (grid_rows >= 0) & (grid_rows < self.grid_size) & \
+                            (grid_cols >= 0) & (grid_cols < self.grid_size)
+
+                    grid_rows = grid_rows[valid]
+                    grid_cols = grid_cols[valid]
+                    depths = z_c_rot[is_obstacle][valid]
+
+                    # Keep minimum distance per cell
+                    for i in range(len(grid_rows)):
+                        r, c, d = grid_rows[i], grid_cols[i], depths[i]
+                        grid[r, c] = min(grid[r, c], d)
+
+        # Process LiDAR scan
+        if laser_scan is not None:
+            if hasattr(laser_scan, 'ranges'):
+                ranges = np.array(laser_scan.ranges)
+                angle_min = laser_scan.angle_min
+                angle_increment = laser_scan.angle_increment
+            else:
+                ranges = np.array(laser_scan['ranges'])
+                angle_min = laser_scan['angle_min']
+                angle_increment = laser_scan['angle_increment']
+
+            # Filter valid ranges
+            valid_mask = (ranges > 0.05) & (ranges < self.range_m)
+
+            if np.any(valid_mask):
+                # Polar to Cartesian
+                angles = angle_min + np.arange(len(ranges)) * angle_increment
+                x = ranges * np.cos(angles)
+                y = ranges * np.sin(angles)
+
+                # Apply mask
+                x = x[valid_mask]
+                y = y[valid_mask]
+                ranges = ranges[valid_mask]
+
+                # Project to grid
+                scale = self.grid_size / self.range_m
+                rows = self.grid_size - 1 - (x * scale).astype(np.int32)
+                cols = (self.grid_size // 2) - (y * scale).astype(np.int32)
+
+                # Clip to bounds
+                valid = (rows >= 0) & (rows < self.grid_size) & \
+                        (cols >= 0) & (cols < self.grid_size)
+
+                rows = rows[valid]
+                cols = cols[valid]
+                ranges = ranges[valid]
+
+                # Keep minimum distance
+                for i in range(len(rows)):
+                    r, c, d = rows[i], cols[i], ranges[i]
+                    grid[r, c] = min(grid[r, c], d)
+
+        # Apply distance transform for smooth gradients
+        # First create binary obstacle mask (obstacles within 0.5m)
+        occupied = grid < 0.5
+
+        # Compute Euclidean distance transform
+        if np.any(occupied):
+            distance_grid = ndimage.distance_transform_edt(~occupied) * self.resolution
+        else:
+            distance_grid = np.full_like(grid, self.range_m)
+
+        # Normalize to [0, 1] for network
+        distance_grid = np.clip(distance_grid / self.range_m, 0.0, 1.0)
+
+        return distance_grid
+
+    def _update_exploration_history(self, robot_pose):
+        """
+        Update persistent exploration map with current position.
+
+        Args:
+            robot_pose: (x, y, theta) in meters and radians
+        """
+        # Apply decay to entire map
+        self.exploration_map *= self.decay_rate
+
+        # Handle odometry updates
+        if self.last_pose is not None:
+            # Compute delta
+            dx = robot_pose[0] - self.last_pose[0]
+            dy = robot_pose[1] - self.last_pose[1]
+            dtheta = robot_pose[2] - self.last_pose[2]
+
+            # Shift map (inverse motion)
+            dx_px = dx / self.resolution
+            dy_px = dy / self.resolution
+
+            # Create affine transform
+            M_rot = cv2.getRotationMatrix2D(
+                (self.exploration_center, self.exploration_center),
+                -np.degrees(dtheta),
+                1.0
+            )
+            M_rot[0, 2] += dy_px  # Col shift
+            M_rot[1, 2] += dx_px  # Row shift
+
+            # Apply warp
+            self.exploration_map = cv2.warpAffine(
+                self.exploration_map,
+                M_rot,
+                (512, 512),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0.0
+            )
+
+        self.last_pose = robot_pose
+
+        # Mark current position as visited
+        grid_x, grid_y = self.exploration_center, self.exploration_center
+        radius = 8  # ~25cm radius at 3.125cm/pixel
+
+        # Create circular mask
+        y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
+        mask = x**2 + y**2 <= radius**2
+
+        # Mark as visited
+        y_min = max(0, grid_y - radius)
+        y_max = min(512, grid_y + radius + 1)
+        x_min = max(0, grid_x - radius)
+        x_max = min(512, grid_x + radius + 1)
+
+        mask_y_min = radius - (grid_y - y_min)
+        mask_y_max = radius + (y_max - grid_y)
+        mask_x_min = radius - (grid_x - x_min)
+        mask_x_max = radius + (x_max - grid_x)
+
+        self.exploration_map[y_min:y_max, x_min:x_max][
+            mask[mask_y_min:mask_y_max, mask_x_min:mask_x_max]
+        ] = 1.0
+
+    def _compute_confidence(self, depth_img, laser_scan):
+        """
+        Compute obstacle confidence map.
+        Higher confidence where both depth and LiDAR agree.
+        Normalized to [0, 1].
+        """
+        confidence = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+
+        # Depth camera contributes 0.5
+        if depth_img is not None and depth_img.size > 0:
+            if depth_img.dtype == np.uint16:
+                depth = depth_img.astype(np.float32) * 0.001
+            else:
+                depth = depth_img
+
+            # Valid depth mask (simple version: non-zero)
+            valid_depth = (depth > 0.1) & (depth < self.range_m)
+
+            if np.any(valid_depth):
+                # Project valid regions to grid and mark confidence
+                z_c = depth
+                x_c = z_c * self.x_mult
+                y_c = z_c * self.y_mult
+
+                points_c = np.stack([x_c, y_c, z_c], axis=-1).reshape(-1, 3)
+                valid_mask = (points_c[:, 2] > 0.1) & (points_c[:, 2] < self.range_m)
+                points_c = points_c[valid_mask]
+
+                if len(points_c) > 0:
+                    # Transform to rover frame
+                    c = np.cos(self.camera_tilt)
+                    s = np.sin(self.camera_tilt)
+
+                    y_c_rot = points_c[:, 1] * c - points_c[:, 2] * s
+                    z_c_rot = points_c[:, 1] * s + points_c[:, 2] * c
+                    x_c_rot = points_c[:, 0]
+
+                    x_r = z_c_rot
+                    y_r = -x_c_rot
+
+                    # Project to grid
+                    scale = self.grid_size / self.range_m
+                    grid_rows = self.grid_size - 1 - (x_r * scale).astype(np.int32)
+                    grid_cols = (self.grid_size // 2) - (y_r * scale).astype(np.int32)
+
+                    valid = (grid_rows >= 0) & (grid_rows < self.grid_size) & \
+                            (grid_cols >= 0) & (grid_cols < self.grid_size)
+
+                    grid_rows = grid_rows[valid]
+                    grid_cols = grid_cols[valid]
+
+                    # Mark with confidence 0.5
+                    confidence[grid_rows, grid_cols] = 0.5
+
+        # LiDAR contributes additional 0.5
+        if laser_scan is not None:
+            if hasattr(laser_scan, 'ranges'):
+                ranges = np.array(laser_scan.ranges)
+                angle_min = laser_scan.angle_min
+                angle_increment = laser_scan.angle_increment
+            else:
+                ranges = np.array(laser_scan['ranges'])
+                angle_min = laser_scan['angle_min']
+                angle_increment = laser_scan['angle_increment']
+
+            valid_mask = (ranges > 0.05) & (ranges < self.range_m)
+
+            if np.any(valid_mask):
+                angles = angle_min + np.arange(len(ranges)) * angle_increment
+                x = ranges * np.cos(angles)
+                y = ranges * np.sin(angles)
+
+                x = x[valid_mask]
+                y = y[valid_mask]
+
+                scale = self.grid_size / self.range_m
+                rows = self.grid_size - 1 - (x * scale).astype(np.int32)
+                cols = (self.grid_size // 2) - (y * scale).astype(np.int32)
+
+                valid = (rows >= 0) & (rows < self.grid_size) & \
+                        (cols >= 0) & (cols < self.grid_size)
+
+                rows = rows[valid]
+                cols = cols[valid]
+
+                # Add 0.5 confidence (max 1.0 when both sensors agree)
+                confidence[rows, cols] = np.minimum(confidence[rows, cols] + 0.5, 1.0)
+
+        return confidence
+
+    def _compute_terrain_height(self, depth_img):
+        """
+        Compute terrain height map relative to ground plane.
+        Normalized to [0, 1] where 0 = ground level, 1 = max obstacle height.
+        """
+        height_grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+
+        if depth_img is None or depth_img.size == 0:
+            return height_grid
+
+        # Handle uint16 input
+        if depth_img.dtype == np.uint16:
+            depth = depth_img.astype(np.float32) * 0.001
+        else:
+            depth = depth_img
+
+        # Unproject to 3D
+        z_c = depth
+        x_c = z_c * self.x_mult
+        y_c = z_c * self.y_mult
+
+        points_c = np.stack([x_c, y_c, z_c], axis=-1).reshape(-1, 3)
+
+        # Filter valid depth
+        valid_mask = (points_c[:, 2] > 0.1) & (points_c[:, 2] < self.range_m)
+        points_c = points_c[valid_mask]
+
+        if len(points_c) == 0:
+            return height_grid
+
+        # Transform to rover frame
+        c = np.cos(self.camera_tilt)
+        s = np.sin(self.camera_tilt)
+
+        y_c_rot = points_c[:, 1] * c - points_c[:, 2] * s
+        z_c_rot = points_c[:, 1] * s + points_c[:, 2] * c
+        x_c_rot = points_c[:, 0]
+
+        x_r = z_c_rot
+        y_r = -x_c_rot
+        z_r = -y_c_rot + self.camera_height
+
+        # Project to grid
+        scale = self.grid_size / self.range_m
+        grid_rows = self.grid_size - 1 - (x_r * scale).astype(np.int32)
+        grid_cols = (self.grid_size // 2) - (y_r * scale).astype(np.int32)
+
+        # Clip to bounds
+        valid = (grid_rows >= 0) & (grid_rows < self.grid_size) & \
+                (grid_cols >= 0) & (grid_cols < self.grid_size)
+
+        grid_rows = grid_rows[valid]
+        grid_cols = grid_cols[valid]
+        heights = z_r[valid]
+
+        # Keep maximum height per cell
+        for i in range(len(grid_rows)):
+            r, c, h = grid_rows[i], grid_cols[i], heights[i]
+            height_grid[r, c] = max(height_grid[r, c], h)
+
+        # Normalize to [0, 1] range
+        # Floor level = 0, max obstacle (0.5m) = 1.0
+        height_grid = np.clip((height_grid + 0.1) / 0.6, 0.0, 1.0)
+
+        return height_grid
+
+    def _get_centered_crop(self, map_array, center, crop_size):
+        """
+        Extract centered crop from map with robot at bottom-center.
+
+        Args:
+            map_array: Large persistent map
+            center: Robot position in map
+            crop_size: Output grid size
+
+        Returns:
+            crop: (crop_size, crop_size) array
+        """
+        # Robot should be at bottom-center of crop
+        # For 128x128 crop, robot at row 127, col 64
+        robot_row_in_crop = crop_size - 1
+        robot_col_in_crop = crop_size // 2
+
+        # Calculate map region
+        start_row = center - robot_row_in_crop
+        end_row = start_row + crop_size
+        start_col = center - robot_col_in_crop
+        end_col = start_col + crop_size
+
+        # Handle boundaries
+        if start_row < 0 or end_row > map_array.shape[0] or \
+           start_col < 0 or end_col > map_array.shape[1]:
+            # Create padded crop
+            crop = np.zeros((crop_size, crop_size), dtype=map_array.dtype)
+
+            # Calculate valid region
+            src_r_start = max(0, start_row)
+            src_r_end = min(map_array.shape[0], end_row)
+            src_c_start = max(0, start_col)
+            src_c_end = min(map_array.shape[1], end_col)
+
+            dst_r_start = src_r_start - start_row
+            dst_r_end = dst_r_start + (src_r_end - src_r_start)
+            dst_c_start = src_c_start - start_col
+            dst_c_end = dst_c_start + (src_c_end - src_c_start)
+
+            crop[dst_r_start:dst_r_end, dst_c_start:dst_c_end] = \
+                map_array[src_r_start:src_r_end, src_c_start:src_c_end]
+
+            return crop
+        else:
+            return map_array[start_row:end_row, start_col:end_col].copy()

@@ -17,7 +17,8 @@
       "Bash(git push)",
       "Bash(pgrep:*)",
       "Bash(find:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

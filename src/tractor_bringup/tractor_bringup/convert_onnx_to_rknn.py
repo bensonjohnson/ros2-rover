@@ -33,11 +33,11 @@ import numpy as np
 
 def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
     """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
-    
+
     Args:
         calibration_dir: Directory containing calibration_XXXX.npz files
         max_samples: Maximum number of samples to use
-        
+
     Returns:
         Path to the generated dataset.txt file
     """
@@ -48,43 +48,51 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
     ])[:max_samples]
 
     print(f"Preparing calibration dataset from {len(calibration_files)} samples...")
-    
+
     # Create a temporary directory for calibration artifacts
     # We use a fixed path inside calibration_dir to avoid filling /tmp
     dataset_dir = os.path.join(calibration_dir, "rknn_dataset")
     os.makedirs(dataset_dir, exist_ok=True)
-    
+
     dataset_txt_path = os.path.join(dataset_dir, "dataset.txt")
-    
+
     valid_samples = 0
     with open(dataset_txt_path, 'w') as f:
         for i, file_path in enumerate(calibration_files):
             try:
                 data = np.load(file_path)
-                grid = data['grid']  # (64, 64) uint8
-                proprio = data['proprio']  # (7,) float32
+                grid = data['grid']  # (4, 128, 128) float32 - multi-channel occupancy
+                proprio = data['proprio']  # (10,) float32
+
+                # Validate shapes
+                if grid.shape != (4, 128, 128):
+                    print(f"⚠ Warning: Expected grid shape (4, 128, 128), got {grid.shape} in {file_path}")
+                    continue
+                if proprio.shape != (10,):
+                    print(f"⚠ Warning: Expected proprio shape (10,), got {proprio.shape} in {file_path}")
+                    continue
 
                 # Sanitize Proprio
                 proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
 
-                # Grid to NCHW
-                # Grid is (H, W), add batch and channel dims -> (1, 1, 64, 64)
-                grid_nchw = grid[None, None, ...] 
-                
-                # Proprio
-                proprio_batch = proprio[None, ...] # (1, 7)
-                
+                # Add batch dimension
+                # Grid: (4, 128, 128) -> (1, 4, 128, 128)
+                grid_batch = grid[None, ...]
+
+                # Proprio: (10,) -> (1, 10)
+                proprio_batch = proprio[None, ...]
+
                 grid_path = os.path.abspath(os.path.join(dataset_dir, f"grid_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
-                
-                np.save(grid_path, grid_nchw)
-                np.save(proprio_path, proprio_batch)
-                
+
+                np.save(grid_path, grid_batch.astype(np.float32))
+                np.save(proprio_path, proprio_batch.astype(np.float32))
+
                 # Write to dataset.txt (space separated)
                 f.write(f"{grid_path} {proprio_path}\n")
-                
+
                 valid_samples += 1
-                
+
             except Exception as exc:
                 print(f"⚠ Warning: Failed to process {file_path}: {exc}")
                 continue
@@ -150,12 +158,12 @@ def convert_onnx_to_rknn(
             # Disable RKNN normalization - we'll normalize in calibration generator
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
-                [0],                 # Grid (will be pre-normalized to [0,1] in generator)
-                [0] * 11,            # Proprio (11 values: ax, ay, az, gx, gy, gz, min_depth, min_lidar, gap, prev_lin, prev_ang)
+                [0, 0, 0, 0],        # Grid: 4 channels (distance, exploration, confidence, height)
+                [0] * 10,            # Proprio (10 values: ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang)
             ],
             'std_values': [
-                [255],               # Grid: [0, 255] -> [0, 1] (std=255)
-                [1] * 11,            # Proprio (no scaling)
+                [1, 1, 1, 1],        # Grid: already normalized to [0, 1]
+                [1] * 10,            # Proprio (no scaling)
             ],
             'target_platform': target_platform,
             'optimization_level': 3

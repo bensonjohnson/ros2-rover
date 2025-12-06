@@ -58,8 +58,10 @@ class RKNNConverter:
         # Configure RKNN
         print("Configuring RKNN...")
         ret = self.rknn.config(
-            mean_values=[[0, 0, 0], [0], [0]*6],  # RGB: [0, 255]->[0, 1], Depth: [0, 1]->[0, 1], Proprio: No norm
-            std_values=[[255, 255, 255], [1], [1]*6],
+            # Input 0: Grid (4, 128, 128) float32, already normalized to [0, 1]
+            # Input 1: Proprio (10,) float32, various ranges
+            mean_values=[[0, 0, 0, 0], [0]*10],  # Grid: no normalization needed, Proprio: no normalization
+            std_values=[[1, 1, 1, 1], [1]*10],   # Grid: already [0,1], Proprio: as-is
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
             quantized_algorithm='normal',
@@ -108,8 +110,10 @@ class RKNNConverter:
     def _prepare_calibration_dataset(self, num_samples: int = 100):
         """Prepare calibration dataset for quantization.
 
-        The calibration dataset should contain representative RGB-D samples
+        The calibration dataset should contain representative multi-channel grid samples
         collected from the rover during operation.
+
+        Expected format: grid (4, 128, 128) float32 + proprio (10,) float32
         """
         if not self.calibration_data_dir or not os.path.exists(self.calibration_data_dir):
             print(f"WARNING: Calibration data directory not found: {self.calibration_data_dir}")
@@ -117,7 +121,7 @@ class RKNNConverter:
 
         print(f"Loading calibration data from {self.calibration_data_dir}...")
 
-        # Look for .npz files saved by the observation node
+        # Look for .npz files saved by the SAC episode runner
         calibration_files = list(Path(self.calibration_data_dir).glob('*.npz'))
 
         if not calibration_files:
@@ -128,35 +132,20 @@ class RKNNConverter:
         dataset = []
         for i, file_path in enumerate(calibration_files[:num_samples]):
             try:
-                # Try to load keys directly (if saved from ppo_episode_runner buffer)
                 data = np.load(file_path)
-                if 'rgb' in data and 'depth' in data:
-                    rgb = data['rgb']
-                    depth = data['depth']
-                    # Proprio might be there or not
-                    if 'proprio' in data:
-                        proprio = data['proprio']
-                    else:
-                        proprio = np.zeros(6, dtype=np.float32)
-                    dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
-                    continue
 
-                # Fallback to 'observation' key (legacy/gym format)
-                if 'observation' in data:
-                    obs = data['observation']
-                    if obs.shape[0] >= 3:  # Has RGB (3 channels) + Depth (1 channel)
-                        # Extract RGB (first 3 channels) and depth (channel index 3)
-                        # Assuming format is (C, H, W)
-                        rgb = obs[:3].transpose(1, 2, 0)  # (H, W, 3)
-                        depth = obs[3]  # Depth channel
-                        proprio = np.zeros(6, dtype=np.float32) # Dummy proprio
-                        dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
-                    elif obs.shape[0] >= 2:  # Has at least occupancy + depth (fallback)
-                        # Create dummy RGB for now (you'd extract real RGB from your data)
-                        rgb = np.random.randint(0, 255, (240, 424, 3), dtype=np.uint8)
-                        depth = obs[1]  # Depth channel
-                        proprio = np.zeros(6, dtype=np.float32) # Dummy proprio
-                        dataset.append({'rgb': rgb, 'depth': depth, 'proprio': proprio})
+                # New format: grid (4, 128, 128) + proprio (10,)
+                if 'grid' in data and 'proprio' in data:
+                    grid = data['grid']
+                    proprio = data['proprio']
+
+                    # Validate shapes
+                    if grid.shape == (4, 128, 128) and proprio.shape == (10,):
+                        dataset.append({'grid': grid, 'proprio': proprio})
+                    else:
+                        print(f"WARNING: Unexpected shapes in {file_path}: grid={grid.shape}, proprio={proprio.shape}")
+                else:
+                    print(f"WARNING: Missing 'grid' or 'proprio' in {file_path}")
 
             except Exception as exc:
                 print(f"Failed to load {file_path}: {exc}")
@@ -164,15 +153,18 @@ class RKNNConverter:
 
         if not dataset:
             print("WARNING: No valid calibration samples loaded")
+            print("TIP: Run the rover with SAC to collect calibration data first")
             return None
 
         print(f"Loaded {len(dataset)} calibration samples")
 
         # Convert to RKNN dataset format
-        # Note: This is a simplified version - adjust based on your model inputs
         def data_generator():
             for sample in dataset:
-                yield [sample['rgb'], sample['depth'], sample['proprio']]
+                # RKNN expects: [input0, input1, ...]
+                # Input 0: grid (4, 128, 128) float32
+                # Input 1: proprio (10,) float32
+                yield [sample['grid'], sample['proprio']]
 
         return data_generator
 
@@ -182,8 +174,13 @@ class RKNNConverter:
         sdk_version = self.rknn.get_sdk_version()
         print(f"RKNN SDK Version: {sdk_version}")
 
-    def test_inference(self, test_rgb: np.ndarray, test_depth: np.ndarray):
-        """Test inference on sample data."""
+    def test_inference(self, test_grid: np.ndarray, test_proprio: np.ndarray):
+        """Test inference on sample data.
+
+        Args:
+            test_grid: (4, 128, 128) float32 multi-channel occupancy grid
+            test_proprio: (10,) float32 proprioception vector
+        """
         print("Testing RKNN inference...")
 
         # Initialize runtime on simulator (for testing on x86)
@@ -192,8 +189,12 @@ class RKNNConverter:
             print(f"RKNN init_runtime failed: {ret}")
             return
 
+        # Validate inputs
+        assert test_grid.shape == (4, 128, 128), f"Expected grid shape (4, 128, 128), got {test_grid.shape}"
+        assert test_proprio.shape == (10,), f"Expected proprio shape (10,), got {test_proprio.shape}"
+
         # Run inference
-        outputs = self.rknn.inference(inputs=[test_rgb, test_depth])
+        outputs = self.rknn.inference(inputs=[test_grid, test_proprio])
         print(f"Inference output shape: {[o.shape for o in outputs]}")
         print(f"Action: {outputs[0]}")
 
