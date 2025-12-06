@@ -7,20 +7,25 @@ Usage:
     python3 benchmark_sac_npu.py
 
 Requirements:
-    - RKNNLite installed
-    - ONNX model (will be created if not exists)
-    - Calibration data for quantization
+    - RKNNLite installed (for NPU benchmark)
+    - ONNX Runtime installed (optional, for CPU benchmark)
+    - PyTorch (optional, for creating ONNX model)
+    - ONNX model file (sac_actor_benchmark.onnx)
 """
 
 import os
 import time
 import numpy as np
-import torch
-import torch.nn as nn
-from pathlib import Path
 
-# Import model architectures
-from model_architectures import OccupancyGridEncoder, GaussianPolicyHead
+# Optional PyTorch imports
+try:
+    import torch
+    import torch.nn as nn
+    from model_architectures import OccupancyGridEncoder, GaussianPolicyHead
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+    print("⚠ PyTorch not available - will skip model creation")
 
 # RKNN support
 try:
@@ -30,24 +35,33 @@ except ImportError:
     HAS_RKNN = False
     print("⚠ RKNNLite not available - cannot run NPU benchmark")
 
-class SACActor(nn.Module):
-    """SAC Actor model for benchmarking."""
-    def __init__(self):
-        super().__init__()
-        self.encoder = OccupancyGridEncoder(input_channels=4)
-        self.policy_head = GaussianPolicyHead(
-            feature_dim=self.encoder.output_dim,
-            proprio_dim=10,
-            action_dim=2
-        )
+# Define model class only if PyTorch is available
+if HAS_TORCH:
+    class SACActor(nn.Module):
+        """SAC Actor model for benchmarking."""
+        def __init__(self):
+            super().__init__()
+            self.encoder = OccupancyGridEncoder(input_channels=4)
+            self.policy_head = GaussianPolicyHead(
+                feature_dim=self.encoder.output_dim,
+                proprio_dim=10,
+                action_dim=2
+            )
 
-    def forward(self, grid, proprio):
-        features = self.encoder(grid)
-        mean, log_std = self.policy_head(features, proprio)
-        return torch.tanh(mean)  # Deterministic action
+        def forward(self, grid, proprio):
+            features = self.encoder(grid)
+            mean, log_std = self.policy_head(features, proprio)
+            return torch.tanh(mean)  # Deterministic action
+else:
+    SACActor = None
 
 def create_onnx_model():
     """Create and export ONNX model."""
+    if not HAS_TORCH:
+        print("⚠ Cannot create ONNX model - PyTorch not available")
+        print("   Please create the model on a machine with PyTorch and transfer sac_actor_benchmark.onnx")
+        return None
+
     print("Creating ONNX model...")
 
     model = SACActor()
@@ -191,7 +205,10 @@ def main():
     # Create model if needed
     onnx_path = "sac_actor_benchmark.onnx"
     if not os.path.exists(onnx_path):
-        create_onnx_model()
+        onnx_path = create_onnx_model()
+        if onnx_path is None:
+            print("❌ Cannot proceed without ONNX model")
+            return
     else:
         print(f"Using existing ONNX model: {onnx_path}")
 
