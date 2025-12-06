@@ -16,6 +16,7 @@ Requirements:
 import os
 import time
 import numpy as np
+import subprocess
 
 # Optional PyTorch imports
 try:
@@ -34,6 +35,35 @@ try:
 except ImportError:
     HAS_RKNN = False
     print("⚠ RKNNLite not available - cannot run NPU benchmark")
+
+def source_rknn_env():
+    """Source RKNN environment if available."""
+    env_files = [
+        "/opt/rknn-toolkit2/envsetup.sh",
+        "/usr/bin/envsetup.sh",
+        "/opt/rknn/envsetup.sh"
+    ]
+    
+    for env_file in env_files:
+        if os.path.exists(env_file):
+            print(f"🔧 Sourcing RKNN environment: {env_file}")
+            try:
+                result = subprocess.run(f"source {env_file} && env", shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    # Parse and set environment variables
+                    for line in result.stdout.split('\n'):
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            os.environ[key] = value
+                    print("✓ RKNN environment sourced successfully")
+                    return True
+                else:
+                    print(f"⚠ Failed to source {env_file}")
+            except Exception as e:
+                print(f"⚠ Error sourcing {env_file}: {e}")
+    
+    print("ℹ No RKNN environment file found, proceeding anyway...")
+    return False
 
 # Define model class only if PyTorch is available
 if HAS_TORCH:
@@ -201,6 +231,9 @@ def main():
     print("==================================================")
     print("   SAC Actor NPU Benchmark (RK3588)              ")
     print("==================================================")
+
+    # Source RKNN environment if available
+    source_rknn_env()
 
     # Create model if needed
     onnx_path = "sac_actor_benchmark.onnx"
