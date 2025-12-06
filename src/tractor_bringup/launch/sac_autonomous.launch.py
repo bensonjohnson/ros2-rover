@@ -50,7 +50,10 @@ def generate_launch_description():
         executable="hiwonder_motor_driver",
         name="hiwonder_motor_driver",
         output="screen",
-        parameters=[os.path.join(tractor_bringup_dir, "config", "hiwonder_motor_params.yaml")]
+        parameters=[
+            os.path.join(tractor_bringup_dir, "config", "hiwonder_motor_params.yaml"),
+            {"publish_tf": False} # Disable wheel odom TF, use RF2O (LiDAR) instead
+        ]
     )
 
     # 3. RealSense Camera (Depth + RGB, no PointCloud for speed)
@@ -76,6 +79,24 @@ def generate_launch_description():
     lsm9ds1_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(tractor_sensors_dir, "launch", "lsm9ds1_imu.launch.py")
+        )
+    )
+
+    # 4b. LiDAR (STL-19p)
+    lidar_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_sensors_dir, "launch", "stl19p_lidar.launch.py")
+        ),
+        launch_arguments={
+            'port_name': '/dev/ttyUSB0', # Adjust if needed
+            'frame_id': 'laser_link'
+        }.items()
+    )
+
+    # 4c. LiDAR Odometry (RF2O)
+    rf2o_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")
         )
     )
 
@@ -135,6 +156,8 @@ def generate_launch_description():
         hiwonder_motor_node,
         
         # Sensors (delayed)
+        TimerAction(period=2.0, actions=[lidar_launch]),
+        TimerAction(period=4.0, actions=[rf2o_launch]),
         TimerAction(period=5.0, actions=[realsense_launch]),
         TimerAction(period=6.0, actions=[lsm9ds1_launch]),
         

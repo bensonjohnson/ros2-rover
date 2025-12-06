@@ -1108,7 +1108,7 @@ if __name__ == '__main__':
                         help='Dropout rate for DroQ (0.0 to disable)')
     parser.add_argument('--droq_samples', type=int, default=10,
                         help='Number of Q-network forward passes for DroQ (M)')
-    parser.add_argument('--utd_ratio', type=int, default=20,
+    parser.add_argument('--utd_ratio', type=int, default=4,
                         help='Update-to-Data ratio (gradient steps per env step)')
     parser.add_argument('--actor_update_freq', type=int, default=10,
                         help='Update actor every N critic updates')
