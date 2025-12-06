@@ -173,9 +173,7 @@ class ReplayBuffer:
         indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
 
         # Retrieve s
-        # Retrieve s
         grid = self.grid[indices].to(self.device, non_blocking=True).float() / 255.0
-        grid = grid.unsqueeze(1) # (B, 1, H, W)
 
         proprio = self.proprio[indices].to(self.device, non_blocking=True)
         actions = self.actions[indices].to(self.device, non_blocking=True)
@@ -186,7 +184,6 @@ class ReplayBuffer:
         next_indices = (indices + 1) % self.capacity
 
         next_grid = self.grid[next_indices].to(self.device, non_blocking=True).float() / 255.0
-        next_grid = next_grid.unsqueeze(1)
 
         next_proprio = self.proprio[next_indices].to(self.device, non_blocking=True)
 
@@ -240,8 +237,8 @@ class V620SACTrainer:
              print(f"  Replay Buffer stored on System RAM (CPU)")
             
         # Dimensions
-        self.grid_shape = (64, 64)
-        self.proprio_dim = 11 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, gap, prev_lin, prev_ang]
+        self.grid_shape = (4, 64, 64)  # Reduced for NPU efficiency
+        self.proprio_dim = 10 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
         self.action_dim = 2
         
         # Visualization state
@@ -436,8 +433,8 @@ class V620SACTrainer:
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
             
-            # Dummy input: (B, 1, 64, 64)
-            dummy_grid = torch.randn(1, 1, 64, 64, device=self.device)
+            # Dummy input: (B, 4, 64, 64)
+            dummy_grid = torch.randn(1, 4, 64, 64, device=self.device)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
             class ActorWrapper(nn.Module):

@@ -40,32 +40,26 @@ class OccupancyGridEncoder(nn.Module):
     def __init__(self, input_channels: int = 4):
         super().__init__()
 
-        # Input: (B, 4, 128, 128)
+        # Input: (B, 4, 64, 64) - Reduced for NPU efficiency
         self.conv = nn.Sequential(
-            # Stage 1: 128 → 64
-            nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
+            # Stage 1: 64 → 32
+            nn.Conv2d(input_channels, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
 
-            # Stage 2: 64 → 32
+            # Stage 2: 32 → 16
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+
+            # Stage 3: 16 → 8
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
 
-            # Stage 3: 32 → 16 (with spatial attention)
+            # Stage 4: 8 → 4
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            SpatialAttention(128),  # Focus on relevant regions
-
-            # Stage 4: 16 → 8
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-
-            # Stage 5: 8 → 4
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
         )
 
-        # NO global pooling! Flatten spatial features
-        self.output_dim = 256 * 4 * 4  # 4096
+        # Output: 128 * 4 * 4 = 2048 features (half the original)
 
     def forward(self, grid: torch.Tensor) -> torch.Tensor:
         """
@@ -190,32 +184,32 @@ class QNetwork(nn.Module):
 
     Estimates Q(s, a) - the expected return for taking action a in state s.
     """
-    def __init__(self, feature_dim: int = 4096, proprio_dim: int = 10, action_dim: int = 2, dropout: float = 0.0):
+    def __init__(self, feature_dim: int = 2048, proprio_dim: int = 10, action_dim: int = 2, dropout: float = 0.0):
         super().__init__()
 
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 64),
+            nn.Linear(proprio_dim, 32),
             nn.ReLU(inplace=True),
         )
 
-        # Q-function: visual (4096) + proprio (64) + action (2) = 4162
+        # Q-function: visual (2048) + proprio (32) + action (2) = 2082
         # Build with conditional dropout for DroQ
         layers = [
-            nn.Linear(feature_dim + 64 + action_dim, 512),
+            nn.Linear(feature_dim + 32 + action_dim, 256),
             nn.ReLU(inplace=True),
         ]
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
 
         layers.extend([
-            nn.Linear(512, 256),
+            nn.Linear(256, 128),
             nn.ReLU(inplace=True),
         ])
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
 
-        layers.append(nn.Linear(256, 1))
+        layers.append(nn.Linear(128, 1))
 
         self.q_net = nn.Sequential(*layers)
 
@@ -228,22 +222,22 @@ class QNetwork(nn.Module):
 class GaussianPolicyHead(nn.Module):
     """SAC Policy head that outputs mean and log_std for continuous actions."""
 
-    def __init__(self, feature_dim: int = 4096, proprio_dim: int = 10, action_dim: int = 2, hidden_size: int = 256):
+    def __init__(self, feature_dim: int = 2048, proprio_dim: int = 10, action_dim: int = 2, hidden_size: int = 128):
         super().__init__()
 
         # Proprioception encoder (unchanged)
         self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 64),
+            nn.Linear(proprio_dim, 32),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 64),
+            nn.Linear(32, 32),
             nn.ReLU(inplace=True),
         )
 
-        # Fusion: 4096 (visual) + 64 (proprio) = 4160
+        # Fusion: 2048 (visual) + 32 (proprio) = 2080
         self.net = nn.Sequential(
-            nn.Linear(feature_dim + 64, 512),  # Larger first layer
+            nn.Linear(feature_dim + 32, 256),  # Smaller first layer
             nn.ReLU(inplace=True),
-            nn.Linear(512, hidden_size),
+            nn.Linear(256, hidden_size),
             nn.ReLU(inplace=True),
         )
 
