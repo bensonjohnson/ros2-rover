@@ -168,7 +168,17 @@ def benchmark_rknn(onnx_path, num_runs=1000):
     rknn = RKNNLite()
 
     print("Loading ONNX model...")
-    ret = rknn.load_onnx(onnx_path)
+    # Try different RKNN API methods for different versions
+    try:
+        # RKNN Toolkit Lite2 2.3.2 API
+        ret = rknn.load_onnx_model(onnx_path)
+    except AttributeError:
+        try:
+            # Older API
+            ret = rknn.load_onnx(onnx_path)
+        except AttributeError:
+            print("❌ RKNN API not supported. This version may require different loading method.")
+            return
     if ret != 0:
         print(f"❌ Load ONNX failed: {ret}")
         return
