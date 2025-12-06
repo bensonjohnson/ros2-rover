@@ -88,7 +88,7 @@ class SACEpisodeRunner(Node):
         self._latest_rgb = None # Keep for debug/logging if needed, but not used for model
         self._latest_depth = None
         self._latest_scan = None
-        self._latest_grid = None # (64, 64) uint8
+        self._latest_grid = None # (4, 128, 128) float32
         self._latest_odom = None
         self._latest_imu = None
         self._latest_mag = None
@@ -465,8 +465,10 @@ class SACEpisodeRunner(Node):
 
         # For compatibility with visualization/logging, extract channel 0 (distance)
         # and convert back to uint8 format (0-255)
-        grid_for_viz = (grid_multichannel[0] * 255).astype(np.uint8)
-        self._latest_grid = grid_for_viz 
+        # grid_for_viz = (grid_multichannel[0] * 255).astype(np.uint8)
+        
+        # CRITICAL FIX: The model and training server expect the FULL 4-channel grid!
+        self._latest_grid = grid_multichannel 
         
         # Gap Following Analysis (for heuristic warmup and reward)
         # Use distance channel for gap finding
