@@ -538,18 +538,21 @@ class SACEpisodeRunner(Node):
 
         best_col = np.argmax(col_scores)
 
-        # Map col 0..63 to heading -1..1
-        # Col 0 = LEFT, Col 63 = RIGHT, Col 32 = CENTER
-        # Heading: +1.0 = turn left, -1.0 = turn right
-        self._target_heading = (32 - best_col) / 32.0
+        # Map col 0..127 to heading -1..1
+        # Col 0 = LEFT, Col 127 = RIGHT, Col 64 = CENTER
+        # Angle: Left is +1.0, Right is -1.0
+        self._target_heading = (64 - best_col) / 64.0
 
         # Calculate min_forward_dist from distance channel (for reward function)
-        # Scan center strip (width ~30cm -> ~5 pixels at 6.25cm/pixel)
-        # Center col is 32. 32 +/- 2.5 = 29..35
-        center_strip = distance_channel[:, 29:35]
+        # Scan center strip (width ~30cm -> ~10 pixels at 3.125cm/pixel)
+        # Center col is 64. 64 +/- 5 = 59..69
+        # Only look at the bottom (closest to robot) to get safety distance!
+        # Robot is at row 127. Look at last 10 rows.
+        center_patch = distance_channel[118:128, 59:69]
+        
         # Find minimum distance in front (inverse of distance = obstacle proximity)
         # Distance channel: 1.0 = far (free), 0.0 = close (occupied)
-        min_normalized_dist = np.min(center_strip)
+        min_normalized_dist = np.min(center_patch) if center_patch.size > 0 else 0.0
         # Convert back to meters (denormalize)
         self._min_forward_dist = min_normalized_dist * 4.0  # range_m = 4.0
 
