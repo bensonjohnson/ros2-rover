@@ -307,7 +307,12 @@ class SACEpisodeRunner(Node):
         ranges_padded = np.pad(ranges_gap, (window_size//2, window_size//2), mode='wrap')
         
         # Convolve
-        smoothed = np.convolve(ranges_padded, np.ones(window_size)/window_size, mode='valid')
+        smoothed = np.convolve(ranges_padded, np.ones(window_size)/window_size, mode='same')
+        # Remove padding
+        if window_size//2 > 0:
+             smoothed = smoothed[window_size//2 : -window_size//2]
+        else:
+             smoothed = ranges_gap
         
         # Find best index in smoothed (matches length of ranges_gap potentially, or close)
         # 'valid' mode output length = N - K + 1. 
@@ -334,14 +339,14 @@ class SACEpisodeRunner(Node):
                 # Apply forward bias: Prefer gaps closer to straight ahead
                 # Weight each gap by (1 - |angle|/max_angle) to favor forward direction
                 forward_bias = 1.0 - (np.abs(front_angles) / 1.05)  # 1.0 at center, 0.0 at ±60°
-                biased_scores = smoothed_front * (0.7 + 0.3 * forward_bias)  # 70% distance + 30% forward bias
+                biased_scores = smoothed_front * (0.9 + 0.1 * forward_bias)  # 90% distance + 10% forward bias
 
                 best_idx_local = np.argmax(biased_scores)
                 best_angle = front_angles[best_idx_local]
             else:
                 # Too few points, pick max individual with forward bias
                 forward_bias = 1.0 - (np.abs(front_angles) / 1.05)
-                biased_scores = front_ranges * (0.7 + 0.3 * forward_bias)
+                biased_scores = front_ranges * (0.9 + 0.1 * forward_bias)
                 best_idx_local = np.argmax(biased_scores)
                 best_angle = front_angles[best_idx_local]
         else:
