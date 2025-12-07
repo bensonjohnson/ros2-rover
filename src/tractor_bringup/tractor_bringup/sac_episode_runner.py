@@ -622,7 +622,7 @@ class SACEpisodeRunner(Node):
         # Use heuristic "Gap Follower" for the first model version (v0)
         # This seeds the replay buffer with "good" driving data (driving towards gaps)
         # instead of random thrashing, helping the model learn the "drive forward" objective faster.
-        if self._current_model_version == 0:
+        if self._current_model_version <= 0:
             if not self._warmup_active:
                 self._warmup_active = True
                 self.get_logger().info('🔥 Starting Heuristic Warmup (Gap Follower)...')
@@ -736,7 +736,7 @@ class SACEpisodeRunner(Node):
             # Normal execution
             # During warmup (model v0), use max_linear directly for better movement
             # After training starts, use curriculum_max_speed which may be lower
-            if self._current_model_version == 0:
+            if self._current_model_version <= 0:
                 cmd.linear.x = float(action[0] * self.max_linear)
             else:
                 cmd.linear.x = float(action[0] * self._curriculum_max_speed)
