@@ -491,7 +491,7 @@ class SACEpisodeRunner(Node):
         if not self._model_ready:
             return
 
-        if self._latest_depth is None:
+        if self._latest_depth_raw is None:
             # self.get_logger().warn('Waiting for depth data...', throttle_duration_sec=5.0)
             return
 
