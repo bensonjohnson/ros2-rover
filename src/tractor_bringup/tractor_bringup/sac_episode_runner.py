@@ -644,24 +644,32 @@ class SACEpisodeRunner(Node):
             # Use LiDAR for safety distance check since it's more reliable than depth-grid computation
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
             
+            # DEBUG: Log clearance values to diagnose movement issues
+            if not hasattr(self, '_debug_log_count'):
+                self._debug_log_count = 0
+            self._debug_log_count += 1
+            if self._debug_log_count % 30 == 0:  # Log every 1 second
+                self.get_logger().info(f"🔍 Warmup Debug: LiDAR_min={lidar_min:.3f}m, Depth_min={self._min_forward_dist:.3f}m, clearance={clearance_dist:.3f}m, target={self._target_heading:.2f}")
+            
             # Determine linear speed based on alignment AND clearance
             # NOTE: These are normalized actions [-1, 1] that get scaled by max_speed later
             # Make sure values are high enough to overcome motor deadzone
-            if abs(heuristic_angular) < 0.3 and clearance_dist > 0.4:
+            # LOWERED thresholds since we're getting stuck at 0 velocity
+            if abs(heuristic_angular) < 0.3 and clearance_dist > 0.35:
                 # Aligned and clear - go fast
                 heuristic_linear = 1.0
-            elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.25:
+            elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.2:
                 # Aligned but getting close - moderate
                 heuristic_linear = 0.8
-            elif abs(heuristic_angular) < 0.6 and clearance_dist > 0.25:
+            elif abs(heuristic_angular) < 0.6 and clearance_dist > 0.2:
                 # Turning and clear - moderate speed
                 heuristic_linear = 0.7
-            elif clearance_dist > 0.2:
+            elif clearance_dist > 0.15:
                 # Close but some room - slower but still moving
                 heuristic_linear = 0.5
             else:
-                # Very close - stop (don't reverse during warmup - let safety handle it)
-                heuristic_linear = 0.0
+                # Very close - slow crawl (not full stop, to collect data)
+                heuristic_linear = 0.3
                 
             # Override model action with heuristic
             action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
