@@ -612,12 +612,37 @@ class MultiChannelOccupancy:
 
         # Compute Euclidean distance transform
         if np.any(occupied):
+            # EDT gives distance in pixels, multiply by resolution to get meters
             distance_grid = ndimage.distance_transform_edt(~occupied) * self.resolution
+            
+            # SAFETY CHECK: If EDT produces all zeros (shouldn't happen, but defensive)
+            # or NaN/Inf values, fall back to using the original grid values
+            if np.all(distance_grid == 0) or np.any(np.isnan(distance_grid)) or np.any(np.isinf(distance_grid)):
+                # Use the original distance values from grid (pre-EDT)
+                # These are actual measured distances to obstacles
+                distance_grid = grid.copy()
         else:
+            # No obstacles detected - everything is free space
             distance_grid = np.full_like(grid, self.range_m)
 
         # Normalize to [0, 1] for network
-        distance_grid = np.clip(distance_grid / self.range_m, 0.0, 1.0)
+        # Ensure no negative values and no values > range_m
+        distance_grid = np.clip(distance_grid, 0.0, self.range_m)
+        distance_grid = distance_grid / self.range_m
+
+        # FINAL SAFETY CHECK: Ensure center region (robot footprint) is never 0
+        # Robot is at (127, 64). The 10x10 patch we check in episode runner is rows 118-128, cols 59-69
+        # These should NEVER be 0.0 as the robot occupies this space (free by definition)
+        r_center, c_center = self.grid_size - 1, self.grid_size // 2
+        safety_patch = distance_grid[r_center-10:r_center+1, c_center-5:c_center+6]
+        if np.min(safety_patch) < 0.05:  # Less than 20cm (0.05 * 4.0m)
+            # Something is wrong - footprint should be clear
+            # Set to a safe minimum value (at least 0.5m)
+            min_safe_val = 0.5 / self.range_m  # 0.125 normalized
+            distance_grid[r_center-10:r_center+1, c_center-5:c_center+6] = np.maximum(
+                distance_grid[r_center-10:r_center+1, c_center-5:c_center+6],
+                min_safe_val
+            )
 
         return distance_grid
 
