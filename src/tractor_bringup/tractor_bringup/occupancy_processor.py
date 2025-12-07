@@ -420,12 +420,12 @@ class MultiChannelOccupancy:
                  fy=386.0,
                  cx=212.0,
                  cy=120.0,
-                 camera_height=0.123,
+                 camera_height=0.18, # 180mm from ground
                  camera_tilt_deg=0.0,
                  # Thresholds
                  obstacle_height_thresh=0.1,
                  floor_thresh=0.08):
-
+        
         self.grid_size = grid_size
         self.range_m = range_m
         self.resolution = range_m / grid_size  # 3.125 cm/pixel for 128x128
@@ -560,8 +560,8 @@ class MultiChannelOccupancy:
                 angle_min = laser_scan['angle_min']
                 angle_increment = laser_scan['angle_increment']
 
-            # Filter valid ranges
-            valid_mask = (ranges > 0.05) & (ranges < self.range_m)
+            # Filter valid ranges - Increase min to 0.2m to avoid self-hits
+            valid_mask = (ranges > 0.2) & (ranges < self.range_m)
 
             if np.any(valid_mask):
                 # Polar to Cartesian
@@ -591,6 +591,18 @@ class MultiChannelOccupancy:
                 for i in range(len(rows)):
                     r, c, d = rows[i], cols[i], ranges[i]
                     grid[r, c] = min(grid[r, c], d)
+
+        # Force Clear Robot Footprint (Mask out self-collisions)
+        # Robot is at bottom center (127, 64)
+        # Radius of ~20cm? Grid res ~3cm. 20/3 = ~7 pixels.
+        # Let's clear a semi-circle or box around the origin
+        r_center, c_center = self.grid_size - 1, self.grid_size // 2
+        y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
+        # (r - r_cnt)^2 + (c - c_cnt)^2 < radius^2
+        # Use 25cm radius clearing to be safe
+        radius_px = int(0.25 / self.resolution)
+        footprint_mask = ((y_grid - r_center)**2 + (x_grid - c_center)**2) < radius_px**2
+        grid[footprint_mask] = self.range_m # Reset to max distance (free)
 
         # Apply distance transform for smooth gradients
         # First create binary obstacle mask
