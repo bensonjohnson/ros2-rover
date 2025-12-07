@@ -1,0 +1,14 @@
+✅ Imported RawSensorProcessor
+✅ Imported DualEncoderPolicyNetwork
+
+--- 1. Testing RawSensorProcessor ---
+Processor Output Shapes: Laser=(128, 128), Depth=(240, 424)
+✅ Laser Grid Shape OK
+✅ Depth Image Shape OK
+
+--- 2. Testing DualEncoderPolicyNetwork ---
+Model Output Shapes: Mean=torch.Size([1, 2]), LogStd=torch.Size([1, 2])
+✅ Model Forward Pass OK
+
+--- 3. Testing Serialization (Roundtrip) ---
+⚠️ Serialization skipped: No module named 'msgpack'

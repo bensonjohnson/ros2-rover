@@ -58,10 +58,11 @@ class RKNNConverter:
         # Configure RKNN
         print("Configuring RKNN...")
         ret = self.rknn.config(
-            # Input 0: Grid (4, 128, 128) float32, already normalized to [0, 1]
-            # Input 1: Proprio (10,) float32, various ranges
-            mean_values=[[0, 0, 0, 0], [0]*10],  # Grid: no normalization needed, Proprio: no normalization
-            std_values=[[1, 1, 1, 1], [1]*10],   # Grid: already [0,1], Proprio: as-is
+            # Input 0: Laser (1, 128, 128) float32, binary 0/1
+            # Input 1: Depth (1, 424, 240) float32, normalized [0, 1]
+            # Input 2: Proprio (10,) float32, various ranges
+            mean_values=[[0], [0], [0]*10],  # Laser/Depth: no norm, Proprio: no norm
+            std_values=[[1], [1], [1]*10],   # Laser/Depth: already processed, Proprio: as-is
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
             quantized_algorithm='normal',
@@ -113,7 +114,7 @@ class RKNNConverter:
         The calibration dataset should contain representative multi-channel grid samples
         collected from the rover during operation.
 
-        Expected format: grid (4, 128, 128) float32 + proprio (10,) float32
+        Expected format: laser (1, 128, 128) + depth (1, 424, 240) + proprio (10,)
         """
         if not self.calibration_data_dir or not os.path.exists(self.calibration_data_dir):
             print(f"WARNING: Calibration data directory not found: {self.calibration_data_dir}")
@@ -134,18 +135,19 @@ class RKNNConverter:
             try:
                 data = np.load(file_path)
 
-                # New format: grid (4, 128, 128) + proprio (10,)
-                if 'grid' in data and 'proprio' in data:
-                    grid = data['grid']
+                # New format: laser, depth, proprio
+                if 'laser' in data and 'depth' in data and 'proprio' in data:
+                    laser = data['laser']
+                    depth = data['depth']
                     proprio = data['proprio']
 
                     # Validate shapes
-                    if grid.shape == (4, 128, 128) and proprio.shape == (10,):
-                        dataset.append({'grid': grid, 'proprio': proprio})
+                    if laser.shape == (1, 128, 128) and depth.shape == (1, 424, 240) and proprio.shape == (10,):
+                        dataset.append({'laser': laser, 'depth': depth, 'proprio': proprio})
                     else:
-                        print(f"WARNING: Unexpected shapes in {file_path}: grid={grid.shape}, proprio={proprio.shape}")
+                        print(f"WARNING: Unexpected shapes in {file_path}")
                 else:
-                    print(f"WARNING: Missing 'grid' or 'proprio' in {file_path}")
+                    print(f"WARNING: Missing 'laser', 'depth' or 'proprio' in {file_path}")
 
             except Exception as exc:
                 print(f"Failed to load {file_path}: {exc}")
@@ -162,9 +164,10 @@ class RKNNConverter:
         def data_generator():
             for sample in dataset:
                 # RKNN expects: [input0, input1, ...]
-                # Input 0: grid (4, 128, 128) float32
-                # Input 1: proprio (10,) float32
-                yield [sample['grid'], sample['proprio']]
+                # Input 0: laser
+                # Input 1: depth
+                # Input 2: proprio
+                yield [sample['laser'], sample['depth'], sample['proprio']]
 
         return data_generator
 
@@ -174,13 +177,8 @@ class RKNNConverter:
         sdk_version = self.rknn.get_sdk_version()
         print(f"RKNN SDK Version: {sdk_version}")
 
-    def test_inference(self, test_grid: np.ndarray, test_proprio: np.ndarray):
-        """Test inference on sample data.
-
-        Args:
-            test_grid: (4, 128, 128) float32 multi-channel occupancy grid
-            test_proprio: (10,) float32 proprioception vector
-        """
+    def test_inference(self, test_laser, test_depth, test_proprio):
+        """Test inference on sample data."""
         print("Testing RKNN inference...")
 
         # Initialize runtime on simulator (for testing on x86)
@@ -190,11 +188,12 @@ class RKNNConverter:
             return
 
         # Validate inputs
-        assert test_grid.shape == (4, 128, 128), f"Expected grid shape (4, 128, 128), got {test_grid.shape}"
-        assert test_proprio.shape == (10,), f"Expected proprio shape (10,), got {test_proprio.shape}"
+        assert test_laser.shape == (1, 128, 128)
+        assert test_depth.shape == (1, 424, 240)
+        assert test_proprio.shape == (10,)
 
         # Run inference
-        outputs = self.rknn.inference(inputs=[test_grid, test_proprio])
+        outputs = self.rknn.inference(inputs=[test_laser, test_depth, test_proprio])
         print(f"Inference output shape: {[o.shape for o in outputs]}")
         print(f"Action: {outputs[0]}")
 
