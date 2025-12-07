@@ -12,3 +12,10 @@ Model Output Shapes: Mean=torch.Size([1, 2]), LogStd=torch.Size([1, 2])
 
 --- 3. Testing Serialization (Roundtrip) ---
 ⚠️ Serialization skipped: No module named 'msgpack'
+ℹ️ Serialization test ended: No module named 'msgpack'
+
+--- 4. Testing Visualization State ---
+Simulated Vis Laser Shape: (1, 128, 128)
+Simulated Vis Depth Shape: (1, 424, 240)
+✅ Laser Visualization Resize OK
+✅ Depth Visualization Colormap OK

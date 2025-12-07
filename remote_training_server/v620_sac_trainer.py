@@ -249,8 +249,14 @@ class V620SACTrainer:
             print("⚠ Using CPU")
         
         # Determine storage device for Replay Buffer
-        self.storage_device = self.device if args.gpu_buffer else torch.device('cpu')
-        if args.gpu_buffer and self.device.type != 'cpu':
+        # Determine storage device for Replay Buffer
+        # Default to CPU to avoid OOM with large depth buffers
+        self.storage_device = torch.device('cpu') 
+        if args.gpu_buffer:
+            print(f"⚠️ Warning: GPU buffer enabled. Ensure you have >40GB VRAM.")
+            self.storage_device = self.device
+        
+        if self.storage_device.type != 'cpu':
              print(f"✓ Replay Buffer will be stored on GPU memory")
         else:
              print(f"  Replay Buffer stored on System RAM (CPU)")
@@ -260,7 +266,9 @@ class V620SACTrainer:
         self.action_dim = 2
         
         # Visualization state
+        # Visualization state
         self.latest_laser_vis = None
+        self.latest_depth_vis = None
         
         # --- Actor ---
         self.actor = DualEncoderPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
@@ -997,8 +1005,10 @@ class V620SACTrainer:
                         batch = deserialize_batch(msg.data)
 
                         # Update visualization state (take last frame of batch)
+                        # Update visualization state (take last frame of batch)
                         if len(batch['laser']) > 0:
                             self.latest_laser_vis = batch['laser'][-1].copy()
+                            self.latest_depth_vis = batch['depth'][-1].copy()
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
@@ -1134,8 +1144,7 @@ if __name__ == '__main__':
                         help='Minimum buffer size before training starts')
     parser.add_argument('--augment_data', action='store_true',
                         help='Enable data augmentation for occupancy grids')
-    parser.add_argument('--gpu_buffer', action='store_true',
-                        help='Store replay buffer in GPU memory for faster sampling')
+    parser.add_argument('--gpu-buffer', action='store_true', help='Store replay buffer on GPU (WARNING: Requires huge VRAM for depth)')
 
 
 
