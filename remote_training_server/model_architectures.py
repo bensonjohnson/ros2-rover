@@ -40,27 +40,27 @@ class OccupancyGridEncoder(nn.Module):
     def __init__(self, input_channels: int = 4):
         super().__init__()
 
-        # Input: (B, 4, 64, 64) - Reduced for NPU efficiency
+        # Input: (B, 4, 128, 128) - Matched to rover resolution
         self.conv = nn.Sequential(
-            # Stage 1: 64 → 32
+            # Stage 1: 128 → 64
             nn.Conv2d(input_channels, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
 
-            # Stage 2: 32 → 16
+            # Stage 2: 64 → 32
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
 
-            # Stage 3: 16 → 8
+            # Stage 3: 32 → 16
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
 
-            # Stage 4: 8 → 4
+            # Stage 4: 16 → 8
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
         )
 
-        # Output: 128 * 4 * 4 = 2048 features (half the original)
-        self.output_dim = 128 * 4 * 4
+        # Output: 128 * 8 * 8 = 8192 features (preserves more spatial detail)
+        self.output_dim = 128 * 8 * 8
 
     def forward(self, grid: torch.Tensor) -> torch.Tensor:
         """
