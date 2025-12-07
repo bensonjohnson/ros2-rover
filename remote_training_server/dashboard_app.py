@@ -27,6 +27,10 @@ class TrainingDashboard:
         self.app.add_url_rule('/api/stats', 'get_stats', self.get_stats)
         self.app.add_url_rule('/api/metrics_history', 'get_metrics_history', self.get_metrics_history)
         self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
+        self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
+        self.app.add_url_rule('/api/laser', 'get_laser', self.get_laser)
+        self.app.add_url_rule('/api/depth', 'get_depth', self.get_depth)
+        # Keep /api/grid for backward compatibility/debugging if needed, but we'll use laser now
         self.app.add_url_rule('/api/grid', 'get_grid', self.get_grid)
 
     def start(self):
@@ -177,82 +181,74 @@ class TrainingDashboard:
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    def get_grid(self):
-        """Return the latest occupancy grid as a PNG image."""
+    def get_laser(self):
+        """Return the latest laser grid as a PNG image."""
         try:
-            grid = self.trainer.latest_grid_vis
+            grid = self.trainer.latest_laser_vis
             if grid is None:
-                # Return a placeholder black image
-                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
-            
-            # Handle 4-channel float grid (New format: 4x64x64 float32)
-            elif hasattr(grid, 'ndim') and grid.ndim == 3 and grid.shape[0] == 4:
-                # grid is (4, H, W)
-                # Channel 0: Distance to obstacle (0=obstacle, 1=free)
-                # Channel 2: Confidence (0=unknown, 1=known)
-                
-                distance_map = grid[0]
-                confidence_map = grid[2]
-                
-                # Resize maps to 256x256 for display
-                # Note: inputs are 64x64, so we resize up
-                distance_large = cv2.resize(distance_map, (256, 256), interpolation=cv2.INTER_NEAREST)
-                confidence_large = cv2.resize(confidence_map, (256, 256), interpolation=cv2.INTER_NEAREST)
-                
-                # Initialize output image
-                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
-                
-                # 1. Unknown (Low Confidence) -> Dark Gray
-                # 2. Free (High Confidence, High Distance) -> Light Gray
-                # 3. Occupied (High Confidence, Low Distance) -> Red
-                
-                # Define masks
-                # Confidence < 0.1 means we haven't seen this area well
-                mask_unknown = (confidence_large < 0.1)
-                
-                # Distance near 0 means obstacle. 
-                # Distance is normalized [0,1]. Obstacle cells have distance 0.
-                mask_occupied = (distance_large < 0.05) 
-                
-                # Fill colors
-                # Default to Light Gray ("Free" assumption for known space)
-                grid_vis[:, :] = [200, 200, 200]
-                
-                # Set Unknown regions
-                grid_vis[mask_unknown] = [50, 50, 50]
-                
-                # Set Occupied regions (only where we are confident)
-                grid_vis[mask_occupied & ~mask_unknown] = [0, 0, 255] # Red BGR
-
-            # Handle Legacy uint8 grid (Old format: 64x64 uint8)
+                vis = np.zeros((256, 256, 3), dtype=np.uint8)
             else:
+                # grid is (1, 128, 128) or (128, 128) float32 (0 or 1)
+                # Ensure 2D
                 if grid.ndim == 3:
-                     # If (1, 64, 64), take channel 0
                      grid = grid[0]
                 
-                # Resize
-                grid_large = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
-
-                # Colorize: 0=Unknown(Dark Gray), 128=Free(Light Gray), 255=Occupied(Red)
-                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
-
-                mask_unknown = (grid_large == 0)
-                mask_free = (grid_large == 128)
-                mask_occupied = (grid_large == 255)
-
-                grid_vis[mask_unknown] = [50, 50, 50]
-                grid_vis[mask_free] = [200, 200, 200]
-                grid_vis[mask_occupied] = [0, 0, 255]
-
-            # Encode to PNG
-            _, buffer = cv2.imencode('.png', grid_vis)
+                # Resize to display
+                vis_grid = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
+                
+                # Colorize: 0=Free (Light), 1=Occupied (Red)
+                # Note: Logic in processor is 1=Occupied?
+                # Usually 0=Free, 1=Occupied.
+                
+                vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                vis[:, :] = [200, 200, 200] # Free (Light Gray)
+                
+                mask_occupied = (vis_grid > 0.5)
+                vis[mask_occupied] = [0, 0, 255] # Red
+                
+            _, buffer = cv2.imencode('.png', vis)
             return Response(buffer.tobytes(), mimetype='image/png')
-
         except Exception as e:
-            print(f"Error serving grid: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error serving laser: {e}")
             return Response(status=500)
+
+    def get_depth(self):
+        """Return the latest depth image as a PNG."""
+        try:
+            depth = self.trainer.latest_depth_vis
+            if depth is None:
+                vis = np.zeros((240, 424, 3), dtype=np.uint8)
+            else:
+                # depth is (1, 424, 240) or (424, 240) uint8 (0-255)
+                if depth.ndim == 3:
+                    depth = depth[0]
+                
+                # Convert float [0, 1] to uint8 [0, 255] if needed
+                if depth.dtype != np.uint8:
+                    depth = (depth * 255.0).astype(np.uint8)
+                
+                # Apply colormap (Jet: Blue=Close, Red=Far? No, Blue=Low, Red=High)
+                # We want Close=Red (Warning), Far=Blue (Safe).
+                # Depth 0=Close, 1=Far.
+                # So 0->Red, 255->Blue.
+                # Jet: 0=Blue, 255=Red.
+                # So we need to invert depth?
+                # inverted = 255 - depth
+                # cv2.applyColorMap(inverted, cv2.COLORMAP_JET) -> 0(was 255 Far)=Blue. 255(was 0 Close)=Red.
+                # Perfect.
+                
+                depth_inverted = 255 - depth
+                vis = cv2.applyColorMap(depth_inverted, cv2.COLORMAP_JET)
+                
+            _, buffer = cv2.imencode('.png', vis)
+            return Response(buffer.tobytes(), mimetype='image/png')
+        except Exception as e:
+            print(f"Error serving depth: {e}")
+            return Response(status=500)
+
+    def get_grid(self):
+        # Redirect wrapper for legacy
+        return self.get_laser()
 
     def index(self):
         """Render the main dashboard page."""
@@ -608,16 +604,27 @@ class TrainingDashboard:
             </div>
         </div>
 
-        <!-- Live Occupancy Grid -->
-        <div class="card">
-            <div class="card-title"><span class="icon">🗺️</span> Live Occupancy Grid</div>
-            <div class="grid-container">
-                <img id="grid-img" src="/api/grid" alt="Occupancy Grid" class="grid-image">
-            </div>
-            <div class="stat-row" style="margin-top: 12px; font-size: 0.8rem;">
-                <span class="stat-label">🔴 Occupied</span>
-                <span class="stat-label">⚪ Free</span>
-                <span class="stat-label">⚫ Unknown</span>
+        <!-- Live Sensors -->
+        <div class="card wide-card">
+            <div class="card-title"><span class="icon">👁️</span> Live Sensors</div>
+            <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
+                
+                <!-- Laser Grid -->
+                <div class="grid-container">
+                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Laser Occupancy (128x128)</div>
+                    <img id="laser-img" src="/api/laser" alt="Laser Grid" class="grid-image">
+                    <div class="stat-row" style="margin-top: 5px; font-size: 0.8rem; justify-content: center; gap: 10px;">
+                        <span class="badgem" style="color: #ff0000;">🔴 Occupied</span>
+                        <span class="badgem" style="color: #cccccc;">⚪ Free</span>
+                    </div>
+                </div>
+
+                <!-- Depth Image -->
+                <div class="grid-container">
+                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Raw Depth (424x240)</div>
+                    <img id="depth-img" src="/api/depth" alt="Depth Image" class="grid-image" style="width: 424px; max-width: 100%;">
+                </div>
+            
             </div>
         </div>
 
