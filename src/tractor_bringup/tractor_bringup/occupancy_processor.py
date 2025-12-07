@@ -593,8 +593,9 @@ class MultiChannelOccupancy:
                     grid[r, c] = min(grid[r, c], d)
 
         # Apply distance transform for smooth gradients
-        # First create binary obstacle mask (obstacles within 0.5m)
-        occupied = grid < 0.5
+        # First create binary obstacle mask
+        # Any cell with a value less than range_m (minus epsilon) contained a hit
+        occupied = grid < (self.range_m - 0.01)
 
         # Compute Euclidean distance transform
         if np.any(occupied):
