@@ -305,6 +305,12 @@ class SACEpisodeRunner(Node):
         # Clip to front-ish semi-circle (-PI/2 to PI/2) for target
         target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
         
+        # DEBUG: Log if target is stuck at extremes
+        if abs(target) > 0.9:
+            self.get_logger().info(f"🔍 Gap Debug: Best Angle={best_angle:.2f} rad, Target={target:.2f}")
+            self.get_logger().info(f"   Ranges: Min={np.min(ranges):.2f}, Max={np.max(ranges):.2f}, Mean={np.mean(ranges[valid]):.2f}")
+            self.get_logger().info(f"   Gap Window Avg: {smoothed[best_idx]:.2f} (Index {best_idx}/{len(ranges)})")
+        
         return min_dist_all, mean_side_dist, target
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):

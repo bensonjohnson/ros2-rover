@@ -183,28 +183,75 @@ class TrainingDashboard:
             grid = self.trainer.latest_grid_vis
             if grid is None:
                 # Return a placeholder black image
-                grid = np.zeros((64, 64), dtype=np.uint8)
+                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
+            
+            # Handle 4-channel float grid (New format: 4x64x64 float32)
+            elif hasattr(grid, 'ndim') and grid.ndim == 3 and grid.shape[0] == 4:
+                # grid is (4, H, W)
+                # Channel 0: Distance to obstacle (0=obstacle, 1=free)
+                # Channel 2: Confidence (0=unknown, 1=known)
+                
+                distance_map = grid[0]
+                confidence_map = grid[2]
+                
+                # Resize maps to 256x256 for display
+                # Note: inputs are 64x64, so we resize up
+                distance_large = cv2.resize(distance_map, (256, 256), interpolation=cv2.INTER_NEAREST)
+                confidence_large = cv2.resize(confidence_map, (256, 256), interpolation=cv2.INTER_NEAREST)
+                
+                # Initialize output image
+                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                
+                # 1. Unknown (Low Confidence) -> Dark Gray
+                # 2. Free (High Confidence, High Distance) -> Light Gray
+                # 3. Occupied (High Confidence, Low Distance) -> Red
+                
+                # Define masks
+                # Confidence < 0.1 means we haven't seen this area well
+                mask_unknown = (confidence_large < 0.1)
+                
+                # Distance near 0 means obstacle. 
+                # Distance is normalized [0,1]. Obstacle cells have distance 0.
+                mask_occupied = (distance_large < 0.05) 
+                
+                # Fill colors
+                # Default to Light Gray ("Free" assumption for known space)
+                grid_vis[:, :] = [200, 200, 200]
+                
+                # Set Unknown regions
+                grid_vis[mask_unknown] = [50, 50, 50]
+                
+                # Set Occupied regions (only where we are confident)
+                grid_vis[mask_occupied & ~mask_unknown] = [0, 0, 255] # Red BGR
 
-            # Resize for better visibility (nearest neighbor to keep pixels sharp)
-            grid_large = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
+            # Handle Legacy uint8 grid (Old format: 64x64 uint8)
+            else:
+                if grid.ndim == 3:
+                     # If (1, 64, 64), take channel 0
+                     grid = grid[0]
+                
+                # Resize
+                grid_large = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
 
-            # Colorize: 0=Unknown(Dark Gray), 128=Free(Light Gray), 255=Occupied(Red)
-            color_grid = np.zeros((256, 256, 3), dtype=np.uint8)
+                # Colorize: 0=Unknown(Dark Gray), 128=Free(Light Gray), 255=Occupied(Red)
+                grid_vis = np.zeros((256, 256, 3), dtype=np.uint8)
 
-            mask_unknown = (grid_large == 0)
-            mask_free = (grid_large == 128)
-            mask_occupied = (grid_large == 255)
+                mask_unknown = (grid_large == 0)
+                mask_free = (grid_large == 128)
+                mask_occupied = (grid_large == 255)
 
-            color_grid[mask_unknown] = [50, 50, 50]   # Dark Gray
-            color_grid[mask_free] = [200, 200, 200]   # Light Gray
-            color_grid[mask_occupied] = [0, 0, 255]   # Red (BGR)
+                grid_vis[mask_unknown] = [50, 50, 50]
+                grid_vis[mask_free] = [200, 200, 200]
+                grid_vis[mask_occupied] = [0, 0, 255]
 
             # Encode to PNG
-            _, buffer = cv2.imencode('.png', color_grid)
+            _, buffer = cv2.imencode('.png', grid_vis)
             return Response(buffer.tobytes(), mimetype='image/png')
 
         except Exception as e:
             print(f"Error serving grid: {e}")
+            import traceback
+            traceback.print_exc()
             return Response(status=500)
 
     def index(self):
