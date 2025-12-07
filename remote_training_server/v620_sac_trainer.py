@@ -67,7 +67,8 @@ class ReplayBuffer:
         # Laser: 1x128x128, uint8 (0 or 1)
         self.laser = torch.zeros((capacity, 1, 128, 128), dtype=torch.uint8, device=storage_device)
         # Depth: 1x424x240, uint8 (quantized 0-1 -> 0-255)
-        self.depth = torch.zeros((capacity, 1, 424, 240), dtype=torch.uint8, device=storage_device)
+        # Depth: 1x240x424 (H, W), uint8 (quantized 0-1 -> 0-255)
+        self.depth = torch.zeros((capacity, 1, 240, 424), dtype=torch.uint8, device=storage_device)
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, device=storage_device)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32, device=storage_device)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
@@ -440,8 +441,8 @@ class V620SACTrainer:
             # Dummy inputs
             # Laser: (B, 1, 128, 128)
             dummy_laser = torch.randn(1, 1, 128, 128, device=self.device)
-            # Depth: (B, 1, 424, 240)
-            dummy_depth = torch.randn(1, 1, 424, 240, device=self.device)
+            # Depth: (B, 1, 240, 424)
+            dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
             # Proprio: (B, 10)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
