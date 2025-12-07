@@ -16,7 +16,7 @@ echo "Checking repositories..."
 # LDROBOT LiDAR Driver
 if [ ! -d "$SRC_DIR/ldlidar_stl_ros2" ]; then
     echo "⬇ Cloning ldlidar_stl_ros2..."
-    git clone https://github.com/ldrobot-sensor/ldlidar_stl_ros2.git "$SRC_DIR/ldlidar_stl_ros2"
+    git clone https://github.com/ldrobotSensorTeam/ldlidar_stl_ros2.git "$SRC_DIR/ldlidar_stl_ros2"
 else
     echo "✓ ldlidar_stl_ros2 already exists"
 fi

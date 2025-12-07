@@ -4,7 +4,10 @@ setup.py
 config/lc29h_rtk_config.yaml
 config/lsm9ds1_config.yaml
 launch/lc29h_rtk.launch.py
+launch/lidar_foxglove.launch.py
+launch/lidar_odometry.launch.py
 launch/lsm9ds1_imu.launch.py
+launch/stl19p_lidar.launch.py
 resource/tractor_sensors
 tractor_sensors/__init__.py
 tractor_sensors/lc29h_rtk_gps.py

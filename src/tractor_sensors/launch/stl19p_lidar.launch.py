@@ -19,8 +19,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'lidar_model',
-            default_value='LD19',
-            description='LiDAR Model (LD19 for STL-19p)'
+            default_value='LDLiDAR_LD19',
+            description='LiDAR Model (LDLiDAR_LD19 for STL-19p/LD19)'
         ),
 
         # LDROBOT LiDAR Publisher
@@ -35,7 +35,7 @@ def generate_launch_description():
                 {'frame_id': LaunchConfiguration('frame_id')},
                 {'port_name': LaunchConfiguration('port_name')},
                 {'port_baudrate': 230400},
-                {'laser_scan_dir': True},
+                {'laser_scan_dir': True},  # Counterclockwise - arrow points forward, standard orientation
                 {'enable_angle_crop_func': False},
                 {'angle_crop_min': 135.0},
                 {'angle_crop_max': 225.0}
@@ -43,13 +43,16 @@ def generate_launch_description():
         ),
         
         # Static Transform (Base -> Laser)
-        # Assuming laser is mounted on top, slightly forward?
-        # Adjust these values based on actual mounting!
-        # x=0.08 (forward), z=0.15 (height)
+        # LiDAR mounted flat above RealSense camera
+        # - 38mm BEHIND RealSense front (camera front at 133.35mm, LiDAR front at 95.35mm)
+        # - 200mm from ground to LiDAR bottom
+        # - Arrow points FORWARD (standard orientation)
+        # - Counterclockwise scan with no rotation for correct orientation
+        # x=0.07635m, y=0m, z=0.1915m, roll=0, pitch=0, yaw=0
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='base_to_laser_tf',
-            arguments=['0.08', '0.0', '0.15', '0.0', '0.0', '0.0', 'base_link', 'laser_link']
+            arguments=['0.07635', '0.0', '0.1915', '0.0', '0.0', '0.0', 'base_link', 'laser_link']
         )
     ])
