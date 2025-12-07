@@ -189,10 +189,8 @@ class SACEpisodeRunner(Node):
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
         
-        # Odometry: Prefer RF2O if available, otherwise Wheel Odom
-        # We subscribe to both but update logic will prioritize
-        self.create_subscription(Odometry, '/odom', self._wheel_odom_cb, 10)
-        self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
+        # Odometry: Use Fused EKF Output
+        self.create_subscription(Odometry, '/odometry/filtered', self._odom_cb, 10)
 
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         # self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data) # Removed due to noise
@@ -221,14 +219,13 @@ class SACEpisodeRunner(Node):
     def _scan_cb(self, msg):
         self._latest_scan = msg
         
-    def _wheel_odom_cb(self, msg):
-        # Fallback if no RF2O
-        if not hasattr(self, '_last_rf2o_time') or (time.time() - self._last_rf2o_time > 0.5):
-            self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
-            
-    def _rf2o_odom_cb(self, msg):
-        self._last_rf2o_time = time.time()
-        self._latest_odom = (msg.pose.pose.position.x, msg.pose.pose.position.y, msg.twist.twist.linear.x, msg.twist.twist.angular.z)
+    def _odom_cb(self, msg):
+        self._latest_odom = (
+            msg.pose.pose.position.x, 
+            msg.pose.pose.position.y, 
+            msg.twist.twist.linear.x, 
+            msg.twist.twist.angular.z
+        )
     def _imu_cb(self, msg): 
         self._latest_imu = (
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
