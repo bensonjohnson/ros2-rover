@@ -282,12 +282,12 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.019" length="0.041"/>
+        <cylinder radius="0.019" length="0.035"/>
       </geometry>
       <material name="black"/>
     </visual>
     <visual>
-      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <origin xyz="0 0 0.0175" rpy="0 0 0"/>
       <geometry>
         <cylinder radius="0.015" length="0.008"/>
       </geometry>
@@ -296,7 +296,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.019" length="0.041"/>
+        <cylinder radius="0.019" length="0.035"/>
       </geometry>
     </collision>
     <inertial>
@@ -335,7 +335,9 @@
     <child link="camera_link"/>
     <!-- Camera: 25mm deep, front flush with platform edge at base_length/2 (133.35mm) -->
     <!-- Camera center at: 133.35 - 12.5 = 120.85mm = 0.12085m from base_link center -->
-    <origin xyz="0.12085 0 ${platform_height/2 + 0.025/2}" rpy="0 0 0"/>
+    <!-- Measured camera bottom: 174mm from ground, optical center at 186.5mm -->
+    <!-- Platform at 109.25mm, so offset = 186.5 - 109.25 = 77.25mm -->
+    <origin xyz="0.12085 0 0.07725" rpy="0 0 0"/>
   </joint>
 
   <!-- GPS Joint REMOVED -->
@@ -373,9 +375,10 @@
     <child link="laser_link"/>
     <!-- LiDAR: 38mm diameter, front is 38mm behind camera front -->
     <!-- Camera front at 133.35mm, LiDAR front at 95.35mm, LiDAR center at 76.35mm = 0.07635m -->
-    <!-- Z: 200mm from ground = 171mm above base_link + 20.5mm to center = 191.5mm = 0.1915m -->
+    <!-- Measured: Camera top (199mm) + 3mm gap + 35mm/2 = 219.5mm from ground -->
+    <!-- base_link at 29mm, so offset = 219.5 - 29 = 190.5mm = 0.1905m -->
     <!-- Arrow points forward, no rotation needed - counterclockwise scan for correct orientation -->
-    <origin xyz="0.07635 0 0.1915" rpy="0 0 0"/>
+    <origin xyz="0.07635 0 0.1905" rpy="0 0 0"/>
   </joint>
 
   <!-- Virtual Visualization Wheels (small, for motion display only) -->

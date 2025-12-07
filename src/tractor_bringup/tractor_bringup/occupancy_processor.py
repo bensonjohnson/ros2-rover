@@ -16,14 +16,14 @@ class DepthToOccupancy:
     5. Create 64x64 occupancy grid (0=unknown, 128=free, 255=occupied).
     """
     
-    def __init__(self, 
-                 width=424, 
-                 height=240, 
-                 fx=386.0, 
-                 fy=386.0, 
-                 cx=212.0, 
+    def __init__(self,
+                 width=424,
+                 height=240,
+                 fx=386.0,
+                 fy=386.0,
+                 cx=212.0,
                  cy=120.0,
-                 camera_height=0.123, # meters (calculated from URDF)
+                 camera_height=0.187, # 174mm (bottom) + 12.5mm (to optical center)
                  camera_tilt_deg=0.0, # degrees down from horizontal
                  grid_size=64,
                  grid_range=3.0, # meters (forward/side range)
@@ -420,7 +420,7 @@ class MultiChannelOccupancy:
                  fy=386.0,
                  cx=212.0,
                  cy=120.0,
-                 camera_height=0.18, # 180mm from ground
+                 camera_height=0.187, # 174mm (bottom) + 12.5mm (to optical center)
                  camera_tilt_deg=0.0,
                  # Thresholds - INCREASED to avoid ground plane false positives
                  # Only consider objects > 15cm above ground as obstacles
