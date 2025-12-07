@@ -151,6 +151,12 @@ class ReplayBuffer:
         laser_slice = torch.as_tensor(laser[start_idx:end_idx].copy())
         depth_slice = torch.as_tensor(depth[start_idx:end_idx].copy())
         
+        # Ensure correct shape (N, 1, H, W)
+        if laser_slice.ndim == 3:
+            laser_slice = laser_slice.unsqueeze(1)
+        if depth_slice.ndim == 3:
+            depth_slice = depth_slice.unsqueeze(1)
+        
         # Quantize depth
         depth_slice = (depth_slice * 255.0).to(torch.uint8)
         laser_slice = laser_slice.to(torch.uint8)
@@ -162,10 +168,6 @@ class ReplayBuffer:
         self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
         self.dones[buffer_idx:buffer_idx+count] = torch.as_tensor(dones[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
         
-        # We don't store next_state explicitly to save RAM.
-        # We store sequential data.
-        # Wait, if I use a circular buffer and overwrite, I lose the "next" relationship at the boundary of the pointer?
-        # Standard ReplayBuffers store (s, s').
         # Storing images twice is heavy (2x RAM).
         # Optimization: Store only 's'. When sampling index 'i', 's_next' is 'i+1'.
         # We just need to handle the case where 'i' is the last element or 'i' is a terminal state.
