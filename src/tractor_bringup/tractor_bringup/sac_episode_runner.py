@@ -119,8 +119,9 @@ class SACEpisodeRunner(Node):
         
         # Warmup State
         self._warmup_start_time = 0.0
-        self._warmup_start_time = 0.0
         self._warmup_active = False
+        self._sensor_warmup_complete = False  # Flag for sensor stabilization
+        self._sensor_warmup_countdown = 50  # ~1.7 seconds at 30Hz
         self._prev_odom_update = None
         
         # Previous action for smoothness reward
@@ -675,17 +676,42 @@ class SACEpisodeRunner(Node):
         # 4. Execute Action
         cmd = Twist()
         
+        # SENSOR WARMUP: Count down before enabling safety-triggered resets
+        # This prevents false positives from unstable sensor data during startup
+        if not self._sensor_warmup_complete:
+            self._sensor_warmup_countdown -= 1
+            if self._sensor_warmup_countdown <= 0:
+                self._sensor_warmup_complete = True
+                self.get_logger().info('✅ Sensor warmup complete - safety system fully active')
+            elif self._sensor_warmup_countdown % 10 == 0:
+                self.get_logger().info(f'⏳ Sensor warmup: {self._sensor_warmup_countdown} cycles remaining...')
+        
+        # SAFETY DISTANCE: Use best available measurement
+        # If depth-based distance is suspiciously low (< 0.05m), it's likely invalid data
+        # Fall back to LiDAR-based minimum distance as sanity check
+        effective_min_dist = self._min_forward_dist
+        
+        if self._min_forward_dist < 0.05 and lidar_min > 0.2:
+            # Depth reports < 5cm but LiDAR sees > 20cm - depth is probably invalid
+            effective_min_dist = lidar_min
+            if self._sensor_warmup_complete:  # Only log after warmup
+                self.get_logger().debug(f'📏 Using LiDAR fallback: Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m')
+        
         # Safety Override Logic
-        if self._safety_override or self._min_forward_dist < 0.12:
+        safety_triggered = self._safety_override or effective_min_dist < 0.12
+        
+        if safety_triggered:
             # Override: Stop and reverse slightly
-            # LOG THIS!
-            if self._min_forward_dist < 0.12:
-                 self.get_logger().warn(f"🛑 Safety Stop! MinDist={self._min_forward_dist:.3f}m")
+            if effective_min_dist < 0.12 and self._sensor_warmup_complete:
+                self.get_logger().warn(f"🛑 Safety Stop! MinDist={effective_min_dist:.3f}m (Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m)")
                  
             cmd.linear.x = -0.05
             cmd.angular.z = 0.0
             actual_action = np.array([-0.5, 0.0]) # Record that we stopped
-            collision = True
+            
+            # Only mark as collision if sensors are warmed up
+            # During warmup, still stop but don't trigger episode resets
+            collision = self._sensor_warmup_complete
         else:
             # Normal execution
             cmd.linear.x = float(action[0] * self._curriculum_max_speed)
