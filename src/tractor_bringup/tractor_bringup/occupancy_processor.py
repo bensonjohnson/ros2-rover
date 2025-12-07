@@ -527,9 +527,11 @@ class MultiChannelOccupancy:
             # Initialize arrays
             x_r_near = np.array([])
             y_r_near = np.array([])
+            depths_near = np.array([])
             is_obstacle_near = np.array([], dtype=bool)
             x_r_far = np.array([])
             y_r_far = np.array([])
+            depths_far = np.array([])
             is_obstacle_far = np.array([], dtype=bool)
 
             # Process near-range points (reliable floor detection)
@@ -545,6 +547,7 @@ class MultiChannelOccupancy:
                 x_r_near = z_c_rot
                 y_r_near = -x_c_rot
                 z_r_near = -y_c_rot + self.camera_height
+                depths_near = z_c_rot  # Store depth values
 
                 # Standard obstacle detection for near range
                 is_obstacle_near = z_r_near > self.obstacle_thresh
@@ -562,6 +565,7 @@ class MultiChannelOccupancy:
                 x_r_far = z_c_rot_far
                 y_r_far = -x_c_rot_far
                 z_r_far = -y_c_rot_far + self.camera_height
+                depths_far = z_c_rot_far  # Store depth values
 
                 # Higher threshold for far range to avoid floor misclassification
                 # At 3-4m, depth errors can cause floor to appear 20-30cm high
@@ -571,6 +575,7 @@ class MultiChannelOccupancy:
             if len(points_near) > 0 or len(points_far) > 0:
                 x_r = np.concatenate([x_r_near, x_r_far])
                 y_r = np.concatenate([y_r_near, y_r_far])
+                depths = np.concatenate([depths_near, depths_far])
                 is_obstacle = np.concatenate([is_obstacle_near, is_obstacle_far])
 
                 if np.any(is_obstacle):
@@ -585,11 +590,11 @@ class MultiChannelOccupancy:
 
                     grid_rows = grid_rows[valid]
                     grid_cols = grid_cols[valid]
-                    depths = z_c_rot[is_obstacle][valid]
+                    obstacle_depths = depths[is_obstacle][valid]
 
                     # Keep minimum distance per cell
                     for i in range(len(grid_rows)):
-                        r, c, d = grid_rows[i], grid_cols[i], depths[i]
+                        r, c, d = grid_rows[i], grid_cols[i], obstacle_depths[i]
                         grid[r, c] = min(grid[r, c], d)
 
         # Process LiDAR scan
