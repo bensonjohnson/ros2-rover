@@ -966,3 +966,155 @@ class MultiChannelOccupancy:
             return crop
         else:
             return map_array[start_row:end_row, start_col:end_col].copy()
+
+
+class RawSensorProcessor:
+    """
+    Simplified processor for dual-encoder SAC architecture.
+
+    Processes sensors into raw representations for separate encoders:
+    - Laser: 128×128 binary occupancy grid
+    - Depth: 424×240 full-resolution normalized depth image
+
+    No EDT, no complex fusion - let the CNN learn features directly.
+    """
+
+    def __init__(self, grid_size=128, max_range=4.0):
+        """
+        Args:
+            grid_size: Size of laser occupancy grid (default 128×128)
+            max_range: Maximum sensor range in meters (for normalization)
+        """
+        self.grid_size = grid_size
+        self.max_range = max_range
+        self.resolution = max_range / grid_size  # meters per pixel
+
+    def process(self, depth_img, laser_scan):
+        """
+        Process raw sensor data into dual inputs for CNN.
+
+        Args:
+            depth_img: (424, 240) uint16 depth image in mm, or float32 in meters
+            laser_scan: LaserScan message with ranges, angle_min, angle_increment
+
+        Returns:
+            laser_grid: (128, 128) float32 [0.0, 1.0] - Binary occupancy
+            depth_processed: (424, 240) float32 [0.0, 1.0] - Normalized depth
+        """
+        # Process laser to 128×128 occupancy
+        laser_grid = self._process_laser(laser_scan)
+
+        # Process depth to FULL RESOLUTION 424×240
+        depth_processed = self._process_depth(depth_img)
+
+        return laser_grid, depth_processed
+
+    def _process_laser(self, scan):
+        """
+        Convert LiDAR polar scan to 128×128 binary occupancy grid.
+
+        Args:
+            scan: LaserScan message or dict with 'ranges', 'angle_min', 'angle_increment'
+
+        Returns:
+            grid: (128, 128) float32 binary occupancy (0=free, 1=occupied)
+        """
+        grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+
+        if scan is None:
+            return grid
+
+        # Extract scan data
+        if hasattr(scan, 'ranges'):
+            ranges = np.array(scan.ranges)
+            angle_min = scan.angle_min
+            angle_increment = scan.angle_increment
+        else:
+            ranges = np.array(scan['ranges'])
+            angle_min = scan['angle_min']
+            angle_increment = scan['angle_increment']
+
+        # Filter valid ranges (0.25m min to avoid self-hits, max_range for far limit)
+        valid = (ranges > 0.25) & (ranges < self.max_range) & np.isfinite(ranges)
+
+        if not np.any(valid):
+            return grid
+
+        # Polar → Cartesian conversion
+        # LiDAR coordinate system: X forward, Y left (standard ROS)
+        angles = angle_min + np.arange(len(ranges)) * angle_increment
+        x = ranges * np.cos(angles)
+        y = ranges * np.sin(angles)
+
+        # Apply valid mask
+        x = x[valid]
+        y = y[valid]
+
+        # Project to grid
+        # Robot at bottom-center: (row 127, col 64) for 128×128 grid
+        # +X (forward) maps to -row, +Y (left) maps to -col
+        scale = self.grid_size / self.max_range
+        rows = self.grid_size - 1 - (x * scale).astype(np.int32)
+        cols = (self.grid_size // 2) - (y * scale).astype(np.int32)
+
+        # Clip to bounds
+        valid_idx = (rows >= 0) & (rows < self.grid_size) & \
+                    (cols >= 0) & (cols < self.grid_size)
+
+        rows = rows[valid_idx]
+        cols = cols[valid_idx]
+
+        # Binary occupancy: 1.0 where obstacles detected
+        grid[rows, cols] = 1.0
+
+        # Clear robot footprint (45cm radius ~= 14 pixels at 3.125cm/px)
+        r_c, c_c = self.grid_size - 1, self.grid_size // 2
+        radius_px = int(0.45 / self.resolution)
+        y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
+        footprint_mask = ((y_grid - r_c)**2 + (x_grid - c_c)**2) < radius_px**2
+        grid[footprint_mask] = 0.0  # Free space
+
+        return grid
+
+    def _process_depth(self, depth_img):
+        """
+        Process raw depth image to normalized full-resolution format.
+
+        Args:
+            depth_img: (H, W) numpy array, uint16 (mm) or float32 (meters)
+
+        Returns:
+            depth_normalized: (424, 240) float32 [0.0, 1.0]
+                - 0.0 = very close
+                - 1.0 = far/invalid
+        """
+        if depth_img is None or depth_img.size == 0:
+            # Return empty grid at native resolution
+            return np.ones((240, 424), dtype=np.float32)  # All far/unknown
+
+        # Convert uint16 mm → float32 meters
+        if depth_img.dtype == np.uint16:
+            depth = depth_img.astype(np.float32) * 0.001
+        else:
+            depth = depth_img.astype(np.float32)
+
+        # Apply 3×3 median filter to reduce speckle noise
+        # medianBlur requires uint8 or uint16 input
+        if depth_img.dtype == np.uint16:
+            depth_filtered = cv2.medianBlur(depth_img, 3).astype(np.float32) * 0.001
+        else:
+            # Convert back to uint16 for filtering
+            depth_uint16 = np.clip(depth * 1000, 0, 65535).astype(np.uint16)
+            depth_filtered = cv2.medianBlur(depth_uint16, 3).astype(np.float32) * 0.001
+
+        depth = depth_filtered
+
+        # NO RESIZING - Keep native 424×240 resolution
+        # Normalize to [0.0, 1.0]
+        depth_clipped = np.clip(depth, 0.0, self.max_range)
+        depth_normalized = depth_clipped / self.max_range
+
+        # Invalid/zero depth → 1.0 (far/unknown, same as max range)
+        depth_normalized[depth == 0.0] = 1.0
+
+        return depth_normalized  # Shape: (240, 424)

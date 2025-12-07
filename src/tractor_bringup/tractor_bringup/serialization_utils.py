@@ -19,8 +19,8 @@ def serialize_batch(batch: dict) -> bytes:
 
     Args:
         batch: Dictionary containing:
-            - grid: np.array of shape (N, 4, 128, 128) float32
-                    4 channels: distance, exploration, confidence, height
+            - laser: np.array of shape (N, 128, 128) float32
+            - depth: np.array of shape (N, 424, 240) float32
             - proprio: np.array of shape (N, 10) float32
             - actions: np.array of shape (N, 2) float32
             - rewards: np.array of shape (N,) float32
@@ -31,12 +31,17 @@ def serialize_batch(batch: dict) -> bytes:
     """
     compressor = zstd.ZstdCompressor(level=3)
 
-    # Compress large image arrays
+    # Compress large arrays
     compressed = {
-        "grid": {
-            "data": compressor.compress(batch["grid"].tobytes()),
-            "shape": batch["grid"].shape,
-            "dtype": str(batch["grid"].dtype),
+        "laser": {
+            "data": compressor.compress(batch["laser"].tobytes()),
+            "shape": batch["laser"].shape,
+            "dtype": str(batch["laser"].dtype),
+        },
+        "depth": {
+            "data": compressor.compress(batch["depth"].tobytes()),
+            "shape": batch["depth"].shape,
+            "dtype": str(batch["depth"].dtype),
         },
         # Small arrays don't benefit from compression
         "proprio": batch["proprio"].tolist(),
@@ -62,10 +67,14 @@ def deserialize_batch(data: bytes) -> dict:
     compressed = msgpack.unpackb(data)
 
     return {
-        "grid": np.frombuffer(
-            decompressor.decompress(compressed["grid"]["data"]),
-            dtype=np.dtype(compressed["grid"]["dtype"])
-        ).reshape(compressed["grid"]["shape"]),
+        "laser": np.frombuffer(
+            decompressor.decompress(compressed["laser"]["data"]),
+            dtype=np.dtype(compressed["laser"]["dtype"])
+        ).reshape(compressed["laser"]["shape"]),
+        "depth": np.frombuffer(
+            decompressor.decompress(compressed["depth"]["data"]),
+            dtype=np.dtype(compressed["depth"]["dtype"])
+        ).reshape(compressed["depth"]["shape"]),
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
         "rewards": np.array(compressed["rewards"], dtype=np.float32),

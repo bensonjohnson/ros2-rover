@@ -35,7 +35,7 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
-from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy
+from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, RawSensorProcessor
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField, LaserScan
@@ -84,11 +84,13 @@ class SACEpisodeRunner(Node):
         self.total_steps = 0
         self.episode_reward = 0.0
 
-        # State
+        # State (raw sensors)
         self._latest_rgb = None # Keep for debug/logging if needed, but not used for model
-        self._latest_depth = None
+        self._latest_depth_raw = None  # Raw depth from camera (424, 240) uint16
         self._latest_scan = None
-        self._latest_grid = None # (4, 128, 128) float32
+        # Processed sensor data for model
+        self._latest_laser = None  # (128, 128) float32 - Binary laser occupancy
+        self._latest_depth = None  # (424, 240) float32 - Processed/normalized depth
         self._latest_odom = None
         self._latest_imu = None
         self._latest_mag = None
@@ -103,7 +105,7 @@ class SACEpisodeRunner(Node):
 
         # Buffers for batching
         self._data_buffer = {
-            'grid': [], 'proprio': [], 
+            'laser': [], 'depth': [], 'proprio': [],
             'actions': [], 'rewards': [], 'dones': []
         }
         self._buffer_lock = threading.Lock()
@@ -151,21 +153,12 @@ class SACEpisodeRunner(Node):
 
         # ROS2 Setup
         self.bridge = CvBridge()
-        # New multi-channel occupancy processor for enhanced SAC training
-        # NOTE: Using higher thresholds to avoid ground plane false positives
-        self.occupancy_processor = MultiChannelOccupancy(
-            grid_size=128,  # Increased to 128 for better resolution
-            range_m=4.0,
-            width=424, height=240,
-            camera_height=0.187,  # Corrected: 174mm (bottom) + 12.5mm (to optical center)
-            camera_tilt_deg=2.0,  # Slight downward tilt to account for real-world mounting
-            obstacle_height_thresh=0.15,  # Increased: Only consider objects > 15cm as obstacles
-            floor_thresh=0.12,  # Increased: ±12cm tolerance for ground plane
-            max_depth_for_floor=2.5  # Limit depth range for reliable floor detection
+        # Raw sensor processor for dual-encoder SAC architecture
+        # Processes laser to 128×128 binary occupancy, depth to full 424×240 resolution
+        self.occupancy_processor = RawSensorProcessor(
+            grid_size=128,  # Laser occupancy grid size
+            max_range=4.0   # Maximum sensor range for normalization
         )
-        # Keep old processors for backward compatibility (can be removed later)
-        self.scan_processor = ScanToOccupancy(grid_size=64, grid_range=3.0)
-        self.local_mapper = LocalMapper(map_size=256, decay_rate=0.995)
         self._setup_subscribers()
         self._setup_publishers()
         
@@ -209,15 +202,10 @@ class SACEpisodeRunner(Node):
 
     # Callbacks
     def _rgb_cb(self, msg): pass # self._latest_rgb = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
-    def _depth_cb(self, msg): 
-        # Use passthrough to get raw 16-bit depth
+    def _depth_cb(self, msg):
+        # Use passthrough to get raw 16-bit depth (uint16 mm)
         d = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
-        self._latest_depth = d
-        
-        # Process to grid immediately (or in control loop? Control loop is better for rate limiting)
-        # But doing it here ensures we always have fresh grid
-        # Let's do it in control loop to save CPU if inference is slower than camera
-        pass
+        self._latest_depth_raw = d  # Store raw for processing in control loop
     def _scan_cb(self, msg):
         self._latest_scan = msg
         
@@ -512,36 +500,24 @@ class SACEpisodeRunner(Node):
         t0 = time.time()
 
         # Get robot pose for exploration history
-        robot_pose = None
-        if self._latest_odom:
-            x, y, _, yaw = self._latest_odom
-            robot_pose = (x, y, yaw)
-
-        # NEW: Use MultiChannelOccupancy processor
-        # Returns: (4, 128, 128) float32 array, already normalized to [0, 1]
-        grid_multichannel = self.occupancy_processor.process(
-            depth_img=self._latest_depth,
-            laser_scan=self._latest_scan,
-            robot_pose=robot_pose
+        # Process sensors with RawSensorProcessor
+        # Returns: laser_grid (128, 128), depth_processed (424, 240)
+        laser_grid, depth_processed = self.occupancy_processor.process(
+            depth_img=self._latest_depth_raw,
+            laser_scan=self._latest_scan
         )
 
-        # Grid Input for Model: (1, 4, 128, 128)
-        grid_input = grid_multichannel[None, ...]  # Add batch dimension
+        # Store processed sensor data
+        self._latest_laser = laser_grid    # (128, 128) float32 [0, 1]
+        self._latest_depth = depth_processed  # (424, 240) float32 [0, 1]
 
-        # For compatibility with visualization/logging, extract channel 0 (distance)
-        # and convert back to uint8 format (0-255)
-        # grid_for_viz = (grid_multichannel[0] * 255).astype(np.uint8)
-        
-        # CRITICAL FIX: The model and training server expect the FULL 4-channel grid!
-        self._latest_grid = grid_multichannel 
-        
-        # Gap Following Analysis (for heuristic warmup and reward)
-        # Use distance channel for gap finding
-        distance_channel = grid_multichannel[0]  # (128, 128) normalized [0, 1]
+        # Gap Following Analysis using binary laser occupancy
+        # laser_grid: 0.0 = free, 1.0 = occupied
+        # For gap finding, invert: free space = high score
+        free_space = 1.0 - laser_grid  # (128, 128), free space = 1.0
 
-        # Simple heuristic: find column with maximum average distance
-        # Higher values = more free space
-        col_scores = np.mean(distance_channel, axis=0)
+        # Simple heuristic: find column with maximum average free space
+        col_scores = np.mean(free_space, axis=0)  # Average down columns
 
         # Smooth scores
         col_scores = np.convolve(col_scores, np.ones(7)/7, mode='same')
@@ -553,18 +529,20 @@ class SACEpisodeRunner(Node):
         # Angle: Left is +1.0, Right is -1.0
         self._target_heading = (64 - best_col) / 64.0
 
-        # Calculate min_forward_dist from distance channel (for reward function)
-        # Scan center strip (width ~30cm -> ~10 pixels at 3.125cm/pixel)
-        # Center col is 64. 64 +/- 5 = 59..69
-        # Only look at the bottom (closest to robot) to get safety distance!
-        # Robot is at row 127. Look at last 10 rows.
-        center_patch = distance_channel[118:128, 59:69]
-        
-        # Find minimum distance in front (inverse of distance = obstacle proximity)
-        # Distance channel: 1.0 = far (free), 0.0 = close (occupied)
-        min_normalized_dist = np.min(center_patch) if center_patch.size > 0 else 0.0
-        # Convert back to meters (denormalize)
-        self._min_forward_dist = min_normalized_dist * 4.0  # range_m = 4.0
+        # Calculate min_forward_dist from laser for reward function
+        # Laser: 0.0 = free, 1.0 = occupied
+        # Center strip: cols 59..69 (±5 from center col 64)
+        # Bottom 10 rows: 118..128 (closest to robot at row 127)
+        center_patch = laser_grid[118:128, 59:69]
+
+        # If any obstacle in patch, we're close to collision
+        # Sum up occupied cells - if any are occupied (>0.5), distance is small
+        obstacle_density = np.mean(center_patch) if center_patch.size > 0 else 0.0
+
+        # Convert obstacle density to distance estimate
+        # High obstacle density → low distance
+        # 0.0 (all free) → 4.0m, 1.0 (all occupied) → 0.0m
+        self._min_forward_dist = (1.0 - obstacle_density) * 4.0
 
         # DEBUG: Log forward distance stats
         # if self._min_forward_dist < 0.5:
@@ -597,8 +575,12 @@ class SACEpisodeRunner(Node):
         # Returns: [action_mean] (value head not exported in actor ONNX)
         if self._rknn_runtime:
             # Stateless inference (LSTM removed for export compatibility)
-            # Input: [grid, proprio]
-            outputs = self._rknn_runtime.inference(inputs=[grid_input, proprio])
+            # Input: [laser, depth, proprio]
+            # Add Batch and Channel dimensions: (H, W) -> (1, 1, H, W)
+            laser_input = laser_grid[None, None, ...]
+            depth_input = depth_processed[None, None, ...]
+            
+            outputs = self._rknn_runtime.inference(inputs=[laser_input, depth_input, proprio])
 
             # Output 0 is action (1, 2)
             action_mean = outputs[0][0] # (2,)
@@ -617,7 +599,8 @@ class SACEpisodeRunner(Node):
             if np.isnan(action).any() or np.isinf(action).any():
                 self.get_logger().error(f"❌ RKNN model output contains NaN/Inf!")
                 self.get_logger().error(f"   action: {action}")
-                self.get_logger().error(f"   Grid input range: [{grid_input.min():.3f}, {grid_input.max():.3f}]")
+                self.get_logger().error(f"   Laser input range: [{laser_input.min():.3f}, {laser_input.max():.3f}]")
+                self.get_logger().error(f"   Depth input range: [{depth_input.min():.3f}, {depth_input.max():.3f}]")
                 self.get_logger().error(f"   Proprio input: {proprio}")
                 # Use zeros and continue
                 action_mean = np.zeros(2)
@@ -791,7 +774,8 @@ class SACEpisodeRunner(Node):
 
         # 6. Store Transition
         with self._buffer_lock:
-            self._data_buffer['grid'].append(self._latest_grid)
+            self._data_buffer['laser'].append(self._latest_laser)
+            self._data_buffer['depth'].append(self._latest_depth)
             self._data_buffer['proprio'].append(proprio[0])
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
@@ -817,7 +801,8 @@ class SACEpisodeRunner(Node):
                 save_path = self._calibration_dir / f"calib_{timestamp}.npz"
                 np.savez_compressed(
                     save_path,
-                    grid=self._latest_grid,
+                    laser=self._latest_laser,
+                    depth=self._latest_depth,
                     proprio=proprio[0]
                 )
             
