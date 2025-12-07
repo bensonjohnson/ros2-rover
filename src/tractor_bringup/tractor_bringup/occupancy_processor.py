@@ -422,9 +422,11 @@ class MultiChannelOccupancy:
                  cy=120.0,
                  camera_height=0.18, # 180mm from ground
                  camera_tilt_deg=0.0,
-                 # Thresholds
-                 obstacle_height_thresh=0.1,
-                 floor_thresh=0.08):
+                 # Thresholds - INCREASED to avoid ground plane false positives
+                 # Only consider objects > 15cm above ground as obstacles
+                 obstacle_height_thresh=0.15,
+                 # Anything within ±12cm of ground level is floor (more tolerance)
+                 floor_thresh=0.12):
         
         self.grid_size = grid_size
         self.range_m = range_m
