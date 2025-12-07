@@ -131,6 +131,7 @@ class SACEpisodeRunner(Node):
 
         # Gap Following State
         self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right)
+        self._prev_target_heading = 0.0 # For rate limiting
         self._max_depth_val = 0.0
 
         # IMU State for Stitching
@@ -327,8 +328,9 @@ class SACEpisodeRunner(Node):
         # Typically we want forward gaps.
         # Let's focus on [-PI/2, PI/2] (Front 180).
         
-        # Filter for front sector only (-1.57 to 1.57) to avoid driving backwards
-        front_mask = (sorted_angles > -1.6) & (sorted_angles < 1.6)
+        # Filter for front sector only (±60° = ±1.05 rad) to avoid extreme turns
+        # Narrower than ±90° to keep rover focused on forward motion
+        front_mask = (sorted_angles > -1.05) & (sorted_angles < 1.05)
         
         # If we have front data
         if np.any(front_mask):
@@ -339,11 +341,19 @@ class SACEpisodeRunner(Node):
             # Smooth front arc
             if len(front_ranges) >= window_size:
                 smoothed_front = np.convolve(front_ranges, np.ones(window_size)/window_size, mode='same')
-                best_idx_local = np.argmax(smoothed_front)
+
+                # Apply forward bias: Prefer gaps closer to straight ahead
+                # Weight each gap by (1 - |angle|/max_angle) to favor forward direction
+                forward_bias = 1.0 - (np.abs(front_angles) / 1.05)  # 1.0 at center, 0.0 at ±60°
+                biased_scores = smoothed_front * (0.7 + 0.3 * forward_bias)  # 70% distance + 30% forward bias
+
+                best_idx_local = np.argmax(biased_scores)
                 best_angle = front_angles[best_idx_local]
             else:
-                # Too few points, pick max individual
-                best_idx_local = np.argmax(front_ranges)
+                # Too few points, pick max individual with forward bias
+                forward_bias = 1.0 - (np.abs(front_angles) / 1.05)
+                biased_scores = front_ranges * (0.7 + 0.3 * forward_bias)
+                best_idx_local = np.argmax(biased_scores)
                 best_angle = front_angles[best_idx_local]
         else:
             # Fallback to 360 search if front is blocked?
@@ -631,50 +641,60 @@ class SACEpisodeRunner(Node):
             # Heuristic Policy:
             # 1. Steer towards _target_heading (gap direction from LiDAR)
             # 2. Drive fast if aligned and clear, slow if turning or blocked
-            
-            # Angular action: directly map target heading (-1..1)
-            # _target_heading is already normalized: +1 (Left) to -1 (Right)
-            heuristic_angular = np.clip(self._target_heading, -1.0, 1.0)
-            
+
+            # Rate-limit target heading to prevent oscillation
+            # Max change of 0.3 per step (at 30Hz = 9 rad/s max turn rate)
+            max_heading_change = 0.3
+            heading_delta = self._target_heading - self._prev_target_heading
+            if abs(heading_delta) > max_heading_change:
+                # Clamp the change
+                heading_delta = np.sign(heading_delta) * max_heading_change
+            smoothed_target = self._prev_target_heading + heading_delta
+            self._prev_target_heading = smoothed_target
+
+            # Proportional control: Use gain of 0.5 to prevent bang-bang behavior
+            # This gives smoother steering: small errors = small corrections
+            heuristic_angular = np.clip(smoothed_target * 0.5, -1.0, 1.0)
+
             # Linear action based on LiDAR clearance (more reliable than depth)
             # lidar_min is the 360-degree safety bubble from actual LiDAR
             # Use LiDAR for safety distance check since it's more reliable than depth-grid computation
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
-            
+
             # DEBUG: Log clearance values to diagnose movement issues
             if not hasattr(self, '_debug_log_count'):
                 self._debug_log_count = 0
             self._debug_log_count += 1
             if self._debug_log_count % 30 == 0:  # Log every 1 second
-                self.get_logger().info(f"🔍 Warmup Debug: LiDAR_min={lidar_min:.3f}m, Depth_min={self._min_forward_dist:.3f}m, clearance={clearance_dist:.3f}m, target={self._target_heading:.2f}")
-            
+                self.get_logger().info(f"🔍 Warmup Debug: LiDAR_min={lidar_min:.3f}m, Depth_min={self._min_forward_dist:.3f}m, clearance={clearance_dist:.3f}m, target={self._target_heading:.2f}, smooth={smoothed_target:.2f}, cmd={heuristic_angular:.2f}")
+
             # Determine linear speed based on alignment AND clearance
             # NOTE: These are normalized actions [-1, 1] that get scaled by max_speed later
             # Make sure values are high enough to overcome motor deadzone
-            # LOWERED thresholds since we're getting stuck at 0 velocity
-            if abs(heuristic_angular) < 0.3 and clearance_dist > 0.35:
-                # Aligned and clear - go fast
+            if abs(heuristic_angular) < 0.2 and clearance_dist > 0.35:
+                # Well aligned and clear - go fast
                 heuristic_linear = 1.0
             elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.2:
-                # Aligned but getting close - moderate
+                # Reasonably aligned - moderate speed
                 heuristic_linear = 0.8
-            elif abs(heuristic_angular) < 0.6 and clearance_dist > 0.2:
-                # Turning and clear - moderate speed
-                heuristic_linear = 0.7
+            elif abs(heuristic_angular) < 0.5 and clearance_dist > 0.2:
+                # Turning and clear - slower
+                heuristic_linear = 0.6
             elif clearance_dist > 0.15:
-                # Close but some room - slower but still moving
-                heuristic_linear = 0.5
+                # Close but some room - slow
+                heuristic_linear = 0.4
             else:
-                # Very close - slow crawl (not full stop, to collect data)
+                # Very close - crawl
                 heuristic_linear = 0.3
-                
+
             # Override model action with heuristic
             action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
-            
-            # Add small noise to heuristic so we don't just record identical straight lines
-            # This helps the policy learn robustness
-            noise = np.random.normal(0, 0.1, size=2) 
-            action = np.clip(action + noise, -1.0, 1.0)
+
+            # Add small noise ONLY to linear speed (not angular - avoid oscillation)
+            # This helps the policy learn robustness without causing steering jitter
+            linear_noise = np.random.normal(0, 0.1)
+            action[0] = np.clip(action[0] + linear_noise, 0.0, 1.0)  # Linear only
+            action[1] = np.clip(action[1], -1.0, 1.0)  # Angular unchanged
             
         elif self._warmup_active:
             self.get_logger().info('✅ Warmup Complete (Model v1+ loaded). Switching to learned policy.')
