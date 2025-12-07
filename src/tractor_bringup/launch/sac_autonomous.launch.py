@@ -45,8 +45,8 @@ def generate_launch_description():
     )
 
     # 2. Motor Driver
-    # Use wheel encoder odometry instead of RF2O laser odometry
-    # RF2O can be unstable during fast motion or featureless environments
+    # Use wheel encoder odometry as input to EKF
+    # DISABLE TF publishing to avoid conflict with EKF
     hiwonder_motor_node = Node(
         package="tractor_control",
         executable="hiwonder_motor_driver",
@@ -54,7 +54,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(tractor_bringup_dir, "config", "hiwonder_motor_params.yaml"),
-            {"publish_tf": True} # Enable wheel odom TF (more reliable than RF2O for SAC warmup)
+            {"publish_tf": False} # Let EKF handle odom -> base_link
         ]
     )
 
@@ -95,13 +95,16 @@ def generate_launch_description():
         }.items()
     )
 
-    # 4c. LiDAR Odometry (RF2O) - DISABLED for SAC warmup
-    # RF2O can be unstable during fast motion; using wheel encoder odom instead
-    # rf2o_launch = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(
-    #         os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")
-    #     )
-    # )
+    # 4c. LiDAR Odometry (RF2O)
+    # Enable for EKF fusion
+    rf2o_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")
+        ),
+        launch_arguments={
+            'publish_tf': 'false' # Let EKF handle odom -> base_link
+        }.items()
+    )
 
     # 5. Velocity Feedback Controller
     vfc_node = Node(
@@ -131,6 +134,17 @@ def generate_launch_description():
         }],
     )
     
+    # 6b. Robot Localization (EKF)
+    # Fuses Wheel Odom, RF2O, and IMU
+    robot_localization_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_bringup_dir, 'launch', 'robot_localization.launch.py')
+        ),
+        launch_arguments={
+            'use_gps': 'false' # Local EKF only
+        }.items()
+    )
+
     # 7. SAC Episode Runner Node
     sac_runner_node = Node(
         package='tractor_bringup',
@@ -160,11 +174,13 @@ def generate_launch_description():
         
         # Sensors (delayed)
         TimerAction(period=2.0, actions=[lidar_launch]),
-        # RF2O disabled - using wheel encoder odom instead
-        # TimerAction(period=4.0, actions=[rf2o_launch]),
+        TimerAction(period=4.0, actions=[rf2o_launch]),
         TimerAction(period=5.0, actions=[realsense_launch]),
         TimerAction(period=6.0, actions=[lsm9ds1_launch]),
         
+        # State Estimation (delayed to ensure sensors ready)
+        TimerAction(period=7.0, actions=[robot_localization_launch]),
+
         # Control (delayed)
         TimerAction(period=8.0, actions=[vfc_node]),
         TimerAction(period=9.0, actions=[safety_monitor_node]),
