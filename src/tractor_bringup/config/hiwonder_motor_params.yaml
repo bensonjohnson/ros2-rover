@@ -20,5 +20,5 @@ hiwonder_motor_driver:
     # Odometry publishing
     publish_odom: true
     odom_frame_id: "odom"
-    base_frame_id: "base_footprint"
+    base_frame_id: "base_link"
     odom_topic: "/odom"
