@@ -257,59 +257,108 @@ class SACEpisodeRunner(Node):
             return 0.0, 0.0, 0.0
 
         ranges = np.array(scan_msg.ranges)
-        # Filter invalid
-        valid = (ranges > 0.05) & (ranges < scan_msg.range_max)
+        
+        # 1. Strict Filtering (NaN, Inf, Range Limits)
+        # Using 0.05 and range_max from message
+        valid = (ranges > 0.05) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
+        
         if not np.any(valid):
+            # No valid data? Assume wide open (safest for reward, but risky for nav)
+            # Or assume blocked? If completely blind, stop.
+            # Let's return safe values but valid=False signal implicitly via 0.0 heading
             return 3.0, 3.0, 0.0
 
-        # 1. Safety Bubble
-        min_dist_all = np.min(ranges[valid])
+        # Used for stats
+        valid_ranges = ranges[valid]
 
-        # 2. Side Clearance (Left/Right sectors)
-        # Scan is usually CCW. Angle 0 is front? Or front is middle?
-        # LD19: Usually 0 is back w.r.t wire? Need to assume standard Frame:
-        # Laser Line: X Forward. 0 deg usually X axis (Forward).
-        # ranges index corresponds to angle_min + i * increment
-        
-        # Let's assume standard ROS: 0 is Forward, +90 Left, -90 Right.
-        # Check angle_min/max in launch? default is usually -PI to PI
-        
-        # We need to map angles to indices
+        # 1. Safety Bubble
+        min_dist_all = np.min(valid_ranges)
+
+        # 2. Angle Handling
+        # LD19/STL19p often outputs 0..2PI. We want -PI..PI for steering.
+        # angles = angle_min + i * increment
         angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
         
-        # Left Sector: 45 to 135 deg (0.78 to 2.35 rad)
+        # Wrap angles to [-PI, PI]
+        angles = (angles + np.pi) % (2 * np.pi) - np.pi
+        
+        # 3. Side Clearance
+        # Left: +45 to +135 deg (+0.78 to +2.35 rad)
+        # Right: -135 to -45 deg (-2.35 to -0.78 rad)
         left_mask = (angles > 0.78) & (angles < 2.35) & valid
-        # Right Sector: -135 to -45 deg (-2.35 to -0.78 rad)
         right_mask = (angles > -2.35) & (angles < -0.78) & valid
         
         l_dist = np.mean(ranges[left_mask]) if np.any(left_mask) else 3.0
         r_dist = np.mean(ranges[right_mask]) if np.any(right_mask) else 3.0
         mean_side_dist = (l_dist + r_dist) / 2.0
 
-        # 3. Gap Finding (Simple)
+        # 4. Gap Finding
         # Find 20-degree sector with max average depth
-        # Convolve with window of size ~20 deg
+        # We need to sort by angle to do a proper convolution or sliding window on the circle?
+        # Actually, since 'angles' might be jumbled after wrapping if scan wasn't -PI..PI,
+        # we should sort the data by angle first to ensure continuity.
+        
+        sort_idx = np.argsort(angles)
+        sorted_angles = angles[sort_idx]
+        sorted_ranges = ranges[sort_idx]
+        sorted_valid = valid[sort_idx]
+        
+        # Fill invalid with 0.0 (treat as obstacle/unknown for gap finding)
+        ranges_gap = sorted_ranges.copy()
+        ranges_gap[~sorted_valid] = 0.0
+        
+        # Window size ~20 degrees
+        # avg_increment = (max - min) / len? Or just use scan_msg.angle_increment
         window_size = int(np.radians(20) / scan_msg.angle_increment)
         window_size = max(1, window_size)
         
-        # Fill invalid with 0 for gap finding (don't go into unknown)
-        ranges_gap = ranges.copy()
-        ranges_gap[~valid] = 0.0
+        # Circular convolution? Or just valid range?
+        # Scan usually covers 360.
+        # Pad array for circular continuity
+        ranges_padded = np.pad(ranges_gap, (window_size//2, window_size//2), mode='wrap')
         
-        # Convolution
-        smoothed = np.convolve(ranges_gap, np.ones(window_size)/window_size, mode='same')
-        best_idx = np.argmax(smoothed)
-        best_angle = angles[best_idx]
+        # Convolve
+        smoothed = np.convolve(ranges_padded, np.ones(window_size)/window_size, mode='valid')
         
-        # Map angle (-PI..PI) to Heading (-1..1), where -1 is Right (-PI/2), 1 is Left (PI/2)
-        # Clip to front-ish semi-circle (-PI/2 to PI/2) for target
+        # Find best index in smoothed (matches length of ranges_gap potentially, or close)
+        # 'valid' mode output length = N - K + 1. 
+        # Actually simplest is mode='same' on original and handle wrapping manually or ignore edge effect.
+        # Let's use mode='same' on unpadded for simplicity, assuming adequate standard scan.
+        # But wait, gap might be at -PI/PI boundary (behind?). 
+        # Typically we want forward gaps.
+        # Let's focus on [-PI/2, PI/2] (Front 180).
+        
+        # Filter for front sector only (-1.57 to 1.57) to avoid driving backwards
+        front_mask = (sorted_angles > -1.6) & (sorted_angles < 1.6)
+        
+        # If we have front data
+        if np.any(front_mask):
+            # Extract front arc
+            front_ranges = ranges_gap[front_mask]
+            front_angles = sorted_angles[front_mask]
+            
+            # Smooth front arc
+            if len(front_ranges) >= window_size:
+                smoothed_front = np.convolve(front_ranges, np.ones(window_size)/window_size, mode='same')
+                best_idx_local = np.argmax(smoothed_front)
+                best_angle = front_angles[best_idx_local]
+            else:
+                # Too few points, pick max individual
+                best_idx_local = np.argmax(front_ranges)
+                best_angle = front_angles[best_idx_local]
+        else:
+            # Fallback to 360 search if front is blocked?
+            # Or just assume forward if everything fails?
+            best_angle = 0.0
+            
+        # Map to Heading -1..1
         target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
         
         # DEBUG: Log if target is stuck at extremes
         if abs(target) > 0.9:
             self.get_logger().info(f"🔍 Gap Debug: Best Angle={best_angle:.2f} rad, Target={target:.2f}")
-            self.get_logger().info(f"   Ranges: Min={np.min(ranges):.2f}, Max={np.max(ranges):.2f}, Mean={np.mean(ranges[valid]):.2f}")
-            self.get_logger().info(f"   Gap Window Avg: {smoothed[best_idx]:.2f} (Index {best_idx}/{len(ranges)})")
+            self.get_logger().info(f"   Ranges: Min={min_dist_all:.2f}, Max={np.max(valid_ranges):.2f}, Mean={np.mean(valid_ranges):.2f}")
+            # self.get_logger().info(f"   Gap Window Avg: {smoothed[best_idx]:.2f} (Index {best_idx}/{len(ranges)})")
         
         return min_dist_all, mean_side_dist, target
 
