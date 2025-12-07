@@ -4,6 +4,7 @@ setup.py
 resource/tractor_control
 tractor_control/__init__.py
 tractor_control/hiwonder_motor_driver.py
+tractor_control/velocity_estimator.py
 tractor_control/velocity_feedback_controller.py
 tractor_control/xbox_controller_teleop.py
 tractor_control.egg-info/PKG-INFO

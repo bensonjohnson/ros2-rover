@@ -6,6 +6,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -33,7 +34,10 @@ def generate_launch_description():
     urdf_file = os.path.join(pkg_tractor_bringup, "urdf", "tractor.urdf.xacro")
 
     # Robot description
-    robot_description_content = Command(["xacro ", urdf_file])
+    robot_description_content = ParameterValue(
+        Command(["xacro ", urdf_file]),
+        value_type=str
+    )
 
     # Robot state publisher
     robot_state_publisher_node = Node(

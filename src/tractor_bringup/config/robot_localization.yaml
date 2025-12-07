@@ -55,10 +55,10 @@ ekf_filter_node:
     ]
     
     # Sensor configurations
-    # Wheel odometry from motor encoders
-    odom0: wheel_odom
-    odom0_config: [false, false, false,  # x, y, z position
-                   false, false, false,  # roll, pitch, yaw orientation
+    # Laser odometry from LD19 LiDAR (rf2o) - replaces wheel encoders for better accuracy
+    odom0: odom_rf2o
+    odom0_config: [true,  true,  false,  # x, y, z position - Use position from laser odometry
+                   false, false, true,   # roll, pitch, yaw orientation - Use yaw from laser odometry
                    true,  true,  false,  # x, y, z linear velocity
                    false, false, true,   # roll, pitch, yaw angular velocity
                    false, false, false] # x, y, z linear acceleration
