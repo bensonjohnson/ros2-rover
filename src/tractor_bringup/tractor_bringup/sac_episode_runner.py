@@ -151,14 +151,15 @@ class SACEpisodeRunner(Node):
         # ROS2 Setup
         self.bridge = CvBridge()
         # New multi-channel occupancy processor for enhanced SAC training
+        # NOTE: Using higher thresholds to avoid ground plane false positives
         self.occupancy_processor = MultiChannelOccupancy(
             grid_size=128,  # Increased to 128 for better resolution
             range_m=4.0,
             width=424, height=240,
             camera_height=0.18,  # Updated: 180mm from ground
             camera_tilt_deg=0.0,
-            obstacle_height_thresh=0.1,
-            floor_thresh=0.08
+            obstacle_height_thresh=0.15,  # Increased: Only consider objects > 15cm as obstacles
+            floor_thresh=0.12  # Increased: ±12cm tolerance for ground plane
         )
         # Keep old processors for backward compatibility (can be removed later)
         self.scan_processor = ScanToOccupancy(grid_size=64, grid_range=3.0)
@@ -631,22 +632,34 @@ class SACEpisodeRunner(Node):
                 self.pbar.set_description("🔥 Warmup: Gap Follower")
 
             # Heuristic Policy:
-            # 1. Steer towards _target_heading
+            # 1. Steer towards _target_heading (gap direction from LiDAR)
             # 2. Drive fast if aligned and clear, slow if turning or blocked
             
             # Angular action: directly map target heading (-1..1)
             # _target_heading is already normalized: +1 (Left) to -1 (Right)
             heuristic_angular = np.clip(self._target_heading, -1.0, 1.0)
             
-            # Linear action:
-            # If we are aligned (abs(heading) < 0.3) and have space, go FAST
-            # If we are turning sharply, go SLOW
-            if abs(heuristic_angular) < 0.3 and self._min_forward_dist > 0.5:
-                heuristic_linear = 1.0 # Full speed ahead
-            elif abs(heuristic_angular) < 0.6:
-                heuristic_linear = 0.5 # Moderate speed
+            # Linear action based on LiDAR clearance (more reliable than depth)
+            # lidar_min is the 360-degree safety bubble from actual LiDAR
+            # Use LiDAR for safety distance check since it's more reliable than depth-grid computation
+            clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
+            
+            # Determine linear speed based on alignment AND clearance
+            if abs(heuristic_angular) < 0.3 and clearance_dist > 0.4:
+                # Aligned and clear - go fast
+                heuristic_linear = 1.0
+            elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.25:
+                # Aligned but getting close - moderate
+                heuristic_linear = 0.6
+            elif abs(heuristic_angular) < 0.6 and clearance_dist > 0.25:
+                # Turning and clear - moderate speed
+                heuristic_linear = 0.5
+            elif clearance_dist > 0.2:
+                # Close but some room - crawl forward
+                heuristic_linear = 0.3
             else:
-                heuristic_linear = 0.2 # Crawl while turning sharply
+                # Very close - stop or reverse
+                heuristic_linear = -0.1
                 
             # Override model action with heuristic
             action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
