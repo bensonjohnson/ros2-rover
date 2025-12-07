@@ -421,12 +421,14 @@ class MultiChannelOccupancy:
                  cx=212.0,
                  cy=120.0,
                  camera_height=0.187, # 174mm (bottom) + 12.5mm (to optical center)
-                 camera_tilt_deg=0.0,
+                 camera_tilt_deg=2.0,  # Slight downward tilt (adjust if needed)
                  # Thresholds - INCREASED to avoid ground plane false positives
                  # Only consider objects > 15cm above ground as obstacles
                  obstacle_height_thresh=0.15,
                  # Anything within ±12cm of ground level is floor (more tolerance)
-                 floor_thresh=0.12):
+                 floor_thresh=0.12,
+                 # Max depth range for reliable floor detection (depth sensor degrades beyond this)
+                 max_depth_for_floor=2.5):
         
         self.grid_size = grid_size
         self.range_m = range_m
@@ -443,6 +445,7 @@ class MultiChannelOccupancy:
         self.camera_tilt = np.radians(camera_tilt_deg)
         self.obstacle_thresh = obstacle_height_thresh
         self.floor_thresh = floor_thresh
+        self.max_depth_for_floor = max_depth_for_floor
 
         # Pre-compute unprojection matrices
         u, v = np.meshgrid(np.arange(width), np.arange(height))
@@ -512,25 +515,58 @@ class MultiChannelOccupancy:
             # Flatten for processing
             points_c = np.stack([x_c, y_c, z_c], axis=-1).reshape(-1, 3)
 
-            # Filter valid depth
-            valid_mask = (points_c[:, 2] > 0.1) & (points_c[:, 2] < self.range_m)
-            points_c = points_c[valid_mask]
+            # Filter valid depth - split into near and far ranges
+            # Near range: high confidence for floor detection
+            # Far range: depth sensor less reliable, more conservative obstacle detection
+            valid_near = (points_c[:, 2] > 0.1) & (points_c[:, 2] <= self.max_depth_for_floor)
+            valid_far = (points_c[:, 2] > self.max_depth_for_floor) & (points_c[:, 2] < self.range_m)
 
-            if len(points_c) > 0:
+            points_near = points_c[valid_near]
+            points_far = points_c[valid_far]
+
+            # Process near-range points (reliable floor detection)
+            is_obstacle_near = np.array([], dtype=bool)
+            if len(points_near) > 0:
                 # Transform to rover frame
                 c = np.cos(self.camera_tilt)
                 s = np.sin(self.camera_tilt)
 
-                y_c_rot = points_c[:, 1] * c - points_c[:, 2] * s
-                z_c_rot = points_c[:, 1] * s + points_c[:, 2] * c
-                x_c_rot = points_c[:, 0]
+                y_c_rot = points_near[:, 1] * c - points_near[:, 2] * s
+                z_c_rot = points_near[:, 1] * s + points_near[:, 2] * c
+                x_c_rot = points_near[:, 0]
 
-                x_r = z_c_rot
-                y_r = -x_c_rot
-                z_r = -y_c_rot + self.camera_height
+                x_r_near = z_c_rot
+                y_r_near = -x_c_rot
+                z_r_near = -y_c_rot + self.camera_height
 
-                # Only consider obstacles (above ground)
-                is_obstacle = z_r > self.obstacle_thresh
+                # Standard obstacle detection for near range
+                is_obstacle_near = z_r_near > self.obstacle_thresh
+
+            # Process far-range points (conservative - higher threshold to avoid floor false positives)
+            is_obstacle_far = np.array([], dtype=bool)
+            if len(points_far) > 0:
+                # Transform to rover frame
+                c = np.cos(self.camera_tilt)
+                s = np.sin(self.camera_tilt)
+
+                y_c_rot_far = points_far[:, 1] * c - points_far[:, 2] * s
+                z_c_rot_far = points_far[:, 1] * s + points_far[:, 2] * c
+                x_c_rot_far = points_far[:, 0]
+
+                x_r_far = z_c_rot_far
+                y_r_far = -x_c_rot_far
+                z_r_far = -y_c_rot_far + self.camera_height
+
+                # Higher threshold for far range to avoid floor misclassification
+                # At 3-4m, depth errors can cause floor to appear 20-30cm high
+                is_obstacle_far = z_r_far > (self.obstacle_thresh + 0.20)  # +20cm tolerance
+
+            # Combine near and far points
+            if len(points_near) > 0 or len(points_far) > 0:
+                points_c = np.vstack([points_near, points_far]) if len(points_near) > 0 and len(points_far) > 0 else (points_near if len(points_near) > 0 else points_far)
+                x_r = np.concatenate([x_r_near, x_r_far]) if len(points_near) > 0 and len(points_far) > 0 else (x_r_near if len(points_near) > 0 else x_r_far)
+                y_r = np.concatenate([y_r_near, y_r_far]) if len(points_near) > 0 and len(points_far) > 0 else (y_r_near if len(points_near) > 0 else y_r_far)
+                is_obstacle = np.concatenate([is_obstacle_near, is_obstacle_far]) if len(points_near) > 0 and len(points_far) > 0 else (is_obstacle_near if len(points_near) > 0 else is_obstacle_far)
 
                 if np.any(is_obstacle):
                     # Project to grid

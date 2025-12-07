@@ -158,9 +158,10 @@ class SACEpisodeRunner(Node):
             range_m=4.0,
             width=424, height=240,
             camera_height=0.187,  # Corrected: 174mm (bottom) + 12.5mm (to optical center)
-            camera_tilt_deg=0.0,
+            camera_tilt_deg=2.0,  # Slight downward tilt to account for real-world mounting
             obstacle_height_thresh=0.15,  # Increased: Only consider objects > 15cm as obstacles
-            floor_thresh=0.12  # Increased: ±12cm tolerance for ground plane
+            floor_thresh=0.12,  # Increased: ±12cm tolerance for ground plane
+            max_depth_for_floor=2.5  # Limit depth range for reliable floor detection
         )
         # Keep old processors for backward compatibility (can be removed later)
         self.scan_processor = ScanToOccupancy(grid_size=64, grid_range=3.0)
