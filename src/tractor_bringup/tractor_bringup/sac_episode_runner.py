@@ -645,21 +645,23 @@ class SACEpisodeRunner(Node):
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
             
             # Determine linear speed based on alignment AND clearance
+            # NOTE: These are normalized actions [-1, 1] that get scaled by max_speed later
+            # Make sure values are high enough to overcome motor deadzone
             if abs(heuristic_angular) < 0.3 and clearance_dist > 0.4:
                 # Aligned and clear - go fast
                 heuristic_linear = 1.0
             elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.25:
                 # Aligned but getting close - moderate
-                heuristic_linear = 0.6
+                heuristic_linear = 0.8
             elif abs(heuristic_angular) < 0.6 and clearance_dist > 0.25:
                 # Turning and clear - moderate speed
-                heuristic_linear = 0.5
+                heuristic_linear = 0.7
             elif clearance_dist > 0.2:
-                # Close but some room - crawl forward
-                heuristic_linear = 0.3
+                # Close but some room - slower but still moving
+                heuristic_linear = 0.5
             else:
-                # Very close - stop or reverse
-                heuristic_linear = -0.1
+                # Very close - stop (don't reverse during warmup - let safety handle it)
+                heuristic_linear = 0.0
                 
             # Override model action with heuristic
             action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
@@ -727,7 +729,12 @@ class SACEpisodeRunner(Node):
             collision = self._sensor_warmup_complete
         else:
             # Normal execution
-            cmd.linear.x = float(action[0] * self._curriculum_max_speed)
+            # During warmup (model v0), use max_linear directly for better movement
+            # After training starts, use curriculum_max_speed which may be lower
+            if self._current_model_version == 0:
+                cmd.linear.x = float(action[0] * self.max_linear)
+            else:
+                cmd.linear.x = float(action[0] * self._curriculum_max_speed)
             cmd.angular.z = float(action[1] * self.max_angular)
             actual_action = action
             collision = False

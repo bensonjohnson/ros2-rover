@@ -552,6 +552,9 @@ class MultiChannelOccupancy:
                         grid[r, c] = min(grid[r, c], d)
 
         # Process LiDAR scan
+        # NOTE: LiDAR provides 2D horizontal slice at a fixed height (~10cm off ground)
+        # It's excellent for detecting walls/obstacles but may produce artifacts at edges
+        # We use it ONLY for obstacle detection, not for filling the entire grid
         if laser_scan is not None:
             if hasattr(laser_scan, 'ranges'):
                 ranges = np.array(laser_scan.ranges)
@@ -562,11 +565,12 @@ class MultiChannelOccupancy:
                 angle_min = laser_scan['angle_min']
                 angle_increment = laser_scan['angle_increment']
 
-            # Filter valid ranges - Increase min to 0.2m to avoid self-hits
-            valid_mask = (ranges > 0.2) & (ranges < self.range_m)
+            # Filter valid ranges - Increase min to 0.25m to avoid self-hits from rover body
+            valid_mask = (ranges > 0.25) & (ranges < self.range_m) & np.isfinite(ranges)
 
             if np.any(valid_mask):
                 # Polar to Cartesian
+                # LiDAR coordinate system: X forward, Y left (standard ROS)
                 angles = angle_min + np.arange(len(ranges)) * angle_increment
                 x = ranges * np.cos(angles)
                 y = ranges * np.sin(angles)
@@ -574,24 +578,25 @@ class MultiChannelOccupancy:
                 # Apply mask
                 x = x[valid_mask]
                 y = y[valid_mask]
-                ranges = ranges[valid_mask]
+                ranges_filtered = ranges[valid_mask]
 
                 # Project to grid
+                # Grid coordinate system: Robot at (127, 64), +X is UP (row 0), +Y is LEFT (col 0)
                 scale = self.grid_size / self.range_m
                 rows = self.grid_size - 1 - (x * scale).astype(np.int32)
                 cols = (self.grid_size // 2) - (y * scale).astype(np.int32)
 
-                # Clip to bounds
-                valid = (rows >= 0) & (rows < self.grid_size) & \
+                # Clip to bounds - also exclude the robot footprint region
+                valid = (rows >= 0) & (rows < self.grid_size - 15) & \
                         (cols >= 0) & (cols < self.grid_size)
 
                 rows = rows[valid]
                 cols = cols[valid]
-                ranges = ranges[valid]
+                ranges_filtered = ranges_filtered[valid]
 
                 # Keep minimum distance
                 for i in range(len(rows)):
-                    r, c, d = rows[i], cols[i], ranges[i]
+                    r, c, d = rows[i], cols[i], ranges_filtered[i]
                     grid[r, c] = min(grid[r, c], d)
 
         # Force Clear Robot Footprint (Mask out self-collisions)
