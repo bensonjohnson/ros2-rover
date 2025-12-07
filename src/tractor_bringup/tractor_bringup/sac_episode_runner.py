@@ -556,6 +556,11 @@ class SACEpisodeRunner(Node):
         # Convert back to meters (denormalize)
         self._min_forward_dist = min_normalized_dist * 4.0  # range_m = 4.0
 
+        # DEBUG: Log forward distance stats
+        # if self._min_forward_dist < 0.5:
+        #     self.get_logger().info(f"📏 Safety Check: MinDist={self._min_forward_dist:.3f}m (Norm={min_normalized_dist:.3f})")
+        #     self.get_logger().info(f"   Patch Mean: {np.mean(center_patch):.3f}, Min: {np.min(center_patch):.3f}")
+
         # Get IMU data
         if self._latest_imu:
             ax, ay, az, gx, gy, gz = self._latest_imu
@@ -673,6 +678,10 @@ class SACEpisodeRunner(Node):
         # Safety Override Logic
         if self._safety_override or self._min_forward_dist < 0.12:
             # Override: Stop and reverse slightly
+            # LOG THIS!
+            if self._min_forward_dist < 0.12:
+                 self.get_logger().warn(f"🛑 Safety Stop! MinDist={self._min_forward_dist:.3f}m")
+                 
             cmd.linear.x = -0.05
             cmd.angular.z = 0.0
             actual_action = np.array([-0.5, 0.0]) # Record that we stopped
