@@ -599,8 +599,8 @@ class MultiChannelOccupancy:
         r_center, c_center = self.grid_size - 1, self.grid_size // 2
         y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
         # (r - r_cnt)^2 + (c - c_cnt)^2 < radius^2
-        # Use 25cm radius clearing to be safe
-        radius_px = int(0.25 / self.resolution)
+        # Use 45cm radius clearing to be safe (tractor body + noise)
+        radius_px = int(0.45 / self.resolution)
         footprint_mask = ((y_grid - r_center)**2 + (x_grid - c_center)**2) < radius_px**2
         grid[footprint_mask] = self.range_m # Reset to max distance (free)
 
