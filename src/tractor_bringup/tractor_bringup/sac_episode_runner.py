@@ -151,10 +151,10 @@ class SACEpisodeRunner(Node):
         self.bridge = CvBridge()
         # New multi-channel occupancy processor for enhanced SAC training
         self.occupancy_processor = MultiChannelOccupancy(
-            grid_size=64,  # Reduced for NPU efficiency
+            grid_size=128,  # Increased to 128 for better resolution
             range_m=4.0,
             width=424, height=240,
-            camera_height=0.123,  # Calculated from URDF: 0.029 + 0.08025 + 0.01375
+            camera_height=0.18,  # Updated: 180mm from ground
             camera_tilt_deg=0.0,
             obstacle_height_thresh=0.1,
             floor_thresh=0.08

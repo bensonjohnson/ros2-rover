@@ -237,7 +237,7 @@ class V620SACTrainer:
              print(f"  Replay Buffer stored on System RAM (CPU)")
             
         # Dimensions
-        self.grid_shape = (4, 64, 64)  # Reduced for NPU efficiency
+        self.grid_shape = (4, 128, 128)  # Updated to match rover resolution
         self.proprio_dim = 10 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
         self.action_dim = 2
         
