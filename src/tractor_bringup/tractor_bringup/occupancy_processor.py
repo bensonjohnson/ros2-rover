@@ -987,7 +987,14 @@ class RawSensorProcessor:
         """
         self.grid_size = grid_size
         self.max_range = max_range
-        self.resolution = max_range / grid_size  # meters per pixel
+        self.resolution = (max_range) / grid_size # m/pixel (at farthest point? No, standard grid)
+        # Actually standard grid range logic:
+        # If robot is at bottom center, range is max_range forward.
+        # So resolution = max_range / grid_size works for Y axis?
+        # Let's say 4m / 128 = 3.125 cm/px
+        
+        # Persistence buffer for laser scan (Decay)
+        self.scan_buffer = np.zeros((grid_size, grid_size), dtype=np.float32)
 
     def process(self, depth_img, laser_scan):
         """
@@ -1065,8 +1072,24 @@ class RawSensorProcessor:
         cols = cols[valid_idx]
 
         # Binary occupancy: 1.0 where obstacles detected
-        grid[rows, cols] = 1.0
+        current_view = np.zeros_like(grid)
+        current_view[rows, cols] = 1.0
+        
+        # Accumulate into buffer with max-hold
+        self.scan_buffer = np.maximum(self.scan_buffer, current_view)
+        
+        # Output is buffer state
+        grid = self.scan_buffer.copy()
 
+        # Decay buffer for next frame
+        # 0.7 decay -> gone in ~5 frames (0.7^5 = 0.16)
+        self.scan_buffer *= 0.6  # Faster decay since we run at 30Hz and scan is 10Hz
+        # We want points to survive ~3 frames (100ms)
+        # Frame 0: 1.0 (Scan arrives)
+        # Frame 1: 0.6
+        # Frame 2: 0.36
+        # Frame 3: 0.21 (Scan arrives again ideally)
+        
         # Clear robot footprint (45cm radius ~= 14 pixels at 3.125cm/px)
         r_c, c_c = self.grid_size - 1, self.grid_size // 2
         radius_px = int(0.45 / self.resolution)
