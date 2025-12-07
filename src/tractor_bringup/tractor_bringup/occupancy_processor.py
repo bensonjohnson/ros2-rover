@@ -524,8 +524,15 @@ class MultiChannelOccupancy:
             points_near = points_c[valid_near]
             points_far = points_c[valid_far]
 
-            # Process near-range points (reliable floor detection)
+            # Initialize arrays
+            x_r_near = np.array([])
+            y_r_near = np.array([])
             is_obstacle_near = np.array([], dtype=bool)
+            x_r_far = np.array([])
+            y_r_far = np.array([])
+            is_obstacle_far = np.array([], dtype=bool)
+
+            # Process near-range points (reliable floor detection)
             if len(points_near) > 0:
                 # Transform to rover frame
                 c = np.cos(self.camera_tilt)
@@ -543,7 +550,6 @@ class MultiChannelOccupancy:
                 is_obstacle_near = z_r_near > self.obstacle_thresh
 
             # Process far-range points (conservative - higher threshold to avoid floor false positives)
-            is_obstacle_far = np.array([], dtype=bool)
             if len(points_far) > 0:
                 # Transform to rover frame
                 c = np.cos(self.camera_tilt)
@@ -563,10 +569,9 @@ class MultiChannelOccupancy:
 
             # Combine near and far points
             if len(points_near) > 0 or len(points_far) > 0:
-                points_c = np.vstack([points_near, points_far]) if len(points_near) > 0 and len(points_far) > 0 else (points_near if len(points_near) > 0 else points_far)
-                x_r = np.concatenate([x_r_near, x_r_far]) if len(points_near) > 0 and len(points_far) > 0 else (x_r_near if len(points_near) > 0 else x_r_far)
-                y_r = np.concatenate([y_r_near, y_r_far]) if len(points_near) > 0 and len(points_far) > 0 else (y_r_near if len(points_near) > 0 else y_r_far)
-                is_obstacle = np.concatenate([is_obstacle_near, is_obstacle_far]) if len(points_near) > 0 and len(points_far) > 0 else (is_obstacle_near if len(points_near) > 0 else is_obstacle_far)
+                x_r = np.concatenate([x_r_near, x_r_far])
+                y_r = np.concatenate([y_r_near, y_r_far])
+                is_obstacle = np.concatenate([is_obstacle_near, is_obstacle_far])
 
                 if np.any(is_obstacle):
                     # Project to grid
