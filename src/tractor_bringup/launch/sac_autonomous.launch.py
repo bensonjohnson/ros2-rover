@@ -45,6 +45,8 @@ def generate_launch_description():
     )
 
     # 2. Motor Driver
+    # Use wheel encoder odometry instead of RF2O laser odometry
+    # RF2O can be unstable during fast motion or featureless environments
     hiwonder_motor_node = Node(
         package="tractor_control",
         executable="hiwonder_motor_driver",
@@ -52,7 +54,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(tractor_bringup_dir, "config", "hiwonder_motor_params.yaml"),
-            {"publish_tf": False} # Disable wheel odom TF, use RF2O (LiDAR) instead
+            {"publish_tf": True} # Enable wheel odom TF (more reliable than RF2O for SAC warmup)
         ]
     )
 
@@ -93,12 +95,13 @@ def generate_launch_description():
         }.items()
     )
 
-    # 4c. LiDAR Odometry (RF2O)
-    rf2o_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")
-        )
-    )
+    # 4c. LiDAR Odometry (RF2O) - DISABLED for SAC warmup
+    # RF2O can be unstable during fast motion; using wheel encoder odom instead
+    # rf2o_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(
+    #         os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")
+    #     )
+    # )
 
     # 5. Velocity Feedback Controller
     vfc_node = Node(
@@ -157,7 +160,8 @@ def generate_launch_description():
         
         # Sensors (delayed)
         TimerAction(period=2.0, actions=[lidar_launch]),
-        TimerAction(period=4.0, actions=[rf2o_launch]),
+        # RF2O disabled - using wheel encoder odom instead
+        # TimerAction(period=4.0, actions=[rf2o_launch]),
         TimerAction(period=5.0, actions=[realsense_launch]),
         TimerAction(period=6.0, actions=[lsm9ds1_launch]),
         
