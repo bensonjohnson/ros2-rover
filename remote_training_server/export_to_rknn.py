@@ -59,7 +59,7 @@ class RKNNConverter:
         print("Configuring RKNN...")
         ret = self.rknn.config(
             # Input 0: Laser (1, 128, 128) float32, binary 0/1
-            # Input 1: Depth (1, 424, 240) float32, normalized [0, 1]
+            # Input 1: Depth (1, 240, 424) float32, normalized [0, 1]
             # Input 2: Proprio (10,) float32, various ranges
             mean_values=[[0], [0], [0]*10],  # Laser/Depth: no norm, Proprio: no norm
             std_values=[[1], [1], [1]*10],   # Laser/Depth: already processed, Proprio: as-is
@@ -114,7 +114,7 @@ class RKNNConverter:
         The calibration dataset should contain representative multi-channel grid samples
         collected from the rover during operation.
 
-        Expected format: laser (1, 128, 128) + depth (1, 424, 240) + proprio (10,)
+        Expected format: laser (1, 128, 128) + depth (1, 240, 424) + proprio (10,)
         """
         if not self.calibration_data_dir or not os.path.exists(self.calibration_data_dir):
             print(f"WARNING: Calibration data directory not found: {self.calibration_data_dir}")
@@ -142,7 +142,7 @@ class RKNNConverter:
                     proprio = data['proprio']
 
                     # Validate shapes
-                    if laser.shape == (1, 128, 128) and depth.shape == (1, 424, 240) and proprio.shape == (10,):
+                    if laser.shape == (1, 128, 128) and depth.shape == (1, 240, 424) and proprio.shape == (10,):
                         dataset.append({'laser': laser, 'depth': depth, 'proprio': proprio})
                     else:
                         print(f"WARNING: Unexpected shapes in {file_path}")
@@ -189,7 +189,7 @@ class RKNNConverter:
 
         # Validate inputs
         assert test_laser.shape == (1, 128, 128)
-        assert test_depth.shape == (1, 424, 240)
+        assert test_depth.shape == (1, 240, 424)
         assert test_proprio.shape == (10,)
 
         # Run inference

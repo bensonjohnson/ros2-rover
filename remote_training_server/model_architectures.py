@@ -292,14 +292,14 @@ class LaserEncoder(nn.Module):
 
 class DepthEncoder(nn.Module):
     """
-    Encoder for 424×240 raw depth image.
-    Input: (B, 1, 424, 240)
+    Encoder for 240x424 raw depth image.
+    Input: (B, 1, 240, 424)
     Output: (B, 11648) features
     """
     def __init__(self):
         super().__init__()
-        # 424x240 -> 212x120 -> 106x60 -> 53x30 -> 26x15 -> 13x7
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1)   # 424x240 -> 212x120
+        # 240x424 (H, W) -> 120x212 -> 60x106 -> 30x53 -> 15x26 -> 7x13
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1)   # 240x424 -> 120x212
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)  # 212x120 -> 106x60
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)  # 106x60 -> 53x30
         self.conv4 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # 53x30 -> 26x15
@@ -320,7 +320,20 @@ class DepthEncoder(nn.Module):
 
     @property
     def output_dim(self):
-        return 14336
+        return 14336 # 128 * 7 * 14 = 12544? No wait.
+        # 240 -s2-> 120 -s2-> 60 -s2-> 30 -s2-> 15 -s2-> 8 (padding=1 keeps it ceil(H/2))
+        # 15 / 2 = 7.5 -> 8 (if padding=1, kernel=3, stride=2: out = floor((in + 2*1 - 3)/2 + 1)
+        # formula: floor((W + 2*P - K)/S + 1)
+        # 240 -> (240+2-3)/2 + 1 = 119.5 -> 120
+        # 120 -> 60
+        # 60 -> 30
+        # 30 -> 15
+        # 15 -> (15+2-3)/2 + 1 = 7.5 -> 7
+        
+        # 424 -> 212 -> 106 -> 53 -> 26 -> 13
+        
+        # Last layer: 128 channels * 7 * 13 = 11648
+        return 12544  # 128 * 7 * 14 = 12544 features
 
 
 class DualEncoderPolicyNetwork(nn.Module):
