@@ -1058,11 +1058,18 @@ class RawSensorProcessor:
         y = y[valid]
 
         # Project to grid
-        # Robot at bottom-center: (row 127, col 64) for 128×128 grid
+        # Robot at 3/4 down: (row 96, col 64) for 128×128 grid
+        # This gives ~270 degree view (sees ~1m behind, ~3m forward)
         # +X (forward) maps to -row, +Y (left) maps to -col
-        scale = self.grid_size / self.max_range
-        rows = self.grid_size - 1 - (x * scale).astype(np.int32)
-        cols = (self.grid_size // 2) - (y * scale).astype(np.int32)
+        
+        # Center point (Robot)
+        r_c = int(self.grid_size * 0.75) # Row 96
+        c_c = self.grid_size // 2        # Col 64
+        
+        scale = self.grid_size / self.max_range # ~32 pixels/meter
+        
+        rows = r_c - (x * scale).astype(np.int32)
+        cols = c_c - (y * scale).astype(np.int32)
 
         # Clip to bounds
         valid_idx = (rows >= 0) & (rows < self.grid_size) & \
@@ -1091,7 +1098,7 @@ class RawSensorProcessor:
         # Frame 3: 0.21 (Scan arrives again ideally)
         
         # Clear robot footprint (45cm radius ~= 14 pixels at 3.125cm/px)
-        r_c, c_c = self.grid_size - 1, self.grid_size // 2
+        # r_c, c_c already defined above
         radius_px = int(0.45 / self.resolution)
         y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
         footprint_mask = ((y_grid - r_c)**2 + (x_grid - c_c)**2) < radius_px**2
