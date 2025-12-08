@@ -310,18 +310,8 @@ class V620SACTrainer:
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=args.lr)
 
-        self.alpha_optimizer = optim.Adam([self.log_alpha], lr=args.lr)
-
         # Replay Buffer
         self.buffer = ReplayBuffer(
-            capacity=args.buffer_size,
-            proprio_dim=self.proprio_dim,
-            device=self.device,
-            storage_device=self.storage_device
-        )
-        
-        # Training Buffer (Double Buffering)
-        self.training_buffer = ReplayBuffer(
             capacity=args.buffer_size,
             proprio_dim=self.proprio_dim,
             device=self.device,
