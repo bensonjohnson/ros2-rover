@@ -39,7 +39,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import model architectures
-from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork
+from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork, RGBDEncoderPolicyNetwork, RGBDEncoderQNetwork
 
 # Import serialization utilities
 from serialization_utils import (
@@ -66,9 +66,8 @@ class ReplayBuffer:
         # Storage
         # Laser: 1x128x128, uint8 (0 or 1)
         self.laser = torch.zeros((capacity, 1, 128, 128), dtype=torch.uint8, device=storage_device)
-        # Depth: 1x424x240, uint8 (quantized 0-1 -> 0-255)
-        # Depth: 1x240x424 (H, W), uint8 (quantized 0-1 -> 0-255)
-        self.depth = torch.zeros((capacity, 1, 240, 424), dtype=torch.uint8, device=storage_device)
+        # RGBD: 4x240x424, uint8 (quantized 0-1 -> 0-255)
+        self.rgbd = torch.zeros((capacity, 4, 240, 424), dtype=torch.uint8, device=storage_device)
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, device=storage_device)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32, device=storage_device)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
@@ -81,7 +80,7 @@ class ReplayBuffer:
         # Since data is sequential, s'[t] = s[t+1]
 
         laser = batch_data['laser']
-        depth = batch_data['depth']
+        rgbd = batch_data['rgbd']
         proprio = batch_data['proprio']
         actions = batch_data['actions']
         rewards = batch_data['rewards']
@@ -120,13 +119,13 @@ class ReplayBuffer:
             first_part = self.capacity - self.ptr
             second_part = batch_size - first_part
 
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, 0, first_part, self.ptr)
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, first_part, second_part, 0)
+            self._add_slice(laser, rgbd, proprio, actions, rewards, dones, 0, first_part, self.ptr)
+            self._add_slice(laser, rgbd, proprio, actions, rewards, dones, first_part, second_part, 0)
 
             self.ptr = second_part
             self.full = True
         else:
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, 0, batch_size, self.ptr)
+            self._add_slice(laser, rgbd, proprio, actions, rewards, dones, 0, batch_size, self.ptr)
             self.ptr += batch_size
             if self.ptr >= self.capacity:
                 self.full = True
@@ -134,7 +133,7 @@ class ReplayBuffer:
 
         self.size = self.capacity if self.full else self.ptr
 
-    def _add_slice(self, laser, depth, proprio, actions, rewards, dones, start_idx, count, buffer_idx):
+    def _add_slice(self, laser, rgbd, proprio, actions, rewards, dones, start_idx, count, buffer_idx):
         """Helper to add slice."""
         # Source indices: start_idx to start_idx + count
         # BUT for next_state, we need +1
@@ -150,20 +149,20 @@ class ReplayBuffer:
         # self.depth = depth (N, 1, 424, 240) float32
         
         laser_slice = torch.as_tensor(laser[start_idx:end_idx].copy())
-        depth_slice = torch.as_tensor(depth[start_idx:end_idx].copy())
+        rgbd_slice = torch.as_tensor(rgbd[start_idx:end_idx].copy())
         
-        # Ensure correct shape (N, 1, H, W)
+        # Ensure correct shape (N, 1, H, W) and (N, 4, H, W)
         if laser_slice.ndim == 3:
             laser_slice = laser_slice.unsqueeze(1)
-        if depth_slice.ndim == 3:
-            depth_slice = depth_slice.unsqueeze(1)
+        if rgbd_slice.ndim == 3:
+            rgbd_slice = rgbd_slice.unsqueeze(1)
         
-        # Quantize depth
-        depth_slice = (depth_slice * 255.0).to(torch.uint8)
+        # Quantize rgbd
+        rgbd_slice = (rgbd_slice * 255.0).to(torch.uint8)
         laser_slice = laser_slice.to(torch.uint8)
 
         self.laser[buffer_idx:buffer_idx+count] = laser_slice.to(self.storage_device)
-        self.depth[buffer_idx:buffer_idx+count] = depth_slice.to(self.storage_device)
+        self.rgbd[buffer_idx:buffer_idx+count] = rgbd_slice.to(self.storage_device)
         self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy()).to(self.storage_device)
         self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy()).to(self.storage_device)
         self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
@@ -193,7 +192,7 @@ class ReplayBuffer:
 
         # Retrieve s
         laser = self.laser[indices].to(self.device, non_blocking=True).float() # Binary 0/1
-        depth = self.depth[indices].to(self.device, non_blocking=True).float() / 255.0
+        rgbd = self.rgbd[indices].to(self.device, non_blocking=True).float() / 255.0
 
         proprio = self.proprio[indices].to(self.device, non_blocking=True)
         actions = self.actions[indices].to(self.device, non_blocking=True)
@@ -204,14 +203,14 @@ class ReplayBuffer:
         next_indices = (indices + 1) % self.capacity
 
         next_laser = self.laser[next_indices].to(self.device, non_blocking=True).float()
-        next_depth = self.depth[next_indices].to(self.device, non_blocking=True).float() / 255.0
+        next_rgbd = self.rgbd[next_indices].to(self.device, non_blocking=True).float() / 255.0
 
         next_proprio = self.proprio[next_indices].to(self.device, non_blocking=True)
 
         return {
-            'laser': laser, 'depth': depth, 'proprio': proprio,
+            'laser': laser, 'rgbd': rgbd, 'proprio': proprio,
             'action': actions, 'reward': rewards, 'done': dones,
-            'next_laser': next_laser, 'next_depth': next_depth, 'next_proprio': next_proprio
+            'next_laser': next_laser, 'next_rgbd': next_rgbd, 'next_proprio': next_proprio
         }
 
     def copy_state_from(self, other):
@@ -222,7 +221,7 @@ class ReplayBuffer:
 
         # Copy tensors
         self.laser.copy_(other.laser)
-        self.depth.copy_(other.depth)
+        self.rgbd.copy_(other.rgbd)
         self.proprio.copy_(other.proprio)
         self.actions.copy_(other.actions)
         self.rewards.copy_(other.rewards)
@@ -269,22 +268,22 @@ class V620SACTrainer:
         self.action_dim = 2
         
         # Visualization state
-        # Visualization state
         self.latest_laser_vis = None
-        self.latest_depth_vis = None
+        self.latest_rgbd_vis = None
         
         # --- Actor ---
-        self.actor = DualEncoderPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
+        # Use RGBD-based network
+        self.actor = RGBDEncoderPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
         
         # --- Critics ---
-        # Dual Encoder Q-Networks
-        self.critic1 = DualEncoderQNetwork(
+        # RGBD-based Q-Networks
+        self.critic1 = RGBDEncoderQNetwork(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
         ).to(self.device)
         
-        self.critic2 = DualEncoderQNetwork(
+        self.critic2 = RGBDEncoderQNetwork(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
@@ -353,6 +352,7 @@ class V620SACTrainer:
         self.training_thread.start()
         
         # Load Checkpoint
+        # Load checkpoint before exporting
         self.load_latest_checkpoint()
         
         # Export initial model
@@ -375,14 +375,27 @@ class V620SACTrainer:
         # Check if checkpoint is from old architecture
         try:
             actor_state = ckpt.get('actor', {})
-            # New architecture has 'laser_encoder' and 'depth_encoder'
-            is_old_checkpoint = 'laser_encoder.conv1.weight' not in actor_state
-        except Exception:
-            is_old_checkpoint = True
+            # Check if it's RGBD-based (has rgbd_encoder)
+            has_rgbd_encoder = 'rgbd_encoder.conv1.weight' in actor_state
+            # Check if it's depth-based (has depth_encoder)
+            has_depth_encoder = 'depth_encoder.conv1.weight' in actor_state
 
-        if is_old_checkpoint:
-            print("⚠️  Checkpoint is from old version/architecture")
-            print("   Starting fresh with Dual Encoder architecture...")
+            if has_rgbd_encoder:
+                print("✅ Checkpoint uses RGBD architecture - compatible")
+                is_compatible = True
+            elif has_depth_encoder:
+                print("⚠️  Checkpoint uses Depth-only architecture")
+                print("   Starting fresh with RGBD architecture...")
+                is_compatible = False
+            else:
+                print("⚠️  Checkpoint is from very old architecture")
+                print("   Starting fresh with RGBD architecture...")
+                is_compatible = False
+        except Exception:
+            print("⚠️  Checkpoint loading failed - starting fresh")
+            is_compatible = False
+
+        if not is_compatible:
             # Don't load anything, start fresh
             return
 
@@ -400,7 +413,7 @@ class V620SACTrainer:
 
         self.total_steps = ckpt['total_steps']
         self.gradient_steps = ckpt.get('gradient_steps', 0)
-        self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100)) 
+        self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100))
 
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
@@ -431,8 +444,8 @@ class V620SACTrainer:
             # Dummy inputs
             # Laser: (B, 1, 128, 128)
             dummy_laser = torch.randn(1, 1, 128, 128, device=self.device)
-            # Depth: (B, 1, 240, 424)
-            dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
+            # RGBD: (B, 4, 240, 424)
+            dummy_rgbd = torch.randn(1, 4, 240, 424, device=self.device)
             # Proprio: (B, 10)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
@@ -440,8 +453,8 @@ class V620SACTrainer:
                 def __init__(self, actor):
                     super().__init__()
                     self.actor = actor
-                def forward(self, laser, depth, proprio):
-                    mean, _ = self.actor(laser, depth, proprio)
+                def forward(self, laser, rgbd, proprio):
+                    mean, _ = self.actor(laser, rgbd, proprio)
                     return torch.tanh(mean) # Deterministic action
             
             model = ActorWrapper(self.actor)
@@ -449,10 +462,10 @@ class V620SACTrainer:
             
             torch.onnx.export(
                 model,
-                (dummy_laser, dummy_depth, dummy_proprio),
+                (dummy_laser, dummy_rgbd, dummy_proprio),
                 onnx_path,
                 opset_version=11,
-                input_names=['laser', 'depth', 'proprio'],
+                input_names=['laser', 'rgbd', 'proprio'],
                 output_names=['action'],
                 export_params=True,
                 do_constant_folding=True,
@@ -608,10 +621,10 @@ class V620SACTrainer:
         # Validate batch data
         try:
             self._validate_tensor(batch['laser'], "state_laser")
-            self._validate_tensor(batch['depth'], "state_depth")
+            self._validate_tensor(batch['rgbd'], "state_rgbd")
             self._validate_tensor(batch['proprio'], "state_proprio")
             self._validate_tensor(batch['next_laser'], "next_laser")
-            self._validate_tensor(batch['next_depth'], "next_depth")
+            self._validate_tensor(batch['next_rgbd'], "next_rgbd")
             self._validate_tensor(batch['next_proprio'], "next_proprio")
         except ValueError as e:
             tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
@@ -685,7 +698,7 @@ class V620SACTrainer:
 
             # NEW: Log observation statistics for debugging
             self.writer.add_scalar('Observation/Laser_Mean', batch['laser'].mean().item(), self.total_steps)
-            self.writer.add_scalar('Observation/Depth_Mean', batch['depth'].mean().item(), self.total_steps)
+            self.writer.add_scalar('Observation/RGBD_Mean', batch['rgbd'].mean().item(), self.total_steps)
             self.writer.add_scalar('Observation/Proprio_Mean', batch['proprio'].mean().item(), self.total_steps)
 
             # Training progress
@@ -733,13 +746,13 @@ class V620SACTrainer:
             tuple: (critic_loss, q1, q2, q_target)
         """
         state_laser = batch['laser']
-        state_depth = batch['depth']
+        state_rgbd = batch['rgbd']
         state_proprio = batch['proprio']
         action = batch['action']
         reward = batch['reward']
         done = batch['done']
         next_laser = batch['next_laser']
-        next_depth = batch['next_depth']
+        next_rgbd = batch['next_rgbd']
         next_proprio = batch['next_proprio']
 
         alpha = self.log_alpha.exp().item()
@@ -747,7 +760,7 @@ class V620SACTrainer:
         # --- Compute Target Q-values (no dropout, deterministic) ---
         with torch.no_grad():
             # Get next action from actor
-            next_mean, next_log_std = self.actor(next_laser, next_depth, next_proprio)
+            next_mean, next_log_std = self.actor(next_laser, next_rgbd, next_proprio)
 
             # Sample and validate
             next_log_std = torch.clamp(next_log_std, -20, 2)
@@ -767,8 +780,8 @@ class V620SACTrainer:
             next_log_prob -= (2 * (np.log(2) - next_action_sample - F.softplus(-2 * next_action_sample))).sum(dim=1, keepdim=True)
 
             # Target Q (NO dropout in target networks)
-            q1_target = self.target_critic1(next_laser, next_depth, next_proprio, next_action)
-            q2_target = self.target_critic2(next_laser, next_depth, next_proprio, next_action)
+            q1_target = self.target_critic1(next_laser, next_rgbd, next_proprio, next_action)
+            q2_target = self.target_critic2(next_laser, next_rgbd, next_proprio, next_action)
             min_q_target = torch.min(q1_target, q2_target) - alpha * next_log_prob
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
 
@@ -783,16 +796,16 @@ class V620SACTrainer:
             self.critic2.train()
 
             for _ in range(self.args.droq_samples):
-                q1_samples.append(self.critic1(state_laser, state_depth, state_proprio, action))
-                q2_samples.append(self.critic2(state_laser, state_depth, state_proprio, action))
+                q1_samples.append(self.critic1(state_laser, state_rgbd, state_proprio, action))
+                q2_samples.append(self.critic2(state_laser, state_rgbd, state_proprio, action))
 
             # Average over samples
             q1 = torch.stack(q1_samples).mean(dim=0)
             q2 = torch.stack(q2_samples).mean(dim=0)
         else:
             # Standard SAC: single forward pass
-            q1 = self.critic1(state_laser, state_depth, state_proprio, action)
-            q2 = self.critic2(state_laser, state_depth, state_proprio, action)
+            q1 = self.critic1(state_laser, state_rgbd, state_proprio, action)
+            q2 = self.critic2(state_laser, state_rgbd, state_proprio, action)
 
         # MSE loss against target
         critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
@@ -819,13 +832,13 @@ class V620SACTrainer:
             tuple: (actor_loss, log_prob, min_q_pi)
         """
         state_laser = batch['laser']
-        state_depth = batch['depth']
+        state_rgbd = batch['rgbd']
         state_proprio = batch['proprio']
 
         alpha = self.log_alpha.exp().item()
 
         # Re-compute features for actor (gradient flows through encoder)
-        mean, log_std = self.actor(state_laser, state_depth, state_proprio)
+        mean, log_std = self.actor(state_laser, state_rgbd, state_proprio)
 
         # Validate and sample
         self._validate_tensor(mean, "mean")
@@ -850,8 +863,8 @@ class V620SACTrainer:
         self.critic1.eval()
         self.critic2.eval()
 
-        q1_pi = self.critic1(state_laser, state_depth, state_proprio, current_action)
-        q2_pi = self.critic2(state_laser, state_depth, state_proprio, current_action)
+        q1_pi = self.critic1(state_laser, state_rgbd, state_proprio, current_action)
+        q2_pi = self.critic2(state_laser, state_rgbd, state_proprio, current_action)
         min_q_pi = torch.min(q1_pi, q2_pi)
 
         actor_loss = ((alpha * log_prob) - min_q_pi).mean()
@@ -998,10 +1011,9 @@ class V620SACTrainer:
                         batch = deserialize_batch(msg.data)
 
                         # Update visualization state (take last frame of batch)
-                        # Update visualization state (take last frame of batch)
                         if len(batch['laser']) > 0:
                             self.latest_laser_vis = batch['laser'][-1].copy()
-                            self.latest_depth_vis = batch['depth'][-1].copy()
+                            self.latest_rgbd_vis = batch['rgbd'][-1].copy()
 
                         # Add to replay buffer (thread-safe)
                         with self.lock:
@@ -1075,7 +1087,7 @@ class V620SACTrainer:
             await self.js.publish("models.sac.metadata", metadata_msg)
             tqdm.write(f"✅ Metadata published for v{self.model_version}")
 
-            tqdm.write(f"🚀 Published model version {self.model_version} successfully")
+            tqdm.write(f"� Published model version {self.model_version} successfully")
 
         except Exception as e:
             tqdm.write(f"❌ Model publish error: {e}")

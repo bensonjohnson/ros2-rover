@@ -968,6 +968,45 @@ class MultiChannelOccupancy:
             return map_array[start_row:end_row, start_col:end_col].copy()
 
 
+class RGBDProcessor:
+    """Process RGB and Depth into 4-channel RGBA input for model."""
+
+    def __init__(self, max_range=4.0):
+        self.max_range = max_range
+
+    def process(self, rgb_img, depth_img):
+        """
+        Args:
+            rgb_img: (240, 424, 3) uint8 RGB image
+            depth_img: (240, 424) uint16 depth image (mm)
+
+        Returns:
+            rgbd: (4, 240, 424) float32 [0,1] normalized
+        """
+        # Convert RGB to float32 and normalize
+        rgb_normalized = rgb_img.astype(np.float32) / 255.0
+
+        # Process depth (same as current _process_depth)
+        if depth_img.dtype == np.uint16:
+            depth = depth_img.astype(np.float32) * 0.001
+        else:
+            depth = depth_img.astype(np.float32)
+
+        # Apply median filter
+        depth_filtered = cv2.medianBlur(depth_img, 3).astype(np.float32) * 0.001
+        depth_normalized = np.clip(depth_filtered, 0.0, self.max_range) / self.max_range
+        depth_normalized[depth == 0.0] = 1.0
+
+        # Stack channels: RGB + Depth
+        rgbd = np.stack([
+            rgb_normalized[..., 0],  # R
+            rgb_normalized[..., 1],  # G
+            rgb_normalized[..., 2],  # B
+            depth_normalized          # Depth
+        ], axis=0)
+
+        return rgbd.astype(np.float32)
+
 class RawSensorProcessor:
     """
     Simplified processor for dual-encoder SAC architecture.

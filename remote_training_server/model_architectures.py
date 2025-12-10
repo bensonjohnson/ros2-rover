@@ -290,6 +290,38 @@ class LaserEncoder(nn.Module):
         return 4096
 
 
+class RGBDEncoder(nn.Module):
+    """
+    Encoder for 4-channel 240×424 RGB-D image.
+    Input: (B, 4, 240, 424) - RGB + Depth
+    Output: (B, 11648) features
+    """
+    def __init__(self):
+        super().__init__()
+        # 240x424 (H, W) -> 120x212 -> 60x106 -> 30x53 -> 15x26 -> 7x13
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=2, padding=1)   # 240x424 -> 120x212
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)  # 120x212 -> 60x106
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)  # 60x106 -> 30x53
+        self.conv4 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # 30x53 -> 15x26
+        self.conv5 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)# 15x26 -> 7x13
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # Input: (B, 4, 240, 424)
+        x = self.relu(self.conv1(x))
+        x = self.relu(self.conv2(x))
+        x = self.relu(self.conv3(x))
+        x = self.relu(self.conv4(x))
+        x = self.relu(self.conv5(x))
+
+        x = x.flatten(start_dim=1)    # (B, 128*7*13) = (B, 11648)
+        return x
+
+    @property
+    def output_dim(self):
+        return 11648  # 128 * 7 * 13 = 11648 features
+
 class DepthEncoder(nn.Module):
     """
     Encoder for 240x424 raw depth image.
@@ -425,6 +457,98 @@ class DualEncoderQNetwork(nn.Module):
         proprio_feats = self.proprio_encoder(proprio)
 
         fused = torch.cat([laser_feats, depth_feats, proprio_feats, action], dim=1)
+
+        q_value = self.q_net(fused)
+        return q_value
+
+class RGBDEncoderPolicyNetwork(nn.Module):
+    """Policy network using RGBD + Laser encoders."""
+    def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
+        super().__init__()
+
+        # Separate encoders
+        self.laser_encoder = LaserEncoder()    # -> 4096 features
+        self.rgbd_encoder = RGBDEncoder()      # -> 11648 features
+
+        # Proprioception encoder (unchanged)
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        # Fusion: laser + rgbd + proprio
+        fusion_dim = self.laser_encoder.output_dim + self.rgbd_encoder.output_dim + 32
+
+        self.net = nn.Sequential(
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, hidden_size),
+            nn.ReLU(inplace=True),
+        )
+
+        self.mean_layer = nn.Linear(hidden_size, action_dim)
+        self.log_std_layer = nn.Linear(hidden_size, action_dim)
+
+    def forward(self, laser_grid, rgbd_img, proprio):
+        # Encode each modality
+        laser_feats = self.laser_encoder(laser_grid)
+        rgbd_feats = self.rgbd_encoder(rgbd_img)
+        proprio_feats = self.proprio_encoder(proprio)
+
+        # Concatenate features
+        fused = torch.cat([laser_feats, rgbd_feats, proprio_feats], dim=1)
+
+        x = self.net(fused)
+        mean = self.mean_layer(x)
+        log_std = self.log_std_layer(x)
+
+        # Clamp log_std
+        log_std = torch.clamp(log_std, -20, 2)
+
+        return mean, log_std
+
+class RGBDEncoderQNetwork(nn.Module):
+    """Q-network using RGBD + Laser encoders."""
+    def __init__(self, action_dim=2, proprio_dim=10, dropout=0.0):
+        super().__init__()
+
+        self.laser_encoder = LaserEncoder()
+        self.rgbd_encoder = RGBDEncoder()
+        
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        # Q-network: fusion + action
+        fusion_dim = self.laser_encoder.output_dim + self.rgbd_encoder.output_dim + 32 + action_dim
+
+        layers = [
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+        ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.extend([
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+        ])
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.append(nn.Linear(128, 1))
+
+        self.q_net = nn.Sequential(*layers)
+
+    def forward(self, laser_grid, rgbd_img, proprio, action):
+        laser_feats = self.laser_encoder(laser_grid)
+        rgbd_feats = self.rgbd_encoder(rgbd_img)
+        proprio_feats = self.proprio_encoder(proprio)
+
+        fused = torch.cat([laser_feats, rgbd_feats, proprio_feats, action], dim=1)
 
         q_value = self.q_net(fused)
         return q_value
