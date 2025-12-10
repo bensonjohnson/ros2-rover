@@ -125,7 +125,7 @@ def generate_launch_description():
             "depth_topic": "/camera/camera/depth/image_rect_raw",
             "input_cmd_topic": "cmd_vel_ai",
             "output_cmd_topic": "cmd_vel_raw",
-            "emergency_stop_distance": 0.25,
+            "emergency_stop_distance": 0.15,
             "hard_stop_distance": LaunchConfiguration("collision_distance"),
             "depth_scale": 0.001,
             "forward_roi_width_ratio": 0.6,
