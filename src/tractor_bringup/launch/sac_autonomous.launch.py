@@ -115,21 +115,19 @@ def generate_launch_description():
         parameters=[{"control_frequency": 50.0}]
     )
 
-    # 6. Safety Monitor (Depth-based)
+    # 6. Safety Monitor (LIDAR-based)
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_depth_safety_monitor.py",
-        name="simple_depth_safety_monitor",
+        executable="lidar_safety_monitor.py",
+        name="lidar_safety_monitor",
         output="screen",
         parameters=[{
-            "depth_topic": "/camera/camera/depth/image_rect_raw",
+            "scan_topic": "/scan",
             "input_cmd_topic": "cmd_vel_ai",
             "output_cmd_topic": "cmd_vel_raw",
-            "emergency_stop_distance": 0.15,
-            "hard_stop_distance": LaunchConfiguration("collision_distance"),
-            "depth_scale": 0.001,
-            "forward_roi_width_ratio": 0.6,
-            "forward_roi_height_ratio": 0.5,
+            "emergency_stop_distance": 0.20,
+            "hard_stop_distance": 0.15,
+            "min_valid_range": 0.05,
             "max_eval_distance": 5.0,
         }],
     )
