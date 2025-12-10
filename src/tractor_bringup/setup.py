@@ -30,6 +30,7 @@ setup(
             "simple_safety_monitor.py = tractor_bringup.simple_safety_monitor:main",
             "simple_safety_monitor_rtab.py = tractor_bringup.simple_safety_monitor_rtab:main",
             "simple_depth_safety_monitor.py = tractor_bringup.simple_depth_safety_monitor:main",
+            "lidar_safety_monitor.py = tractor_bringup.lidar_safety_monitor:main",
             "ppo_manager_rtab.py = tractor_bringup.ppo_manager_rtab:main",
             "rtab_observation_node.py = tractor_bringup.rtab_observation_node:main",
             "npu_exploration_rtab.py = tractor_bringup.npu_exploration_rtab:main",
