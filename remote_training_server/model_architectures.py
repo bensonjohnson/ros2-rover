@@ -309,18 +309,18 @@ class RGBDEncoder(nn.Module):
 
     def forward(self, x):
         # Input: (B, 4, 240, 424)
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
-        x = self.relu(self.conv4(x))
-        x = self.relu(self.conv5(x))
+        x = self.relu(self.conv1(x))  # -> (B, 16, 120, 212)
+        x = self.relu(self.conv2(x))  # -> (B, 32, 60, 106)
+        x = self.relu(self.conv3(x))  # -> (B, 64, 30, 53)
+        x = self.relu(self.conv4(x))  # -> (B, 128, 15, 27)
+        x = self.relu(self.conv5(x))  # -> (B, 128, 8, 14)
 
-        x = x.flatten(start_dim=1)    # (B, 128*7*13) = (B, 11648)
+        x = x.flatten(start_dim=1)    # (B, 128*8*14) = (B, 14336)
         return x
 
     @property
     def output_dim(self):
-        return 11648  # 128 * 7 * 13 = 11648 features
+        return 14336  # 128 * 8 * 14 = 14336 features (424->212->106->53->27->14)
 
 class DepthEncoder(nn.Module):
     """
