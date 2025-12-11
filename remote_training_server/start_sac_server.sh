@@ -145,13 +145,23 @@ echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
 LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
-# Launch Python with proper ulimit applied to the process
-bash -c "ulimit -n 65535 && exec python3 -u v620_sac_trainer.py \
-  --nats_server ${NATS_SERVER} \
-  --checkpoint_dir ${CHECKPOINT_DIR} \
-  --log_dir ${LOG_DIR} \
-  $* \
-  2>&1" | tee "${LOG_FILE}" &
+# Launch Python with proper ulimit applied (if possible)
+# Note: We use a block {} to group commands for the pipe, instead of bash -c string interpolation
+{
+  if ! ulimit -n 65535 2>/dev/null; then
+      echo "⚠ Warning: Failed to raise ulimit to 65535. Current limit: $(ulimit -n)"
+      echo "  Proceeding anyway..."
+  else
+      echo "✓ Raised file descriptor limit to 65535"
+  fi
+
+  echo "Starting V620 SAC Trainer..."
+  exec python3 -u v620_sac_trainer.py \
+  --nats_server "${NATS_SERVER}" \
+  --checkpoint_dir "${CHECKPOINT_DIR}" \
+  --log_dir "${LOG_DIR}" \
+  "$@"
+} 2>&1 | tee "${LOG_FILE}" &
 
 TRAINER_PID=$!
 
