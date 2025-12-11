@@ -20,7 +20,7 @@ def serialize_batch(batch: dict) -> bytes:
     Args:
         batch: Dictionary containing:
             - laser: np.array of shape (N, 128, 128) float32
-            - depth: np.array of shape (N, 424, 240) float32
+            - rgbd: np.array of shape (N, 4, 240, 424) float32 [R,G,B,Depth channels]
             - proprio: np.array of shape (N, 10) float32
             - actions: np.array of shape (N, 2) float32
             - rewards: np.array of shape (N,) float32
@@ -38,10 +38,10 @@ def serialize_batch(batch: dict) -> bytes:
             "shape": batch["laser"].shape,
             "dtype": str(batch["laser"].dtype),
         },
-        "depth": {
-            "data": compressor.compress(batch["depth"].tobytes()),
-            "shape": batch["depth"].shape,
-            "dtype": str(batch["depth"].dtype),
+        "rgbd": {
+            "data": compressor.compress(batch["rgbd"].tobytes()),
+            "shape": batch["rgbd"].shape,
+            "dtype": str(batch["rgbd"].dtype),
         },
         # Small arrays don't benefit from compression
         "proprio": batch["proprio"].tolist(),
@@ -71,10 +71,10 @@ def deserialize_batch(data: bytes) -> dict:
             decompressor.decompress(compressed["laser"]["data"]),
             dtype=np.dtype(compressed["laser"]["dtype"])
         ).reshape(compressed["laser"]["shape"]),
-        "depth": np.frombuffer(
-            decompressor.decompress(compressed["depth"]["data"]),
-            dtype=np.dtype(compressed["depth"]["dtype"])
-        ).reshape(compressed["depth"]["shape"]),
+        "rgbd": np.frombuffer(
+            decompressor.decompress(compressed["rgbd"]["data"]),
+            dtype=np.dtype(compressed["rgbd"]["dtype"])
+        ).reshape(compressed["rgbd"]["shape"]),
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
         "rewards": np.array(compressed["rewards"], dtype=np.float32),
