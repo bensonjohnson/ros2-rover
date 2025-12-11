@@ -71,7 +71,7 @@ def generate_launch_description():
             "enable_sync": "true",
             "device_type": "435i",
             "depth_module.depth_profile": "424x240x30",
-            "color_module.color_profile": "424x240x30",
+            "rgb_camera.color_profile": "424x240x30",
             "enable_gyro": "false",
             "enable_accel": "false",
             "enable_imu": "false",
