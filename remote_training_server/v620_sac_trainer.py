@@ -262,7 +262,7 @@ class V620SACTrainer:
              print(f"✓ Replay Buffer will be stored on GPU memory")
         else:
              print(f"  Replay Buffer stored on System RAM (CPU)")
-            
+
         # Dimensions
         self.proprio_dim = 10 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
         self.action_dim = 2
@@ -270,11 +270,11 @@ class V620SACTrainer:
         # Visualization state
         self.latest_laser_vis = None
         self.latest_rgbd_vis = None
-        
+
         # --- Actor ---
         # Use RGBD-based network
         self.actor = RGBDEncoderPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
-        
+
         # --- Critics ---
         # RGBD-based Q-Networks
         self.critic1 = RGBDEncoderQNetwork(
@@ -282,7 +282,7 @@ class V620SACTrainer:
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
         ).to(self.device)
-        
+
         self.critic2 = RGBDEncoderQNetwork(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
@@ -296,14 +296,14 @@ class V620SACTrainer:
         # Disable dropout in target networks (deterministic targets)
         self.target_critic1.eval()
         self.target_critic2.eval()
-        
+
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.lr)
         self.critic_optimizer = optim.Adam(
             list(self.critic1.parameters()) + list(self.critic2.parameters()),
             lr=args.lr
         )
-        
+
         # Automatic Entropy Tuning
         self.target_entropy = -float(self.action_dim)
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
@@ -341,20 +341,20 @@ class V620SACTrainer:
         self.nc = None
         self.js = None
         self.nats_server = args.nats_server
-        
+
         # Logging
         self.writer = SummaryWriter(args.log_dir)
         os.makedirs(args.checkpoint_dir, exist_ok=True)
-        
+
         # Threading
         self.lock = threading.Lock()
         self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self.training_thread.start()
-        
+
         # Load Checkpoint
         # Load checkpoint before exporting
         self.load_latest_checkpoint()
-        
+
         # Export initial model
         self.export_onnx(increment_version=False)
 
@@ -585,8 +585,8 @@ class V620SACTrainer:
             if self.total_steps % 100 == 0:
                 self.writer.flush()
 
-            # Checkpoint every 2000 steps
-            if self.total_steps % 500 == 0:
+            # Checkpoint and export model every 200 steps
+            if self.total_steps % 200 == 0:
                 self.save_checkpoint()
 
             # Periodic GPU memory cleanup (prevents fragmentation)
@@ -1123,10 +1123,10 @@ if __name__ == '__main__':
     # Learning - Updated for improved convergence
     parser.add_argument('--lr', type=float, default=3e-4,  # Was 3e-5 (10× too low!)
                         help='Learning rate for Adam optimizer')
-    parser.add_argument('--batch_size', type=int, default=512,  # Was 4096
-                        help='Batch size for training (smaller = more frequent updates)')
-    parser.add_argument('--buffer_size', type=int, default=200000,  # Was 1M
-                        help='Replay buffer capacity (faster turnover)')
+    parser.add_argument('--batch_size', type=int, default=2048,  # Optimized for V620 32GB VRAM
+                        help='Batch size for training (larger = more stable gradients)')
+    parser.add_argument('--buffer_size', type=int, default=50000,  # Reduced for RGBD memory usage (240x424x4 = ~20GB at 50k)
+                        help='Replay buffer capacity')
 
     # SAC specific
     parser.add_argument('--gamma', type=float, default=0.98,  # Was 0.97
