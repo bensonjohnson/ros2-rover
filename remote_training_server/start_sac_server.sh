@@ -160,6 +160,7 @@ LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
   --nats_server "${NATS_SERVER}" \
   --checkpoint_dir "${CHECKPOINT_DIR}" \
   --log_dir "${LOG_DIR}" \
+  --batch_size 1536 \
   "$@"
 } 2>&1 | tee "${LOG_FILE}" &
 

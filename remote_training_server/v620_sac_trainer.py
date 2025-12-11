@@ -1123,7 +1123,7 @@ if __name__ == '__main__':
     # Learning - Updated for improved convergence
     parser.add_argument('--lr', type=float, default=3e-4,  # Was 3e-5 (10× too low!)
                         help='Learning rate for Adam optimizer')
-    parser.add_argument('--batch_size', type=int, default=2048,  # Optimized for V620 32GB VRAM
+    parser.add_argument('--batch_size', type=int, default=1536,  # Optimized for V620 32GB VRAM
                         help='Batch size for training (larger = more stable gradients)')
     parser.add_argument('--buffer_size', type=int, default=50000,  # Reduced for RGBD memory usage (240x424x4 = ~20GB at 50k)
                         help='Replay buffer capacity')
