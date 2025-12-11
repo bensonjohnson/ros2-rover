@@ -983,6 +983,22 @@ class RGBDProcessor:
         Returns:
             rgbd: (4, 240, 424) float32 [0,1] normalized
         """
+        # Validate input shapes
+        if rgb_img is None or depth_img is None:
+            raise ValueError(f"Invalid input: rgb_img={rgb_img is not None}, depth_img={depth_img is not None}")
+
+        if len(rgb_img.shape) != 3 or rgb_img.shape[2] != 3:
+            raise ValueError(f"Expected RGB image shape (H, W, 3), got {rgb_img.shape}")
+
+        if len(depth_img.shape) != 2:
+            raise ValueError(f"Expected depth image shape (H, W), got {depth_img.shape}")
+
+        if rgb_img.shape[:2] != depth_img.shape[:2]:
+            raise ValueError(
+                f"Shape mismatch: RGB {rgb_img.shape} vs Depth {depth_img.shape}. "
+                f"RGB and depth must have same spatial dimensions."
+            )
+
         # Convert RGB to float32 and normalize
         rgb_normalized = rgb_img.astype(np.float32) / 255.0
 

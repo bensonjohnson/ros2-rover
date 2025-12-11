@@ -790,13 +790,25 @@ class SACEpisodeRunner(Node):
 
         # 6. Store Transition
         # Build RGBD for storage
-        if self._latest_rgb is not None:
+        # Validate that both RGB and depth are available and have matching shapes
+        if self._latest_rgb is not None and self._latest_depth_raw is not None:
+            # Verify shape compatibility
+            expected_depth_shape = self._latest_rgb.shape[:2]  # (height, width)
+            if self._latest_depth_raw.shape[:2] != expected_depth_shape:
+                self.get_logger().warn(
+                    f"⚠️  Shape mismatch: RGB {self._latest_rgb.shape} vs Depth {self._latest_depth_raw.shape}, skipping"
+                )
+                return
             rgbd_to_store = self.rgbd_processor.process(self._latest_rgb, self._latest_depth_raw)
-        else:
-            # Fallback: grayscale depth RGB
+        elif self._latest_depth_raw is not None:
+            # Fallback: grayscale depth RGB (only if depth is available)
             depth_normalized = (self._latest_depth_raw.astype(np.float32) / 1000.0).clip(0, 4.0) / 4.0 * 255.0
             depth_3 = np.repeat(depth_normalized[..., None], 3, axis=2).astype(np.uint8)
             rgbd_to_store = self.rgbd_processor.process(depth_3, self._latest_depth_raw)
+        else:
+            # No valid sensor data yet
+            self.get_logger().warn("⚠️  No RGB or depth data available, skipping data collection")
+            return
         
         with self._buffer_lock:
             self._data_buffer['laser'].append(self._latest_laser)
