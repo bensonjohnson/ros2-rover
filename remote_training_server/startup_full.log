@@ -1,0 +1,9 @@
+✓ Using GPU: AMD Radeon PRO V620
+✓ Enabled cuDNN benchmark (Startup may take ~2min)
+  Replay Buffer stored on System RAM (CPU)
+🔍 DEBUG: Creating actor network...
+🔍 DEBUG: Actor created
+🔍 DEBUG: Creating critic1...
+🔍 DEBUG: Critic1 created
+🔍 DEBUG: Creating critic2...
+🔍 DEBUG: Critic2 created

@@ -151,7 +151,6 @@ bash -c "ulimit -n 65535 && exec python3 -u v620_sac_trainer.py \
   --checkpoint_dir ${CHECKPOINT_DIR} \
   --log_dir ${LOG_DIR} \
   $* \
-
   2>&1" | tee "${LOG_FILE}" &
 
 TRAINER_PID=$!
