@@ -2,6 +2,69 @@ import numpy as np
 import cv2
 from scipy import ndimage
 
+# ============================================================================
+# Shared Helper Functions
+# ============================================================================
+
+def bresenham_line(x0, y0, x1, y1):
+    """
+    Fast Bresenham line algorithm for ray tracing.
+
+    Args:
+        x0, y0: Start point (robot position)
+        x1, y1: End point (obstacle hit)
+
+    Returns:
+        points_x, points_y: Arrays of pixel coordinates along the line
+    """
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    points_x, points_y = [], []
+    while True:
+        points_x.append(x0)
+        points_y.append(y0)
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+
+    return np.array(points_x), np.array(points_y)
+
+def clear_rectangular_footprint(grid, robot_row, robot_col, width_m, length_m, resolution):
+    """
+    Clear rectangular rover footprint from occupancy grid.
+
+    Args:
+        grid: Occupancy grid to modify
+        robot_row, robot_col: Robot position in grid
+        width_m: Rover width in meters
+        length_m: Rover length in meters
+        resolution: Grid resolution in meters/pixel
+
+    Returns:
+        Modified grid with footprint cleared
+    """
+    width_px = int(width_m / resolution)
+    length_px = int(length_m / resolution)
+
+    grid_size = grid.shape[0]
+    row_start = max(0, robot_row - length_px)
+    row_end = min(grid_size, robot_row + 1)
+    col_start = max(0, robot_col - width_px // 2)
+    col_end = min(grid_size, robot_col + width_px // 2 + 1)
+
+    grid[row_start:row_end, col_start:col_end] = 0.0
+    return grid
+
 class DepthToOccupancy:
     """
     Vectorized processor to convert raw depth images to a top-down occupancy grid.
@@ -145,27 +208,40 @@ class DepthToOccupancy:
 class ScanToOccupancy:
     """
     Vectorized processor to convert 2D Laser Scan to a top-down occupancy grid.
-    
+
     Logic:
     1. Filter invalid ranges (0 or > max_range).
     2. Convert Polar (range, angle) to Cartesian (x, y) in Robot Frame.
-    3. Project to 64x64 grid to match DepthToOccupancy.
+    3. Ray trace free space using Bresenham algorithm.
+    4. Project to 64x64 grid to match DepthToOccupancy.
+
+    Improvements:
+    - Free space ray tracing for better obstacle clearing
+    - Vectorized grid updates (no loops)
+    - Configurable dilation kernel
+    - Rectangular footprint clearing
+    - Input validation
     """
-    def __init__(self, 
-                 grid_size=64, 
+    def __init__(self,
+                 grid_size=64,
                  grid_range=3.0, # meters
-                 resolution=0.046875 # meters/pixel
+                 resolution=0.046875, # meters/pixel
+                 obstacle_dilation_cm=5, # cm to dilate obstacles for safety
+                 rover_width_m=0.30, # meters
+                 rover_length_m=0.40, # meters
+                 enable_ray_tracing=True # Enable free space ray tracing
                  ):
         self.grid_size = grid_size
         self.grid_range = grid_range
         self.resolution = resolution
-        
-        # Pre-compute grid center offset
-        # Grid: 64x64. Robot at (63, 32).
-        # We need to map meters (x, y) to pixels (r, c).
-        # Pixel coordinates
-        # r = 63 - (x / resolution)
-        # c = 32 - (y / resolution)
+        self.obstacle_dilation_cm = obstacle_dilation_cm
+        self.rover_width_m = rover_width_m
+        self.rover_length_m = rover_length_m
+        self.enable_ray_tracing = enable_ray_tracing
+
+        # Robot position: bottom-center for consistency
+        self.robot_row = grid_size - 1  # 63 for 64x64
+        self.robot_col = grid_size // 2  # 32 for 64x64
 
     def process(self, ranges, angle_min, angle_increment):
         """
@@ -176,62 +252,73 @@ class ScanToOccupancy:
         Returns:
             grid: (64, 64) numpy array, uint8 (0=unknown, 255=obstacle, 128=free)
         """
+        # Input validation
+        if ranges is None or len(ranges) == 0:
+            return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+
         ranges = np.array(ranges)
-        
+
+        # Validate finite values
+        if not np.any(np.isfinite(ranges)):
+            return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+
         # 1. Filter Ranges
-        # Valid: 0.05 < r < grid_range
-        valid_mask = (ranges > 0.05) & (ranges < self.grid_range)
-        
+        # Valid: 0.15m < r < grid_range (improved from 0.05m to avoid self-hits)
+        valid_mask = (ranges > 0.15) & (ranges < self.grid_range) & np.isfinite(ranges)
+
+        if not np.any(valid_mask):
+            return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+
         # 2. Polar to Cartesian
         angles = angle_min + np.arange(len(ranges)) * angle_increment
-        
+
         x = ranges * np.cos(angles)
         y = ranges * np.sin(angles)
-        
+
         # Apply mask
         x = x[valid_mask]
         y = y[valid_mask]
-        
-        if len(x) == 0:
-             return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
-        
+
         # 3. Project to Grid
-        # Robot is at bottom center (row 63, col 32)
-        # X is Forward (Up in grid) -> -Row
-        # Y is Left (Left in grid) -> +Col? No.
-        # Image convention: Col 0 is Left. Col 63 is Right.
-        # Robot Y+ is Left. So Y > 0 means Col < 32.
-        # Standard:
-        # row = H - 1 - (x / res)
-        # col = W/2 - (y / res)
-        
-        rows = self.grid_size - 1 - (x / self.resolution).astype(np.int32)
-        cols = (self.grid_size // 2) - (y / self.resolution).astype(np.int32)
-        
-        # Clip
+        # Robot at bottom-center (row 63, col 32 for 64x64)
+        rows = self.robot_row - (x / self.resolution).astype(np.int32)
+        cols = self.robot_col - (y / self.resolution).astype(np.int32)
+
+        # Clip to bounds
         valid_indices = (rows >= 0) & (rows < self.grid_size) & \
                         (cols >= 0) & (cols < self.grid_size)
-                        
+
         rows = rows[valid_indices]
         cols = cols[valid_indices]
-        
+
+        if len(rows) == 0:
+            return np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
+
         # 4. Create Grid
         grid = np.zeros((self.grid_size, self.grid_size), dtype=np.uint8)
-        
-        # Mark obstacles (255)
-        # Use simple marking for now.
+
+        # 5. Ray Tracing for Free Space (if enabled)
+        if self.enable_ray_tracing:
+            # Use OpenCV line drawing for efficiency
+            for end_r, end_c in zip(rows, cols):
+                cv2.line(grid, (self.robot_col, self.robot_row),
+                        (end_c, end_r), 128, 1)  # 128 = free space
+
+        # 6. Mark obstacles (255) - Vectorized, no loops
         grid[rows, cols] = 255
-        
-        # Expand obstacles slightly (dilation)
-        kernel = np.ones((3,3), np.uint8)
-        grid = cv2.dilate(grid, kernel, iterations=1)
-        
-        # Ray tracing for free space is expensive in Python.
-        # We'll rely on the "decay" of the LocalMapper to clear dynamic obstacles
-        # or rely on Depth camera for free space clearing.
-        # Alternatively, we could assume everything between robot and hit is free?
-        # For now, let's just mark obstacles.
-        
+
+        # 7. Expand obstacles with adaptive kernel
+        if self.obstacle_dilation_cm > 0:
+            kernel_size = max(3, int(self.obstacle_dilation_cm / (self.resolution * 100)))
+            kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1  # Ensure odd
+            kernel = np.ones((kernel_size, kernel_size), np.uint8)
+            grid = cv2.dilate(grid, kernel, iterations=1)
+
+        # 8. Clear robot footprint (rectangular)
+        grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
+                                          self.rover_width_m, self.rover_length_m,
+                                          self.resolution).astype(np.uint8)
+
         return grid
 
 class LocalMapper:
@@ -592,10 +679,8 @@ class MultiChannelOccupancy:
                     grid_cols = grid_cols[valid]
                     obstacle_depths = depths[is_obstacle][valid]
 
-                    # Keep minimum distance per cell
-                    for i in range(len(grid_rows)):
-                        r, c, d = grid_rows[i], grid_cols[i], obstacle_depths[i]
-                        grid[r, c] = min(grid[r, c], d)
+                    # Keep minimum distance per cell - VECTORIZED (no loops)
+                    np.minimum.at(grid, (grid_rows, grid_cols), obstacle_depths)
 
         # Process LiDAR scan
         # NOTE: LiDAR provides 2D horizontal slice at a fixed height (~10cm off ground)
@@ -611,8 +696,8 @@ class MultiChannelOccupancy:
                 angle_min = laser_scan['angle_min']
                 angle_increment = laser_scan['angle_increment']
 
-            # Filter valid ranges - Increase min to 0.25m to avoid self-hits from rover body
-            valid_mask = (ranges > 0.25) & (ranges < self.range_m) & np.isfinite(ranges)
+            # Filter valid ranges - 0.15m to avoid self-hits from rover body
+            valid_mask = (ranges > 0.15) & (ranges < self.range_m) & np.isfinite(ranges)
 
             if np.any(valid_mask):
                 # Polar to Cartesian
@@ -640,22 +725,15 @@ class MultiChannelOccupancy:
                 cols = cols[valid]
                 ranges_filtered = ranges_filtered[valid]
 
-                # Keep minimum distance
-                for i in range(len(rows)):
-                    r, c, d = rows[i], cols[i], ranges_filtered[i]
-                    grid[r, c] = min(grid[r, c], d)
+                # Keep minimum distance - VECTORIZED (no loops)
+                np.minimum.at(grid, (rows, cols), ranges_filtered)
 
-        # Force Clear Robot Footprint (Mask out self-collisions)
+        # Force Clear Robot Footprint (Rectangular rover dimensions)
         # Robot is at bottom center (127, 64)
-        # Radius of ~20cm? Grid res ~3cm. 20/3 = ~7 pixels.
-        # Let's clear a semi-circle or box around the origin
         r_center, c_center = self.grid_size - 1, self.grid_size // 2
-        y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
-        # (r - r_cnt)^2 + (c - c_cnt)^2 < radius^2
-        # Use 45cm radius clearing to be safe (tractor body + noise)
-        radius_px = int(0.45 / self.resolution)
-        footprint_mask = ((y_grid - r_center)**2 + (x_grid - c_center)**2) < radius_px**2
-        grid[footprint_mask] = self.range_m # Reset to max distance (free)
+        grid = clear_rectangular_footprint(grid, r_center, c_center,
+                                           0.30, 0.40, self.resolution)  # 30cm x 40cm rover
+        grid[grid == 0.0] = self.range_m  # Set cleared area to max distance (free)
 
         # Apply distance transform for smooth gradients
         # First create binary obstacle mask
@@ -909,10 +987,8 @@ class MultiChannelOccupancy:
         grid_cols = grid_cols[valid]
         heights = z_r[valid]
 
-        # Keep maximum height per cell
-        for i in range(len(grid_rows)):
-            r, c, h = grid_rows[i], grid_cols[i], heights[i]
-            height_grid[r, c] = max(height_grid[r, c], h)
+        # Keep maximum height per cell - VECTORIZED (no loops)
+        np.maximum.at(height_grid, (grid_rows, grid_cols), heights)
 
         # Normalize to [0, 1] range
         # Floor level = 0, max obstacle (0.5m) = 1.0
@@ -1032,24 +1108,33 @@ class RawSensorProcessor:
     - Depth: 424×240 full-resolution normalized depth image
 
     No EDT, no complex fusion - let the CNN learn features directly.
+
+    Improvements:
+    - Configurable decay rate for persistence buffer
+    - Standardized robot position (bottom-center)
+    - Rectangular footprint clearing
+    - Improved min range filtering (0.15m)
+    - Input validation
     """
 
-    def __init__(self, grid_size=128, max_range=4.0):
+    def __init__(self, grid_size=128, max_range=4.0, scan_decay_rate=0.85):
         """
         Args:
             grid_size: Size of laser occupancy grid (default 128×128)
             max_range: Maximum sensor range in meters (for normalization)
+            scan_decay_rate: Decay rate for persistence buffer (0.85 = slower, 0.6 = faster)
         """
         self.grid_size = grid_size
         self.max_range = max_range
-        self.resolution = (max_range) / grid_size # m/pixel (at farthest point? No, standard grid)
-        # Actually standard grid range logic:
-        # If robot is at bottom center, range is max_range forward.
-        # So resolution = max_range / grid_size works for Y axis?
-        # Let's say 4m / 128 = 3.125 cm/px
-        
+        self.resolution = max_range / grid_size  # 4m / 128 = 3.125 cm/px
+        self.scan_decay_rate = scan_decay_rate
+
         # Persistence buffer for laser scan (Decay)
         self.scan_buffer = np.zeros((grid_size, grid_size), dtype=np.float32)
+
+        # Robot position: bottom-center for consistency
+        self.robot_row = grid_size - 1  # 127 for 128x128
+        self.robot_col = grid_size // 2  # 64 for 128x128
 
     def process(self, depth_img, laser_scan):
         """
@@ -1086,18 +1171,24 @@ class RawSensorProcessor:
         if scan is None:
             return grid
 
-        # Extract scan data
+        # Extract scan data with validation
         if hasattr(scan, 'ranges'):
             ranges = np.array(scan.ranges)
             angle_min = scan.angle_min
             angle_increment = scan.angle_increment
         else:
-            ranges = np.array(scan['ranges'])
-            angle_min = scan['angle_min']
-            angle_increment = scan['angle_increment']
+            ranges = np.array(scan.get('ranges', []))
+            if len(ranges) == 0:
+                return grid
+            angle_min = scan.get('angle_min', -np.pi)
+            angle_increment = scan.get('angle_increment', 0.01)
 
-        # Filter valid ranges (0.25m min to avoid self-hits, max_range for far limit)
-        valid = (ranges > 0.25) & (ranges < self.max_range) & np.isfinite(ranges)
+        # Validate ranges
+        if len(ranges) == 0 or not np.any(np.isfinite(ranges)):
+            return grid
+
+        # Filter valid ranges (0.15m min to avoid self-hits, improved from 0.25m)
+        valid = (ranges > 0.15) & (ranges < self.max_range) & np.isfinite(ranges)
 
         if not np.any(valid):
             return grid
@@ -1113,18 +1204,11 @@ class RawSensorProcessor:
         y = y[valid]
 
         # Project to grid
-        # Robot at 3/4 down: (row 96, col 64) for 128×128 grid
-        # This gives ~270 degree view (sees ~1m behind, ~3m forward)
-        # +X (forward) maps to -row, +Y (left) maps to -col
-        
-        # Center point (Robot)
-        r_c = int(self.grid_size * 0.75) # Row 96
-        c_c = self.grid_size // 2        # Col 64
-        
-        scale = self.grid_size / self.max_range # ~32 pixels/meter
-        
-        rows = r_c - (x * scale).astype(np.int32)
-        cols = c_c - (y * scale).astype(np.int32)
+        # Robot at bottom-center (row 127, col 64) for standardization
+        scale = self.grid_size / self.max_range  # ~32 pixels/meter
+
+        rows = self.robot_row - (x * scale).astype(np.int32)
+        cols = self.robot_col - (y * scale).astype(np.int32)
 
         # Clip to bounds
         valid_idx = (rows >= 0) & (rows < self.grid_size) & \
@@ -1133,31 +1217,30 @@ class RawSensorProcessor:
         rows = rows[valid_idx]
         cols = cols[valid_idx]
 
+        if len(rows) == 0:
+            return grid
+
         # Binary occupancy: 1.0 where obstacles detected
         current_view = np.zeros_like(grid)
         current_view[rows, cols] = 1.0
-        
+
         # Accumulate into buffer with max-hold
         self.scan_buffer = np.maximum(self.scan_buffer, current_view)
-        
+
         # Output is buffer state
         grid = self.scan_buffer.copy()
 
-        # Decay buffer for next frame
-        # 0.7 decay -> gone in ~5 frames (0.7^5 = 0.16)
-        self.scan_buffer *= 0.6  # Faster decay since we run at 30Hz and scan is 10Hz
-        # We want points to survive ~3 frames (100ms)
-        # Frame 0: 1.0 (Scan arrives)
-        # Frame 1: 0.6
-        # Frame 2: 0.36
-        # Frame 3: 0.21 (Scan arrives again ideally)
-        
-        # Clear robot footprint (45cm radius ~= 14 pixels at 3.125cm/px)
-        # r_c, c_c already defined above
-        radius_px = int(0.45 / self.resolution)
-        y_grid, x_grid = np.ogrid[:self.grid_size, :self.grid_size]
-        footprint_mask = ((y_grid - r_c)**2 + (x_grid - c_c)**2) < radius_px**2
-        grid[footprint_mask] = 0.0  # Free space
+        # Decay buffer for next frame with configurable rate
+        # Default 0.85 decay -> survives ~4 frames at 30Hz
+        # Frame 0: 1.0 (Scan arrives at 10Hz)
+        # Frame 1: 0.85
+        # Frame 2: 0.72
+        # Frame 3: 0.61 (Next scan arrives)
+        self.scan_buffer *= self.scan_decay_rate
+
+        # Clear robot footprint (rectangular rover dimensions)
+        grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
+                                           0.30, 0.40, self.resolution)
 
         return grid
 
