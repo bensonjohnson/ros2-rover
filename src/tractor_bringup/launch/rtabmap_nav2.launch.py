@@ -307,14 +307,15 @@ def generate_launch_description():
     )
 
     # Velocity feedback controller for improved speed accuracy
-    # Takes cmd_vel_safe from safety monitor and outputs to motor driver
+    # VFC subscribes to cmd_vel_raw and publishes to cmd_vel
+    # Remap cmd_vel_raw to take input from safety monitor's cmd_vel_safe
     vfc_node = Node(
         package="tractor_control",
         executable="velocity_feedback_controller",
         name="velocity_feedback_controller",
         output="screen",
         parameters=[{"control_frequency": 50.0, "use_sim_time": use_sim_time}],
-        remappings=[("cmd_vel_in", "cmd_vel_safe"), ("cmd_vel_out", "cmd_vel")],
+        remappings=[("cmd_vel_raw", "cmd_vel_safe")],  # Remap input only
     )
 
     # LiDAR-based safety monitor (more reliable than depth-based)
