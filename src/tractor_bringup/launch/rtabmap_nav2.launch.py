@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """
-RTAB-Map + Nav2 launch for outdoor RGB-D mapping without GPS.
-Uses EKF (/odometry/filtered) as odom prior and publishes map->odom TF.
-Keeps Nav2 obstacle layers on RealSense pointcloud.
+RTAB-Map + Nav2 launch for indoor/outdoor RGB-D mapping.
+
+Sensor Fusion:
+  - STL-19p LiDAR: 2D laser scans for obstacle detection
+  - RF2O: Laser scan matching for drift-free odometry (position + yaw)
+  - Wheel encoders: Velocity feedback
+  - LSM9DS1 IMU: Angular velocity
+  - EKF: Fuses all sensors into /odometry/filtered
+
+RTAB-Map uses RGB-D from RealSense D435i for visual SLAM.
+Nav2 uses LiDAR scans for obstacle avoidance and local planning.
 """
 
 import os
@@ -68,6 +76,7 @@ def generate_launch_description():
     )
 
     # 2) Motor driver
+    # DISABLE TF publishing to avoid conflict with EKF
     hiwonder_motor_node = Node(
         package="tractor_control",
         executable="hiwonder_motor_driver",
@@ -75,7 +84,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml"),
-            {"use_sim_time": use_sim_time},
+            {"use_sim_time": use_sim_time, "publish_tf": False},  # Let EKF handle odom -> base_link
         ],
         remappings=[("cmd_vel", "cmd_vel_safe")],
         condition=IfCondition(with_motor),
@@ -89,6 +98,27 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
 
+    # 3b) LiDAR (STL-19p) - provides accurate 2D laser scans
+    lidar_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "stl19p_lidar.launch.py")
+        ),
+        launch_arguments={
+            "port_name": "/dev/ttyUSB0",
+            "frame_id": "laser_link",
+        }.items(),
+    )
+
+    # 3c) LiDAR Odometry (RF2O) - scan matching for drift-free odometry
+    rf2o_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory("tractor_sensors"), "launch", "lidar_odometry.launch.py")
+        ),
+        launch_arguments={
+            "publish_tf": "false",  # Let EKF handle odom -> base_link
+        }.items(),
+    )
+
     # 4) EKF localization (GPS disabled here, but node present for odom fusion)
     robot_localization_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -97,7 +127,7 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time, "use_gps": "false"}.items(),
     )
 
-    # 5) RealSense - using config file for proper parameter loading
+    # 5) RealSense - optimized for RTAB-Map performance
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("realsense2_camera"), "launch", "rs_launch.py")
@@ -107,13 +137,13 @@ def generate_launch_description():
             "camera_name": "camera",
             "camera_namespace": "camera",
             "device_type": "435i",
-            "depth_module.depth_profile": "640x480x30",
-            "rgb_camera.color_profile": "640x480x30",
+            "depth_module.depth_profile": "424x240x30",  # Lower resolution for performance
+            "rgb_camera.color_profile": "424x240x30",     # Lower resolution for performance
             "enable_color": "true",
             "enable_depth": "true",
             "enable_sync": "true",
-            "align_depth.enable": "true",
-            "pointcloud.enable": "true",
+            "align_depth.enable": "true",  # Keep alignment for RTAB-Map RGBD sync
+            "pointcloud.enable": "false",   # Disable pointcloud (not needed, using LiDAR)
             "initial_reset": "true",
             "enable_gyro": "false",
             "enable_accel": "false",
@@ -121,23 +151,7 @@ def generate_launch_description():
         }.items(),
     )
 
-    # 6) Pointcloud to laserscan converter (since pointcloud is disabled)
-    pointcloud_to_laserscan_node = Node(
-        package="pointcloud_to_laserscan",
-        executable="pointcloud_to_laserscan_node",
-        name="pointcloud_to_laserscan",
-        output="screen",
-        parameters=[
-            os.path.join(pkg_tractor_bringup, "config", "pointcloud_to_laserscan.yaml"),
-            {"use_sim_time": use_sim_time},
-        ],
-        remappings=[
-            ("cloud_in", "/camera/camera/depth/color/points"),
-            ("scan", "/scan"),
-        ],
-    )
-
-    # 7) RTAB-Map RGBD sync
+    # 6) RTAB-Map RGBD sync
     rgbd_sync_node = Node(
         package="rtabmap_sync",
         executable="rgbd_sync",
@@ -285,22 +299,31 @@ def generate_launch_description():
         condition=IfCondition(with_autonomous_mapper),
     )
 
+    # Velocity feedback controller for improved speed accuracy
+    vfc_node = Node(
+        package="tractor_control",
+        executable="velocity_feedback_controller",
+        name="velocity_feedback_controller",
+        output="screen",
+        parameters=[{"control_frequency": 50.0, "use_sim_time": use_sim_time}],
+    )
+
+    # LiDAR-based safety monitor (more reliable than depth-based)
     safety_monitor_node = Node(
         package="tractor_bringup",
-        executable="simple_depth_safety_monitor.py",
-        name="simple_depth_safety_monitor",
+        executable="lidar_safety_monitor.py",
+        name="lidar_safety_monitor",
         output="screen",
         parameters=[
             {
-                "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
+                "scan_topic": "/scan",
                 "input_cmd_topic": "cmd_vel_smoothed",
                 "output_cmd_topic": "cmd_vel_safe",
                 "emergency_stop_distance": 0.25,
-                "hard_stop_distance": 0.12,
-                "depth_scale": 0.001,
-                "forward_roi_width_ratio": 0.6,
-                "forward_roi_height_ratio": 0.5,
+                "hard_stop_distance": 0.15,
+                "min_valid_range": 0.05,
                 "max_eval_distance": 5.0,
+                "use_sim_time": use_sim_time,
             }
         ],
         condition=IfCondition(with_safety),
@@ -330,20 +353,23 @@ def generate_launch_description():
     ld.add_action(robot_description_launch)
     ld.add_action(hiwonder_motor_node)
 
-    # Sensors and EKF - improved timing for better startup
-    ld.add_action(TimerAction(period=2.0, actions=[lsm9ds1_imu_launch]))
-    ld.add_action(TimerAction(period=4.0, actions=[robot_localization_launch]))
+    # Sensors - staggered startup for stability
+    ld.add_action(TimerAction(period=2.0, actions=[lidar_launch]))
+    ld.add_action(TimerAction(period=3.0, actions=[lsm9ds1_imu_launch]))
+    ld.add_action(TimerAction(period=4.0, actions=[rf2o_launch]))
 
-    # Camera - allow more time for sensor initialization
+    # EKF - start after sensor data is available
+    ld.add_action(TimerAction(period=5.0, actions=[robot_localization_launch]))
+
+    # Camera - start after core sensors
     ld.add_action(TimerAction(period=6.0, actions=[realsense_launch]))
-    ld.add_action(TimerAction(period=10.0, actions=[pointcloud_to_laserscan_node]))
 
     # RTAB-Map - ensure camera is fully initialized
-    ld.add_action(TimerAction(period=12.0, actions=[rgbd_sync_node]))
-    ld.add_action(TimerAction(period=14.0, actions=[rtabmap_node]))
+    ld.add_action(TimerAction(period=10.0, actions=[rgbd_sync_node]))
+    ld.add_action(TimerAction(period=12.0, actions=[rtabmap_node]))
 
     # Nav2 - start after mapping is ready
-    nav2_start_time = 18.0
+    nav2_start_time = 15.0
     for t, node in enumerate([
         nav2_controller_node,
         nav2_planner_node,
@@ -356,9 +382,10 @@ def generate_launch_description():
     ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager_collision]))
     ld.add_action(TimerAction(period=nav2_start_time + 4.0, actions=[nav2_lifecycle_manager_no_collision]))
 
-    # Safety + exploration - start after everything else is ready
-    ld.add_action(TimerAction(period=25.0, actions=[safety_monitor_node]))
-    ld.add_action(TimerAction(period=28.0, actions=[autonomous_mapper_node]))
+    # Control and safety - start after Nav2 is ready
+    ld.add_action(TimerAction(period=20.0, actions=[vfc_node]))
+    ld.add_action(TimerAction(period=21.0, actions=[safety_monitor_node]))
+    ld.add_action(TimerAction(period=23.0, actions=[autonomous_mapper_node]))
 
     # Optional teleop
     xbox_teleop_launch = IncludeLaunchDescription(
@@ -368,7 +395,7 @@ def generate_launch_description():
         launch_arguments={"use_sim_time": use_sim_time}.items(),
         condition=IfCondition(with_teleop),
     )
-    ld.add_action(TimerAction(period=20.0, actions=[xbox_teleop_launch]))
+    ld.add_action(TimerAction(period=22.0, actions=[xbox_teleop_launch]))
 
     # Viz - start early for debugging
     ld.add_action(TimerAction(period=3.0, actions=[foxglove_bridge_node]))
