@@ -64,14 +64,16 @@ class PDController:
     Improvements over simple P-controller:
     - Derivative term prevents overshoot and oscillation
     - Deadband reduces jitter from sensor noise
-    - Adaptive gains can be tuned per environment
+    - Rate limiting for stability
     """
-    def __init__(self, kp=0.6, kd=0.3, deadband=0.05):
+    def __init__(self, kp=0.5, kd=0.15, deadband=0.05, max_rate=0.3):
         self.kp = kp
         self.kd = kd
         self.deadband = deadband
+        self.max_rate = max_rate  # Max change per step
         self.prev_error = 0.0
-        self.prev_time = time.time()
+        self.prev_output = 0.0
+        self.prev_time = None  # Initialize as None to detect first call
 
     def update(self, target_heading):
         """
@@ -81,7 +83,19 @@ class PDController:
             angular_cmd: [-1, 1] angular velocity command
         """
         current_time = time.time()
-        dt = max(current_time - self.prev_time, 0.01)  # Prevent division by zero
+
+        # First call initialization
+        if self.prev_time is None:
+            self.prev_time = current_time
+            self.prev_error = target_heading
+            # Return simple proportional on first call
+            output = self.kp * target_heading
+            self.prev_output = output
+            return np.clip(output, -1.0, 1.0)
+
+        dt = current_time - self.prev_time
+        # Clamp dt to reasonable range (avoid huge derivatives)
+        dt = np.clip(dt, 0.01, 0.2)
 
         error = target_heading
 
@@ -95,8 +109,15 @@ class PDController:
         # PD control law
         output = self.kp * error + self.kd * derivative
 
+        # Rate limiting: prevent large changes
+        delta = output - self.prev_output
+        if abs(delta) > self.max_rate:
+            delta = np.sign(delta) * self.max_rate
+        output = self.prev_output + delta
+
         # Update state
         self.prev_error = error
+        self.prev_output = output
         self.prev_time = current_time
 
         return np.clip(output, -1.0, 1.0)
@@ -252,8 +273,12 @@ class SACEpisodeRunner(Node):
         self._prev_odom_update = None
 
         # Warmup Controllers (improved)
-        self._pd_controller = PDController(kp=0.6, kd=0.3, deadband=0.05)
+        self._pd_controller = PDController(kp=0.5, kd=0.15, deadband=0.05, max_rate=0.3)
         self._stuck_detector = StuckDetector(window_size=60, stuck_threshold=0.15)
+
+        # Safety flags for new features
+        self._enable_corridor_centering = False  # Disabled by default until tested
+        self._enable_stuck_recovery = True
         
         # Previous action for smoothness reward
         self._prev_action = np.array([0.0, 0.0])
@@ -395,12 +420,14 @@ class SACEpisodeRunner(Node):
         left_dist = np.median(ranges[left_mask])
         right_dist = np.median(ranges[right_mask])
 
-        # Corridor detection: Both sides at similar distance (within 30%)
+        # Corridor detection: Both sides at similar distance (within 20% for stricter detection)
         avg_side = (left_dist + right_dist) / 2.0
         diff = abs(left_dist - right_dist)
 
-        # Corridor criteria: similar side distances AND reasonably close (< 2m)
-        is_corridor = (diff / (avg_side + 0.01) < 0.30) and (avg_side < 2.0) and (avg_side > 0.3)
+        # Stricter corridor criteria: very similar side distances AND close walls
+        # Reduced threshold from 30% to 20% to avoid false positives
+        # Increased min distance to 0.5m to only activate in actual corridors
+        is_corridor = (diff / (avg_side + 0.01) < 0.20) and (avg_side < 1.5) and (avg_side > 0.5)
 
         if is_corridor:
             # Centering error: positive = too far left (need to move right)
@@ -563,24 +590,24 @@ class SACEpisodeRunner(Node):
         # 4. Improved Multi-Scale Gap Finding
         best_angle, best_depth = self._find_best_gap_multiscale(ranges, angles, valid, scan_msg)
 
-        # 5. Corridor Detection and Centering
-        is_corridor, centering_error = self._detect_corridor_and_center(scan_msg)
+        # 5. Corridor Detection and Centering (if enabled)
+        target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
 
-        if is_corridor:
-            # In corridor: blend gap following with lateral centering
-            # Use 70% gap heading + 30% centering correction
-            gap_target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
-            target = 0.7 * gap_target + 0.3 * centering_error
+        if self._enable_corridor_centering:
+            is_corridor, centering_error = self._detect_corridor_and_center(scan_msg)
 
-            # DEBUG: Log corridor centering
-            if not hasattr(self, '_corridor_log_count'):
-                self._corridor_log_count = 0
-            self._corridor_log_count += 1
-            if self._corridor_log_count % 30 == 0:  # Every 1 second
-                self.get_logger().info(f"🛤️  Corridor Mode: Gap={gap_target:.2f}, Center={centering_error:.2f}, Blended={target:.2f}")
-        else:
-            # Open space: use pure gap heading
-            target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
+            if is_corridor:
+                # In corridor: blend gap following with lateral centering
+                # Use 85% gap heading + 15% centering correction
+                gap_target = target
+                target = 0.85 * gap_target + 0.15 * centering_error
+
+                # DEBUG: Log corridor centering
+                if not hasattr(self, '_corridor_log_count'):
+                    self._corridor_log_count = 0
+                self._corridor_log_count += 1
+                if self._corridor_log_count % 30 == 0:  # Every 1 second
+                    self.get_logger().info(f"🛤️  Corridor Mode: Gap={gap_target:.2f}, Center={centering_error:.2f}, Blended={target:.2f}")
 
         # DEBUG: Log if target is stuck at extremes
         if abs(target) > 0.9:
@@ -862,11 +889,11 @@ class SACEpisodeRunner(Node):
                 self.get_logger().info('🔥 Starting Improved Heuristic Warmup (PD Gap Follower + Centering)...')
                 self.pbar.set_description("🔥 Warmup: Smart Gap Follower")
 
-            # Stuck Detection & Recovery (only if odometry available)
+            # Stuck Detection & Recovery (only if enabled and odometry available)
             is_stuck = False
             recovery_action = None
 
-            if self._latest_odom is not None:
+            if self._enable_stuck_recovery and self._latest_odom is not None:
                 is_stuck = self._stuck_detector.update(self._latest_odom)
                 recovery_action = self._stuck_detector.get_recovery_action()
 
@@ -881,17 +908,31 @@ class SACEpisodeRunner(Node):
                 # 3. Corridor centering (automatic via _process_lidar_metrics)
 
                 # Use PD controller for smooth, non-oscillating steering
-                heuristic_angular = self._pd_controller.update(self._target_heading)
+                try:
+                    heuristic_angular = self._pd_controller.update(self._target_heading)
+                except Exception as e:
+                    self.get_logger().error(f"PD controller error: {e}")
+                    heuristic_angular = np.clip(self._target_heading * 0.5, -1.0, 1.0)  # Fallback to simple P
 
                 # Clearance distance (prefer LiDAR for reliability)
                 clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
 
                 # Continuous speed control (replaces hardcoded thresholds)
-                heuristic_linear = self._compute_safe_speed(
-                    heuristic_angular,
-                    clearance_dist,
-                    lidar_sides  # lateral clearance
-                )
+                try:
+                    heuristic_linear = self._compute_safe_speed(
+                        heuristic_angular,
+                        clearance_dist,
+                        lidar_sides  # lateral clearance
+                    )
+                except Exception as e:
+                    self.get_logger().error(f"Speed control error: {e}")
+                    # Fallback to simple threshold
+                    if abs(heuristic_angular) < 0.2 and clearance_dist > 0.35:
+                        heuristic_linear = 1.0
+                    elif clearance_dist > 0.2:
+                        heuristic_linear = 0.6
+                    else:
+                        heuristic_linear = 0.3
 
                 # DEBUG: Log warmup state
                 if not hasattr(self, '_debug_log_count'):
