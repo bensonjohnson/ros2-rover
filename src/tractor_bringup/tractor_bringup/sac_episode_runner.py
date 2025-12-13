@@ -52,6 +52,131 @@ except ImportError:
     HAS_RKNN = False
     print("⚠ RKNNLite not available - cannot run on NPU")
 
+
+# ============================================================================
+# Helper Classes for Improved Warmup/Centering
+# ============================================================================
+
+class PDController:
+    """
+    PD controller for smooth gap following with adaptive damping.
+
+    Improvements over simple P-controller:
+    - Derivative term prevents overshoot and oscillation
+    - Deadband reduces jitter from sensor noise
+    - Adaptive gains can be tuned per environment
+    """
+    def __init__(self, kp=0.6, kd=0.3, deadband=0.05):
+        self.kp = kp
+        self.kd = kd
+        self.deadband = deadband
+        self.prev_error = 0.0
+        self.prev_time = time.time()
+
+    def update(self, target_heading):
+        """
+        Args:
+            target_heading: [-1, 1] normalized gap heading
+        Returns:
+            angular_cmd: [-1, 1] angular velocity command
+        """
+        current_time = time.time()
+        dt = max(current_time - self.prev_time, 0.01)  # Prevent division by zero
+
+        error = target_heading
+
+        # Deadband to reduce jitter
+        if abs(error) < self.deadband:
+            error = 0.0
+
+        # Derivative term (rate of change of error)
+        derivative = (error - self.prev_error) / dt
+
+        # PD control law
+        output = self.kp * error + self.kd * derivative
+
+        # Update state
+        self.prev_error = error
+        self.prev_time = current_time
+
+        return np.clip(output, -1.0, 1.0)
+
+
+class StuckDetector:
+    """
+    Detect if robot is stuck and trigger recovery behavior.
+
+    Monitors odometry to detect:
+    - Low movement over time window
+    - Repetitive oscillation patterns
+    """
+    def __init__(self, window_size=60, stuck_threshold=0.15):
+        """
+        Args:
+            window_size: Number of samples to track (60 = 2s at 30Hz)
+            stuck_threshold: Minimum distance traveled (meters) to not be stuck
+        """
+        self.window_size = window_size
+        self.stuck_threshold = stuck_threshold
+        self.position_history = deque(maxlen=window_size)
+        self.stuck_counter = 0
+        self.recovery_mode = False
+        self.recovery_steps = 0
+
+    def update(self, odom_msg):
+        """
+        Check if stuck based on odometry.
+
+        Args:
+            odom_msg: Odometry message
+
+        Returns:
+            is_stuck (bool): True if robot hasn't moved significantly
+        """
+        pos = (odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y)
+        self.position_history.append(pos)
+
+        if len(self.position_history) < self.position_history.maxlen:
+            return False  # Not enough history
+
+        # Compute total traveled distance over window
+        positions = np.array(self.position_history)
+        distances = np.linalg.norm(np.diff(positions, axis=0), axis=1)
+        total_distance = np.sum(distances)
+
+        # Stuck if moved < threshold in time window
+        is_stuck = total_distance < self.stuck_threshold
+
+        # Count consecutive stuck detections
+        if is_stuck:
+            self.stuck_counter += 1
+        else:
+            self.stuck_counter = 0
+
+        # Trigger recovery after 30 consecutive stuck detections (~1 second)
+        if self.stuck_counter > 30 and not self.recovery_mode:
+            self.recovery_mode = True
+            self.recovery_steps = 45  # 1.5 seconds of recovery
+
+        return is_stuck
+
+    def get_recovery_action(self):
+        """
+        Generate recovery action (back up and turn).
+
+        Returns:
+            action: [linear, angular] recovery command
+        """
+        if self.recovery_steps > 0:
+            self.recovery_steps -= 1
+            # Back up and turn randomly
+            return np.array([-0.5, np.random.uniform(-0.8, 0.8)])
+        else:
+            self.recovery_mode = False
+            self.stuck_counter = 0
+            return None
+
+
 class SACEpisodeRunner(Node):
     """Continuous SAC runner with async data collection."""
 
@@ -123,8 +248,12 @@ class SACEpisodeRunner(Node):
         self._warmup_start_time = 0.0
         self._warmup_active = False
         self._sensor_warmup_complete = False  # Flag for sensor stabilization
-        self._sensor_warmup_countdown = 50  # ~1.7 seconds at 30Hz
+        self._sensor_warmup_countdown = 90  # ~3.0 seconds at 30Hz (increased from 50)
         self._prev_odom_update = None
+
+        # Warmup Controllers (improved)
+        self._pd_controller = PDController(kp=0.6, kd=0.3, deadband=0.05)
+        self._stuck_detector = StuckDetector(window_size=60, stuck_threshold=0.15)
         
         # Previous action for smoothness reward
         self._prev_action = np.array([0.0, 0.0])
@@ -234,135 +363,230 @@ class SACEpisodeRunner(Node):
     def _safety_cb(self, msg): self._safety_override = msg.data
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
 
+    def _detect_corridor_and_center(self, scan_msg) -> Tuple[bool, float]:
+        """
+        Detect if robot is in a corridor and compute centering correction.
+
+        Args:
+            scan_msg: LaserScan message
+
+        Returns:
+            is_corridor (bool): True if symmetric environment detected
+            centering_error (float): [-1, 1] where negative = too far left, positive = too far right
+        """
+        if not scan_msg:
+            return False, 0.0
+
+        ranges = np.array(scan_msg.ranges)
+        angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
+        angles = (angles + np.pi) % (2 * np.pi) - np.pi
+        valid = (ranges > 0.15) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
+
+        # Left/Right 90° sectors (perpendicular to robot)
+        # Left: 20° to 90° (avoiding too far forward/back)
+        # Right: -90° to -20°
+        left_mask = (angles > 0.35) & (angles < 1.57) & valid  # ~20° to 90°
+        right_mask = (angles > -1.57) & (angles < -0.35) & valid  # -90° to -20°
+
+        if not (np.any(left_mask) and np.any(right_mask)):
+            return False, 0.0
+
+        # Use median for robustness against outliers
+        left_dist = np.median(ranges[left_mask])
+        right_dist = np.median(ranges[right_mask])
+
+        # Corridor detection: Both sides at similar distance (within 30%)
+        avg_side = (left_dist + right_dist) / 2.0
+        diff = abs(left_dist - right_dist)
+
+        # Corridor criteria: similar side distances AND reasonably close (< 2m)
+        is_corridor = (diff / (avg_side + 0.01) < 0.30) and (avg_side < 2.0) and (avg_side > 0.3)
+
+        if is_corridor:
+            # Centering error: positive = too far left (need to move right)
+            # Negative = too far right (need to move left)
+            # right_dist > left_dist means right wall is farther, robot is too far left
+            centering_error = (right_dist - left_dist) / avg_side
+            return True, np.clip(centering_error, -1.0, 1.0)
+
+        return False, 0.0
+
+    def _find_best_gap_multiscale(self, ranges, angles, valid, scan_msg) -> Tuple[float, float]:
+        """
+        Multi-scale gap detection with forward bias.
+
+        Args:
+            ranges: Range array
+            angles: Angle array (wrapped to [-π, π])
+            valid: Valid data mask
+            scan_msg: LaserScan message for increment
+
+        Returns:
+            best_angle (float): Angle of best gap in radians
+            best_depth (float): Average depth of best gap
+        """
+        if not np.any(valid):
+            return 0.0, 0.0
+
+        # Focus on front sector ±60° (±1.05 rad)
+        front_mask = (angles > -1.05) & (angles < 1.05) & valid
+
+        if not np.any(front_mask):
+            return 0.0, 0.0
+
+        # Extract front arc
+        front_ranges = ranges.copy()
+        front_ranges[~valid] = 0.0  # Treat invalid as obstacles
+
+        # Sort by angle for proper convolution
+        sort_idx = np.argsort(angles)
+        sorted_angles = angles[sort_idx]
+        sorted_ranges = front_ranges[sort_idx]
+
+        # Front sector only
+        front_sector_mask = (sorted_angles > -1.05) & (sorted_angles < 1.05)
+        sector_angles = sorted_angles[front_sector_mask]
+        sector_ranges = sorted_ranges[front_sector_mask]
+
+        if len(sector_ranges) < 5:
+            return 0.0, 0.0
+
+        best_gap = {'angle': 0.0, 'depth': 0.0, 'score': -np.inf}
+
+        # Multi-scale: try 15°, 25°, 35° windows
+        for window_deg in [15, 25, 35]:
+            window_rad = np.radians(window_deg)
+            window_size = int(window_rad / scan_msg.angle_increment)
+            window_size = max(3, min(window_size, len(sector_ranges) // 3))
+
+            # Convolve to smooth
+            if len(sector_ranges) >= window_size:
+                smoothed = np.convolve(sector_ranges, np.ones(window_size)/window_size, mode='same')
+
+                # Find local maxima
+                for i in range(window_size, len(smoothed) - window_size):
+                    if smoothed[i] < 0.5:  # Too close
+                        continue
+
+                    # Check if local maximum
+                    if smoothed[i] > smoothed[i-1] and smoothed[i] > smoothed[i+1]:
+                        # Scoring: depth × width_bonus × forward_bias
+                        angle = sector_angles[i]
+                        forward_bias = 1.0 - (abs(angle) / 1.05)  # 1.0 at center, 0.0 at ±60°
+
+                        # Increased forward bias from 10% to 30%
+                        forward_weight = 0.7 + 0.3 * forward_bias
+
+                        width_bonus = 1.0 + (window_deg / 35.0) * 0.3  # Prefer wider gaps
+
+                        score = smoothed[i] * forward_weight * width_bonus
+
+                        if score > best_gap['score']:
+                            best_gap = {
+                                'angle': angle,
+                                'depth': smoothed[i],
+                                'score': score
+                            }
+
+        return best_gap['angle'], best_gap['depth']
+
+    def _compute_safe_speed(self, angular_cmd, clearance_front, clearance_sides) -> float:
+        """
+        Compute linear speed using continuous functions instead of hardcoded thresholds.
+
+        Args:
+            angular_cmd: [-1, 1] angular velocity command
+            clearance_front: meters ahead
+            clearance_sides: average lateral clearance
+
+        Returns:
+            linear_cmd: [0, 1] normalized linear speed
+        """
+        # 1. Alignment factor: slower when turning (sigmoid function)
+        # 1.0 when straight, ~0.3 when max turn
+        alignment_factor = 1.0 / (1.0 + 3.0 * abs(angular_cmd))
+
+        # 2. Clearance factor: slower when close to obstacles
+        # Sigmoid: 1.0 when clear (>1m), 0.3 when close (<0.2m)
+        clearance_factor = 1.0 / (1.0 + np.exp(-5.0 * (clearance_front - 0.5)))
+        clearance_factor = np.clip(clearance_factor, 0.2, 1.0)
+
+        # 3. Lateral clearance: slower in narrow spaces
+        # 1.0 when wide (>1m), 0.7 when narrow (<0.5m)
+        lateral_factor = 0.7 + 0.3 * np.clip(clearance_sides / 1.0, 0.0, 1.0)
+
+        # Combine factors
+        speed = alignment_factor * clearance_factor * lateral_factor
+
+        # Enforce minimum speed to overcome motor deadzone
+        return np.clip(speed, 0.25, 1.0)
+
     def _process_lidar_metrics(self, scan_msg) -> Tuple[float, float, float]:
         """
-        Extract key metrics from LiDAR scan.
+        Extract key metrics from LiDAR scan using improved multi-scale gap detection.
+
         Returns:
             min_dist_all (float): Closest obstacle in 360 degrees (Safety Bubble)
-            mean_side_dist (float): Average distance on left/right (for centering/clearing)
+            mean_side_dist (float): Average distance on left/right (for lateral clearance)
             gap_heading (float): Heading towards largest open space (-1..1)
         """
         if not scan_msg:
             return 0.0, 0.0, 0.0
 
         ranges = np.array(scan_msg.ranges)
-        
+
         # 1. Strict Filtering (NaN, Inf, Range Limits)
-        # Using 0.05 and range_max from message
-        valid = (ranges > 0.05) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
-        
+        valid = (ranges > 0.15) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
+
         if not np.any(valid):
-            # No valid data? Assume wide open (safest for reward, but risky for nav)
-            # Or assume blocked? If completely blind, stop.
-            # Let's return safe values but valid=False signal implicitly via 0.0 heading
             return 3.0, 3.0, 0.0
 
-        # Used for stats
         valid_ranges = ranges[valid]
 
-        # 1. Safety Bubble
+        # 1. Safety Bubble (minimum distance in 360°)
         min_dist_all = np.min(valid_ranges)
 
-        # 2. Angle Handling
-        # LD19/STL19p often outputs 0..2PI. We want -PI..PI for steering.
-        # angles = angle_min + i * increment
+        # 2. Angle Handling (wrap to [-π, π])
         angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
-        
-        # Wrap angles to [-PI, PI]
         angles = (angles + np.pi) % (2 * np.pi) - np.pi
-        
-        # 3. Side Clearance
-        # Left: +45 to +135 deg (+0.78 to +2.35 rad)
-        # Right: -135 to -45 deg (-2.35 to -0.78 rad)
+
+        # 3. Side Clearance (for speed control)
+        # Left: +45° to +135° (+0.78 to +2.35 rad)
+        # Right: -135° to -45° (-2.35 to -0.78 rad)
         left_mask = (angles > 0.78) & (angles < 2.35) & valid
         right_mask = (angles > -2.35) & (angles < -0.78) & valid
-        
+
         l_dist = np.mean(ranges[left_mask]) if np.any(left_mask) else 3.0
         r_dist = np.mean(ranges[right_mask]) if np.any(right_mask) else 3.0
         mean_side_dist = (l_dist + r_dist) / 2.0
 
-        # 4. Gap Finding
-        # Find 20-degree sector with max average depth
-        # We need to sort by angle to do a proper convolution or sliding window on the circle?
-        # Actually, since 'angles' might be jumbled after wrapping if scan wasn't -PI..PI,
-        # we should sort the data by angle first to ensure continuity.
-        
-        sort_idx = np.argsort(angles)
-        sorted_angles = angles[sort_idx]
-        sorted_ranges = ranges[sort_idx]
-        sorted_valid = valid[sort_idx]
-        
-        # Fill invalid with 0.0 (treat as obstacle/unknown for gap finding)
-        ranges_gap = sorted_ranges.copy()
-        ranges_gap[~sorted_valid] = 0.0
-        
-        # Window size ~20 degrees
-        # avg_increment = (max - min) / len? Or just use scan_msg.angle_increment
-        window_size = int(np.radians(20) / scan_msg.angle_increment)
-        window_size = max(1, window_size)
-        
-        # Circular convolution? Or just valid range?
-        # Scan usually covers 360.
-        # Pad array for circular continuity
-        ranges_padded = np.pad(ranges_gap, (window_size//2, window_size//2), mode='wrap')
-        
-        # Convolve
-        smoothed = np.convolve(ranges_padded, np.ones(window_size)/window_size, mode='same')
-        # Remove padding
-        if window_size//2 > 0:
-             smoothed = smoothed[window_size//2 : -window_size//2]
-        else:
-             smoothed = ranges_gap
-        
-        # Find best index in smoothed (matches length of ranges_gap potentially, or close)
-        # 'valid' mode output length = N - K + 1. 
-        # Actually simplest is mode='same' on original and handle wrapping manually or ignore edge effect.
-        # Let's use mode='same' on unpadded for simplicity, assuming adequate standard scan.
-        # But wait, gap might be at -PI/PI boundary (behind?). 
-        # Typically we want forward gaps.
-        # Let's focus on [-PI/2, PI/2] (Front 180).
-        
-        # Filter for front sector only (±60° = ±1.05 rad) to avoid extreme turns
-        # Narrower than ±90° to keep rover focused on forward motion
-        front_mask = (sorted_angles > -1.05) & (sorted_angles < 1.05)
-        
-        # If we have front data
-        if np.any(front_mask):
-            # Extract front arc
-            front_ranges = ranges_gap[front_mask]
-            front_angles = sorted_angles[front_mask]
-            
-            # Smooth front arc
-            if len(front_ranges) >= window_size:
-                smoothed_front = np.convolve(front_ranges, np.ones(window_size)/window_size, mode='same')
+        # 4. Improved Multi-Scale Gap Finding
+        best_angle, best_depth = self._find_best_gap_multiscale(ranges, angles, valid, scan_msg)
 
-                # Apply forward bias: Prefer gaps closer to straight ahead
-                # Weight each gap by (1 - |angle|/max_angle) to favor forward direction
-                forward_bias = 1.0 - (np.abs(front_angles) / 1.05)  # 1.0 at center, 0.0 at ±60°
-                biased_scores = smoothed_front * (0.9 + 0.1 * forward_bias)  # 90% distance + 10% forward bias
+        # 5. Corridor Detection and Centering
+        is_corridor, centering_error = self._detect_corridor_and_center(scan_msg)
 
-                best_idx_local = np.argmax(biased_scores)
-                best_angle = front_angles[best_idx_local]
-            else:
-                # Too few points, pick max individual with forward bias
-                forward_bias = 1.0 - (np.abs(front_angles) / 1.05)
-                biased_scores = front_ranges * (0.9 + 0.1 * forward_bias)
-                best_idx_local = np.argmax(biased_scores)
-                best_angle = front_angles[best_idx_local]
+        if is_corridor:
+            # In corridor: blend gap following with lateral centering
+            # Use 70% gap heading + 30% centering correction
+            gap_target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
+            target = 0.7 * gap_target + 0.3 * centering_error
+
+            # DEBUG: Log corridor centering
+            if not hasattr(self, '_corridor_log_count'):
+                self._corridor_log_count = 0
+            self._corridor_log_count += 1
+            if self._corridor_log_count % 30 == 0:  # Every 1 second
+                self.get_logger().info(f"🛤️  Corridor Mode: Gap={gap_target:.2f}, Center={centering_error:.2f}, Blended={target:.2f}")
         else:
-            # Fallback to 360 search if front is blocked?
-            # Or just assume forward if everything fails?
-            best_angle = 0.0
-            
-        # Map to Heading -1..1
-        target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
-        
+            # Open space: use pure gap heading
+            target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
+
         # DEBUG: Log if target is stuck at extremes
         if abs(target) > 0.9:
-            self.get_logger().info(f"🔍 Gap Debug: Best Angle={best_angle:.2f} rad, Target={target:.2f}")
+            self.get_logger().info(f"🔍 Gap Debug: Best Angle={best_angle:.2f} rad, Target={target:.2f}, Depth={best_depth:.2f}m")
             self.get_logger().info(f"   Ranges: Min={min_dist_all:.2f}, Max={np.max(valid_ranges):.2f}, Mean={np.mean(valid_ranges):.2f}")
-            # self.get_logger().info(f"   Gap Window Avg: {smoothed[best_idx]:.2f} (Index {best_idx}/{len(ranges)})")
-        
+
         return min_dist_all, mean_side_dist, target
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
@@ -628,74 +852,63 @@ class SACEpisodeRunner(Node):
             action = np.zeros(2) # Initialize action to avoid UnboundLocalError
             value = 0.0
 
-        # WARMUP / SEEDING
+        # WARMUP / SEEDING (IMPROVED)
         # Use heuristic "Gap Follower" for the first model version (v0)
         # This seeds the replay buffer with "good" driving data (driving towards gaps)
         # instead of random thrashing, helping the model learn the "drive forward" objective faster.
         if self._current_model_version <= 0:
             if not self._warmup_active:
                 self._warmup_active = True
-                self.get_logger().info('🔥 Starting Heuristic Warmup (Gap Follower)...')
-                self.pbar.set_description("🔥 Warmup: Gap Follower")
+                self.get_logger().info('🔥 Starting Improved Heuristic Warmup (PD Gap Follower + Centering)...')
+                self.pbar.set_description("🔥 Warmup: Smart Gap Follower")
 
-            # Heuristic Policy:
-            # 1. Steer towards _target_heading (gap direction from LiDAR)
-            # 2. Drive fast if aligned and clear, slow if turning or blocked
+            # Stuck Detection & Recovery
+            is_stuck = self._stuck_detector.update(self._latest_odom)
+            recovery_action = self._stuck_detector.get_recovery_action()
 
-            # Rate-limit target heading to prevent oscillation
-            # Max change of 0.3 per step (at 30Hz = 9 rad/s max turn rate)
-            max_heading_change = 0.3
-            heading_delta = self._target_heading - self._prev_target_heading
-            if abs(heading_delta) > max_heading_change:
-                # Clamp the change
-                heading_delta = np.sign(heading_delta) * max_heading_change
-            smoothed_target = self._prev_target_heading + heading_delta
-            self._prev_target_heading = smoothed_target
-
-            # Proportional control: Use gain of 0.5 to prevent bang-bang behavior
-            # This gives smoother steering: small errors = small corrections
-            heuristic_angular = np.clip(smoothed_target * 0.5, -1.0, 1.0)
-
-            # Linear action based on LiDAR clearance (more reliable than depth)
-            # lidar_min is the 360-degree safety bubble from actual LiDAR
-            # Use LiDAR for safety distance check since it's more reliable than depth-grid computation
-            clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
-
-            # DEBUG: Log clearance values to diagnose movement issues
-            if not hasattr(self, '_debug_log_count'):
-                self._debug_log_count = 0
-            self._debug_log_count += 1
-            if self._debug_log_count % 30 == 0:  # Log every 1 second
-                self.get_logger().info(f"🔍 Warmup Debug: LiDAR_min={lidar_min:.3f}m, Depth_min={self._min_forward_dist:.3f}m, clearance={clearance_dist:.3f}m, target={self._target_heading:.2f}, smooth={smoothed_target:.2f}, cmd={heuristic_angular:.2f}")
-
-            # Determine linear speed based on alignment AND clearance
-            # NOTE: These are normalized actions [-1, 1] that get scaled by max_speed later
-            # Make sure values are high enough to overcome motor deadzone
-            if abs(heuristic_angular) < 0.2 and clearance_dist > 0.35:
-                # Well aligned and clear - go fast
-                heuristic_linear = 1.0
-            elif abs(heuristic_angular) < 0.3 and clearance_dist > 0.2:
-                # Reasonably aligned - moderate speed
-                heuristic_linear = 0.8
-            elif abs(heuristic_angular) < 0.5 and clearance_dist > 0.2:
-                # Turning and clear - slower
-                heuristic_linear = 0.6
-            elif clearance_dist > 0.15:
-                # Close but some room - slow
-                heuristic_linear = 0.4
+            if recovery_action is not None:
+                # In recovery mode: back up and turn
+                action = recovery_action
+                self.get_logger().warn(f"🔄 Recovery Mode: Backing up and turning...")
             else:
-                # Very close - crawl
-                heuristic_linear = 0.3
+                # Normal Warmup Policy (IMPROVED):
+                # 1. PD controller for smooth steering (replaces simple P-controller)
+                # 2. Continuous speed control (replaces hardcoded thresholds)
+                # 3. Corridor centering (automatic via _process_lidar_metrics)
 
-            # Override model action with heuristic
-            action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
+                # Use PD controller for smooth, non-oscillating steering
+                heuristic_angular = self._pd_controller.update(self._target_heading)
 
-            # Add small noise ONLY to linear speed (not angular - avoid oscillation)
-            # This helps the policy learn robustness without causing steering jitter
-            linear_noise = np.random.normal(0, 0.1)
-            action[0] = np.clip(action[0] + linear_noise, 0.0, 1.0)  # Linear only
-            action[1] = np.clip(action[1], -1.0, 1.0)  # Angular unchanged
-            
+                # Clearance distance (prefer LiDAR for reliability)
+                clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
+
+                # Continuous speed control (replaces hardcoded thresholds)
+                heuristic_linear = self._compute_safe_speed(
+                    heuristic_angular,
+                    clearance_dist,
+                    lidar_sides  # lateral clearance
+                )
+
+                # DEBUG: Log warmup state
+                if not hasattr(self, '_debug_log_count'):
+                    self._debug_log_count = 0
+                self._debug_log_count += 1
+                if self._debug_log_count % 30 == 0:  # Log every 1 second
+                    self.get_logger().info(
+                        f"🔍 Warmup: LiDAR={lidar_min:.2f}m, Depth={self._min_forward_dist:.2f}m, "
+                        f"Sides={lidar_sides:.2f}m, Target={self._target_heading:.2f}, "
+                        f"Angular={heuristic_angular:.2f}, Speed={heuristic_linear:.2f}, Stuck={is_stuck}"
+                    )
+
+                # Override model action with heuristic
+                action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
+
+                # Add small noise ONLY to linear speed (not angular - avoid oscillation)
+                # This helps the policy learn robustness without causing steering jitter
+                linear_noise = np.random.normal(0, 0.08)
+                action[0] = np.clip(action[0] + linear_noise, 0.0, 1.0)  # Linear only
+                action[1] = np.clip(action[1], -1.0, 1.0)  # Angular unchanged
+
         elif self._warmup_active:
             self.get_logger().info('✅ Warmup Complete (Model v1+ loaded). Switching to learned policy.')
             self._warmup_active = False
