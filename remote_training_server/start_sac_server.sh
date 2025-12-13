@@ -23,11 +23,13 @@ echo "=================================================="
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
+BATCH_SIZE=${4:-256}  # Default to 256 for better UTD performance
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
+echo "  Batch Size: ${BATCH_SIZE}"
 echo ""
 
 # Check we're in the right directory
@@ -124,7 +126,24 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   export HSA_FORCE_FINE_GRAIN_PCIE=1
   export MIOPEN_FIND_ENFORCE=NONE
   export MIOPEN_DISABLE_CACHE=0 # Enable cache to speed up startup after first run
-  echo "✓ ROCm environment variables set"
+
+  # V620-specific optimizations
+  export PYTORCH_ROCM_ARCH="gfx1030"  # V620 architecture (Navi 21)
+  export MIOPEN_DEBUG_DISABLE_FIND_DB=0  # Enable find-db for faster ops
+  export HSA_ENABLE_SDMA=0  # Disable SDMA for better performance
+  export MIOPEN_FIND_MODE=NORMAL  # Use normal find mode
+  export HSA_OVERRIDE_GFX_VERSION=10.3.0  # Ensure correct GFX version
+
+  echo "✓ V620-optimized ROCm environment variables set"
+
+  # Check available VRAM
+  echo ""
+  echo "Checking GPU memory..."
+  if rocm-smi --showmeminfo vram 2>/dev/null | grep -q "Total"; then
+    TOTAL_VRAM=$(rocm-smi --showmeminfo vram 2>/dev/null | grep "VRAM Total Memory" | awk '{print $5}')
+    echo "  Total VRAM: ${TOTAL_VRAM} MB"
+    # Note: Batch size of 256 requires ~8GB, 768 requires ~20GB
+  fi
 fi
 
 # Check and warn about file descriptor limits
@@ -160,7 +179,7 @@ LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
   --nats_server "${NATS_SERVER}" \
   --checkpoint_dir "${CHECKPOINT_DIR}" \
   --log_dir "${LOG_DIR}" \
-  --batch_size 768 \
+  --batch_size "${BATCH_SIZE}" \
   "$@"
 } 2>&1 | tee "${LOG_FILE}" &
 

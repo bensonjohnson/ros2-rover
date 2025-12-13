@@ -245,9 +245,15 @@ class V620SACTrainer:
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
             torch.backends.cudnn.benchmark = True # REQUIRED for speed
             print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
+
+            # Enable Automatic Mixed Precision for 2x speedup
+            self.use_amp = True
+            self.scaler = torch.cuda.amp.GradScaler()
+            print("✓ Enabled AMP (Automatic Mixed Precision)")
         else:
             self.device = torch.device('cpu')
-            self.device = torch.device('cpu')
+            self.use_amp = False
+            self.scaler = None
             print("⚠ Using CPU")
         
         # Determine storage device for Replay Buffer
@@ -309,6 +315,15 @@ class V620SACTrainer:
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=args.lr)
 
+        # Learning rate schedulers (cosine annealing)
+        self.actor_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.actor_optimizer, T_max=100000, eta_min=1e-5
+        )
+        self.critic_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.critic_optimizer, T_max=100000, eta_min=1e-5
+        )
+        print("✓ Learning rate schedulers initialized (CosineAnnealing)")
+
         # Replay Buffer
         self.buffer = ReplayBuffer(
             capacity=args.buffer_size,
@@ -336,6 +351,11 @@ class V620SACTrainer:
         self.metrics_history = deque(maxlen=500)
         self.last_step_time = time.time()
         self.steps_per_sec = 0.0
+
+        # Episode reward tracking
+        self.episode_rewards = deque(maxlen=100)  # Track last 100 episodes
+        self.current_episode_reward = 0.0
+        self.episode_count = 0
 
         # NATS connection (will be initialized in async setup)
         self.nc = None
@@ -411,9 +431,16 @@ class V620SACTrainer:
         self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
         self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
 
+        # Load schedulers if available
+        if 'actor_scheduler' in ckpt:
+            self.actor_scheduler.load_state_dict(ckpt['actor_scheduler'])
+        if 'critic_scheduler' in ckpt:
+            self.critic_scheduler.load_state_dict(ckpt['critic_scheduler'])
+
         self.total_steps = ckpt['total_steps']
         self.gradient_steps = ckpt.get('gradient_steps', 0)
         self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100))
+        self.episode_count = ckpt.get('episode_count', 0)
 
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
@@ -427,9 +454,12 @@ class V620SACTrainer:
             'actor_opt': self.actor_optimizer.state_dict(),
             'critic_opt': self.critic_optimizer.state_dict(),
             'alpha_opt': self.alpha_optimizer.state_dict(),
+            'actor_scheduler': self.actor_scheduler.state_dict(),
+            'critic_scheduler': self.critic_scheduler.state_dict(),
             'total_steps': self.total_steps,
             'gradient_steps': self.gradient_steps,
-            'model_version': self.model_version
+            'model_version': self.model_version,
+            'episode_count': self.episode_count
         }
 
         torch.save(checkpoint, path)
@@ -589,6 +619,14 @@ class V620SACTrainer:
             if self.total_steps % 200 == 0:
                 self.save_checkpoint()
 
+            # Step learning rate schedulers every 100 steps
+            if self.total_steps % 100 == 0:
+                self.actor_scheduler.step()
+                self.critic_scheduler.step()
+                # Log current learning rates
+                self.writer.add_scalar('LR/Actor', self.actor_optimizer.param_groups[0]['lr'], self.total_steps)
+                self.writer.add_scalar('LR/Critic', self.critic_optimizer.param_groups[0]['lr'], self.total_steps)
+
             # Periodic GPU memory cleanup (prevents fragmentation)
             if self.total_steps % 1000 == 0:
                 torch.cuda.empty_cache()
@@ -696,6 +734,13 @@ class V620SACTrainer:
             self.writer.add_scalar('Reward/Mean', batch['reward'].mean().item(), self.total_steps)
             self.writer.add_scalar('Reward/Std', batch['reward'].std().item(), self.total_steps)
 
+            # Episode reward statistics
+            if len(self.episode_rewards) > 0:
+                self.writer.add_scalar('Episode/Mean_Reward', np.mean(self.episode_rewards), self.total_steps)
+                self.writer.add_scalar('Episode/Max_Reward', np.max(self.episode_rewards), self.total_steps)
+                self.writer.add_scalar('Episode/Min_Reward', np.min(self.episode_rewards), self.total_steps)
+                self.writer.add_scalar('Episode/Count', self.episode_count, self.total_steps)
+
             # NEW: Log observation statistics for debugging
             self.writer.add_scalar('Observation/Laser_Mean', batch['laser'].mean().item(), self.total_steps)
             self.writer.add_scalar('Observation/RGBD_Mean', batch['rgbd'].mean().item(), self.total_steps)
@@ -786,39 +831,48 @@ class V620SACTrainer:
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
 
         # --- Current Q with DroQ (M forward passes with dropout) ---
-        if self.args.droq_samples > 1 and self.args.droq_dropout > 0.0:
-            # DroQ: Multiple forward passes with dropout
-            q1_samples = []
-            q2_samples = []
+        # Use AMP for forward pass and loss computation
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            if self.args.droq_samples > 1 and self.args.droq_dropout > 0.0:
+                # DroQ: Multiple forward passes with dropout
+                q1_samples = []
+                q2_samples = []
 
-            # Enable dropout
-            self.critic1.train()
-            self.critic2.train()
+                # Enable dropout
+                self.critic1.train()
+                self.critic2.train()
 
-            for _ in range(self.args.droq_samples):
-                q1_samples.append(self.critic1(state_laser, state_rgbd, state_proprio, action))
-                q2_samples.append(self.critic2(state_laser, state_rgbd, state_proprio, action))
+                for _ in range(self.args.droq_samples):
+                    q1_samples.append(self.critic1(state_laser, state_rgbd, state_proprio, action))
+                    q2_samples.append(self.critic2(state_laser, state_rgbd, state_proprio, action))
 
-            # Average over samples
-            q1 = torch.stack(q1_samples).mean(dim=0)
-            q2 = torch.stack(q2_samples).mean(dim=0)
-        else:
-            # Standard SAC: single forward pass
-            q1 = self.critic1(state_laser, state_rgbd, state_proprio, action)
-            q2 = self.critic2(state_laser, state_rgbd, state_proprio, action)
+                # Average over samples
+                q1 = torch.stack(q1_samples).mean(dim=0)
+                q2 = torch.stack(q2_samples).mean(dim=0)
+            else:
+                # Standard SAC: single forward pass
+                q1 = self.critic1(state_laser, state_rgbd, state_proprio, action)
+                q2 = self.critic2(state_laser, state_rgbd, state_proprio, action)
 
-        # MSE loss against target
-        critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
+            # MSE loss against target
+            critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
 
-        # Backprop
+        # Backprop with AMP scaling
         self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
-        torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
-
-        self.critic_optimizer.step()
+        if self.use_amp:
+            self.scaler.scale(critic_loss).backward()
+            self.scaler.unscale_(self.critic_optimizer)
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
+            self.scaler.step(self.critic_optimizer)
+            self.scaler.update()
+        else:
+            critic_loss.backward()
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
+            self.critic_optimizer.step()
 
         return critic_loss, q1, q2, next_q_value
 
@@ -837,46 +891,54 @@ class V620SACTrainer:
 
         alpha = self.log_alpha.exp().item()
 
-        # Re-compute features for actor (gradient flows through encoder)
-        mean, log_std = self.actor(state_laser, state_rgbd, state_proprio)
+        # Use AMP for actor forward pass
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            # Re-compute features for actor (gradient flows through encoder)
+            mean, log_std = self.actor(state_laser, state_rgbd, state_proprio)
 
-        # Validate and sample
-        self._validate_tensor(mean, "mean")
-        self._validate_tensor(log_std, "log_std")
-        log_std = torch.clamp(log_std, -20, 2)
-        std = log_std.exp() + 1e-6
-        self._validate_tensor(std, "std")
+            # Validate and sample
+            self._validate_tensor(mean, "mean")
+            self._validate_tensor(log_std, "log_std")
+            log_std = torch.clamp(log_std, -20, 2)
+            std = log_std.exp() + 1e-6
+            self._validate_tensor(std, "std")
 
-        if self.device.type == 'cuda':
-            torch.cuda.synchronize()
+            if self.device.type == 'cuda':
+                torch.cuda.synchronize()
 
-        dist = torch.distributions.Normal(mean, std)
-        action_sample = dist.rsample()
-        self._validate_tensor(action_sample, "action_sample")
-        current_action = torch.tanh(action_sample)
+            dist = torch.distributions.Normal(mean, std)
+            action_sample = dist.rsample()
+            self._validate_tensor(action_sample, "action_sample")
+            current_action = torch.tanh(action_sample)
 
-        log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
-        log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
+            log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
+            log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
 
-        # Use critic to evaluate action (NO dropout, deterministic)
-        # Disable dropout for actor evaluation
-        self.critic1.eval()
-        self.critic2.eval()
+            # Use critic to evaluate action (NO dropout, deterministic)
+            # Disable dropout for actor evaluation
+            self.critic1.eval()
+            self.critic2.eval()
 
-        q1_pi = self.critic1(state_laser, state_rgbd, state_proprio, current_action)
-        q2_pi = self.critic2(state_laser, state_rgbd, state_proprio, current_action)
-        min_q_pi = torch.min(q1_pi, q2_pi)
+            q1_pi = self.critic1(state_laser, state_rgbd, state_proprio, current_action)
+            q2_pi = self.critic2(state_laser, state_rgbd, state_proprio, current_action)
+            min_q_pi = torch.min(q1_pi, q2_pi)
 
-        actor_loss = ((alpha * log_prob) - min_q_pi).mean()
+            actor_loss = ((alpha * log_prob) - min_q_pi).mean()
 
-        # Backprop
+        # Backprop with AMP scaling
         self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-
-        # Gradient clipping
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
-
-        self.actor_optimizer.step()
+        if self.use_amp:
+            self.scaler.scale(actor_loss).backward()
+            self.scaler.unscale_(self.actor_optimizer)
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
+            self.scaler.step(self.actor_optimizer)
+            self.scaler.update()
+        else:
+            actor_loss.backward()
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
+            self.actor_optimizer.step()
 
         return actor_loss, log_prob, min_q_pi
 
@@ -1015,6 +1077,15 @@ class V620SACTrainer:
                             self.latest_laser_vis = batch['laser'][-1].copy()
                             self.latest_rgbd_vis = batch['rgbd'][-1].copy()
 
+                        # Track episode rewards
+                        for i, (r, d) in enumerate(zip(batch['rewards'], batch['dones'])):
+                            self.current_episode_reward += r
+                            if d:
+                                self.episode_rewards.append(self.current_episode_reward)
+                                self.episode_count += 1
+                                print(f"📊 Episode {self.episode_count} completed: reward = {self.current_episode_reward:.2f}")
+                                self.current_episode_reward = 0.0
+
                         # Add to replay buffer (thread-safe)
                         with self.lock:
                             self.buffer.add_batch(batch)
@@ -1121,29 +1192,29 @@ if __name__ == '__main__':
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
 
     # Learning - Updated for improved convergence
-    parser.add_argument('--lr', type=float, default=3e-4,  # Was 3e-5 (10× too low!)
+    parser.add_argument('--lr', type=float, default=3e-4,
                         help='Learning rate for Adam optimizer')
-    parser.add_argument('--batch_size', type=int, default=768,  # Optimized for V620 32GB VRAM
-                        help='Batch size for training (larger = more stable gradients)')
+    parser.add_argument('--batch_size', type=int, default=256,  # Reduced from 768 for 3x more gradient steps/sec
+                        help='Batch size for training (smaller = better for high UTD)')
     parser.add_argument('--buffer_size', type=int, default=50000,  # Reduced for RGBD memory usage (240x424x4 = ~20GB at 50k)
                         help='Replay buffer capacity')
 
     # SAC specific
-    parser.add_argument('--gamma', type=float, default=0.98,  # Was 0.97
+    parser.add_argument('--gamma', type=float, default=0.99,  # Increased from 0.98 (standard for robotics)
                         help='Discount factor')
-    parser.add_argument('--tau', type=float, default=0.005,  # Was 0.001
+    parser.add_argument('--tau', type=float, default=0.005,
                         help='Soft target update rate')
     parser.add_argument('--checkpoint_dir', default='./checkpoints_sac')
     parser.add_argument('--log_dir', default='./logs_sac')
 
     # DroQ + UTD + Augmentation parameters - Updated for sample efficiency
-    parser.add_argument('--droq_dropout', type=float, default=0.005,  # Was 0.01
+    parser.add_argument('--droq_dropout', type=float, default=0.01,  # Increased from 0.005 for better regularization
                         help='Dropout rate for DroQ (0.0 to disable)')
-    parser.add_argument('--droq_samples', type=int, default=2,  # Was 10 (overkill)
+    parser.add_argument('--droq_samples', type=int, default=5,  # Increased from 2 for better ensemble
                         help='Number of Q-network forward passes for DroQ (M)')
-    parser.add_argument('--utd_ratio', type=int, default=20,  # Was 4 (CRITICAL!)
+    parser.add_argument('--utd_ratio', type=int, default=20,  # High UTD for sample efficiency
                         help='Update-to-Data ratio (gradient steps per env step)')
-    parser.add_argument('--actor_update_freq', type=int, default=2,  # Was 10
+    parser.add_argument('--actor_update_freq', type=int, default=4,  # Increased from 2 (update actor less frequently)
                         help='Update actor every N critic updates')
     parser.add_argument('--warmup_steps', type=int, default=10000,  # Was 2000
                         help='Minimum buffer size before training starts')
