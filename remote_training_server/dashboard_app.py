@@ -214,37 +214,37 @@ class TrainingDashboard:
             return Response(status=500)
 
     def get_depth(self):
-        """Return the latest depth image as a PNG."""
+        """Return the latest depth image as a PNG (extracted from RGBD)."""
         try:
-            depth = self.trainer.latest_depth_vis
-            if depth is None:
+            rgbd = self.trainer.latest_rgbd_vis
+            if rgbd is None:
                 vis = np.zeros((240, 424, 3), dtype=np.uint8)
             else:
-                # depth is (1, 424, 240) or (424, 240) uint8 (0-255)
-                if depth.ndim == 3:
-                    depth = depth[0]
-                
+                # rgbd is (4, 240, 424) - extract depth channel (index 3)
+                if rgbd.shape[0] == 4:
+                    depth = rgbd[3]  # 4th channel is depth
+                else:
+                    # Fallback if shape is different
+                    vis = np.zeros((240, 424, 3), dtype=np.uint8)
+                    _, buffer = cv2.imencode('.png', vis)
+                    return Response(buffer.tobytes(), mimetype='image/png')
+
                 # Convert float [0, 1] to uint8 [0, 255] if needed
                 if depth.dtype != np.uint8:
                     depth = (depth * 255.0).astype(np.uint8)
-                
-                # Apply colormap (Jet: Blue=Close, Red=Far? No, Blue=Low, Red=High)
-                # We want Close=Red (Warning), Far=Blue (Safe).
-                # Depth 0=Close, 1=Far.
-                # So 0->Red, 255->Blue.
-                # Jet: 0=Blue, 255=Red.
-                # So we need to invert depth?
-                # inverted = 255 - depth
-                # cv2.applyColorMap(inverted, cv2.COLORMAP_JET) -> 0(was 255 Far)=Blue. 255(was 0 Close)=Red.
-                # Perfect.
-                
+
+                # Apply colormap (close=red, far=blue)
+                # Depth 0=Close, 255=Far
+                # Invert so close becomes red in JET colormap
                 depth_inverted = 255 - depth
                 vis = cv2.applyColorMap(depth_inverted, cv2.COLORMAP_JET)
-                
+
             _, buffer = cv2.imencode('.png', vis)
             return Response(buffer.tobytes(), mimetype='image/png')
         except Exception as e:
             print(f"Error serving depth: {e}")
+            import traceback
+            traceback.print_exc()
             return Response(status=500)
 
     def get_rgbd(self):
