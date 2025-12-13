@@ -13,12 +13,12 @@ rtabmap:
     publish_tf: true
     tf_delay: 0.05
 
-    # Input selection: use RGBD sync + external odometry
+    # Input selection: use RGBD sync + laser scan + external odometry
     subscribe_rgbd: true
     subscribe_depth: false
     subscribe_rgb: false
     subscribe_stereo: false
-    subscribe_scan: false
+    subscribe_scan: true           # Enable laser scan for obstacle detection
     subscribe_scan_cloud: false
     subscribe_user_data: false
     subscribe_odom_info: false
@@ -60,10 +60,10 @@ rtabmap:
     Mem/UseOdomGravity: "true"
     Mem/UseOdomFeatures: "false"
 
-    # Grid map (2D occupancy) - optimized for indoor spaces
-    Grid/Sensor: "1"                 # 0=laser scan, 1=depth camera
+    # Grid map (2D occupancy) - uses LiDAR for accurate obstacle detection
+    Grid/Sensor: "0"                 # 0=laser scan, 1=depth camera
     Grid/DepthDecimation: "2"        # Reduced for better resolution
-    Grid/RangeMax: "4.0"             # Reduced for indoor spaces
+    Grid/RangeMax: "8.0"             # LiDAR max range
     Grid/MinClusterSize: "5"          # Reduced for small indoor obstacles
     Grid/MaxGroundAngle: "10"         # Reduced for indoor floor detection
     Grid/NormalK: "15"               # Reduced for faster processing
