@@ -862,9 +862,13 @@ class SACEpisodeRunner(Node):
                 self.get_logger().info('🔥 Starting Improved Heuristic Warmup (PD Gap Follower + Centering)...')
                 self.pbar.set_description("🔥 Warmup: Smart Gap Follower")
 
-            # Stuck Detection & Recovery
-            is_stuck = self._stuck_detector.update(self._latest_odom)
-            recovery_action = self._stuck_detector.get_recovery_action()
+            # Stuck Detection & Recovery (only if odometry available)
+            is_stuck = False
+            recovery_action = None
+
+            if self._latest_odom is not None:
+                is_stuck = self._stuck_detector.update(self._latest_odom)
+                recovery_action = self._stuck_detector.get_recovery_action()
 
             if recovery_action is not None:
                 # In recovery mode: back up and turn
