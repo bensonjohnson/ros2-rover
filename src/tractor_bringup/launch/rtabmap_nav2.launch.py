@@ -31,6 +31,7 @@ def generate_launch_description():
     max_speed = LaunchConfiguration("max_speed")
     mapping_duration = LaunchConfiguration("mapping_duration")
     nav2_params_file = LaunchConfiguration("nav2_params_file")
+    database_path = LaunchConfiguration("database_path")
     with_teleop = LaunchConfiguration("with_teleop")
     with_autonomous_mapper = LaunchConfiguration("with_autonomous_mapper")
     with_motor = LaunchConfiguration("with_motor")
@@ -66,6 +67,11 @@ def generate_launch_description():
     declare_with_safety_cmd = DeclareLaunchArgument(
         "with_safety", default_value="false", description="Start safety monitor"
     )
+    declare_database_path_cmd = DeclareLaunchArgument(
+        "database_path",
+        default_value=os.path.join(os.path.expanduser("~"), ".ros", "rtabmap.db"),
+        description="Path to RTAB-Map database file"
+    )
 
     # 1) Robot description
     robot_description_launch = IncludeLaunchDescription(
@@ -77,6 +83,7 @@ def generate_launch_description():
 
     # 2) Motor driver
     # DISABLE TF publishing to avoid conflict with EKF
+    # cmd_vel is handled by velocity feedback controller
     hiwonder_motor_node = Node(
         package="tractor_control",
         executable="hiwonder_motor_driver",
@@ -86,7 +93,6 @@ def generate_launch_description():
             os.path.join(pkg_tractor_bringup, "config", "hiwonder_motor_params.yaml"),
             {"use_sim_time": use_sim_time, "publish_tf": False},  # Let EKF handle odom -> base_link
         ],
-        remappings=[("cmd_vel", "cmd_vel_safe")],
         condition=IfCondition(with_motor),
     )
 
@@ -174,10 +180,11 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(pkg_tractor_bringup, "config", "rtabmap_params.yaml"),
-            {"use_sim_time": use_sim_time},
+            {"use_sim_time": use_sim_time, "database_path": database_path},
         ],
         remappings=[
             ("rgbd_image", "rgbd_image"),
+            ("scan", "/scan"),
             ("imu", "/imu/data"),
         ],
         condition=IfCondition(with_rtabmap),
@@ -300,12 +307,14 @@ def generate_launch_description():
     )
 
     # Velocity feedback controller for improved speed accuracy
+    # Takes cmd_vel_safe from safety monitor and outputs to motor driver
     vfc_node = Node(
         package="tractor_control",
         executable="velocity_feedback_controller",
         name="velocity_feedback_controller",
         output="screen",
         parameters=[{"control_frequency": 50.0, "use_sim_time": use_sim_time}],
+        remappings=[("cmd_vel_in", "cmd_vel_safe"), ("cmd_vel_out", "cmd_vel")],
     )
 
     # LiDAR-based safety monitor (more reliable than depth-based)
@@ -343,6 +352,7 @@ def generate_launch_description():
     ld.add_action(declare_max_speed_cmd)
     ld.add_action(declare_mapping_duration_cmd)
     ld.add_action(declare_nav2_params_cmd)
+    ld.add_action(declare_database_path_cmd)
     ld.add_action(declare_with_teleop_cmd)
     ld.add_action(declare_with_autonomous_mapper_cmd)
     ld.add_action(declare_with_motor_cmd)
