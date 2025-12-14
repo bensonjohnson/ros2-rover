@@ -39,7 +39,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import model architectures
-from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork, DepthEncoderPolicyNetwork, DepthEncoderQNetwork
+from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork
 
 # Import serialization utilities
 from serialization_utils import (
