@@ -249,9 +249,9 @@ class SACEpisodeRunner(Node):
         self._curriculum_collision_dist = 0.5
         self._curriculum_max_speed = 0.1
 
-        # Buffers for batching
+        # Buffers for batching (depth-only mode)
         self._data_buffer = {
-            'laser': [], 'rgbd': [], 'proprio': [],
+            'laser': [], 'depth': [], 'proprio': [],
             'actions': [], 'rewards': [], 'dones': []
         }
         self._buffer_lock = threading.Lock()
@@ -313,8 +313,7 @@ class SACEpisodeRunner(Node):
             grid_size=128,  # Laser occupancy grid size
             max_range=4.0   # Maximum sensor range for normalization
         )
-        # RGBD processor for RGB-D fusion
-        self.rgbd_processor = RGBDProcessor(max_range=4.0)
+        # Depth-only processing (no RGB needed)
         self._setup_subscribers()
         self._setup_publishers()
         
@@ -336,7 +335,7 @@ class SACEpisodeRunner(Node):
         self.get_logger().info('🚀 SAC Runner Initialized')
 
     def _setup_subscribers(self):
-        self.create_subscription(Image, '/camera/camera/color/image_raw', self._rgb_cb, qos_profile_sensor_data)
+        # No RGB camera subscription - depth-only mode
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
         # Odometry: Use Fused EKF Output
@@ -354,12 +353,36 @@ class SACEpisodeRunner(Node):
         self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
 
     # Callbacks
-    def _rgb_cb(self, msg):
-        self._latest_rgb = self.bridge.imgmsg_to_cv2(msg, 'rgb8')
+    # RGB callback removed - depth-only mode
     def _depth_cb(self, msg):
         # Use passthrough to get raw 16-bit depth (uint16 mm)
         d = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
         self._latest_depth_raw = d  # Store raw for processing in control loop
+
+    def _process_depth(self, depth_raw):
+        """Process raw depth to normalized (100, 848) float32 [0, 1].
+
+        848x100 mode is center-cropped - captures less floor, more forward view.
+        """
+        if depth_raw is None or depth_raw.size == 0:
+            return np.ones((100, 848), dtype=np.float32)  # All far/unknown
+
+        # Convert uint16 mm → float32 meters
+        if depth_raw.dtype == np.uint16:
+            depth = depth_raw.astype(np.float32) * 0.001
+        else:
+            depth = depth_raw.astype(np.float32)
+
+        # Apply median filter to reduce noise
+        depth_uint16 = np.clip(depth * 1000, 0, 65535).astype(np.uint16)
+        depth = cv2.medianBlur(depth_uint16, 3).astype(np.float32) * 0.001
+
+        # Normalize to [0, 1] with max_range=4.0
+        depth_clipped = np.clip(depth, 0.0, 4.0)
+        depth_normalized = depth_clipped / 4.0
+        depth_normalized[depth == 0.0] = 1.0  # Invalid -> far
+
+        return depth_normalized  # (100, 848) float32
     def _scan_cb(self, msg):
         self._latest_scan = msg
         
@@ -831,22 +854,14 @@ class SACEpisodeRunner(Node):
         # Returns: [action_mean] (value head not exported in actor ONNX)
         if self._rknn_runtime:
             # Stateless inference (LSTM removed for export compatibility)
-            # Input: [laser, rgbd, proprio]
+            # Input: [laser, depth, proprio]
             # Add Batch and Channel dimensions
-            laser_input = laser_grid[None, None, ...]
-            # Build RGBD if RGB is available; fallback to depth-only
-            if self._latest_rgb is not None:
-                rgbd_input = self.rgbd_processor.process(self._latest_rgb, self._latest_depth_raw)
-                rgbd_input = rgbd_input[None, ...]  # (1, 4, 240, 424)
-            else:
-                # Fallback: use depth as single-channel replicated to 4 channels to avoid crashes
-                # Create a grayscale "RGB" by repeating depth 3 times
-                depth_normalized = (self._latest_depth_raw.astype(np.float32) / 1000.0).clip(0, 4.0) / 4.0 * 255.0
-                depth_3 = np.repeat(depth_normalized[..., None], 3, axis=2).astype(np.uint8)
-                rgbd_input = self.rgbd_processor.process(depth_3, self._latest_depth_raw)
-                rgbd_input = rgbd_input[None, ...]  # (1, 4, 240, 424)
+            laser_input = laser_grid[None, None, ...]  # (1, 1, 128, 128)
+            # Process depth to normalized (100, 848) float32 [0, 1]
+            depth_input = self._process_depth(self._latest_depth_raw)
+            depth_input = depth_input[None, None, ...]  # (1, 1, 100, 848)
 
-            outputs = self._rknn_runtime.inference(inputs=[laser_input, rgbd_input, proprio])
+            outputs = self._rknn_runtime.inference(inputs=[laser_input, depth_input, proprio])
 
             # Output 0 is action (1, 2)
             action_mean = outputs[0][0] # (2,)
@@ -1047,30 +1062,19 @@ class SACEpisodeRunner(Node):
             return
 
         # 6. Store Transition
-        # Build RGBD for storage
-        # Validate that both RGB and depth are available and have matching shapes
-        if self._latest_rgb is not None and self._latest_depth_raw is not None:
-            # Verify shape compatibility
-            expected_depth_shape = self._latest_rgb.shape[:2]  # (height, width)
-            if self._latest_depth_raw.shape[:2] != expected_depth_shape:
-                self.get_logger().warn(
-                    f"⚠️  Shape mismatch: RGB {self._latest_rgb.shape} vs Depth {self._latest_depth_raw.shape}, skipping"
-                )
-                return
-            rgbd_to_store = self.rgbd_processor.process(self._latest_rgb, self._latest_depth_raw)
-        elif self._latest_depth_raw is not None:
-            # Fallback: grayscale depth RGB (only if depth is available)
-            depth_normalized = (self._latest_depth_raw.astype(np.float32) / 1000.0).clip(0, 4.0) / 4.0 * 255.0
-            depth_3 = np.repeat(depth_normalized[..., None], 3, axis=2).astype(np.uint8)
-            rgbd_to_store = self.rgbd_processor.process(depth_3, self._latest_depth_raw)
-        else:
+        # Process depth for storage
+        if self._latest_depth_raw is None:
             # No valid sensor data yet
-            self.get_logger().warn("⚠️  No RGB or depth data available, skipping data collection")
+            self.get_logger().warn("⚠️  No depth data available, skipping data collection")
             return
-        
+
+        depth_to_store = self._process_depth(self._latest_depth_raw)  # (100, 848) float32
+        # Add channel dimension for consistency: (1, 100, 848)
+        depth_to_store = depth_to_store[None, ...]
+
         with self._buffer_lock:
             self._data_buffer['laser'].append(self._latest_laser)
-            self._data_buffer['rgbd'].append(rgbd_to_store)
+            self._data_buffer['depth'].append(depth_to_store)
             self._data_buffer['proprio'].append(proprio[0])
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
@@ -1094,18 +1098,14 @@ class SACEpisodeRunner(Node):
             if len(calib_files) < 100:
                 timestamp = int(time.time() * 1000)
                 save_path = self._calibration_dir / f"calib_{timestamp}.npz"
-                # Save RGBD for calibration
-                if self._latest_rgb is not None:
-                    rgbd_calib = self.rgbd_processor.process(self._latest_rgb, self._latest_depth_raw)
-                else:
-                    depth_normalized = (self._latest_depth_raw.astype(np.float32) / 1000.0).clip(0, 4.0) / 4.0 * 255.0
-                    depth_3 = np.repeat(depth_normalized[..., None], 3, axis=2).astype(np.uint8)
-                    rgbd_calib = self.rgbd_processor.process(depth_3, self._latest_depth_raw)
-                
+
+                # Save depth-only for calibration
+                depth_calib = self._process_depth(self._latest_depth_raw)  # (100, 848)
+
                 np.savez_compressed(
                     save_path,
                     laser=self._latest_laser,
-                    rgbd=rgbd_calib,
+                    depth=depth_calib,
                     proprio=proprio[0]
                 )
             

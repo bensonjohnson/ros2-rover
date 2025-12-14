@@ -59,7 +59,7 @@ class RKNNConverter:
         print("Configuring RKNN...")
         ret = self.rknn.config(
             # Input 0: Laser (1, 128, 128) float32, binary 0/1
-            # Input 1: Depth (1, 240, 424) float32, normalized [0, 1]
+            # Input 1: Depth (1, 100, 848) float32, normalized [0, 1] - 848x100@100Hz mode
             # Input 2: Proprio (10,) float32, various ranges
             mean_values=[[0], [0], [0]*10],  # Laser/Depth: no norm, Proprio: no norm
             std_values=[[1], [1], [1]*10],   # Laser/Depth: already processed, Proprio: as-is
@@ -141,11 +141,11 @@ class RKNNConverter:
                     depth = data['depth']
                     proprio = data['proprio']
 
-                    # Validate shapes
-                    if laser.shape == (1, 128, 128) and depth.shape == (1, 240, 424) and proprio.shape == (10,):
+                    # Validate shapes (848x100@100Hz mode)
+                    if laser.shape == (1, 128, 128) and depth.shape == (1, 100, 848) and proprio.shape == (10,):
                         dataset.append({'laser': laser, 'depth': depth, 'proprio': proprio})
                     else:
-                        print(f"WARNING: Unexpected shapes in {file_path}")
+                        print(f"WARNING: Unexpected shapes in {file_path}: laser={laser.shape}, depth={depth.shape}, proprio={proprio.shape}")
                 else:
                     print(f"WARNING: Missing 'laser', 'depth' or 'proprio' in {file_path}")
 
@@ -187,9 +187,9 @@ class RKNNConverter:
             print(f"RKNN init_runtime failed: {ret}")
             return
 
-        # Validate inputs
+        # Validate inputs (848x100@100Hz mode)
         assert test_laser.shape == (1, 128, 128)
-        assert test_depth.shape == (1, 240, 424)
+        assert test_depth.shape == (1, 100, 848)
         assert test_proprio.shape == (10,)
 
         # Run inference

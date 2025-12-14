@@ -193,19 +193,9 @@ def convert_onnx_to_rknn(
             model=onnx_path,
             inputs=['laser', 'depth', 'proprio'],
             input_size_list=[
-                [1, 1, 128, 128],   # Laser
-                [1, 1, 424, 240],   # Depth
-                [1, 11],            # Proprio (is it 10 or 11?) -> Code uses 10 elsewhere, exports dim 10. Check ONNX export?
-                                    # ONNX export used 10 dummy inputs.
-                                    # Wait, existing code said [1, 11] for proprio?
-                                    # _v620_sac_trainer.py says proprio_dim = 10.
-                                    # export_to_rknn.py says [0]*10.
-                                    # I will use 10. If 11 was old, maybe it had something extra.
-                                    # Existing file at line 65 says "proprio = data['proprio'] # (10,)".
-                                    # Line 188 in file says "[1, 11]". Why 11?
-                                    # Maybe old code had 11 inputs?
-                                    # I'll stick to 10 based on current trainer.
-                [1, 10],            # Proprio
+                [1, 1, 128, 128],   # Laser occupancy grid
+                [1, 1, 100, 848],   # Depth (848x100@100Hz mode - center crop, less floor)
+                [1, 10],            # Proprio (10-dim)
             ]
         )
         if ret != 0:
@@ -236,9 +226,8 @@ def convert_onnx_to_rknn(
                 print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
             else:
                 # Create test inputs (normalized like rover)
-                # Create test inputs (normalized like rover)
                 test_laser = np.random.rand(1, 1, 128, 128).astype(np.float32)
-                test_depth = np.random.rand(1, 1, 424, 240).astype(np.float32)
+                test_depth = np.random.rand(1, 1, 100, 848).astype(np.float32)  # 848x100@100Hz
                 test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference

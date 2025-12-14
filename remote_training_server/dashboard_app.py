@@ -214,18 +214,18 @@ class TrainingDashboard:
             return Response(status=500)
 
     def get_depth(self):
-        """Return the latest depth image as a PNG (extracted from RGBD)."""
+        """Return the latest depth image as a PNG (depth-only, 100x848)."""
         try:
-            rgbd = self.trainer.latest_rgbd_vis
-            if rgbd is None:
-                vis = np.zeros((240, 424, 3), dtype=np.uint8)
+            depth = self.trainer.latest_depth_vis
+            if depth is None:
+                vis = np.zeros((100, 848, 3), dtype=np.uint8)
             else:
-                # rgbd is (4, 240, 424) - extract depth channel (index 3)
-                if rgbd.shape[0] == 4:
-                    depth = rgbd[3]  # 4th channel is depth
-                else:
-                    # Fallback if shape is different
-                    vis = np.zeros((240, 424, 3), dtype=np.uint8)
+                # depth is (1, 100, 848) - extract depth channel
+                if depth.ndim == 3 and depth.shape[0] == 1:
+                    depth = depth[0]  # (100, 848)
+                elif depth.ndim != 2:
+                    # Fallback if shape is unexpected
+                    vis = np.zeros((100, 848, 3), dtype=np.uint8)
                     _, buffer = cv2.imencode('.png', vis)
                     return Response(buffer.tobytes(), mimetype='image/png')
 
@@ -248,48 +248,9 @@ class TrainingDashboard:
             return Response(status=500)
 
     def get_rgbd(self):
-        """Return the latest RGBD image as a PNG (RGB + Depth side-by-side)."""
-        try:
-            rgbd = self.trainer.latest_rgbd_vis
-            if rgbd is None:
-                # Create placeholder with RGB and Depth side-by-side
-                rgb_placeholder = np.zeros((240, 424, 3), dtype=np.uint8)
-                depth_placeholder = np.zeros((240, 424, 3), dtype=np.uint8)
-                vis = np.hstack([rgb_placeholder, depth_placeholder])
-            else:
-                # rgbd is (4, 240, 424) uint8 - [R, G, B, D]
-                # Reshape to (240, 424, 4) for easier processing
-                if rgbd.shape[0] == 4:
-                    rgbd = rgbd.transpose(1, 2, 0)  # (4, 240, 424) -> (240, 424, 4)
-
-                # Extract RGB and Depth
-                rgb = rgbd[:, :, :3]  # First 3 channels
-                depth = rgbd[:, :, 3]  # 4th channel
-
-                # Ensure RGB is uint8
-                if rgb.dtype != np.uint8:
-                    rgb = (rgb * 255.0).astype(np.uint8)
-
-                # Convert depth to colormap (close=red, far=blue)
-                if depth.dtype != np.uint8:
-                    depth = (depth * 255.0).astype(np.uint8)
-
-                depth_inverted = 255 - depth
-                depth_colored = cv2.applyColorMap(depth_inverted, cv2.COLORMAP_JET)
-
-                # Convert RGB from RGB to BGR for OpenCV
-                rgb_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-
-                # Stack side-by-side: RGB | Depth
-                vis = np.hstack([rgb_bgr, depth_colored])
-
-            _, buffer = cv2.imencode('.png', vis)
-            return Response(buffer.tobytes(), mimetype='image/png')
-        except Exception as e:
-            print(f"Error serving RGBD: {e}")
-            import traceback
-            traceback.print_exc()
-            return Response(status=500)
+        """Return the latest depth image as a PNG (depth-only, backward compatibility)."""
+        # Redirect to depth endpoint for backward compatibility
+        return self.get_depth()
 
     def get_grid(self):
         # Redirect wrapper for legacy
@@ -666,16 +627,11 @@ class TrainingDashboard:
 
                 <!-- Depth Image -->
                 <div class="grid-container">
-                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Raw Depth (424x240)</div>
-                    <img id="depth-img" src="/api/depth" alt="Depth Image" class="grid-image" style="width: 424px; max-width: 100%;">
-                </div>
-
-                <!-- RGBD Image -->
-                <div class="grid-container">
-                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">RGBD (RGB + Depth) (848x240)</div>
-                    <img id="rgbd-img" src="/api/rgbd" alt="RGBD Image" class="grid-image" style="width: 848px; max-width: 100%;">
+                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Depth (848x100@100Hz)</div>
+                    <img id="depth-img" src="/api/depth" alt="Depth Image" class="grid-image" style="width: 848px; max-width: 100%;">
                     <div class="stat-row" style="margin-top: 5px; font-size: 0.8rem; justify-content: center; gap: 10px;">
-                        <span class="badgem">📷 RGB | 🌡️ Depth</span>
+                        <span class="badgem" style="color: #ff0000;">🔴 Close</span>
+                        <span class="badgem" style="color: #0000ff;">🔵 Far</span>
                     </div>
                 </div>
 
@@ -1090,7 +1046,6 @@ class TrainingDashboard:
             const timestamp = new Date().getTime();
             document.getElementById('laser-img').src = '/api/laser?t=' + timestamp;
             document.getElementById('depth-img').src = '/api/depth?t=' + timestamp;
-            document.getElementById('rgbd-img').src = '/api/rgbd?t=' + timestamp;
         }, 500);
     </script>
 </body>

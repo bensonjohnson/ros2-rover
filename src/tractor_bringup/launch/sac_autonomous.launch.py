@@ -58,7 +58,7 @@ def generate_launch_description():
         ]
     )
 
-    # 3. RealSense Camera (RGB-D + Depth, no PointCloud for speed)
+    # 3. RealSense Camera (Depth-only at 848x100@100Hz - less floor, higher framerate)
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(realsense_dir, "launch", "rs_launch.py")
@@ -66,12 +66,11 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "false",
             "align_depth.enable": "false",
-            "enable_color": "true",
+            "enable_color": "false",  # Disable RGB to save bandwidth
             "enable_depth": "true",
-            "enable_sync": "true",
+            "enable_sync": "false",  # No sync needed without RGB
             "device_type": "435i",
-            "depth_module.depth_profile": "424x240x30",
-            "rgb_camera.color_profile": "424x240x30",
+            "depth_module.depth_profile": "848x100x100",  # 848x100 @ 100Hz - center crop, less floor
             "enable_gyro": "false",
             "enable_accel": "false",
             "enable_imu": "false",

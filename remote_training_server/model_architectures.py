@@ -324,58 +324,52 @@ class RGBDEncoder(nn.Module):
 
 class DepthEncoder(nn.Module):
     """
-    Encoder for 240x424 raw depth image.
-    Input: (B, 1, 240, 424)
-    Output: (B, 11648) features
+    Encoder for 100x848 raw depth image (center-cropped, less floor).
+    Input: (B, 1, 100, 848)
+    Output: (B, 13824) features
     """
     def __init__(self):
         super().__init__()
-        # 240x424 (H, W) -> 120x212 -> 60x106 -> 30x53 -> 15x26 -> 7x13
-        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1)   # 240x424 -> 120x212
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)  # 212x120 -> 106x60
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)  # 106x60 -> 53x30
-        self.conv4 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # 53x30 -> 26x15
-        self.conv5 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)# 26x15 -> 13x7
+        # 100x848 (H, W) -> 50x424 -> 25x212 -> 13x106 -> 7x53 -> 4x27
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1)   # 100x848 -> 50x424
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)  # 50x424 -> 25x212
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)  # 25x212 -> 13x106
+        self.conv4 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1) # 13x106 -> 7x53
+        self.conv5 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)# 7x53 -> 4x27
 
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        # Input: (B, 1, 424, 240)
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
-        x = self.relu(self.conv4(x))
-        x = self.relu(self.conv5(x))
+        # Input: (B, 1, 100, 848)
+        x = self.relu(self.conv1(x))  # -> (B, 16, 50, 424)
+        x = self.relu(self.conv2(x))  # -> (B, 32, 25, 212)
+        x = self.relu(self.conv3(x))  # -> (B, 64, 13, 106)
+        x = self.relu(self.conv4(x))  # -> (B, 128, 7, 53)
+        x = self.relu(self.conv5(x))  # -> (B, 128, 4, 27)
 
-        x = x.flatten(start_dim=1)    # (B, 128*14*8) = (B, 14336). Note: 13*7 was incorrect.
+        x = x.flatten(start_dim=1)    # (B, 128*4*27) = (B, 13824)
         return x
 
     @property
     def output_dim(self):
-        return 14336 # 128 * 7 * 14 = 12544? No wait.
-        # 240 -s2-> 120 -s2-> 60 -s2-> 30 -s2-> 15 -s2-> 8 (padding=1 keeps it ceil(H/2))
-        # 15 / 2 = 7.5 -> 8 (if padding=1, kernel=3, stride=2: out = floor((in + 2*1 - 3)/2 + 1)
-        # formula: floor((W + 2*P - K)/S + 1)
-        # 240 -> (240+2-3)/2 + 1 = 119.5 -> 120
-        # 120 -> 60
-        # 60 -> 30
-        # 30 -> 15
-        # 15 -> (15+2-3)/2 + 1 = 7.5 -> 7
-        
-        # 424 -> 212 -> 106 -> 53 -> 26 -> 13
-        
-        # Last layer: 128 channels * 7 * 13 = 11648
-        return 12544  # 128 * 7 * 14 = 12544 features
+        # 100 -> 50 -> 25 -> 13 -> 7 -> 4
+        # 848 -> 424 -> 212 -> 106 -> 53 -> 27
+        # Last layer: 128 channels * 4 * 27 = 13824
+        return 13824  # 128 * 4 * 27 features
 
 
 class DualEncoderPolicyNetwork(nn.Module):
-    """Policy network using dual encoders (Laser + Depth)."""
+    """Policy network using dual encoders (Laser + Depth).
+
+    Input: Laser (1×128×128), Depth (1×100×848), Proprio (10)
+    Depth uses 848x100@100Hz mode - center-cropped, less floor visibility
+    """
     def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
         super().__init__()
 
         # Separate encoders
         self.laser_encoder = LaserEncoder()    # -> 4096 features
-        self.depth_encoder = DepthEncoder()    # -> 11648 features
+        self.depth_encoder = DepthEncoder()    # -> 13824 features (100x848 input)
 
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
