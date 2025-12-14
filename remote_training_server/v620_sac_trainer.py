@@ -662,7 +662,7 @@ class V620SACTrainer:
             self._validate_tensor(batch['depth'], "state_depth")
             self._validate_tensor(batch['proprio'], "state_proprio")
             self._validate_tensor(batch['next_laser'], "next_laser")
-            self._validate_tensor(batch['next_rgbd'], "next_depth")
+            self._validate_tensor(batch['next_depth'], "next_depth")
             self._validate_tensor(batch['next_proprio'], "next_proprio")
         except ValueError as e:
             tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
