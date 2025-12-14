@@ -357,6 +357,12 @@ class V620SACTrainer:
         self.current_episode_reward = 0.0
         self.episode_count = 0
 
+        # Evaluation Tracking
+        self.eval_episode_rewards = deque(maxlen=20)
+        self.current_eval_reward = 0.0
+        self.best_eval_reward = -float('inf')
+        self.last_eval_step = 0
+
         # NATS connection (will be initialized in async setup)
         self.nc = None
         self.js = None
@@ -465,6 +471,47 @@ class V620SACTrainer:
         torch.save(checkpoint, path)
         tqdm.write(f"💾 Saved {path}")
         self.export_onnx()
+
+    def save_best_model(self):
+        """Save the current model as 'best_eval_actor.onnx'."""
+        try:
+            onnx_path = os.path.join(self.args.checkpoint_dir, "best_eval_actor.onnx")
+            
+            # Dummy inputs (reuse logic from export_onnx or just call it if refactored)
+            # For simplicity, we just copy export_onnx logic but change filename
+            
+            dummy_laser = torch.randn(1, 1, 128, 128, device=self.device)
+            dummy_depth = torch.randn(1, 1, 100, 848, device=self.device)
+            dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
+            
+            class ActorWrapper(nn.Module):
+                def __init__(self, actor):
+                    super().__init__()
+                    self.actor = actor
+                def forward(self, laser, depth, proprio):
+                    mean, _ = self.actor(laser, depth, proprio)
+                    return torch.tanh(mean)
+            
+            model = ActorWrapper(self.actor)
+            model.eval()
+            
+            torch.onnx.export(
+                model,
+                (dummy_laser, dummy_depth, dummy_proprio),
+                onnx_path,
+                opset_version=11,
+                input_names=['laser', 'depth', 'proprio'],
+                output_names=['action'],
+                export_params=True,
+                do_constant_folding=True,
+                keep_initializers_as_inputs=False,
+                verbose=False,
+                dynamo=False
+            )
+            tqdm.write(f"🏆 Saved BEST EVAL model to {onnx_path}")
+            
+        except Exception as e:
+            tqdm.write(f"❌ Failed to save best model: {e}")
 
     def export_onnx(self, increment_version=True):
         """Export Actor mean to ONNX."""
@@ -1077,23 +1124,65 @@ class V620SACTrainer:
                             self.latest_laser_vis = batch['laser'][-1].copy()
                             self.latest_depth_vis = batch['depth'][-1].copy()
 
-                        # Track episode rewards
-                        for i, (r, d) in enumerate(zip(batch['rewards'], batch['dones'])):
-                            self.current_episode_reward += r
-                            if d:
-                                self.episode_rewards.append(self.current_episode_reward)
-                                self.episode_count += 1
-                                print(f"📊 Episode {self.episode_count} completed: reward = {self.current_episode_reward:.2f}")
-                                self.current_episode_reward = 0.0
+                        # Process rewards and track episodes
+                        # Separate Eval and Training data
+                        is_eval_mask = batch.get('is_eval', np.zeros(len(batch['rewards']), dtype=bool))
+                        rewards = batch['rewards']
+                        dones = batch['dones']
 
-                        # Add to replay buffer (thread-safe)
-                        with self.lock:
-                            self.buffer.add_batch(batch)
+                        for i, (r, d, is_eval) in enumerate(zip(rewards, dones, is_eval_mask)):
+                            if is_eval:
+                                self.current_eval_reward += r
+                                if d:
+                                    self.eval_episode_rewards.append(self.current_eval_reward)
+                                    print(f"🧪 EVAL Episode completed: Reward = {self.current_eval_reward:.2f}")
+                                    
+                                    # Log immediate eval result
+                                    self.writer.add_scalar('Reward/Eval_Episode', self.current_eval_reward, self.total_steps)
+                                    
+                                    # Check for new best model
+                                    if self.current_eval_reward > self.best_eval_reward:
+                                        self.best_eval_reward = self.current_eval_reward
+                                        print(f"🏆 New Best Eval Reward: {self.best_eval_reward:.2f}")
+                                        self.save_best_model()
+                                    
+                                    self.current_eval_reward = 0.0
+                            else:
+                                self.current_episode_reward += r
+                                if d:
+                                    self.episode_rewards.append(self.current_episode_reward)
+                                    self.episode_count += 1
+                                    print(f"📊 Training Episode {self.episode_count}: Reward = {self.current_episode_reward:.2f}")
+                                    self.current_episode_reward = 0.0
 
-                        # Acknowledge message
-                        await msg.ack()
+                        # Add ONLY training data to replay buffer (filter out eval data)
+                        # We don't want deterministic eval data in the buffer as it lacks exploration noise info
+                        # (SAC assumes off-policy data, but best to keep it clean)
+                        not_eval_indices = np.where(~is_eval_mask)[0]
+                        
+                        if len(not_eval_indices) > 0:
+                            # Filter batch
+                            train_batch = {
+                                'laser': batch['laser'][not_eval_indices],
+                                'depth': batch['depth'][not_eval_indices],
+                                'proprio': batch['proprio'][not_eval_indices],
+                                'actions': batch['actions'][not_eval_indices],
+                                'rewards': batch['rewards'][not_eval_indices],
+                                'dones': batch['dones'][not_eval_indices]
+                            }
+                            
+                            # Add to replay buffer (thread-safe)
+                            with self.lock:
+                                self.buffer.add_batch(train_batch)
 
-                        print(f"📥 Received batch: {len(batch['rewards'])} steps, buffer size: {self.buffer.size}")
+                            # Acknowledge message
+                            await msg.ack()
+
+                            print(f"📥 Added {len(train_batch['rewards'])} training steps (filtered from {len(batch['rewards'])})")
+                        else:
+                            # Batch was all eval data
+                            await msg.ack()
+                            print(f"📥 Processed batch of {len(batch['rewards'])} eval steps (not added to buffer)")
 
                     except Exception as e:
                         print(f"❌ Error processing batch: {e}")

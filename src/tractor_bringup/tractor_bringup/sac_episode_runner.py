@@ -252,7 +252,8 @@ class SACEpisodeRunner(Node):
         # Buffers for batching (depth-only mode)
         self._data_buffer = {
             'laser': [], 'depth': [], 'proprio': [],
-            'actions': [], 'rewards': [], 'dones': []
+            'actions': [], 'rewards': [], 'dones': [],
+            'is_eval': []
         }
         self._buffer_lock = threading.Lock()
 
@@ -264,6 +265,10 @@ class SACEpisodeRunner(Node):
         self._calibration_dir.mkdir(exist_ok=True)
         self._current_model_version = -1
         self._model_update_needed = False
+        
+        # Evaluation State
+        self._episodes_since_eval = 0
+        self._is_eval_episode = False  # Current episode type
         
         # Warmup State
         self._warmup_start_time = 0.0
@@ -898,6 +903,10 @@ class SACEpisodeRunner(Node):
         # Use random actions for model v0 to seed replay buffer with diverse data
         # SAC learns well from random data thanks to entropy maximization
         # Bias towards forward motion to avoid excessive collisions
+        # WARMUP / SEEDING (RANDOM EXPLORATION)
+        # Use random actions for model v0 to seed replay buffer with diverse data
+        # SAC learns well from random data thanks to entropy maximization
+        # Bias towards forward motion to avoid excessive collisions
         if self._current_model_version <= 0:
             if not self._warmup_active:
                 self._warmup_active = True
@@ -944,16 +953,29 @@ class SACEpisodeRunner(Node):
             self.pbar.set_description(f"⏳ Training v{self._current_model_version}")
 
         # 3. Add Exploration Noise (Gaussian)
-        # Only apply standard noise if NOT in warmup (Model > 0)
+        # Only apply standard noise if NOT in warmup (Model > 0) AND NOT eval episode
         if self._current_model_version > 0:
-            noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
-            action = np.clip(action_mean + noise, -1.0, 1.0)
+            if self._is_eval_episode:
+                # Deterministic Evaluation Mode
+                # Use action_mean directly (tanh applied by model)
+                action = action_mean
+                
+                # Visual indicator for logs
+                if not hasattr(self, '_eval_log_count'):
+                    self._eval_log_count = 0
+                self._eval_log_count += 1
+                if self._eval_log_count % 30 == 0:
+                    self.get_logger().info(f"🧪 Evaluation Mode: deterministic action {action}")
+            else:
+                # Training Mode: Add exploration noise
+                noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
+                action = np.clip(action_mean + noise, -1.0, 1.0)
 
             # Safety check: if action_mean has NaN, use zero and warn
             if np.isnan(action_mean).any():
                 self.get_logger().error("⚠️  NaN detected in action_mean from model! Using zero action.")
                 action_mean = np.zeros(2)
-                action = np.clip(noise, -1.0, 1.0)  # Pure random
+                action = np.clip(np.random.normal(0, 0.5, size=2), -1.0, 1.0) if not self._is_eval_episode else np.zeros(2)
 
         # 4. Execute Action
         cmd = Twist()
@@ -1048,6 +1070,7 @@ class SACEpisodeRunner(Node):
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
             self._data_buffer['dones'].append(collision)
+            self._data_buffer['is_eval'].append(self._is_eval_episode)
             
             # Update Dashboard
             self.total_steps += 1
@@ -1091,6 +1114,19 @@ class SACEpisodeRunner(Node):
         if not self.reset_episode_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn('Episode reset service unavailable')
             return
+
+        # Update Evaluation State for NEXT episode
+        if self._is_eval_episode:
+            self.get_logger().info(f"📊 Eval Episode Complete. Result: {'COLLISION' if self._latest_laser is not None and np.min(self._latest_laser) < 0.1 else 'TIMEOUT'}")
+            self._is_eval_episode = False
+            self._episodes_since_eval = 0
+        else:
+            self._episodes_since_eval += 1
+            if self._episodes_since_eval >= 5:
+                self._is_eval_episode = True
+                self.get_logger().info("🧪 Next episode will be EVALUATION (No Noise)")
+            else:
+                self._is_eval_episode = False
 
         request = Trigger.Request()
         future = self.reset_episode_client.call_async(request)

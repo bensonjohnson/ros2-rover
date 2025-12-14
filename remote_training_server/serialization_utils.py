@@ -31,6 +31,9 @@ def serialize_batch(batch: dict) -> bytes:
     """
     compressor = zstd.ZstdCompressor(level=3)
 
+    # Convert is_eval to list if it exists (backward compatibility handled in extraction)
+    is_eval_data = batch.get("is_eval", np.zeros(len(batch["rewards"]), dtype=bool)).tolist()
+
     # Compress large arrays
     compressed = {
         "laser": {
@@ -48,6 +51,7 @@ def serialize_batch(batch: dict) -> bytes:
         "actions": batch["actions"].tolist(),
         "rewards": batch["rewards"].tolist(),
         "dones": batch["dones"].tolist(),
+        "is_eval": is_eval_data,
     }
 
     return msgpack.packb(compressed)
@@ -78,7 +82,10 @@ def deserialize_batch(data: bytes) -> dict:
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
         "rewards": np.array(compressed["rewards"], dtype=np.float32),
+        "actions": np.array(compressed["actions"], dtype=np.float32),
+        "rewards": np.array(compressed["rewards"], dtype=np.float32),
         "dones": np.array(compressed["dones"], dtype=bool),
+        "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
     }
 
 
