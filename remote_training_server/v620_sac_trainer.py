@@ -1210,9 +1210,9 @@ if __name__ == '__main__':
     # DroQ + UTD + Augmentation parameters - Updated for sample efficiency
     parser.add_argument('--droq_dropout', type=float, default=0.01,  # Increased from 0.005 for better regularization
                         help='Dropout rate for DroQ (0.0 to disable)')
-    parser.add_argument('--droq_samples', type=int, default=5,  # Increased from 2 for better ensemble
+    parser.add_argument('--droq_samples', type=int, default=2,  # Increased from 2 for better ensemble
                         help='Number of Q-network forward passes for DroQ (M)')
-    parser.add_argument('--utd_ratio', type=int, default=20,  # High UTD for sample efficiency
+    parser.add_argument('--utd_ratio', type=int, default=2,  # High UTD for sample efficiency
                         help='Update-to-Data ratio (gradient steps per env step)')
     parser.add_argument('--actor_update_freq', type=int, default=4,  # Increased from 2 (update actor less frequently)
                         help='Update actor every N critic updates')
