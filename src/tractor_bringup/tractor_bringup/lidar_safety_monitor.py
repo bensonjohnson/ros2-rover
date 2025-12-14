@@ -161,13 +161,13 @@ class LidarSafetyMonitor(Node):
         # Always publish gated command (even if zero) to keep motor driver alive
         self.cmd_pub.publish(out_cmd)
 
-        # Debug: log what we're outputting when blocked
-        if self._commands_blocked > 0 and self._commands_blocked % 10 == 0:
-            self.get_logger().info(
-                f'Commands blocked: {self._commands_blocked} | '
-                f'In: lin={msg.linear.x:.2f} ang={msg.angular.z:.2f} | '
-                f'Out: lin={out_cmd.linear.x:.2f} ang={out_cmd.angular.z:.2f}'
-            )
+        if estop_active:
+             if self._commands_blocked % 10 == 0:
+                 self.get_logger().info(
+                     f'Commands blocked: {self._commands_blocked} | '
+                     f'In: lin={msg.linear.x:.2f} ang={msg.angular.z:.2f} | '
+                     f'Out: lin={out_cmd.linear.x:.2f} ang={out_cmd.angular.z:.2f}'
+                 )
 
     def _publish_status(self) -> None:
         """Publish status and diagnostics."""
