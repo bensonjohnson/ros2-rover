@@ -894,80 +894,49 @@ class SACEpisodeRunner(Node):
             action = np.zeros(2) # Initialize action to avoid UnboundLocalError
             value = 0.0
 
-        # WARMUP / SEEDING (IMPROVED)
-        # Use heuristic "Gap Follower" for the first model version (v0)
-        # This seeds the replay buffer with "good" driving data (driving towards gaps)
-        # instead of random thrashing, helping the model learn the "drive forward" objective faster.
+        # WARMUP / SEEDING (RANDOM EXPLORATION)
+        # Use random actions for model v0 to seed replay buffer with diverse data
+        # SAC learns well from random data thanks to entropy maximization
+        # Bias towards forward motion to avoid excessive collisions
         if self._current_model_version <= 0:
             if not self._warmup_active:
                 self._warmup_active = True
-                self.get_logger().info('🔥 Starting Improved Heuristic Warmup (PD Gap Follower + Centering)...')
-                self.pbar.set_description("🔥 Warmup: Smart Gap Follower")
+                self.get_logger().info('🔥 Starting Random Exploration Warmup...')
+                self.pbar.set_description("🔥 Warmup: Random Exploration")
 
-            # Stuck Detection & Recovery (only if enabled and odometry available)
-            is_stuck = False
-            recovery_action = None
+            # Random action with forward bias and safety-based speed control
+            # Linear: bias towards moving forward (0.3 - 1.0 range)
+            # Angular: full range but with lower magnitude on average
 
-            if self._enable_stuck_recovery and self._latest_odom is not None:
-                is_stuck = self._stuck_detector.update(self._latest_odom)
-                recovery_action = self._stuck_detector.get_recovery_action()
+            # Base random actions
+            random_linear = np.random.uniform(0.3, 1.0)  # Forward bias
+            random_angular = np.random.uniform(-0.8, 0.8)  # Moderate turning
 
-            if recovery_action is not None:
-                # In recovery mode: back up and turn
-                action = recovery_action
-                self.get_logger().warn(f"🔄 Recovery Mode: Backing up and turning...")
+            # Safety-based speed scaling
+            clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
+
+            # Slow down if close to obstacles
+            if clearance_dist < 0.25:
+                speed_scale = 0.3
+            elif clearance_dist < 0.4:
+                speed_scale = 0.6
             else:
-                # Normal Warmup Policy (IMPROVED):
-                # 1. PD controller for smooth steering (replaces simple P-controller)
-                # 2. Continuous speed control (replaces hardcoded thresholds)
-                # 3. Corridor centering (automatic via _process_lidar_metrics)
+                speed_scale = 1.0
 
-                # Use PD controller for smooth, non-oscillating steering
-                try:
-                    heuristic_angular = self._pd_controller.update(self._target_heading)
-                except Exception as e:
-                    self.get_logger().error(f"PD controller error: {e}")
-                    heuristic_angular = np.clip(self._target_heading * 0.5, -1.0, 1.0)  # Fallback to simple P
+            random_linear *= speed_scale
 
-                # Clearance distance (prefer LiDAR for reliability)
-                clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
+            # DEBUG: Log warmup state occasionally
+            if not hasattr(self, '_debug_log_count'):
+                self._debug_log_count = 0
+            self._debug_log_count += 1
+            if self._debug_log_count % 30 == 0:  # Log every 1 second
+                self.get_logger().info(
+                    f"🔍 Warmup Random: LiDAR={lidar_min:.2f}m, Clearance={clearance_dist:.2f}m, "
+                    f"Linear={random_linear:.2f}, Angular={random_angular:.2f}"
+                )
 
-                # Continuous speed control (replaces hardcoded thresholds)
-                try:
-                    heuristic_linear = self._compute_safe_speed(
-                        heuristic_angular,
-                        clearance_dist,
-                        lidar_sides  # lateral clearance
-                    )
-                except Exception as e:
-                    self.get_logger().error(f"Speed control error: {e}")
-                    # Fallback to simple threshold
-                    if abs(heuristic_angular) < 0.2 and clearance_dist > 0.35:
-                        heuristic_linear = 1.0
-                    elif clearance_dist > 0.2:
-                        heuristic_linear = 0.6
-                    else:
-                        heuristic_linear = 0.3
-
-                # DEBUG: Log warmup state
-                if not hasattr(self, '_debug_log_count'):
-                    self._debug_log_count = 0
-                self._debug_log_count += 1
-                if self._debug_log_count % 30 == 0:  # Log every 1 second
-                    self.get_logger().info(
-                        f"🔍 Warmup: LiDAR={lidar_min:.2f}m, Depth={self._min_forward_dist:.2f}m, "
-                        f"Sides={lidar_sides:.2f}m, Target={self._target_heading:.2f}, "
-                        f"Angular={heuristic_angular:.2f}, Speed={heuristic_linear:.2f}, Stuck={is_stuck}"
-                    )
-
-                # Override model action with heuristic
-                action = np.array([heuristic_linear, heuristic_angular], dtype=np.float32)
-
-                # Add small noise ONLY to linear speed (not angular - avoid oscillation)
-                # This helps the policy learn robustness without causing steering jitter
-                linear_noise = np.random.normal(0, 0.08)
-                action[0] = np.clip(action[0] + linear_noise, 0.0, 1.0)  # Linear only
-                action[1] = np.clip(action[1], -1.0, 1.0)  # Angular unchanged
+            # Override model action with random exploration
+            action = np.array([random_linear, random_angular], dtype=np.float32)
 
         elif self._warmup_active:
             self.get_logger().info('✅ Warmup Complete (Model v1+ loaded). Switching to learned policy.')
