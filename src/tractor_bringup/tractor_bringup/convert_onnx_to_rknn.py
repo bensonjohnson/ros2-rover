@@ -67,13 +67,29 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 proprio = data['proprio']
 
                 # Validate shapes
-                # Validate shapes
+                # Validate and Fix Laser shape
+                if laser.ndim == 2 and laser.shape == (128, 128):
+                    laser = laser[None, ...]  # Add channel dim -> (1, 128, 128)
+
                 if laser.shape != (1, 128, 128):
                     print(f"⚠ Warning: Expected laser shape (1, 128, 128), got {laser.shape} in {file_path}")
                     continue
-                if depth.shape != (1, 424, 240):
-                    print(f"⚠ Warning: Expected depth shape (1, 424, 240), got {depth.shape} in {file_path}")
+
+                # Validate and Fix Depth shape
+                # Support old (424, 240) and new (100, 848) formats, but preference new
+                if depth.ndim == 2:
+                    if depth.shape == (100, 848):
+                        depth = depth[None, ...] # Add channel dim -> (1, 100, 848)
+                    elif depth.shape == (424, 240):
+                        # Resize old format to new format if needed, or just fail if model expects new
+                        # Since model expects (100, 848), we can't easily use (424, 240) data without complex cropping/resizing
+                        print(f"⚠ Warning: Skipping legacy depth shape {depth.shape} in {file_path}")
+                        continue
+                
+                if depth.shape != (1, 100, 848):
+                    print(f"⚠ Warning: Expected depth shape (1, 100, 848), got {depth.shape} in {file_path}")
                     continue
+
                 if proprio.shape != (10,):
                     print(f"⚠ Warning: Expected proprio shape (10,), got {proprio.shape} in {file_path}")
                     continue

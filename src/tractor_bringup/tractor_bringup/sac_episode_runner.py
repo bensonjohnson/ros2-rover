@@ -1073,8 +1073,8 @@ class SACEpisodeRunner(Node):
 
                 np.savez_compressed(
                     save_path,
-                    laser=self._latest_laser,
-                    depth=depth_calib,
+                    laser=self._latest_laser[None, ...],  # (1, 128, 128)
+                    depth=depth_calib[None, ...],       # (1, 100, 848)
                     proprio=proprio[0]
                 )
             
