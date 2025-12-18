@@ -1,34 +1,38 @@
 #!/bin/bash
 # Start ES-SAC Rover
+set -e # Exit on error
 
-set -e  # Exit on error
-
-# Parse arguments
+# Configuration
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
+export ROS_DOMAIN_ID=0
 
 echo "=============================================="
 echo "Starting ES-SAC Rover Runner"
 echo "=============================================="
 echo "NATS Server: ${NATS_SERVER}"
-echo ""
 
-# Verify ROS workspace
-if [ ! -f "install/setup.bash" ]; then
-    echo "Error: ROS workspace not found. Please build the workspace first."
+# 1. Build the package to ensure the new node is installed
+echo "🔧 Building tractor_bringup..."
+# We use --symlink-install for faster development (so python changes reflect immediately)
+colcon build --symlink-install --packages-select tractor_bringup
+
+# 2. Source the workspace
+if [ -f "install/setup.bash" ]; then
+    echo "🔧 Sourcing workspace..."
+    source install/setup.bash
+else
+    echo "❌ Error: install/setup.bash not found. Build failed?"
     exit 1
 fi
 
-# Source ROS workspace
-source install/setup.bash
-
-# Set ROS domain
-export ROS_DOMAIN_ID=0
-
-# Verify the es_episode_runner is available
-if ! command -v es_episode_runner.py &> /dev/null; then
-    echo "Error: es_episode_runner.py not found. Please rebuild tractor_bringup package."
+# 3. Check if executable exists (debug check)
+# ros2 run searches specifically, but we can verify via ros2 pkg executables
+if ! ros2 pkg executables tractor_bringup | grep -q "es_episode_runner.py"; then
+    echo "❌ Error: es_episode_runner.py not registered with ROS 2."
+    echo "   Ensure it is in setup.py entry_points."
     exit 1
 fi
 
-echo "Starting ES-SAC Rover Runner..."
-ros2 run tractor_bringup es_episode_runner.py --ros-args -p nats_server:="${NATS_SERVER}"
+# 4. Run
+echo "🚀 Running ES-SAC Episode Runner..."
+ros2 run tractor_bringup es_episode_runner.py --ros-args -p nats_server:=${NATS_SERVER}
