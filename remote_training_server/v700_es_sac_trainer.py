@@ -445,6 +445,9 @@ class ESSACTrainer:
         """Rover sends Obs, Server runs Inference -> Returns Action."""
         t0 = time.perf_counter()
 
+        # Always send exactly 8 bytes (2 float32) no matter what
+        zero_action = np.zeros(2, dtype=np.float32)
+
         try:
             # 1. Deserialize (outside lock - no GPU needed)
             data = msg.data
@@ -456,7 +459,7 @@ class ESSACTrainer:
             if rover_id not in self.active_requests:
                 candidate = self.pop_manager.get_candidate()
                 self.active_requests[rover_id] = candidate
-                print(f"Assigning Model {candidate['id']} to {rover_id}")
+                print(f"Assigning Model {candidate['id']} to {rover_id}", flush=True)
 
             candidate = self.active_requests[rover_id]
 
@@ -503,8 +506,9 @@ class ESSACTrainer:
                     # Explicitly delete GPU tensors
                     del l_t, d_t, p_t, action_mean
 
-            # 5. Reply
+            # 5. Reply - MUST be exactly 8 bytes
             reply_bytes = action.astype(np.float32).tobytes()
+            assert len(reply_bytes) == 8, f"Reply must be 8 bytes, got {len(reply_bytes)}"
             await self.nc.publish(msg.reply, reply_bytes)
 
             # Latency check
@@ -513,10 +517,15 @@ class ESSACTrainer:
                 print(f"⚠ Inference took {dt:.1f}ms (lock wait + GPU)", flush=True)
 
         except Exception as e:
-            print(f"✗ Inference error: {e}", flush=True)
-            # Send zero action on error
-            zero_action = np.zeros(2, dtype=np.float32)
-            await self.nc.publish(msg.reply, zero_action.tobytes())
+            # Log error with more detail
+            import traceback
+            print(f"✗ Inference error: {type(e).__name__}: {e}", flush=True)
+            print(f"   Traceback: {traceback.format_exc()}", flush=True)
+
+            # ALWAYS send exactly 8 bytes (zero action)
+            reply_bytes = zero_action.tobytes()
+            assert len(reply_bytes) == 8, f"Error reply must be 8 bytes, got {len(reply_bytes)}"
+            await self.nc.publish(msg.reply, reply_bytes)
 
     async def sac_training_loop(self):
         """Continuous SAC training on Replay Buffer."""
