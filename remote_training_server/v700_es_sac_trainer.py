@@ -323,7 +323,7 @@ class ESSACTrainer:
         # Subscribers
         await self.nc.subscribe("es.request_model", cb=self.handle_model_request) # Keep for legacy/hybrid
         await self.nc.subscribe("es.episode_result", cb=self.handle_episode_result)
-        await self.nc.subscribe("es.step_inference", cb=self.handle_step_inference)
+        await self.nc.subscribe("es_rpc.step_inference", cb=self.handle_step_inference)
         
         print("🚀 ES-SAC Trainer Running (Remote Inference Mode supported)...")
         

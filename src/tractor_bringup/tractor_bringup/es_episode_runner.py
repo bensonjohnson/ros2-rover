@@ -164,16 +164,12 @@ class ESEpisodeRunner(Node):
                 
                 try:
                     # request-Reply pattern (RPC)
-                    response = await self.nc.request("es.step_inference", payload, timeout=0.2)
+                    # Use es_rpc.* to avoid JetStream capturing it and sending an Ack
+                    response = await self.nc.request("es_rpc.step_inference", payload, timeout=0.2)
                     
                     # 3. Receive Action
                     if len(response.data) != 8:
                         print(f"  ⚠ Bad Response Size: {len(response.data)} bytes (Expected 8)", flush=True)
-                        print(f"  ⚠ Raw Bytes: {response.data}", flush=True)
-                        try:
-                            print(f"  ⚠ As String: {response.data.decode()}", flush=True)
-                        except:
-                            pass
                         action = np.zeros(2, dtype=np.float32)
                     else:
                         action = np.frombuffer(response.data, dtype=np.float32)
