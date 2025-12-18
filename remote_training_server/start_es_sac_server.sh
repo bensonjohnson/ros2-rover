@@ -35,23 +35,29 @@ echo "Output directories ready: ./logs_es, ./checkpoints_es"
 
 # Enable ROCm Optimizations (if ROCm is available)
 if command -v rocm-smi &> /dev/null; then
-    echo "ROCm detected - configuring for inference workload"
+    echo "Applying ROCm optimizations for V620..."
+
+    # HSA optimizations
     export HSA_FORCE_FINE_GRAIN_PCIE=1
+    export HSA_ENABLE_SDMA=0  # Disable SDMA for better performance
+    export HSA_OVERRIDE_GFX_VERSION=10.3.0  # Ensure correct GFX version
 
-    # Disable MIOpen kernel tuning/finding (uses too much workspace memory)
-    export MIOPEN_FIND_MODE=1              # Use immediate mode (no tuning)
-    export MIOPEN_DEBUG_DISABLE_FIND_DB=1  # Disable find database
-    export MIOPEN_FIND_ENFORCE=NONE        # Don't enforce find
-    export MIOPEN_USER_DB_PATH=/tmp/miopen # Temp DB path
+    # V620-specific architecture (Navi 21)
+    export PYTORCH_ROCM_ARCH="gfx1030"
 
-    # Disable convolution workspace to reduce memory
-    export MIOPEN_CONV_PRECISE_ROCBLAS_TIMING=0
+    # MIOpen optimizations
+    export MIOPEN_FIND_ENFORCE=NONE  # Let MIOpen choose best kernels
+    export MIOPEN_DISABLE_CACHE=0  # Enable cache to speed up startup after first run
+    export MIOPEN_DEBUG_DISABLE_FIND_DB=0  # Enable find-db for faster ops
+    export MIOPEN_FIND_MODE=NORMAL  # Use normal find mode
+    export MIOPEN_USER_DB_PATH=/tmp/miopen  # Cache tuned kernels
 
     # PyTorch Memory Management for ROCm
     export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-    echo "✓ MIOpen kernel tuning disabled"
+    echo "✓ V620 (gfx1030) optimizations applied"
+    echo "✓ MIOpen caching enabled"
     echo "✓ GPU memory management configured"
 fi
 
