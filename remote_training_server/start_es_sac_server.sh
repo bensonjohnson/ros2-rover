@@ -94,5 +94,6 @@ echo "Starting trainer..."
         --nats_server "${NATS_SERVER}" \
         --checkpoint_dir "./checkpoints_es" \
         --log_dir "./logs_es" \
-        --cpu_inference
+        --cpu_inference \
+        --batch_size 2048
 } 2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"

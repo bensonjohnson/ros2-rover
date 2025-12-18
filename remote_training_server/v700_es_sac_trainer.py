@@ -594,6 +594,7 @@ class ESSACTrainer:
                     if self.total_steps % 100 == 0:
                         self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
                         self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
+                        print(f"  🧠 SAC Step {self.total_steps}: Actor Loss={metrics['actor_loss']:.3f}, Critic Loss={metrics['critic_loss']:.3f}", flush=True)
 
                     # Periodic garbage collection
                     if self.total_steps % 500 == 0:
