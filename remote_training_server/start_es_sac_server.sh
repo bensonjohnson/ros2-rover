@@ -54,18 +54,44 @@ if command -v rocm-smi &> /dev/null; then
 
     # PyTorch Memory Management for ROCm
     export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
-    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
     echo "✓ V620 (gfx1030) optimizations applied"
     echo "✓ MIOpen caching enabled"
     echo "✓ GPU memory management configured"
+
+    # Check available VRAM
+    echo ""
+    echo "Checking GPU memory..."
+    if rocm-smi --showmeminfo vram 2>/dev/null | grep -q "Total"; then
+        TOTAL_VRAM=$(rocm-smi --showmeminfo vram 2>/dev/null | grep "VRAM Total Memory" | awk '{print $5}')
+        echo "  Total VRAM: ${TOTAL_VRAM} MB"
+    fi
 fi
 
-# Run trainer
+# Check and raise file descriptor limits for MIOpen
+CURRENT_ULIMIT=$(ulimit -n)
+echo ""
+echo "Checking file descriptor limits..."
+echo "  Current ulimit: ${CURRENT_ULIMIT}"
+if [ ${CURRENT_ULIMIT} -lt 65535 ]; then
+    echo "  ⚠ Warning: ulimit is below recommended 65535 for MIOpen benchmark"
+    echo "  Attempting to raise limit for training process..."
+fi
+
+# Run trainer with increased file descriptor limit
 echo ""
 echo "Starting trainer..."
-python3 -u v700_es_sac_trainer.py \
-    --nats_server "${NATS_SERVER}" \
-    --checkpoint_dir "./checkpoints_es" \
-    --log_dir "./logs_es" \
-    2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"
+
+{
+    if ! ulimit -n 65535 2>/dev/null; then
+        echo "⚠ Warning: Failed to raise ulimit to 65535. Current limit: $(ulimit -n)"
+        echo "  Proceeding anyway..."
+    else
+        echo "✓ Raised file descriptor limit to 65535"
+    fi
+
+    exec python3 -u v700_es_sac_trainer.py \
+        --nats_server "${NATS_SERVER}" \
+        --checkpoint_dir "./checkpoints_es" \
+        --log_dir "./logs_es"
+} 2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"
