@@ -205,15 +205,15 @@ class ReplayBuffer:
 
         # Indices
         indices = np.arange(self.ptr, self.ptr + N) % self.capacity
-        
-        # Copy data
+
+        # Copy data - use np.asarray().copy() to ensure writable arrays
         # Note: Inputs expected to be tensors or numpy arrays
-        self.laser[indices] = torch.as_tensor(batch_data['laser'], dtype=torch.uint8)
-        self.depth[indices] = torch.as_tensor(batch_data['depth'], dtype=torch.uint8)
-        self.proprio[indices] = torch.as_tensor(batch_data['proprio'], dtype=torch.float32)
-        self.actions[indices] = torch.as_tensor(batch_data['actions'], dtype=torch.float32)
-        self.rewards[indices] = torch.as_tensor(batch_data['rewards'], dtype=torch.float32).reshape(-1, 1)
-        self.dones[indices] = torch.as_tensor(batch_data['dones'], dtype=torch.float32).reshape(-1, 1)
+        self.laser[indices] = torch.as_tensor(np.asarray(batch_data['laser']).copy(), dtype=torch.uint8)
+        self.depth[indices] = torch.as_tensor(np.asarray(batch_data['depth']).copy(), dtype=torch.uint8)
+        self.proprio[indices] = torch.as_tensor(np.asarray(batch_data['proprio']).copy(), dtype=torch.float32)
+        self.actions[indices] = torch.as_tensor(np.asarray(batch_data['actions']).copy(), dtype=torch.float32)
+        self.rewards[indices] = torch.as_tensor(np.asarray(batch_data['rewards']).copy(), dtype=torch.float32).reshape(-1, 1)
+        self.dones[indices] = torch.as_tensor(np.asarray(batch_data['dones']).copy(), dtype=torch.float32).reshape(-1, 1)
         
         self.ptr = (self.ptr + N) % self.capacity
         self.size = min(self.size + N, self.capacity)
