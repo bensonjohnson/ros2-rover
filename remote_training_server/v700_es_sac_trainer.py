@@ -19,6 +19,7 @@ import threading
 import asyncio
 import argparse
 import warnings
+import gc
 from typing import Dict, List, Tuple, Optional
 from collections import deque
 from pathlib import Path
@@ -440,93 +441,78 @@ class ESSACTrainer:
     async def handle_step_inference(self, msg):
         """Rover sends Obs, Server runs Inference -> Returns Action."""
         t0 = time.perf_counter()
-        
-        # 1. Deserialize
-        # Format: JSON Header (rover_id) + Binary (Laser 128x128 + Depth 100x848 + Proprio 10)
-        # To be fast, we expect raw bytes structure.
-        # Header size (2 bytes) + Header + Data
-        data = msg.data
-        header_len = int.from_bytes(data[:2], 'big')
-        header = json.loads(data[2:2+header_len])
-        rover_id = header.get('rover_id', 'rover_1')
-        
-        # 2. Get Assigned Model
-        # If not assigned, assign one now
-        if rover_id not in self.active_requests:
-            candidate = self.pop_manager.get_candidate()
-            self.active_requests[rover_id] = candidate
-            print(f"Assigning Model {candidate['id']} to {rover_id}")
-            
-        candidate = self.active_requests[rover_id]
-        
-        # 3. Parse Tensors
-        # Data starts after header
-        raw_bytes = data[2+header_len:]
-        
-        # Fixed sizes (float32 = 4 bytes)
-        # Laser: 128*128 * 4 = 65536 bytes (Wait, we can send uint8 for laser/depth to save BW)
-        # Laser (uint8): 16384 bytes
-        # Depth (uint8): 100*848 = 84800 bytes
-        # Proprio (float32): 10*4 = 40 bytes
-        # Total payload ~ 101KB. Very feasible for 30Hz wifi.
-        
-        # Offsets
-        offset = 0
-        
-        # Laser (128x128 uint8)
-        laser_size = 128 * 128
-        laser_np = np.frombuffer(raw_bytes, dtype=np.uint8, count=laser_size, offset=offset).reshape(1, 1, 128, 128)
-        offset += laser_size
-        
-        # Depth (100x848 uint8)
-        depth_size = 100 * 848
-        depth_np = np.frombuffer(raw_bytes, dtype=np.uint8, count=depth_size, offset=offset).reshape(1, 1, 100, 848)
-        offset += depth_size
-        
-        # Proprio (10 float32)
-        proprio_size = 10
-        proprio_np = np.frombuffer(raw_bytes, dtype=np.float32, count=proprio_size, offset=offset).reshape(1, 10)
-        
-        # 4. Inference
-        with torch.no_grad():
-            # Convert to tensor on GPU
-            # Normalize uint8 -> float [0,1]
-            l_t = torch.as_tensor(laser_np, device=self.device).float()
-            d_t = torch.as_tensor(depth_np, device=self.device).float().div(255.0)
-            p_t = torch.as_tensor(proprio_np, device=self.device)
-            
-            # Load weights into a temp/cached actor?
-            # Creating a new actor every step is too slow.
-            # PopManager should cache models or we maintain a pool.
-            # For simplicity: Load state dict into MAIN actor temporarily? No, that breaks SAC training.
-            # Better: Maintain a 'InferenceWorker' with the weights loaded.
-            
-            # Optimization: self.active_requests stores the 'model' dict.
-            # We can use functional call or a separate instance.
-            # Let's use a dedicated inference_actor instance that we load weights into ONLY when ID changes.
-            if not hasattr(self, 'inference_actor'):
-                self.inference_actor = copy.deepcopy(self.actor)
-                self.inference_actor_id = -1
-                
-            if self.inference_actor_id != candidate['id']:
-                self.inference_actor.load_state_dict(candidate['model'])
-                self.inference_actor_id = candidate['id']
-                self.inference_actor.eval()
-                
-            # Run
-            action_mean, _ = self.inference_actor(l_t, d_t, p_t)
-            action = torch.tanh(action_mean).cpu().numpy()[0] # (2,)
-            
-        # 5. Reply
-        # Send back Action (2 floats) + metadata?
-        # Just action for speed.
-        reply_bytes = action.astype(np.float32).tobytes()
-        await self.nc.publish(msg.reply, reply_bytes)
-        
-        # Latency check
-        dt = (time.perf_counter() - t0) * 1000
-        if dt > 20:
-             print(f"Warning: Inference took {dt:.1f}ms")
+
+        try:
+            # 1. Deserialize
+            data = msg.data
+            header_len = int.from_bytes(data[:2], 'big')
+            header = json.loads(data[2:2+header_len])
+            rover_id = header.get('rover_id', 'rover_1')
+
+            # 2. Get Assigned Model
+            if rover_id not in self.active_requests:
+                candidate = self.pop_manager.get_candidate()
+                self.active_requests[rover_id] = candidate
+                print(f"Assigning Model {candidate['id']} to {rover_id}")
+
+            candidate = self.active_requests[rover_id]
+
+            # 3. Parse Tensors
+            raw_bytes = data[2+header_len:]
+            offset = 0
+
+            # Laser (128x128 uint8)
+            laser_size = 128 * 128
+            laser_np = np.frombuffer(raw_bytes, dtype=np.uint8, count=laser_size, offset=offset).reshape(1, 1, 128, 128)
+            offset += laser_size
+
+            # Depth (100x848 uint8)
+            depth_size = 100 * 848
+            depth_np = np.frombuffer(raw_bytes, dtype=np.uint8, count=depth_size, offset=offset).reshape(1, 1, 100, 848)
+            offset += depth_size
+
+            # Proprio (10 float32)
+            proprio_size = 10
+            proprio_np = np.frombuffer(raw_bytes, dtype=np.float32, count=proprio_size, offset=offset).reshape(1, 10)
+
+            # 4. Inference
+            with torch.no_grad():
+                # Convert to tensor on GPU - use from_numpy for better memory management
+                l_t = torch.from_numpy(laser_np.copy()).to(self.device, dtype=torch.float32)
+                d_t = torch.from_numpy(depth_np.copy()).to(self.device, dtype=torch.float32).div_(255.0)
+                p_t = torch.from_numpy(proprio_np.copy()).to(self.device, dtype=torch.float32)
+
+                # Maintain inference actor (only reload weights when model ID changes)
+                if not hasattr(self, 'inference_actor'):
+                    self.inference_actor = copy.deepcopy(self.actor)
+                    self.inference_actor_id = -1
+
+                if self.inference_actor_id != candidate['id']:
+                    self.inference_actor.load_state_dict(candidate['model'])
+                    self.inference_actor_id = candidate['id']
+                    self.inference_actor.eval()
+
+                # Run inference
+                action_mean, _ = self.inference_actor(l_t, d_t, p_t)
+                action = torch.tanh(action_mean).cpu().numpy()[0]  # (2,)
+
+                # Explicitly delete GPU tensors to prevent memory leak
+                del l_t, d_t, p_t, action_mean
+
+            # 5. Reply
+            reply_bytes = action.astype(np.float32).tobytes()
+            await self.nc.publish(msg.reply, reply_bytes)
+
+            # Latency check
+            dt = (time.perf_counter() - t0) * 1000
+            if dt > 20:
+                print(f"⚠ Inference took {dt:.1f}ms", flush=True)
+
+        except Exception as e:
+            print(f"✗ Inference error: {e}", flush=True)
+            # Send zero action on error
+            zero_action = np.zeros(2, dtype=np.float32)
+            await self.nc.publish(msg.reply, zero_action.tobytes())
 
     async def sac_training_loop(self):
         """Continuous SAC training on Replay Buffer."""
@@ -535,18 +521,24 @@ class ESSACTrainer:
             if self.buffer.size < 1000:
                 await asyncio.sleep(1)
                 continue
-                
+
             # Train step
             metrics = self.train_step()
             self.total_steps += 1
-            
+
             if self.total_steps % 100 == 0:
                 self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
                 self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
 
-            # Yield to event loop
-            if self.total_steps % 10 == 0:
-                await asyncio.sleep(0.001)
+            # Periodic garbage collection to prevent memory fragmentation
+            if self.total_steps % 1000 == 0:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                gc.collect()
+
+            # Yield to event loop more frequently to prioritize inference
+            if self.total_steps % 5 == 0:
+                await asyncio.sleep(0.01)  # Give more time to inference requests
 
     @torch.no_grad()
     def evaluate_model_critic(self, model_id: int) -> float:
@@ -554,24 +546,29 @@ class ESSACTrainer:
         # Find model
         entry = next((m for m in self.pop_manager.population if m['id'] == model_id), None)
         if not entry: return 0.0
-        
+
         # Load weights into a temp actor
         temp_actor = copy.deepcopy(self.actor)
         temp_actor.load_state_dict(entry['model'])
         temp_actor.eval()
-        
+
         # Sample batch
         batch = self.buffer.sample(batch_size=256)
-        
+
         # Compute Action
         action, _ = temp_actor(batch['laser'], batch['depth'], batch['proprio'])
-        
+
         # Compute Q
         q1 = self.critic1(batch['laser'], batch['depth'], batch['proprio'], action)
         q2 = self.critic2(batch['laser'], batch['depth'], batch['proprio'], action)
         min_q = torch.min(q1, q2)
-        
-        return min_q.mean().item()
+
+        result = min_q.mean().item()
+
+        # Clean up to prevent memory leak
+        del temp_actor, batch, action, q1, q2, min_q
+
+        return result
 
     def train_step(self):
         """Single SAC Gradient Step."""
