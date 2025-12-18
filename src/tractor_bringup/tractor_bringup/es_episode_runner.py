@@ -119,17 +119,32 @@ class ESEpisodeRunner(Node):
         """Run single remote inference episode."""
         laser_buf, depth_buf, proprio_buf = [], [], []
         action_buf, reward_buf, done_buf = [], [], []
-        
+
         steps = 0
-        
+
         # Pre-allocate reuse buffers
         header_dict = {'rover_id': 'rover_1'}
         header_bytes = json.dumps(header_dict).encode()
         header_len = len(header_bytes).to_bytes(2, 'big')
-        
+
+        # Wait for sensors with timeout
+        wait_start = time.perf_counter()
+        print("  → Waiting for sensor data...", flush=True)
+        while (self.latest['scan'] is None or self.latest['depth'] is None) and rclpy.ok():
+            elapsed = time.perf_counter() - wait_start
+            if elapsed > 5.0 and int(elapsed) % 5 == 0:
+                print(f"  ⚠ Still waiting for sensors (scan: {self.latest['scan'] is not None}, depth: {self.latest['depth'] is not None})...", flush=True)
+            await asyncio.sleep(0.1)
+
+        if self.latest['scan'] is None or self.latest['depth'] is None:
+            print("  ✗ Sensor timeout - returning empty episode", flush=True)
+            return None
+
+        print(f"  ✓ Sensors ready! Starting episode loop...", flush=True)
+
         while steps < self.max_idx and rclpy.ok():
             step_start = time.perf_counter()
-            
+
             if self.latest['scan'] is None or self.latest['depth'] is None:
                 await asyncio.sleep(0.01)
                 continue
