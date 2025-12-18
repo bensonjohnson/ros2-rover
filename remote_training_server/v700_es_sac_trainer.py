@@ -579,42 +579,52 @@ class ESSACTrainer:
     async def sac_training_loop(self):
         """Continuous SAC training on Replay Buffer."""
         print("🧠 SAC Training Loop started...")
-        while True:
-            if self.buffer.size < 1000:
-                await asyncio.sleep(1)
-                continue
+        try:
+            while True:
+                if self.buffer.size < 1000:
+                    if int(time.time()) % 10 == 0:
+                         print(f"Waiting for buffer: {self.buffer.size}/1000", flush=True)
+                    await asyncio.sleep(1)
+                    continue
 
-            # ACQUIRE GPU LOCK for training
-            async with self.gpu_lock:
-                # Train step
-                try:
-                    metrics = self.train_step()
-                    self.total_steps += 1
+                # Debug: Print when we are about to train
+                # print(f"Attempting training step {self.total_steps + 1}", flush=True)
 
-                    if self.total_steps % 100 == 0:
-                        self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
-                        self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
-                        print(f"  🧠 SAC Step {self.total_steps}: Actor Loss={metrics['actor_loss']:.3f}, Critic Loss={metrics['critic_loss']:.3f}", flush=True)
+                # ACQUIRE GPU LOCK for training
+                async with self.gpu_lock:
+                    # Train step
+                    try:
+                        metrics = self.train_step()
+                        self.total_steps += 1
 
-                    # Periodic garbage collection
-                    if self.total_steps % 500 == 0:
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        gc.collect()
+                        if self.total_steps % 100 == 0:
+                            self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
+                            self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
+                            print(f"  🧠 SAC Step {self.total_steps}: Actor Loss={metrics['actor_loss']:.3f}, Critic Loss={metrics['critic_loss']:.3f}", flush=True)
 
-                except RuntimeError as e:
-                    if "out of memory" in str(e):
-                        print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        gc.collect()
-                        await asyncio.sleep(0.5)
-                        continue
-                    else:
-                        raise
+                        # Periodic garbage collection
+                        if self.total_steps % 500 == 0:
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            gc.collect()
 
-            # Yield to event loop after releasing lock - allows inference to get priority
-            await asyncio.sleep(0.01)  # Short sleep to let inference requests in
+                    except RuntimeError as e:
+                        if "out of memory" in str(e):
+                            print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            gc.collect()
+                            await asyncio.sleep(0.5)
+                            continue
+                        else:
+                            raise
+
+                # Yield to event loop after releasing lock - allows inference to get priority
+                await asyncio.sleep(0.01)  # Short sleep to let inference requests in
+        except Exception as e:
+            import traceback
+            print(f"🛑 SAC Training Loop CRASHED: {e}", flush=True)
+            print(traceback.format_exc(), flush=True)
 
     @torch.no_grad()
     def evaluate_model_critic(self, model_id: int) -> float:
