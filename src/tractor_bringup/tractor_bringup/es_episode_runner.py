@@ -163,12 +163,21 @@ class ESEpisodeRunner(Node):
                 payload = header_len + header_bytes + laser_u8.tobytes() + depth_u8.tobytes() + proprio.tobytes()
                 
                 try:
-                    # Request-Reply pattern (RPC)
+                    # request-Reply pattern (RPC)
                     response = await self.nc.request("es.step_inference", payload, timeout=0.2)
                     
                     # 3. Receive Action
-                    action = np.frombuffer(response.data, dtype=np.float32)
+                    if len(response.data) != 8:
+                        print(f"  ⚠ Bad Response Size: {len(response.data)} bytes (Expected 8)", flush=True)
+                        action = np.zeros(2, dtype=np.float32)
+                    else:
+                        action = np.frombuffer(response.data, dtype=np.float32)
                 except TimeoutError:
+                    # print("TIMEOUT waiting for action from server!", flush=True) # Reduce spam
+                    action = np.zeros(2, dtype=np.float32) # Stop
+                except Exception as e:
+                    print(f"  ⚠ Inference Error: {e}", flush=True)
+                    action = np.zeros(2, dtype=np.float32)
                     print("TIMEOUT waiting for action from server!")
                     action = np.zeros(2, dtype=np.float32) # Stop
             else:
