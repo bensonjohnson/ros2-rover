@@ -35,14 +35,24 @@ echo "Output directories ready: ./logs_es, ./checkpoints_es"
 
 # Enable ROCm Optimizations (if ROCm is available)
 if command -v rocm-smi &> /dev/null; then
-    echo "ROCm detected - enabling optimizations"
+    echo "ROCm detected - configuring for inference workload"
     export HSA_FORCE_FINE_GRAIN_PCIE=1
-    export MIOPEN_FIND_ENFORCE=NONE
+
+    # Disable MIOpen kernel tuning/finding (uses too much workspace memory)
+    export MIOPEN_FIND_MODE=1              # Use immediate mode (no tuning)
+    export MIOPEN_DEBUG_DISABLE_FIND_DB=1  # Disable find database
+    export MIOPEN_FIND_ENFORCE=NONE        # Don't enforce find
+    export MIOPEN_USER_DB_PATH=/tmp/miopen # Temp DB path
+
+    # Disable convolution workspace to reduce memory
+    export MIOPEN_CONV_PRECISE_ROCBLAS_TIMING=0
 
     # PyTorch Memory Management for ROCm
     export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
     export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-    echo "GPU memory management configured"
+
+    echo "✓ MIOpen kernel tuning disabled"
+    echo "✓ GPU memory management configured"
 fi
 
 # Run trainer
