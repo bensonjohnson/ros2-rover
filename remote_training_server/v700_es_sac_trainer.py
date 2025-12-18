@@ -8,6 +8,7 @@ Combines Evolutionary Strategies (ES) with Soft Actor-Critic (SAC).
 - SAC Critic "evaluates" population members on previous data to estimate fitness.
 """
 
+print("🔧 Loading imports...", flush=True)
 import os
 import sys
 import time
@@ -22,23 +23,30 @@ from typing import Dict, List, Tuple, Optional
 from collections import deque
 from pathlib import Path
 
+print("  → Importing numpy...", flush=True)
 import numpy as np
+print("  → Importing torch (may take a moment on ROCm)...", flush=True)
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+print("  → Importing tqdm...", flush=True)
 from tqdm import tqdm
-import nats 
+print("  → Importing nats...", flush=True)
+import nats
 from nats.js.api import StreamConfig
 
+print("  → Importing model architectures...", flush=True)
 # Import architectures
 from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork
 
+print("  → Importing serialization utils...", flush=True)
 # Import serialization
 from serialization_utils import (
-    deserialize_batch, serialize_model_update, 
+    deserialize_batch, serialize_model_update,
     serialize_metadata, deserialize_metadata
 )
+print("✅ All imports loaded", flush=True)
 
 # -----------------------------------------------------------------------------
 # Population Manager
@@ -236,45 +244,54 @@ class ReplayBuffer:
 class ESSACTrainer:
     def __init__(self, args):
         self.args = args
+        print("  → Setting up device...", flush=True)
         self.setup_device()
-        
+
         # Components
         self.proprio_dim = 10
         self.action_dim = 2
-        
+
         # 1. SAC Agent (The "Teacher")
+        print("  → Creating actor network...", flush=True)
         self.actor = DualEncoderPolicyNetwork(self.action_dim, self.proprio_dim).to(self.device)
+        print("  → Creating critic networks...", flush=True)
         self.critic1 = DualEncoderQNetwork(self.action_dim, self.proprio_dim).to(self.device)
         self.critic2 = DualEncoderQNetwork(self.action_dim, self.proprio_dim).to(self.device)
+        print("  → Creating target critics...", flush=True)
         self.target_critic1 = copy.deepcopy(self.critic1)
         self.target_critic2 = copy.deepcopy(self.critic2)
         
+        print("  → Creating optimizers...", flush=True)
         self.actor_opt = optim.Adam(self.actor.parameters(), lr=3e-4)
         self.critic_opt = optim.Adam(list(self.critic1.parameters()) + list(self.critic2.parameters()), lr=3e-4)
-        
+
         # Alpha (Entropy)
         self.log_alpha = torch.tensor(np.log(0.1), requires_grad=True, device=self.device)
         self.alpha_opt = optim.Adam([self.log_alpha], lr=3e-4)
         self.target_entropy = -float(self.action_dim)
 
         # 2. Population (The "Students")
+        print("  → Initializing population...", flush=True)
         self.pop_manager = PopulationManager(population_size=10, device=self.device)
         self.pop_manager.initialize_population(self.actor) # Init with random policies
-        
+
         # 3. Buffer
+        print("  → Creating replay buffer...", flush=True)
         self.buffer = ReplayBuffer(100000, self.proprio_dim, torch.device('cpu'))
-        
+
         # 4. State
         self.total_steps = 0
         self.active_requests = {} # request_id -> model_id
-        
+
         # NATS
         self.nc = None
         self.js = None
-        
+
         # Logs
+        print("  → Setting up TensorBoard...", flush=True)
         self.writer = SummaryWriter(args.log_dir)
         os.makedirs(args.checkpoint_dir, exist_ok=True)
+        print("✅ Trainer initialized successfully", flush=True)
 
     def setup_device(self):
         if torch.cuda.is_available():
@@ -604,14 +621,17 @@ class ESSACTrainer:
         return {'actor_loss': actor_loss.item(), 'critic_loss': critic_loss.item()}
 
 if __name__ == "__main__":
+    print("🔧 Parsing arguments...", flush=True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--nats_server', type=str, default="nats://nats.gokickrocks.org:4222")
     parser.add_argument('--checkpoint_dir', type=str, default="./checkpoints_es")
     parser.add_argument('--log_dir', type=str, default="./logs_es")
     parser.add_argument('--batch_size', type=int, default=256)
     args = parser.parse_args()
-    
+
+    print("🔧 Initializing trainer...", flush=True)
     trainer = ESSACTrainer(args)
+    print("🔧 Starting async event loop...", flush=True)
     try:
         asyncio.run(trainer.run())
     except KeyboardInterrupt:

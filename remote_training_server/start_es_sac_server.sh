@@ -43,7 +43,7 @@ fi
 # Run trainer
 echo ""
 echo "Starting trainer..."
-python3 v700_es_sac_trainer.py \
+python3 -u v700_es_sac_trainer.py \
     --nats_server "${NATS_SERVER}" \
     --checkpoint_dir "./checkpoints_es" \
     --log_dir "./logs_es" \
