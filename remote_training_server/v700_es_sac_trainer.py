@@ -273,7 +273,7 @@ class ESSACTrainer:
 
         # 2. Population (The "Students")
         print("  → Initializing population...", flush=True)
-        self.pop_manager = PopulationManager(population_size=10, device=self.device)
+        self.pop_manager = PopulationManager(population_size=5, device=self.device)  # Reduced from 10 to 5
         self.pop_manager.initialize_population(self.actor) # Init with random policies
 
         # 3. Buffer
@@ -283,6 +283,7 @@ class ESSACTrainer:
         # 4. State
         self.total_steps = 0
         self.active_requests = {} # request_id -> model_id
+        self.last_inference_time = 0  # Track when last inference happened
 
         # NATS
         self.nc = None
@@ -441,8 +442,13 @@ class ESSACTrainer:
     async def handle_step_inference(self, msg):
         """Rover sends Obs, Server runs Inference -> Returns Action."""
         t0 = time.perf_counter()
+        self.last_inference_time = t0  # Track inference activity
 
         try:
+            # Clear cache before inference to free up fragmented memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             # 1. Deserialize
             data = msg.data
             header_len = int.from_bytes(data[:2], 'big')
@@ -505,11 +511,15 @@ class ESSACTrainer:
 
             # Latency check
             dt = (time.perf_counter() - t0) * 1000
-            if dt > 20:
+            if dt > 50:
                 print(f"⚠ Inference took {dt:.1f}ms", flush=True)
 
         except Exception as e:
             print(f"✗ Inference error: {e}", flush=True)
+            # Clear cache and try to recover
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
             # Send zero action on error
             zero_action = np.zeros(2, dtype=np.float32)
             await self.nc.publish(msg.reply, zero_action.tobytes())
@@ -522,23 +532,41 @@ class ESSACTrainer:
                 await asyncio.sleep(1)
                 continue
 
+            # Pause training if inference happened recently (within last 100ms)
+            # This prevents GPU memory contention
+            time_since_inference = time.perf_counter() - self.last_inference_time
+            if time_since_inference < 0.1:  # If inference happened in last 100ms
+                await asyncio.sleep(0.05)  # Wait a bit longer
+                continue
+
             # Train step
-            metrics = self.train_step()
-            self.total_steps += 1
+            try:
+                metrics = self.train_step()
+                self.total_steps += 1
 
-            if self.total_steps % 100 == 0:
-                self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
-                self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
+                if self.total_steps % 100 == 0:
+                    self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
+                    self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
 
-            # Periodic garbage collection to prevent memory fragmentation
-            if self.total_steps % 1000 == 0:
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                gc.collect()
+                # Periodic garbage collection to prevent memory fragmentation
+                if self.total_steps % 500 == 0:
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    gc.collect()
+
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    gc.collect()
+                    await asyncio.sleep(0.5)
+                    continue
+                else:
+                    raise
 
             # Yield to event loop more frequently to prioritize inference
-            if self.total_steps % 5 == 0:
-                await asyncio.sleep(0.01)  # Give more time to inference requests
+            await asyncio.sleep(0.05)  # Slow down training significantly
 
     @torch.no_grad()
     def evaluate_model_critic(self, model_id: int) -> float:
@@ -623,7 +651,7 @@ if __name__ == "__main__":
     parser.add_argument('--nats_server', type=str, default="nats://nats.gokickrocks.org:4222")
     parser.add_argument('--checkpoint_dir', type=str, default="./checkpoints_es")
     parser.add_argument('--log_dir', type=str, default="./logs_es")
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=64)  # Reduced from 256 to save GPU memory
     args = parser.parse_args()
 
     print("🔧 Initializing trainer...", flush=True)

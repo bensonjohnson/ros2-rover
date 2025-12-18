@@ -38,6 +38,11 @@ if command -v rocm-smi &> /dev/null; then
     echo "ROCm detected - enabling optimizations"
     export HSA_FORCE_FINE_GRAIN_PCIE=1
     export MIOPEN_FIND_ENFORCE=NONE
+
+    # PyTorch Memory Management for ROCm
+    export PYTORCH_HIP_ALLOC_CONF=max_split_size_mb:512
+    export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    echo "GPU memory management configured"
 fi
 
 # Run trainer
