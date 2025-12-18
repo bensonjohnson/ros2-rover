@@ -169,6 +169,11 @@ class ESEpisodeRunner(Node):
                     # 3. Receive Action
                     if len(response.data) != 8:
                         print(f"  ⚠ Bad Response Size: {len(response.data)} bytes (Expected 8)", flush=True)
+                        print(f"  ⚠ Raw Bytes: {response.data}", flush=True)
+                        try:
+                            print(f"  ⚠ As String: {response.data.decode()}", flush=True)
+                        except:
+                            pass
                         action = np.zeros(2, dtype=np.float32)
                     else:
                         action = np.frombuffer(response.data, dtype=np.float32)

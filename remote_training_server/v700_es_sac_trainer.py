@@ -521,8 +521,20 @@ class ESSACTrainer:
 
             # 5. Reply - MUST be exactly 8 bytes
             reply_bytes = action.astype(np.float32).tobytes()
+
+            # Debug: Log response details
+            if len(reply_bytes) != 8:
+                print(f"✗ WRONG SIZE: {len(reply_bytes)} bytes, action shape: {action.shape}, action: {action}", flush=True)
+
             assert len(reply_bytes) == 8, f"Reply must be 8 bytes, got {len(reply_bytes)}"
             await self.nc.publish(msg.reply, reply_bytes)
+
+            # Log every 30th inference to confirm it's working
+            if not hasattr(self, '_inference_count'):
+                self._inference_count = 0
+            self._inference_count += 1
+            if self._inference_count % 30 == 0:
+                print(f"✓ Inference #{self._inference_count}: {len(reply_bytes)} bytes, action: [{action[0]:.3f}, {action[1]:.3f}]", flush=True)
 
             # Latency check
             dt = (time.perf_counter() - t0) * 1000
