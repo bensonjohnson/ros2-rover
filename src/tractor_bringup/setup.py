@@ -45,6 +45,7 @@ setup(
             "map_elites_episode_runner.py = tractor_bringup.map_elites_episode_runner:main",
             "ppo_episode_runner = tractor_bringup.ppo_episode_runner:main",
             "sac_episode_runner = tractor_bringup.sac_episode_runner:main",
+            "es_episode_runner.py = tractor_bringup.es_episode_runner:main",
         ],
     },
 )
