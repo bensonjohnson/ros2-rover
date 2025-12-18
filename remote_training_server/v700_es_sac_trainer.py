@@ -415,10 +415,6 @@ class ESSACTrainer:
             
             # Evolve
             self.pop_manager.evolve()
-            
-            # Log max fitness
-            best_fit = max(p['fitness'] for p in self.pop_manager.population)
-            self.writer.add_scalar('ES/GenMaxFitness', best_fit, self.pop_manager.generation)
 
             # Log max fitness
             best_fit = max(p['fitness'] for p in self.pop_manager.population)

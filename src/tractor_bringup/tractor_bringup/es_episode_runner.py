@@ -174,10 +174,7 @@ class ESEpisodeRunner(Node):
             if self.safety_override: r -= 1.0
             
             # Store
-            laser_buf.append(laser) # Store full float for training? Or the sent uint8?
-            # Replay buffer expects uint8 for storage anyway.
-            # But the 'add_batch' util might expect specific shapes.
-            # Let's store what we have.
+            # Replay buffer expects uint8 for storage
             laser_buf.append(laser_u8.reshape(1, 128, 128))
             depth_buf.append(depth_u8.reshape(1, 100, 848))
             proprio_buf.append(proprio)
