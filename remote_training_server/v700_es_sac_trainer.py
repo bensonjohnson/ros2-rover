@@ -278,7 +278,7 @@ class ESSACTrainer:
 
         # 3. Buffer
         print("  → Creating replay buffer...", flush=True)
-        self.buffer = ReplayBuffer(100000, self.proprio_dim, torch.device('cpu'))
+        self.buffer = ReplayBuffer(100000, self.proprio_dim, self.device)
 
         # 4. State
         self.total_steps = 0
