@@ -25,6 +25,7 @@ def serialize_batch(batch: dict) -> bytes:
             - actions: np.array of shape (N, 2) float32
             - rewards: np.array of shape (N,) float32
             - dones: np.array of shape (N,) bool
+            - metadata: (optional) dict with rover_id, model_id, etc.
 
     Returns:
         Serialized bytes ready for NATS publish
@@ -52,6 +53,8 @@ def serialize_batch(batch: dict) -> bytes:
         "rewards": batch["rewards"].tolist(),
         "dones": batch["dones"].tolist(),
         "is_eval": is_eval_data,
+        # Include metadata if present
+        "metadata": batch.get("metadata", {}),
     }
 
     return msgpack.packb(compressed)
@@ -82,10 +85,9 @@ def deserialize_batch(data: bytes) -> dict:
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
         "rewards": np.array(compressed["rewards"], dtype=np.float32),
-        "actions": np.array(compressed["actions"], dtype=np.float32),
-        "rewards": np.array(compressed["rewards"], dtype=np.float32),
         "dones": np.array(compressed["dones"], dtype=bool),
         "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
+        "metadata": compressed.get("metadata", {}),
     }
 
 

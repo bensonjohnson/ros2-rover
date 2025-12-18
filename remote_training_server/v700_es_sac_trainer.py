@@ -385,61 +385,74 @@ class ESSACTrainer:
 
     async def handle_episode_result(self, msg):
         """Rover reports: 'Finished episode with Model X, here is data'."""
-        # This is likely a large message with compressed batch data
-        data = deserialize_batch(msg.data) # Reusing existing util which handles zstd
-        
-        model_id = data['metadata'].get('model_id')
-        total_reward = float(np.sum(data['rewards']))
-        
-        if self.buffer.size > 1000:
-            # "Base the fitness on some sort of reinforcement logic"
-            # We calculate the Mean Q-Value of this model on a batch of replay data.
-            # This estimates "future success" based on the collective knowledge of the SAC agent.
-            q_score = self.evaluate_model_critic(model_id)
-            print(f"    Simple Reward: {total_reward:.2f}, Q-Score: {q_score:.2f}")
-            
-            # Hybrid Fitness: Real Reward + Critic Estimate
-            # Scaling: Rewards are ~10-50? Q-values are ~10-50?
-            # Let's simple sum for now, effectively doubling the signal if they agree.
-            final_fitness = total_reward + q_score
-        else:
-            final_fitness = total_reward
-            
-        print(f"📝 Result for Model {model_id}: Fitness = {final_fitness:.2f} (R:{total_reward:.1f} + Q:{final_fitness-total_reward:.1f})")
-        
-        # 1. Update Population Fitness
-        self.pop_manager.update_fitness(model_id, final_fitness)
-        self.writer.add_scalar('ES/EpisodeReward', total_reward, self.total_steps)
-        self.writer.add_scalar('ES/Fitness', final_fitness, self.total_steps)
-        
-        # 2. Add to Replay Buffer (for SAC training)
-        with torch.no_grad():
-             # Convert data to format ReplayBuffer expects
-            self.buffer.add({
-                'laser': data['laser'], # (N, 1, 128, 128)
-                'depth': data['depth'], # (N, 1, 100, 848)
-                'proprio': data['proprio'],
-                'actions': data['actions'],
-                'rewards': data['rewards'],
-                'dones': data['dones']
-            })
-            
-        # 3. Check for Evolution Trigger
-        # If all population evaluated (fitness != -inf), trigger evolution
-        unevaluated = [p for p in self.pop_manager.population if p['fitness'] == -float('inf')]
-        if len(unevaluated) == 0:
-            print("🔄 Population fully evaluated. Evolving...")
-            
-            # Inject SAC Agent before evolving
-            sac_state = self.actor.state_dict()
-            self.pop_manager.inject_agent(sac_state)
-            
-            # Evolve
-            self.pop_manager.evolve()
+        try:
+            # This is likely a large message with compressed batch data
+            data = deserialize_batch(msg.data) # Reusing existing util which handles zstd
 
-            # Log max fitness
-            best_fit = max(p['fitness'] for p in self.pop_manager.population)
-            self.writer.add_scalar('ES/GenMaxFitness', best_fit, self.pop_manager.generation)
+            metadata = data.get('metadata', {})
+            rover_id = metadata.get('rover_id', 'unknown')
+            model_id = metadata.get('model_id', -1)
+
+            # If model_id not set, look up from active requests
+            if model_id == -1 and rover_id in self.active_requests:
+                model_id = self.active_requests[rover_id]['id']
+
+            total_reward = float(np.sum(data['rewards']))
+
+            if self.buffer.size > 1000:
+                # "Base the fitness on some sort of reinforcement logic"
+                # We calculate the Mean Q-Value of this model on a batch of replay data.
+                # This estimates "future success" based on the collective knowledge of the SAC agent.
+                q_score = self.evaluate_model_critic(model_id)
+                print(f"    Simple Reward: {total_reward:.2f}, Q-Score: {q_score:.2f}")
+
+                # Hybrid Fitness: Real Reward + Critic Estimate
+                # Scaling: Rewards are ~10-50? Q-values are ~10-50?
+                # Let's simple sum for now, effectively doubling the signal if they agree.
+                final_fitness = total_reward + q_score
+            else:
+                final_fitness = total_reward
+
+            print(f"📝 Result for Model {model_id}: Fitness = {final_fitness:.2f} (R:{total_reward:.1f} + Q:{final_fitness-total_reward:.1f})", flush=True)
+
+            # 1. Update Population Fitness
+            self.pop_manager.update_fitness(model_id, final_fitness)
+            self.writer.add_scalar('ES/EpisodeReward', total_reward, self.total_steps)
+            self.writer.add_scalar('ES/Fitness', final_fitness, self.total_steps)
+
+            # 2. Add to Replay Buffer (for SAC training)
+            with torch.no_grad():
+                 # Convert data to format ReplayBuffer expects
+                self.buffer.add({
+                    'laser': data['laser'], # (N, 1, 128, 128)
+                    'depth': data['depth'], # (N, 1, 100, 848)
+                    'proprio': data['proprio'],
+                    'actions': data['actions'],
+                    'rewards': data['rewards'],
+                    'dones': data['dones']
+                })
+
+            # 3. Check for Evolution Trigger
+            # If all population evaluated (fitness != -inf), trigger evolution
+            unevaluated = [p for p in self.pop_manager.population if p['fitness'] == -float('inf')]
+            if len(unevaluated) == 0:
+                print("🔄 Population fully evaluated. Evolving...", flush=True)
+
+                # Inject SAC Agent before evolving
+                sac_state = self.actor.state_dict()
+                self.pop_manager.inject_agent(sac_state)
+
+                # Evolve
+                self.pop_manager.evolve()
+
+                # Log max fitness
+                best_fit = max(p['fitness'] for p in self.pop_manager.population)
+                self.writer.add_scalar('ES/GenMaxFitness', best_fit, self.pop_manager.generation)
+
+        except Exception as e:
+            import traceback
+            print(f"✗ Episode result error: {type(e).__name__}: {e}", flush=True)
+            print(f"   Traceback: {traceback.format_exc()}", flush=True)
 
     async def handle_step_inference(self, msg):
         """Rover sends Obs, Server runs Inference -> Returns Action."""
