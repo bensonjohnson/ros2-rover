@@ -93,5 +93,6 @@ echo "Starting trainer..."
     exec python3 -u v700_es_sac_trainer.py \
         --nats_server "${NATS_SERVER}" \
         --checkpoint_dir "./checkpoints_es" \
-        --log_dir "./logs_es"
+        --log_dir "./logs_es" \
+        --cpu_inference
 } 2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"

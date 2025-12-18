@@ -305,6 +305,14 @@ class ESSACTrainer:
         else:
             self.device = torch.device('cpu')
             print("⚠ Using CPU")
+            
+        # Inference Device
+        if self.args.cpu_inference:
+            self.inference_device = torch.device('cpu')
+            print("✓ Inference Device: CPU (Requested)")
+        else:
+            self.inference_device = self.device
+            print(f"✓ Inference Device: {self.inference_device}")
 
     async def connect_nats(self):
         self.nc = await nats.connect(self.args.nats_server, max_reconnect_attempts=-1)
@@ -460,6 +468,9 @@ class ESSACTrainer:
 
         # Always send exactly 8 bytes (2 float32) no matter what
         zero_action = np.zeros(2, dtype=np.float32)
+        
+        # Decide if we need GPU lock
+        use_lock = (self.inference_device.type == 'cuda')
 
         try:
             # 1. Deserialize (outside lock - no GPU needed)
@@ -494,20 +505,29 @@ class ESSACTrainer:
             proprio_size = 10
             proprio_np = np.frombuffer(raw_bytes, dtype=np.float32, count=proprio_size, offset=offset).reshape(1, 10)
 
-            # 4. Inference - ACQUIRE GPU LOCK
-            async with self.gpu_lock:
+            # 4. Inference
+            # Only acquire lock if using GPU
+            if use_lock:
+                await self.gpu_lock.acquire()
+                
+            try:
                 with torch.no_grad():
-                    # Convert to tensor on GPU
-                    l_t = torch.from_numpy(laser_np.copy()).to(self.device, dtype=torch.float32)
-                    d_t = torch.from_numpy(depth_np.copy()).to(self.device, dtype=torch.float32).div_(255.0)
-                    p_t = torch.from_numpy(proprio_np.copy()).to(self.device, dtype=torch.float32)
+                    # Convert to tensor on Inference Device
+                    l_t = torch.from_numpy(laser_np.copy()).to(self.inference_device, dtype=torch.float32)
+                    d_t = torch.from_numpy(depth_np.copy()).to(self.inference_device, dtype=torch.float32).div_(255.0)
+                    p_t = torch.from_numpy(proprio_np.copy()).to(self.inference_device, dtype=torch.float32)
 
                     # Maintain inference actor (only reload weights when model ID changes)
                     if not hasattr(self, 'inference_actor'):
                         self.inference_actor = copy.deepcopy(self.actor)
+                        self.inference_actor.to(self.inference_device)
                         self.inference_actor_id = -1
 
                     if self.inference_actor_id != candidate['id']:
+                        # Load on CPU first then move if needed? 
+                        # Or just load state dict. State dict handles device matching usually? 
+                        # No, load_state_dict copies weights. self.inference_actor is already on device.
+                        # candidate['model'] might be on CPU (it is).
                         self.inference_actor.load_state_dict(candidate['model'])
                         self.inference_actor_id = candidate['id']
                         self.inference_actor.eval()
@@ -516,8 +536,12 @@ class ESSACTrainer:
                     action_mean, _ = self.inference_actor(l_t, d_t, p_t)
                     action = torch.tanh(action_mean).cpu().numpy()[0]  # (2,)
 
-                    # Explicitly delete GPU tensors
+                    # Explicitly delete tensors
                     del l_t, d_t, p_t, action_mean
+
+            finally:
+                if use_lock:
+                    self.gpu_lock.release()
 
             # 5. Reply - MUST be exactly 8 bytes
             reply_bytes = action.astype(np.float32).tobytes()
@@ -675,6 +699,7 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint_dir', type=str, default="./checkpoints_es")
     parser.add_argument('--log_dir', type=str, default="./logs_es")
     parser.add_argument('--batch_size', type=int, default=256)  # Large batch for better gradients
+    parser.add_argument('--cpu_inference', action='store_true', help="Run inference on CPU to save GPU for training")
     args = parser.parse_args()
 
     print("🔧 Initializing trainer...", flush=True)
