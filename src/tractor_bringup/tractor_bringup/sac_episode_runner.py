@@ -235,8 +235,7 @@ class SACEpisodeRunner(Node):
         self._latest_depth_raw = None  # Raw depth from camera (424, 240) uint16
         self._latest_scan = None
         # Processed sensor data for model
-        self._latest_laser = None  # (128, 128) float32 - Binary laser occupancy
-        self._latest_depth = None  # (424, 240) float32 - Processed/normalized depth
+        self._latest_bev = None  # (2, 256, 256) float32 - Unified BEV grid
         self._latest_odom = None
         self._latest_imu = None
         self._latest_mag = None
@@ -249,9 +248,9 @@ class SACEpisodeRunner(Node):
         self._curriculum_collision_dist = 0.5
         self._curriculum_max_speed = 0.1
 
-        # Buffers for batching (depth-only mode)
+        # Buffers for batching (unified BEV mode)
         self._data_buffer = {
-            'laser': [], 'depth': [], 'proprio': [],
+            'bev': [], 'proprio': [],
             'actions': [], 'rewards': [], 'dones': [],
             'is_eval': []
         }
@@ -1074,19 +1073,14 @@ class SACEpisodeRunner(Node):
             return
 
         # 6. Store Transition
-        # Process depth for storage
-        if self._latest_depth_raw is None:
+        # Check BEV is ready
+        if self._latest_bev is None:
             # No valid sensor data yet
-            self.get_logger().warn("⚠️  No depth data available, skipping data collection")
+            self.get_logger().warn("⚠️  No BEV data available, skipping data collection")
             return
 
-        depth_to_store = self._process_depth(self._latest_depth_raw)  # (100, 848) float32
-        # Add channel dimension for consistency: (1, 100, 848)
-        depth_to_store = depth_to_store[None, ...]
-
         with self._buffer_lock:
-            self._data_buffer['laser'].append(self._latest_laser)
-            self._data_buffer['depth'].append(depth_to_store)
+            self._data_buffer['bev'].append(self._latest_bev)  # (2, 256, 256)
             self._data_buffer['proprio'].append(proprio[0])
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
@@ -1117,8 +1111,7 @@ class SACEpisodeRunner(Node):
 
                 np.savez_compressed(
                     save_path,
-                    laser=self._latest_laser[None, ...],  # (1, 128, 128)
-                    depth=depth_calib[None, ...],       # (1, 100, 848)
+                    bev=self._latest_bev,  # (2, 256, 256)
                     proprio=proprio[0]
                 )
             
@@ -1138,7 +1131,7 @@ class SACEpisodeRunner(Node):
 
         # Update Evaluation State for NEXT episode
         if self._is_eval_episode:
-            self.get_logger().info(f"📊 Eval Episode Complete. Result: {'COLLISION' if self._latest_laser is not None and np.min(self._latest_laser) < 0.1 else 'TIMEOUT'}")
+            self.get_logger().info(f"📊 Eval Episode Complete. Result: {'COLLISION' if self._latest_bev is not None and np.max(self._latest_bev[0, 236:, 118:138]) > 0.5 else 'TIMEOUT'}")
             self._is_eval_episode = False
             self._episodes_since_eval = 0
         else:
