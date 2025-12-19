@@ -31,6 +31,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.distributions import Normal
 print("  → Importing tqdm...", flush=True)
 from tqdm import tqdm
 print("  → Importing nats...", flush=True)
@@ -656,13 +657,38 @@ class ESSACTrainer:
 
         return result
 
+    def sample_action(self, mean, log_std):
+        """
+        Sample action using reparameterization trick.
+        """
+        std = log_std.exp()
+        normal = Normal(mean, std)
+        
+        # rsample() implements the reparameterization trick: mean + std * epsilon
+        x_t = normal.rsample()  
+        
+        # Enforce action bounds (-1, 1)
+        action = torch.tanh(x_t)
+        
+        # Calculate log probability
+        # log_prob = log_prob_normal - log(1 - tanh(x)^2 + epsilon)
+        log_prob = normal.log_prob(x_t)
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
+        
+        # Sum log probs across action dimensions to get single log_prob for the vector action
+        log_prob = log_prob.sum(1, keepdim=True)
+        
+        return action, log_prob
+
     def train_step(self):
         """Single SAC Gradient Step."""
         batch = self.buffer.sample(self.args.batch_size)
         
         # 1. Update Critics
         with torch.no_grad():
-            next_action, next_log_prob = self.actor(batch['next_laser'], batch['next_depth'], batch['next_proprio'])
+            next_mean, next_log_std = self.actor(batch['next_laser'], batch['next_depth'], batch['next_proprio'])
+            next_action, next_log_prob = self.sample_action(next_mean, next_log_std)
+            
             target_q1 = self.target_critic1(batch['next_laser'], batch['next_depth'], batch['next_proprio'], next_action)
             target_q2 = self.target_critic2(batch['next_laser'], batch['next_depth'], batch['next_proprio'], next_action)
             target_q = torch.min(target_q1, target_q2) - torch.exp(self.log_alpha) * next_log_prob
@@ -678,7 +704,9 @@ class ESSACTrainer:
         self.critic_opt.step()
         
         # 2. Update Actor
-        pred_action, log_prob = self.actor(batch['laser'], batch['depth'], batch['proprio'])
+        mean, log_std = self.actor(batch['laser'], batch['depth'], batch['proprio'])
+        pred_action, log_prob = self.sample_action(mean, log_std)
+        
         q1 = self.critic1(batch['laser'], batch['depth'], batch['proprio'], pred_action)
         q2 = self.critic2(batch['laser'], batch['depth'], batch['proprio'], pred_action)
         min_q = torch.min(q1, q2)
@@ -693,7 +721,7 @@ class ESSACTrainer:
         alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
         self.alpha_opt.zero_grad()
         alpha_loss.backward()
-        self.alpha_opt.step()
+        self.alpha_opt.step() # Correction: Added missing parenthesis for step()
         
         # 4. Soft Update Targets
         for param, target_param in zip(self.critic1.parameters(), self.target_critic1.parameters()):

@@ -95,5 +95,5 @@ echo "Starting trainer..."
         --checkpoint_dir "./checkpoints_es" \
         --log_dir "./logs_es" \
         --cpu_inference \
-        --batch_size 2048
+        --batch_size 1024
 } 2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"
