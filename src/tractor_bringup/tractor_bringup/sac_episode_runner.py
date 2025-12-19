@@ -646,12 +646,16 @@ class SACEpisodeRunner(Node):
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
         """
-        Simplified reward with 5 clear components:
+        Enhanced reward function with 7 clear components:
         1. Forward progress scaled by safety
-        2. Collision penalty
-        3. Exploration bonus (implicit via exploration history in observation)
-        4. Smooth control penalty
-        5. Idle penalty
+        2. Collision penalty (STRONG - preserved by expanded clip range)
+        3. Gap-following incentive (steer towards open space)
+        4. Side clearance bonus (maintain safe lateral distance)
+        5. Smooth control penalty
+        6. Idle penalty
+        7. Proximity penalty
+        
+        Clip range expanded to [-5, 2] to preserve collision signal strength.
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
@@ -660,33 +664,54 @@ class SACEpisodeRunner(Node):
         min_dist = min_lidar_dist
 
         # 1. Forward progress with safety scaling (primary objective)
-        safety_factor = np.clip((min_dist - 0.2) / 0.4, 0.0, 1.0)  # 0 at 0.2m, 1 at 0.6m
+        # Safety factor: 0 at 0.15m, 1 at 0.8m (expanded range for better gradient)
+        safety_factor = np.clip((min_dist - 0.15) / 0.65, 0.0, 1.0)
         if linear_vel > 0.01:
             speed_ratio = linear_vel / target_speed
             reward += speed_ratio * safety_factor * 2.0  # Max +2.0
         else:
             reward -= 0.5  # Idle penalty
 
-        # 2. Collision penalty (terminal signal)
+        # 2. Collision penalty (terminal signal - STRONG)
+        # Expanded clip range preserves this penalty's full strength
         if collision or self._safety_override:
             reward -= 5.0
-            return np.clip(reward, -1.0, 1.0)  # Early return
+            return np.clip(reward, -5.0, 2.0)  # Collision penalty preserved!
 
-        # 3. Exploration bonus (new grid cells)
-        # This is handled by exploration_map in observation
-        # Implicit via Q-function learning: new areas → more future rewards
+        # 3. Gap-following incentive: reward steering towards open space
+        # self._target_heading: -1 (right), 0 (straight), +1 (left)
+        # action[1]: angular command in same range
+        # Alignment error: 0 when perfectly aligned, 2 when opposite
+        alignment_error = abs(action[1] - self._target_heading)
+        
+        # Only reward gap-following when moving forward (prevent spinning in place)
+        if linear_vel > 0.05:
+            # Max +0.5 when perfectly aligned with best gap
+            gap_following_reward = (1.0 - alignment_error / 2.0) * 0.5
+            reward += gap_following_reward
 
-        # 4. Smooth control (anti-jerk)
+        # 4. Side clearance bonus: reward maintaining safe lateral distance
+        # side_clearance is average of left/right LiDAR distances
+        # Bonus when side clearance > 0.5m, max bonus at 1.5m+
+        if side_clearance > 0.5:
+            clearance_bonus = np.clip((side_clearance - 0.5) / 1.0, 0.0, 1.0) * 0.3
+            reward += clearance_bonus  # Max +0.3
+        elif side_clearance < 0.3:
+            # Penalty for being too close to walls
+            reward -= (0.3 - side_clearance) / 0.3 * 0.2  # Max -0.2
+
+        # 5. Smooth control (anti-jerk)
         angular_change = abs(action[1] - self._prev_action[1])
         if angular_change > 0.5:  # Large steering jerk
             reward -= angular_change * 0.3
 
-        # 5. Proximity penalty (gradual, not cliff)
+        # 6. Proximity penalty (gradual, not cliff)
         if min_dist < 0.3:
             proximity_penalty = (0.3 - min_dist) / 0.3  # 0 to 1
             reward -= proximity_penalty * 1.0
 
-        return np.clip(reward, -1.0, 1.0)
+        # Expanded clip range: [-5, 2] to preserve collision signal
+        return np.clip(reward, -5.0, 2.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.

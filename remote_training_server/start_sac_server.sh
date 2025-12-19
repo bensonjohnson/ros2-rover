@@ -23,7 +23,7 @@ echo "=================================================="
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
-BATCH_SIZE=${4:-256}  # Default to 256 for better UTD performance
+BATCH_SIZE=${4:-1024}  # Default to 1024 for better gradient estimates
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
