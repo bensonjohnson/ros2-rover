@@ -669,7 +669,7 @@ class SACEpisodeRunner(Node):
             speed_ratio = linear_vel / target_speed
             reward += speed_ratio * safety_factor * 2.0  # Max +2.0
         else:
-            reward -= 0.5  # Idle penalty
+            reward -= 1.0  # STRONGER idle penalty (was -0.5)
 
         # 2. Collision penalty (terminal signal - STRONG)
         # Expanded clip range preserves this penalty's full strength
@@ -683,11 +683,16 @@ class SACEpisodeRunner(Node):
         # Alignment error: 0 when perfectly aligned, 2 when opposite
         alignment_error = abs(action[1] - self._target_heading)
         
-        # Only reward gap-following when moving forward (prevent spinning in place)
-        if linear_vel > 0.05:
+        # Only reward gap-following when moving forward MEANINGFULLY (prevent spinning in place)
+        if linear_vel > 0.15:  # INCREASED threshold from 0.05 to 0.15
             # Max +0.5 when perfectly aligned with best gap
             gap_following_reward = (1.0 - alignment_error / 2.0) * 0.5
             reward += gap_following_reward
+            
+            # NEW: Straightness bonus - reward driving straight while moving
+            if abs(angular_vel) < 0.3:
+                straightness_bonus = 0.3 * (linear_vel / target_speed)
+                reward += straightness_bonus  # Max +0.3 for straight driving
 
         # 4. Side clearance bonus: reward maintaining safe lateral distance
         # side_clearance is average of left/right LiDAR distances
@@ -708,6 +713,12 @@ class SACEpisodeRunner(Node):
         if min_dist < 0.3:
             proximity_penalty = (0.3 - min_dist) / 0.3  # 0 to 1
             reward -= proximity_penalty * 1.0
+
+        # 7. NEW: Spinning-in-place penalty (CRITICAL for preventing oscillation)
+        # Strong penalty for turning while not moving forward
+        if abs(angular_vel) > 0.2 and linear_vel < 0.1:
+            spin_penalty = abs(angular_vel) * 2.0  # Strong penalty for spinning
+            reward -= spin_penalty  # Can be up to -2.0 for fast spinning
 
         # Expanded clip range: [-5, 2] to preserve collision signal
         return np.clip(reward, -5.0, 2.0)
