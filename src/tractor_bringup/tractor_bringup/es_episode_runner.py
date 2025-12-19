@@ -165,7 +165,7 @@ class ESEpisodeRunner(Node):
                 try:
                     # request-Reply pattern (RPC)
                     # Use es_rpc.* to avoid JetStream capturing it and sending an Ack
-                    response = await self.nc.request("es_rpc.step_inference", payload, timeout=0.2)
+                    response = await self.nc.request("es_rpc.step_inference", payload, timeout=0.5)
                     
                     # 3. Receive Action
                     if len(response.data) != 8:

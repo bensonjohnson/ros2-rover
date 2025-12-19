@@ -81,6 +81,10 @@ fi
 # Run trainer with increased file descriptor limit
 echo ""
 echo "Starting trainer..."
+echo "  📊 Dashboard will be available at http://localhost:5000"
+echo "  📈 TensorBoard logs: ./logs_es"
+echo "  💾 Checkpoints: ./checkpoints_es"
+echo ""
 
 {
     if ! ulimit -n 65535 2>/dev/null; then
@@ -95,5 +99,6 @@ echo "Starting trainer..."
         --checkpoint_dir "./checkpoints_es" \
         --log_dir "./logs_es" \
         --cpu_inference \
-        --batch_size 1024
+        --batch_size 1024 \
+        --dashboard_port 5000
 } 2>&1 | tee "logs_es/server_$(date +%Y%m%d_%H%M%S).log"

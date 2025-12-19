@@ -48,6 +48,9 @@ from serialization_utils import (
     deserialize_batch, serialize_model_update,
     serialize_metadata, deserialize_metadata
 )
+print("  → Importing dashboard...", flush=True)
+# Import dashboard
+from es_sac_dashboard import ESSACDashboard
 print("✅ All imports loaded", flush=True)
 
 # -----------------------------------------------------------------------------
@@ -287,6 +290,9 @@ class ESSACTrainer:
 
         # GPU Serialization Lock - prevents concurrent GPU operations
         self.gpu_lock = asyncio.Lock()
+        
+        # Thread-safe lock for training (since train_step runs in thread pool)
+        self._train_lock = threading.Lock()
 
         # NATS
         self.nc = None
@@ -296,6 +302,19 @@ class ESSACTrainer:
         print("  → Setting up TensorBoard...", flush=True)
         self.writer = SummaryWriter(args.log_dir)
         os.makedirs(args.checkpoint_dir, exist_ok=True)
+
+        # SAC Metrics History (for dashboard)
+        self.recent_sac_metrics = {
+            'actor_loss': [],
+            'critic_loss': [],
+            'steps': []
+        }
+
+        # Dashboard
+        print("  → Starting dashboard...", flush=True)
+        self.dashboard = ESSACDashboard(self, host='0.0.0.0', port=args.dashboard_port)
+        self.dashboard.start()
+
         print("✅ Trainer initialized successfully", flush=True)
 
     def setup_device(self):
@@ -588,44 +607,56 @@ class ESSACTrainer:
                     await asyncio.sleep(1)
                     continue
 
-                # Debug: Print when we are about to train
-                # print(f"Attempting training step {self.total_steps + 1}", flush=True)
+                # Run training in a thread pool to avoid blocking the event loop
+                # This allows NATS inference requests to be processed during training
+                try:
+                    metrics = await asyncio.to_thread(self._train_step_with_lock)
+                    
+                    if metrics is None:
+                        # OOM recovery happened
+                        await asyncio.sleep(0.5)
+                        continue
+                        
+                    self.total_steps += 1
 
-                # ACQUIRE GPU LOCK for training
-                async with self.gpu_lock:
-                    # Train step
-                    try:
-                        metrics = self.train_step()
-                        self.total_steps += 1
+                    if self.total_steps % 100 == 0:
+                        self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
+                        self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
+                        print(f"  🧠 SAC Step {self.total_steps}: Actor Loss={metrics['actor_loss']:.3f}, Critic Loss={metrics['critic_loss']:.3f}", flush=True)
 
-                        if self.total_steps % 100 == 0:
-                            self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
-                            self.writer.add_scalar('SAC/CriticLoss', metrics['critic_loss'], self.total_steps)
-                            print(f"  🧠 SAC Step {self.total_steps}: Actor Loss={metrics['actor_loss']:.3f}, Critic Loss={metrics['critic_loss']:.3f}", flush=True)
+                        # Track for dashboard (keep last 100 points)
+                        self.recent_sac_metrics['actor_loss'].append(metrics['actor_loss'])
+                        self.recent_sac_metrics['critic_loss'].append(metrics['critic_loss'])
+                        self.recent_sac_metrics['steps'].append(self.total_steps)
 
-                        # Periodic garbage collection
-                        if self.total_steps % 500 == 0:
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                            gc.collect()
+                        if len(self.recent_sac_metrics['steps']) > 100:
+                            self.recent_sac_metrics['actor_loss'].pop(0)
+                            self.recent_sac_metrics['critic_loss'].pop(0)
+                            self.recent_sac_metrics['steps'].pop(0)
 
-                        # Save Checkpoint
-                        if self.total_steps % 1000 == 0:
-                            self.save_checkpoint(f"step_{self.total_steps}.pt")
-                            
-                    except RuntimeError as e:
-                        if "out of memory" in str(e):
-                            print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                            gc.collect()
-                            await asyncio.sleep(0.5)
-                            continue
-                        else:
-                            raise
+                    # Periodic garbage collection
+                    if self.total_steps % 500 == 0:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        gc.collect()
 
-                # Yield to event loop after releasing lock - allows inference to get priority
-                await asyncio.sleep(0.01)  # Short sleep to let inference requests in
+                    # Save Checkpoint
+                    if self.total_steps % 1000 == 0:
+                        self.save_checkpoint(f"step_{self.total_steps}.pt")
+                        
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        gc.collect()
+                        await asyncio.sleep(0.5)
+                        continue
+                    else:
+                        raise
+
+                # Yield to event loop - allows inference to get priority
+                await asyncio.sleep(0.001)  # Minimal sleep, just to yield
         except Exception as e:
             import traceback
             print(f"🛑 SAC Training Loop CRASHED: {e}", flush=True)
@@ -683,6 +714,21 @@ class ESSACTrainer:
         log_prob = log_prob.sum(1, keepdim=True)
         
         return action, log_prob
+
+    def _train_step_with_lock(self):
+        """Thread-safe wrapper for train_step with OOM recovery."""
+        with self._train_lock:
+            try:
+                return self.train_step()
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"⚠ Training OOM in thread, clearing cache", flush=True)
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    gc.collect()
+                    return None  # Signal to skip this step
+                else:
+                    raise
 
     def train_step(self):
         """Single SAC Gradient Step."""
@@ -766,6 +812,7 @@ if __name__ == "__main__":
     parser.add_argument('--log_dir', type=str, default="./logs_es")
     parser.add_argument('--batch_size', type=int, default=256)  # Large batch for better gradients
     parser.add_argument('--cpu_inference', action='store_true', help="Run inference on CPU to save GPU for training")
+    parser.add_argument('--dashboard_port', type=int, default=5000, help="Port for the web dashboard")
     args = parser.parse_args()
 
     print("🔧 Initializing trainer...", flush=True)
