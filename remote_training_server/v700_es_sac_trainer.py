@@ -123,12 +123,13 @@ class PopulationManager:
             # All evaluated. Return best for demo/showing off until evolution triggers
             return max(self.population, key=lambda x: x['fitness'])
 
-    def update_fitness(self, individual_id: int, fitness: float):
-        """Update fitness for an individual."""
+    def update_fitness(self, individual_id: int, fitness: float) -> bool:
+        """Update fitness for an individual. Returns True if found, False otherwise."""
         for p in self.population:
             if p['id'] == individual_id:
                 p['fitness'] = fitness
-                break # Found
+                return True
+        return False  # Not found
 
     def evolve(self, elite_fraction=0.2):
         """Perform one generation of evolution."""
@@ -247,6 +248,10 @@ class ReplayBuffer:
 # -----------------------------------------------------------------------------
 
 class ESSACTrainer:
+    # Training constants
+    SAC_MIN_BUFFER_SIZE = 1000  # Minimum buffer size before SAC training starts
+    SAC_WARMUP_STEPS = 1000  # SAC training steps before using critic for fitness
+
     def __init__(self, args):
         self.args = args
         print("  → Setting up device...", flush=True)
@@ -286,13 +291,17 @@ class ESSACTrainer:
 
         # 4. State
         self.total_steps = 0
+        self.episode_count = 0  # Separate counter for episode logging
         self.active_requests = {} # request_id -> model_id
 
         # GPU Serialization Lock - prevents concurrent GPU operations
         self.gpu_lock = asyncio.Lock()
-        
+
         # Thread-safe lock for training (since train_step runs in thread pool)
         self._train_lock = threading.Lock()
+
+        # Lock for active_requests dictionary access
+        self.active_requests_lock = asyncio.Lock()
 
         # NATS
         self.nc = None
@@ -422,12 +431,21 @@ class ESSACTrainer:
             model_id = metadata.get('model_id', -1)
 
             # If model_id not set, look up from active requests
-            if model_id == -1 and rover_id in self.active_requests:
-                model_id = self.active_requests[rover_id]['id']
+            if model_id == -1:
+                async with self.active_requests_lock:
+                    if rover_id in self.active_requests:
+                        model_id = self.active_requests[rover_id]['id']
+                    else:
+                        # Fallback: assign now for late arrivals
+                        candidate = self.pop_manager.get_candidate()
+                        self.active_requests[rover_id] = candidate
+                        model_id = candidate['id']
+                        print(f"⚠ Late model_id lookup: Assigned Model {model_id} to {rover_id}", flush=True)
 
             total_reward = float(np.sum(data['rewards']))
 
-            if self.buffer.size > 1000:
+            # Use hybrid fitness only after SAC critic has warmed up
+            if self.buffer.size > self.SAC_MIN_BUFFER_SIZE and self.total_steps > self.SAC_WARMUP_STEPS:
                 # "Base the fitness on some sort of reinforcement logic"
                 # We calculate the Mean Q-Value of this model on a batch of replay data.
                 # This estimates "future success" based on the collective knowledge of the SAC agent.
@@ -439,14 +457,20 @@ class ESSACTrainer:
                 # Let's simple sum for now, effectively doubling the signal if they agree.
                 final_fitness = total_reward + q_score
             else:
+                # Before warmup, use only episode reward
                 final_fitness = total_reward
 
             print(f"📝 Result for Model {model_id}: Fitness = {final_fitness:.2f} (R:{total_reward:.1f} + Q:{final_fitness-total_reward:.1f})", flush=True)
 
             # 1. Update Population Fitness
-            self.pop_manager.update_fitness(model_id, final_fitness)
-            self.writer.add_scalar('ES/EpisodeReward', total_reward, self.total_steps)
-            self.writer.add_scalar('ES/Fitness', final_fitness, self.total_steps)
+            updated = self.pop_manager.update_fitness(model_id, final_fitness)
+            if not updated:
+                print(f"✗ CRITICAL: Failed to update fitness for model_id={model_id}. Population IDs: {[p['id'] for p in self.pop_manager.population]}", flush=True)
+
+            # Increment episode counter for consistent logging
+            self.episode_count += 1
+            self.writer.add_scalar('ES/EpisodeReward', total_reward, self.episode_count)
+            self.writer.add_scalar('ES/Fitness', final_fitness, self.episode_count)
 
             # 2. Add to Replay Buffer (for SAC training)
             with torch.no_grad():
@@ -500,12 +524,13 @@ class ESSACTrainer:
             rover_id = header.get('rover_id', 'rover_1')
 
             # 2. Get Assigned Model
-            if rover_id not in self.active_requests:
-                candidate = self.pop_manager.get_candidate()
-                self.active_requests[rover_id] = candidate
-                print(f"Assigning Model {candidate['id']} to {rover_id}", flush=True)
+            async with self.active_requests_lock:
+                if rover_id not in self.active_requests:
+                    candidate = self.pop_manager.get_candidate()
+                    self.active_requests[rover_id] = candidate
+                    print(f"Assigning Model {candidate['id']} to {rover_id}", flush=True)
 
-            candidate = self.active_requests[rover_id]
+                candidate = self.active_requests[rover_id]
 
             # 3. Parse Tensors (outside lock - no GPU needed)
             raw_bytes = data[2+header_len:]
@@ -601,9 +626,9 @@ class ESSACTrainer:
         print("🧠 SAC Training Loop started...")
         try:
             while True:
-                if self.buffer.size < 1000:
+                if self.buffer.size < self.SAC_MIN_BUFFER_SIZE:
                     if int(time.time()) % 10 == 0:
-                         print(f"Waiting for buffer: {self.buffer.size}/1000", flush=True)
+                         print(f"Waiting for buffer: {self.buffer.size}/{self.SAC_MIN_BUFFER_SIZE}", flush=True)
                     await asyncio.sleep(1)
                     continue
 
@@ -611,13 +636,11 @@ class ESSACTrainer:
                 # This allows NATS inference requests to be processed during training
                 try:
                     metrics = await asyncio.to_thread(self._train_step_with_lock)
-                    
+
                     if metrics is None:
                         # OOM recovery happened
                         await asyncio.sleep(0.5)
                         continue
-                        
-                    self.total_steps += 1
 
                     if self.total_steps % 100 == 0:
                         self.writer.add_scalar('SAC/ActorLoss', metrics['actor_loss'], self.total_steps)
@@ -719,7 +742,9 @@ class ESSACTrainer:
         """Thread-safe wrapper for train_step with OOM recovery."""
         with self._train_lock:
             try:
-                return self.train_step()
+                metrics = self.train_step()
+                self.total_steps += 1  # Increment inside lock for thread safety
+                return metrics
             except RuntimeError as e:
                 if "out of memory" in str(e):
                     print(f"⚠ Training OOM in thread, clearing cache", flush=True)
