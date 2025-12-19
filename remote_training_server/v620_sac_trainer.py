@@ -1087,9 +1087,8 @@ class V620SACTrainer:
                         batch = deserialize_batch(msg.data)
 
                         # Update visualization state (take last frame of batch)
-                        if len(batch['laser']) > 0:
-                            self.latest_laser_vis = batch['laser'][-1].copy()
-                            self.latest_depth_vis = batch['depth'][-1].copy()
+                        if len(batch['bev']) > 0:
+                            self.latest_bev_vis = batch['bev'][-1].copy()
 
                         # Process rewards and track episodes
                         # Separate Eval and Training data
@@ -1130,8 +1129,7 @@ class V620SACTrainer:
                         if len(not_eval_indices) > 0:
                             # Filter batch
                             train_batch = {
-                                'laser': batch['laser'][not_eval_indices],
-                                'depth': batch['depth'][not_eval_indices],
+                                'bev': batch['bev'][not_eval_indices],
                                 'proprio': batch['proprio'][not_eval_indices],
                                 'actions': batch['actions'][not_eval_indices],
                                 'rewards': batch['rewards'][not_eval_indices],
