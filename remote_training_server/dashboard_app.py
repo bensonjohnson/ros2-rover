@@ -28,11 +28,12 @@ class TrainingDashboard:
         self.app.add_url_rule('/api/metrics_history', 'get_metrics_history', self.get_metrics_history)
         self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
         self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
-        self.app.add_url_rule('/api/laser', 'get_laser', self.get_laser)
-        self.app.add_url_rule('/api/depth', 'get_depth', self.get_depth)
+        self.app.add_url_rule('/api/bev', 'get_bev', self.get_bev)
         self.app.add_url_rule('/api/rgbd', 'get_rgbd', self.get_rgbd)
-        # Keep /api/grid for backward compatibility/debugging if needed, but we'll use laser now
-        self.app.add_url_rule('/api/grid', 'get_grid', self.get_grid)
+        # Keep legacy endpoints for backward compatibility
+        self.app.add_url_rule('/api/laser', 'get_laser', self.get_bev)
+        self.app.add_url_rule('/api/depth', 'get_depth', self.get_bev)
+        self.app.add_url_rule('/api/grid', 'get_grid', self.get_bev)
 
     def start(self):
         """Start the dashboard in a background thread."""
@@ -182,79 +183,56 @@ class TrainingDashboard:
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    def get_laser(self):
-        """Return the latest laser grid as a PNG image."""
+    def get_bev(self):
+        """Return the latest unified BEV grid as a PNG image.
+        
+        Visualizes 2-channel BEV grid:
+        - Channel 0 (LiDAR): Red for occupied
+        - Channel 1 (Depth): Blue for occupied
+        - Both channels: Magenta overlap
+        """
         try:
-            grid = self.trainer.latest_laser_vis
-            if grid is None:
+            bev = self.trainer.latest_bev_vis
+            if bev is None:
                 vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                vis[:, :] = [40, 40, 40]  # Dark gray background
             else:
-                # grid is (1, 128, 128) or (128, 128) float32 (0 or 1)
-                # Ensure 2D
-                if grid.ndim == 3:
-                     grid = grid[0]
-                
-                # Resize to display
-                vis_grid = cv2.resize(grid, (256, 256), interpolation=cv2.INTER_NEAREST)
-                
-                # Colorize: 0=Free (Light), 1=Occupied (Red)
-                # Note: Logic in processor is 1=Occupied?
-                # Usually 0=Free, 1=Occupied.
-                
-                vis = np.zeros((256, 256, 3), dtype=np.uint8)
-                vis[:, :] = [200, 200, 200] # Free (Light Gray)
-                
-                mask_occupied = (vis_grid > 0.5)
-                vis[mask_occupied] = [0, 0, 255] # Red
-                
-            _, buffer = cv2.imencode('.png', vis)
-            return Response(buffer.tobytes(), mimetype='image/png')
-        except Exception as e:
-            print(f"Error serving laser: {e}")
-            return Response(status=500)
-
-    def get_depth(self):
-        """Return the latest depth image as a PNG (depth-only, 100x848)."""
-        try:
-            depth = self.trainer.latest_depth_vis
-            if depth is None:
-                vis = np.zeros((100, 848, 3), dtype=np.uint8)
-            else:
-                # depth is (1, 100, 848) - extract depth channel
-                if depth.ndim == 3 and depth.shape[0] == 1:
-                    depth = depth[0]  # (100, 848)
-                elif depth.ndim != 2:
+                # bev is (2, 256, 256) float32 [0, 1]
+                # Channel 0: LiDAR, Channel 1: Depth
+                if bev.ndim == 3 and bev.shape[0] == 2:
+                    lidar_ch = bev[0]  # (256, 256)
+                    depth_ch = bev[1]  # (256, 256)
+                else:
                     # Fallback if shape is unexpected
-                    vis = np.zeros((100, 848, 3), dtype=np.uint8)
+                    vis = np.zeros((256, 256, 3), dtype=np.uint8)
                     _, buffer = cv2.imencode('.png', vis)
                     return Response(buffer.tobytes(), mimetype='image/png')
-
-                # Convert float [0, 1] to uint8 [0, 255] if needed
-                if depth.dtype != np.uint8:
-                    depth = (depth * 255.0).astype(np.uint8)
-
-                # Apply colormap (close=red, far=blue)
-                # Depth 0=Close, 255=Far
-                # Invert so close becomes red in JET colormap
-                depth_inverted = 255 - depth
-                vis = cv2.applyColorMap(depth_inverted, cv2.COLORMAP_JET)
-
+                
+                # Create RGB visualization
+                vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                vis[:, :] = [40, 40, 40]  # Dark gray background (free space)
+                
+                # Red channel: LiDAR occupancy (Red)
+                lidar_mask = (lidar_ch > 0.3)
+                vis[lidar_mask, 2] = 255  # Red channel in BGR
+                
+                # Blue channel: Depth occupancy (Blue)
+                depth_mask = (depth_ch > 0.3)
+                vis[depth_mask, 0] = 255  # Blue channel in BGR
+                
+                # Green channel: Both sensors agree (shows as Magenta/Cyan mix)
+                both_mask = lidar_mask & depth_mask
+                vis[both_mask, 1] = 100  # Slight green to show overlap
+                
             _, buffer = cv2.imencode('.png', vis)
             return Response(buffer.tobytes(), mimetype='image/png')
         except Exception as e:
-            print(f"Error serving depth: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error serving BEV: {e}")
             return Response(status=500)
 
     def get_rgbd(self):
-        """Return the latest depth image as a PNG (depth-only, backward compatibility)."""
-        # Redirect to depth endpoint for backward compatibility
-        return self.get_depth()
-
-    def get_grid(self):
-        # Redirect wrapper for legacy
-        return self.get_laser()
+        """Return the latest BEV image as a PNG (backward compatibility)."""
+        return self.get_bev()
 
     def index(self):
         """Render the main dashboard page."""
@@ -612,26 +590,18 @@ class TrainingDashboard:
 
         <!-- Live Sensors -->
         <div class="card wide-card">
-            <div class="card-title"><span class="icon">👁️</span> Live Sensors</div>
+            <div class="card-title"><span class="icon">👁️</span> Live Sensors - Unified BEV Grid (256×256)</div>
             <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
                 
-                <!-- Laser Grid -->
+                <!-- Unified BEV Grid -->
                 <div class="grid-container">
-                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Laser Occupancy (128x128)</div>
-                    <img id="laser-img" src="/api/laser" alt="Laser Grid" class="grid-image">
+                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Unified Birds-Eye-View (LiDAR + Depth)</div>
+                    <img id="bev-img" src="/api/bev" alt="Unified BEV Grid" class="grid-image" style="width: 256px; height: 256px;">
                     <div class="stat-row" style="margin-top: 5px; font-size: 0.8rem; justify-content: center; gap: 10px;">
-                        <span class="badgem" style="color: #ff0000;">🔴 Occupied</span>
-                        <span class="badgem" style="color: #cccccc;">⚪ Free</span>
-                    </div>
-                </div>
-
-                <!-- Depth Image -->
-                <div class="grid-container">
-                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Depth (848x100@100Hz)</div>
-                    <img id="depth-img" src="/api/depth" alt="Depth Image" class="grid-image" style="width: 848px; max-width: 100%;">
-                    <div class="stat-row" style="margin-top: 5px; font-size: 0.8rem; justify-content: center; gap: 10px;">
-                        <span class="badgem" style="color: #ff0000;">🔴 Close</span>
-                        <span class="badgem" style="color: #0000ff;">🔵 Far</span>
+                        <span class="badgem" style="color: #ff0000;">🔴 LiDAR</span>
+                        <span class="badgem" style="color: #0000ff;">🔵 Depth</span>
+                        <span class="badgem" style="color: #ff00ff;">🟣 Both</span>
+                        <span class="badgem" style="color: #444444;">⚫ Free</span>
                     </div>
                 </div>
 

@@ -1286,3 +1286,296 @@ class RawSensorProcessor:
         depth_normalized[depth == 0.0] = 1.0
 
         return depth_normalized  # Shape: (240, 424)
+
+
+class UnifiedBEVProcessor:
+    """
+    Unified Birds-Eye-View (BEV) processor that fuses LiDAR and Depth camera
+    into a single 2-channel 256×256 grid.
+
+    Channel 0: LiDAR occupancy (360° top-down binary occupancy)
+    Channel 1: Depth-projected occupancy (front 87° arc projected to BEV)
+
+    This replaces the dual-input architecture (LaserEncoder + DepthEncoder)
+    with a single unified representation that's spatially aligned.
+
+    Advantages:
+    - Single encoder instead of two (smaller model)
+    - Explicit spatial alignment between modalities
+    - Higher resolution: 256×256 at 4m = 1.56cm/pixel
+    - LiDAR provides 360° coverage, depth reinforces front arc
+    """
+
+    def __init__(self,
+                 grid_size=256,
+                 max_range=4.0,
+                 # D435i camera parameters
+                 depth_width=848,
+                 depth_height=100,
+                 fx=421.0,   # D435i focal length at 848x100
+                 fy=421.0,
+                 cx=424.0,   # Center x (848/2)
+                 cy=50.0,    # Center y (100/2)
+                 camera_height=0.187,      # Camera height above ground
+                 camera_tilt_deg=0.0,      # Camera tilt angle
+                 obstacle_height_thresh=0.10,  # Min height to be obstacle (10cm)
+                 scan_decay_rate=0.85):
+        """
+        Args:
+            grid_size: Output grid size (256×256)
+            max_range: Maximum sensor range in meters
+            depth_width, depth_height: D435i depth image dimensions
+            fx, fy, cx, cy: Camera intrinsics
+            camera_height: Height of camera above ground plane (meters)
+            camera_tilt_deg: Downward tilt of camera (degrees)
+            obstacle_height_thresh: Minimum height above ground to be obstacle
+            scan_decay_rate: Decay rate for LiDAR persistence buffer
+        """
+        self.grid_size = grid_size
+        self.max_range = max_range
+        self.resolution = max_range / grid_size  # 4m / 256 = 1.5625 cm/px
+
+        # Camera parameters
+        self.depth_width = depth_width
+        self.depth_height = depth_height
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.camera_height = camera_height
+        self.camera_tilt = np.radians(camera_tilt_deg)
+        self.obstacle_thresh = obstacle_height_thresh
+
+        # LiDAR persistence buffer (for temporal smoothing)
+        self.scan_decay_rate = scan_decay_rate
+        self.scan_buffer = np.zeros((grid_size, grid_size), dtype=np.float32)
+
+        # Robot position: bottom-center for consistency
+        self.robot_row = grid_size - 1  # 255 for 256x256
+        self.robot_col = grid_size // 2  # 128 for 256x256
+
+        # Pre-compute depth unprojection matrices (for 848 x 100 depth)
+        u, v = np.meshgrid(np.arange(depth_width), np.arange(depth_height))
+        self.x_mult = (u - cx) / fx
+        self.y_mult = (v - cy) / fy
+
+    def process(self, depth_img, laser_scan):
+        """
+        Process raw sensor data into unified 2-channel BEV grid.
+
+        Args:
+            depth_img: (100, 848) or (H, W) uint16 depth image in mm, or float32 in meters
+            laser_scan: LaserScan message with ranges, angle_min, angle_increment
+
+        Returns:
+            bev_grid: (2, 256, 256) float32 [0.0, 1.0]
+                - Channel 0: LiDAR occupancy (0=free, 1=occupied)
+                - Channel 1: Depth occupancy (0=free, 1=occupied)
+        """
+        # Channel 0: LiDAR occupancy
+        laser_bev = self._process_laser(laser_scan)
+
+        # Channel 1: Depth-projected occupancy
+        depth_bev = self._process_depth_to_bev(depth_img)
+
+        # Stack channels: (2, 256, 256)
+        bev_grid = np.stack([laser_bev, depth_bev], axis=0)
+
+        return bev_grid.astype(np.float32)
+
+    def _process_laser(self, scan):
+        """
+        Convert LiDAR polar scan to 256×256 binary occupancy grid.
+
+        Args:
+            scan: LaserScan message or dict with 'ranges', 'angle_min', 'angle_increment'
+
+        Returns:
+            grid: (256, 256) float32 binary occupancy (0=free, 1=occupied)
+        """
+        grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+
+        if scan is None:
+            return grid
+
+        # Extract scan data with validation
+        if hasattr(scan, 'ranges'):
+            ranges = np.array(scan.ranges)
+            angle_min = scan.angle_min
+            angle_increment = scan.angle_increment
+        else:
+            ranges = np.array(scan.get('ranges', []))
+            if len(ranges) == 0:
+                return grid
+            angle_min = scan.get('angle_min', -np.pi)
+            angle_increment = scan.get('angle_increment', 0.01)
+
+        # Validate ranges
+        if len(ranges) == 0 or not np.any(np.isfinite(ranges)):
+            return grid
+
+        # Filter valid ranges (0.15m min to avoid self-hits)
+        valid = (ranges > 0.15) & (ranges < self.max_range) & np.isfinite(ranges)
+
+        if not np.any(valid):
+            return grid
+
+        # Polar → Cartesian conversion
+        # LiDAR coordinate system: X forward, Y left (standard ROS)
+        angles = angle_min + np.arange(len(ranges)) * angle_increment
+        x = ranges * np.cos(angles)
+        y = ranges * np.sin(angles)
+
+        # Apply valid mask
+        x = x[valid]
+        y = y[valid]
+
+        # Project to grid
+        # Robot at bottom-center (row 255, col 128) for standardization
+        scale = self.grid_size / self.max_range  # 64 pixels/meter for 256/4
+
+        rows = self.robot_row - (x * scale).astype(np.int32)
+        cols = self.robot_col - (y * scale).astype(np.int32)
+
+        # Clip to bounds
+        valid_idx = (rows >= 0) & (rows < self.grid_size) & \
+                    (cols >= 0) & (cols < self.grid_size)
+
+        rows = rows[valid_idx]
+        cols = cols[valid_idx]
+
+        if len(rows) == 0:
+            return grid
+
+        # Binary occupancy: 1.0 where obstacles detected
+        current_view = np.zeros_like(grid)
+        current_view[rows, cols] = 1.0
+
+        # Accumulate into buffer with max-hold
+        self.scan_buffer = np.maximum(self.scan_buffer, current_view)
+
+        # Output is buffer state
+        grid = self.scan_buffer.copy()
+
+        # Decay buffer for next frame
+        self.scan_buffer *= self.scan_decay_rate
+
+        # Clear robot footprint (30cm x 40cm rover)
+        grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
+                                           0.30, 0.40, self.resolution)
+
+        return grid
+
+    def _process_depth_to_bev(self, depth_img):
+        """
+        Project depth camera image to 256×256 BEV occupancy grid.
+
+        Uses pinhole camera model to unproject depth pixels to 3D,
+        then projects to top-down view.
+
+        Args:
+            depth_img: (H, W) numpy array, uint16 (mm) or float32 (meters)
+
+        Returns:
+            grid: (256, 256) float32 binary occupancy (0=free, 1=occupied)
+        """
+        grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+
+        if depth_img is None or depth_img.size == 0:
+            return grid
+
+        # Handle input shape mismatch (resize if needed)
+        h, w = depth_img.shape[:2]
+        if (h, w) != (self.depth_height, self.depth_width):
+            # Resize to expected dimensions
+            if depth_img.dtype == np.uint16:
+                depth_img = cv2.resize(depth_img, (self.depth_width, self.depth_height), 
+                                       interpolation=cv2.INTER_NEAREST)
+            else:
+                depth_img = cv2.resize(depth_img, (self.depth_width, self.depth_height),
+                                       interpolation=cv2.INTER_LINEAR)
+            # Update unprojection matrices for new size
+            u, v = np.meshgrid(np.arange(self.depth_width), np.arange(self.depth_height))
+            x_mult = (u - self.cx) / self.fx
+            y_mult = (v - self.cy) / self.fy
+        else:
+            x_mult = self.x_mult
+            y_mult = self.y_mult
+
+        # Convert uint16 mm → float32 meters
+        if depth_img.dtype == np.uint16:
+            depth = depth_img.astype(np.float32) * 0.001
+        else:
+            depth = depth_img.astype(np.float32)
+
+        # 1. Unproject to 3D (Camera Frame)
+        z_c = depth
+        x_c = z_c * x_mult
+        y_c = z_c * y_mult
+
+        # Flatten for point cloud processing
+        points_c = np.stack([x_c, y_c, z_c], axis=-1).reshape(-1, 3)
+
+        # Filter invalid depth
+        valid_mask = (points_c[:, 2] > 0.15) & (points_c[:, 2] < self.max_range)
+        points_c = points_c[valid_mask]
+
+        if len(points_c) == 0:
+            return grid
+
+        # 2. Transform to Rover Frame
+        # Camera frame: Z forward, X right, Y down
+        # Rover frame: X forward, Y left, Z up
+        c = np.cos(self.camera_tilt)
+        s = np.sin(self.camera_tilt)
+
+        # Apply camera tilt rotation around X-axis
+        y_c_rot = points_c[:, 1] * c - points_c[:, 2] * s
+        z_c_rot = points_c[:, 1] * s + points_c[:, 2] * c
+        x_c_rot = points_c[:, 0]  # Unchanged
+
+        # Map to Rover Frame
+        # X_r = Z_c_rot (forward)
+        # Y_r = -X_c_rot (left)
+        # Z_r = -Y_c_rot + height (up)
+        x_r = z_c_rot
+        y_r = -x_c_rot
+        z_r = -y_c_rot + self.camera_height
+
+        # 3. Filter for obstacles (above ground threshold)
+        is_obstacle = z_r > self.obstacle_thresh
+
+        if not np.any(is_obstacle):
+            return grid
+
+        # 4. Project obstacles to grid
+        scale = self.grid_size / self.max_range  # 64 pixels/meter
+
+        # Robot at bottom-center (255, 128)
+        grid_rows = self.robot_row - (x_r[is_obstacle] * scale).astype(np.int32)
+        grid_cols = self.robot_col - (y_r[is_obstacle] * scale).astype(np.int32)
+
+        # Clip to bounds
+        valid_idx = (grid_rows >= 0) & (grid_rows < self.grid_size) & \
+                    (grid_cols >= 0) & (grid_cols < self.grid_size)
+
+        grid_rows = grid_rows[valid_idx]
+        grid_cols = grid_cols[valid_idx]
+
+        if len(grid_rows) == 0:
+            return grid
+
+        # Mark obstacle cells as 1.0
+        grid[grid_rows, grid_cols] = 1.0
+
+        # Morphological closing to fill gaps
+        kernel = np.ones((3, 3), np.uint8)
+        grid = cv2.morphologyEx((grid * 255).astype(np.uint8), 
+                                cv2.MORPH_CLOSE, kernel).astype(np.float32) / 255.0
+
+        # Clear robot footprint
+        grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
+                                           0.30, 0.40, self.resolution)
+
+        return grid
+

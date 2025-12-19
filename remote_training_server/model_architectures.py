@@ -546,3 +546,150 @@ class RGBDEncoderQNetwork(nn.Module):
 
         q_value = self.q_net(fused)
         return q_value
+
+
+# =============================================================================
+# Unified BEV Architecture (256×256 2-channel input)
+# =============================================================================
+
+class UnifiedBEVEncoder(nn.Module):
+    """
+    Encoder for 2-channel 256×256 unified BEV grid.
+    
+    Input: (B, 2, 256, 256)
+        - Channel 0: LiDAR occupancy (360° top-down)
+        - Channel 1: Depth occupancy (front arc projected)
+    
+    Output: (B, 4096) features
+    
+    Architecture: 256 → 128 → 64 → 32 → 16 → 8
+    """
+    def __init__(self, input_channels: int = 2):
+        super().__init__()
+        # 256 -> 128 -> 64 -> 32 -> 16 -> 8
+        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=2, padding=1)   # 256->128
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)               # 128->64
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64->32
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32->16
+        self.conv5 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16->8
+
+        self.relu = nn.ReLU(inplace=True)
+        
+        # Output: 64 channels × 8 × 8 = 4096 features
+        self._output_dim = 64 * 8 * 8
+
+    def forward(self, x):
+        # Input: (B, 2, 256, 256)
+        x = self.relu(self.conv1(x))  # (B, 16, 128, 128)
+        x = self.relu(self.conv2(x))  # (B, 32, 64, 64)
+        x = self.relu(self.conv3(x))  # (B, 64, 32, 32)
+        x = self.relu(self.conv4(x))  # (B, 64, 16, 16)
+        x = self.relu(self.conv5(x))  # (B, 64, 8, 8)
+
+        x = x.flatten(start_dim=1)    # (B, 4096)
+        return x
+
+    @property
+    def output_dim(self):
+        return self._output_dim
+
+
+class UnifiedBEVPolicyNetwork(nn.Module):
+    """
+    Policy network using unified BEV encoder.
+    
+    Input: BEV grid (2, 256, 256), Proprio (10)
+    Output: mean, log_std for Gaussian policy
+    """
+    def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
+        super().__init__()
+
+        # Unified BEV encoder
+        self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
+
+        # Proprioception encoder
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        # Fusion: BEV features + proprio
+        fusion_dim = self.bev_encoder.output_dim + 32  # 4096 + 32 = 4128
+
+        self.net = nn.Sequential(
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, hidden_size),
+            nn.ReLU(inplace=True),
+        )
+
+        self.mean_layer = nn.Linear(hidden_size, action_dim)
+        self.log_std_layer = nn.Linear(hidden_size, action_dim)
+
+    def forward(self, bev_grid, proprio):
+        # Encode BEV
+        bev_feats = self.bev_encoder(bev_grid)
+        proprio_feats = self.proprio_encoder(proprio)
+
+        # Concatenate features
+        fused = torch.cat([bev_feats, proprio_feats], dim=1)
+
+        x = self.net(fused)
+        mean = self.mean_layer(x)
+        log_std = self.log_std_layer(x)
+
+        # Clamp log_std
+        log_std = torch.clamp(log_std, -20, 2)
+
+        return mean, log_std
+
+
+class UnifiedBEVQNetwork(nn.Module):
+    """
+    Q-network using unified BEV encoder.
+    
+    Input: BEV grid (2, 256, 256), Proprio (10), Action (2)
+    Output: Q-value
+    """
+    def __init__(self, action_dim=2, proprio_dim=10, dropout=0.0):
+        super().__init__()
+
+        self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
+        
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        # Q-network: BEV features + proprio + action
+        fusion_dim = self.bev_encoder.output_dim + 32 + action_dim  # 4096 + 32 + 2 = 4130
+
+        layers = [
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+        ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.extend([
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+        ])
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.append(nn.Linear(128, 1))
+
+        self.q_net = nn.Sequential(*layers)
+
+    def forward(self, bev_grid, proprio, action):
+        bev_feats = self.bev_encoder(bev_grid)
+        proprio_feats = self.proprio_encoder(proprio)
+
+        fused = torch.cat([bev_feats, proprio_feats, action], dim=1)
+
+        q_value = self.q_net(fused)
+        return q_value
+

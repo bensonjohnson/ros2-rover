@@ -39,7 +39,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import model architectures
-from model_architectures import DualEncoderPolicyNetwork, DualEncoderQNetwork
+from model_architectures import UnifiedBEVPolicyNetwork, UnifiedBEVQNetwork
 
 # Import serialization utilities
 from serialization_utils import (
@@ -64,10 +64,9 @@ class ReplayBuffer:
         self.full = False
 
         # Storage
-        # Laser: 1x128x128, uint8 (0 or 1)
-        self.laser = torch.zeros((capacity, 1, 128, 128), dtype=torch.uint8, device=storage_device)
-        # Depth: 1x100x848, uint8 (quantized 0-1 -> 0-255) - 848x100@100Hz mode
-        self.depth = torch.zeros((capacity, 1, 100, 848), dtype=torch.uint8, device=storage_device)
+        # Unified BEV: 2x256x256, uint8 (quantized 0-1 -> 0-255)
+        # Channel 0: LiDAR occupancy, Channel 1: Depth occupancy
+        self.bev = torch.zeros((capacity, 2, 256, 256), dtype=torch.uint8, device=storage_device)
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, device=storage_device)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32, device=storage_device)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
@@ -79,8 +78,7 @@ class ReplayBuffer:
         # We need to construct (s, a, r, s', d)
         # Since data is sequential, s'[t] = s[t+1]
 
-        laser = batch_data['laser']
-        depth = batch_data['depth']
+        bev = batch_data['bev']  # Unified BEV grid (N, 2, 256, 256)
         proprio = batch_data['proprio']
         actions = batch_data['actions']
         rewards = batch_data['rewards']
@@ -119,13 +117,13 @@ class ReplayBuffer:
             first_part = self.capacity - self.ptr
             second_part = batch_size - first_part
 
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, 0, first_part, self.ptr)
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, first_part, second_part, 0)
+            self._add_slice(bev, proprio, actions, rewards, dones, 0, first_part, self.ptr)
+            self._add_slice(bev, proprio, actions, rewards, dones, first_part, second_part, 0)
 
             self.ptr = second_part
             self.full = True
         else:
-            self._add_slice(laser, depth, proprio, actions, rewards, dones, 0, batch_size, self.ptr)
+            self._add_slice(bev, proprio, actions, rewards, dones, 0, batch_size, self.ptr)
             self.ptr += batch_size
             if self.ptr >= self.capacity:
                 self.full = True
@@ -133,7 +131,7 @@ class ReplayBuffer:
 
         self.size = self.capacity if self.full else self.ptr
 
-    def _add_slice(self, laser, depth, proprio, actions, rewards, dones, start_idx, count, buffer_idx):
+    def _add_slice(self, bev, proprio, actions, rewards, dones, start_idx, count, buffer_idx):
         """Helper to add slice."""
         # Source indices: start_idx to start_idx + count
         # BUT for next_state, we need +1
@@ -143,26 +141,17 @@ class ReplayBuffer:
 
         end_idx = start_idx + count
 
-        # Quantize depth to uint8 (0-1 -> 0-255)
-        # Laser is binary 0/1, so it fits in uint8 directly
-        # self.laser = laser (N, 1, 128, 128) float32
-        # self.depth = depth (N, 1, 100, 848) float32
-        
-        laser_slice = torch.as_tensor(laser[start_idx:end_idx].copy())
-        depth_slice = torch.as_tensor(depth[start_idx:end_idx].copy())
+        # Quantize BEV to uint8 (0-1 -> 0-255)
+        bev_slice = torch.as_tensor(bev[start_idx:end_idx].copy())
 
-        # Ensure correct shape (N, 1, H, W)
-        if laser_slice.ndim == 3:
-            laser_slice = laser_slice.unsqueeze(1)
-        if depth_slice.ndim == 3:
-            depth_slice = depth_slice.unsqueeze(1)
+        # Ensure correct shape (N, 2, 256, 256)
+        if bev_slice.ndim == 3:
+            bev_slice = bev_slice.unsqueeze(1)
 
-        # Quantize depth (0-1 -> 0-255)
-        depth_slice = (depth_slice * 255.0).to(torch.uint8)
-        laser_slice = laser_slice.to(torch.uint8)
+        # Quantize (0-1 -> 0-255)
+        bev_slice = (bev_slice * 255.0).to(torch.uint8)
 
-        self.laser[buffer_idx:buffer_idx+count] = laser_slice.to(self.storage_device)
-        self.depth[buffer_idx:buffer_idx+count] = depth_slice.to(self.storage_device)
+        self.bev[buffer_idx:buffer_idx+count] = bev_slice.to(self.storage_device)
         self.proprio[buffer_idx:buffer_idx+count] = torch.as_tensor(proprio[start_idx:end_idx].copy()).to(self.storage_device)
         self.actions[buffer_idx:buffer_idx+count] = torch.as_tensor(actions[start_idx:end_idx].copy()).to(self.storage_device)
         self.rewards[buffer_idx:buffer_idx+count] = torch.as_tensor(rewards[start_idx:end_idx].copy()).unsqueeze(1).to(self.storage_device)
@@ -191,8 +180,7 @@ class ReplayBuffer:
         indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
 
         # Retrieve s
-        laser = self.laser[indices].to(self.device, non_blocking=True).float() # Binary 0/1
-        depth = self.depth[indices].to(self.device, non_blocking=True).float() / 255.0
+        bev = self.bev[indices].to(self.device, non_blocking=True).float() / 255.0
 
         proprio = self.proprio[indices].to(self.device, non_blocking=True)
         actions = self.actions[indices].to(self.device, non_blocking=True)
@@ -202,15 +190,13 @@ class ReplayBuffer:
         # Retrieve s' (next index)
         next_indices = (indices + 1) % self.capacity
 
-        next_laser = self.laser[next_indices].to(self.device, non_blocking=True).float()
-        next_depth = self.depth[next_indices].to(self.device, non_blocking=True).float() / 255.0
-
+        next_bev = self.bev[next_indices].to(self.device, non_blocking=True).float() / 255.0
         next_proprio = self.proprio[next_indices].to(self.device, non_blocking=True)
 
         return {
-            'laser': laser, 'depth': depth, 'proprio': proprio,
+            'bev': bev, 'proprio': proprio,
             'action': actions, 'reward': rewards, 'done': dones,
-            'next_laser': next_laser, 'next_depth': next_depth, 'next_proprio': next_proprio
+            'next_bev': next_bev, 'next_proprio': next_proprio
         }
 
     def copy_state_from(self, other):
@@ -220,8 +206,7 @@ class ReplayBuffer:
         self.full = other.full
 
         # Copy tensors
-        self.laser.copy_(other.laser)
-        self.depth.copy_(other.depth)
+        self.bev.copy_(other.bev)
         self.proprio.copy_(other.proprio)
         self.actions.copy_(other.actions)
         self.rewards.copy_(other.rewards)
@@ -274,22 +259,21 @@ class V620SACTrainer:
         self.action_dim = 2
         
         # Visualization state
-        self.latest_laser_vis = None
-        self.latest_depth_vis = None
+        self.latest_bev_vis = None
 
         # --- Actor ---
-        # Use Depth-only network (848x100@100Hz mode)
-        self.actor = DualEncoderPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
+        # Use unified BEV network (2-channel 256x256 input)
+        self.actor = UnifiedBEVPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
 
         # --- Critics ---
-        # Depth-only Q-Networks
-        self.critic1 = DualEncoderQNetwork(
+        # Unified BEV Q-Networks
+        self.critic1 = UnifiedBEVQNetwork(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
         ).to(self.device)
 
-        self.critic2 = DualEncoderQNetwork(
+        self.critic2 = UnifiedBEVQNetwork(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
@@ -401,21 +385,15 @@ class V620SACTrainer:
         # Check if checkpoint is from old architecture
         try:
             actor_state = ckpt.get('actor', {})
-            # Check if it's Depth-based (has depth_encoder)
-            has_depth_encoder = 'depth_encoder.conv1.weight' in actor_state
-            # Check if it's depth-based (has depth_encoder)
-            has_depth_encoder = 'depth_encoder.conv1.weight' in actor_state
+            # Check if it's UnifiedBEV-based (has bev_encoder)
+            has_bev_encoder = 'bev_encoder.conv1.weight' in actor_state
 
-            if has_depth_encoder:
-                print("✅ Checkpoint uses Depth architecture - compatible")
+            if has_bev_encoder:
+                print("✅ Checkpoint uses UnifiedBEV architecture - compatible")
                 is_compatible = True
-            elif has_depth_encoder:
-                print("⚠️  Checkpoint uses Depth-only architecture")
-                print("   Starting fresh with Depth architecture...")
-                is_compatible = False
             else:
-                print("⚠️  Checkpoint is from very old architecture")
-                print("   Starting fresh with Depth architecture...")
+                print("⚠️  Checkpoint is from old dual-encoder architecture")
+                print("   Starting fresh with UnifiedBEV architecture...")
                 is_compatible = False
         except Exception:
             print("⚠️  Checkpoint loading failed - starting fresh")
@@ -477,19 +455,16 @@ class V620SACTrainer:
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "best_eval_actor.onnx")
             
-            # Dummy inputs (reuse logic from export_onnx or just call it if refactored)
-            # For simplicity, we just copy export_onnx logic but change filename
-            
-            dummy_laser = torch.randn(1, 1, 128, 128, device=self.device)
-            dummy_depth = torch.randn(1, 1, 100, 848, device=self.device)
+            # Dummy inputs for unified BEV
+            dummy_bev = torch.randn(1, 2, 256, 256, device=self.device)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
             class ActorWrapper(nn.Module):
                 def __init__(self, actor):
                     super().__init__()
                     self.actor = actor
-                def forward(self, laser, depth, proprio):
-                    mean, _ = self.actor(laser, depth, proprio)
+                def forward(self, bev, proprio):
+                    mean, _ = self.actor(bev, proprio)
                     return torch.tanh(mean)
             
             model = ActorWrapper(self.actor)
@@ -497,10 +472,10 @@ class V620SACTrainer:
             
             torch.onnx.export(
                 model,
-                (dummy_laser, dummy_depth, dummy_proprio),
+                (dummy_bev, dummy_proprio),
                 onnx_path,
                 opset_version=11,
-                input_names=['laser', 'depth', 'proprio'],
+                input_names=['bev', 'proprio'],
                 output_names=['action'],
                 export_params=True,
                 do_constant_folding=True,
@@ -518,11 +493,9 @@ class V620SACTrainer:
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
             
-            # Dummy inputs
-            # Laser: (B, 1, 128, 128)
-            dummy_laser = torch.randn(1, 1, 128, 128, device=self.device)
-            # Depth: (B, 1, 100, 848) - 848x100@100Hz mode
-            dummy_depth = torch.randn(1, 1, 100, 848, device=self.device)
+            # Dummy inputs for unified BEV
+            # BEV: (B, 2, 256, 256)
+            dummy_bev = torch.randn(1, 2, 256, 256, device=self.device)
             # Proprio: (B, 10)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
@@ -530,19 +503,19 @@ class V620SACTrainer:
                 def __init__(self, actor):
                     super().__init__()
                     self.actor = actor
-                def forward(self, laser, depth, proprio):
-                    mean, _ = self.actor(laser, depth, proprio)
-                    return torch.tanh(mean) # Deterministic action
+                def forward(self, bev, proprio):
+                    mean, _ = self.actor(bev, proprio)
+                    return torch.tanh(mean)  # Deterministic action
             
             model = ActorWrapper(self.actor)
             model.eval()
             
             torch.onnx.export(
                 model,
-                (dummy_laser, dummy_depth, dummy_proprio),
+                (dummy_bev, dummy_proprio),
                 onnx_path,
                 opset_version=11,
-                input_names=['laser', 'depth', 'proprio'],
+                input_names=['bev', 'proprio'],
                 output_names=['action'],
                 export_params=True,
                 do_constant_folding=True,
@@ -705,11 +678,9 @@ class V620SACTrainer:
 
         # Validate batch data
         try:
-            self._validate_tensor(batch['laser'], "state_laser")
-            self._validate_tensor(batch['depth'], "state_depth")
+            self._validate_tensor(batch['bev'], "state_bev")
             self._validate_tensor(batch['proprio'], "state_proprio")
-            self._validate_tensor(batch['next_laser'], "next_laser")
-            self._validate_tensor(batch['next_depth'], "next_depth")
+            self._validate_tensor(batch['next_bev'], "next_bev")
             self._validate_tensor(batch['next_proprio'], "next_proprio")
         except ValueError as e:
             tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
@@ -789,8 +760,7 @@ class V620SACTrainer:
                 self.writer.add_scalar('Episode/Count', self.episode_count, self.total_steps)
 
             # NEW: Log observation statistics for debugging
-            self.writer.add_scalar('Observation/Laser_Mean', batch['laser'].mean().item(), self.total_steps)
-            self.writer.add_scalar('Observation/Depth_Mean', batch['depth'].mean().item(), self.total_steps)
+            self.writer.add_scalar('Observation/BEV_Mean', batch['bev'].mean().item(), self.total_steps)
             self.writer.add_scalar('Observation/Proprio_Mean', batch['proprio'].mean().item(), self.total_steps)
 
             # Training progress
@@ -831,20 +801,18 @@ class V620SACTrainer:
         """Update critics with DroQ (M forward passes with dropout).
 
         Args:
-            batch: Dictionary with 'laser', 'depth', 'proprio', 'action', 'reward', 'done',
-                   'next_laser', 'next_depth', 'next_proprio'
+            batch: Dictionary with 'bev', 'proprio', 'action', 'reward', 'done',
+                   'next_bev', 'next_proprio'
 
         Returns:
             tuple: (critic_loss, q1, q2, q_target)
         """
-        state_laser = batch['laser']
-        state_depth = batch['depth']
+        state_bev = batch['bev']
         state_proprio = batch['proprio']
         action = batch['action']
         reward = batch['reward']
         done = batch['done']
-        next_laser = batch['next_laser']
-        next_depth = batch['next_depth']
+        next_bev = batch['next_bev']
         next_proprio = batch['next_proprio']
 
         alpha = self.log_alpha.exp().item()
@@ -852,7 +820,7 @@ class V620SACTrainer:
         # --- Compute Target Q-values (no dropout, deterministic) ---
         with torch.no_grad():
             # Get next action from actor
-            next_mean, next_log_std = self.actor(next_laser, next_depth, next_proprio)
+            next_mean, next_log_std = self.actor(next_bev, next_proprio)
 
             # Sample and validate
             next_log_std = torch.clamp(next_log_std, -20, 2)
@@ -872,8 +840,8 @@ class V620SACTrainer:
             next_log_prob -= (2 * (np.log(2) - next_action_sample - F.softplus(-2 * next_action_sample))).sum(dim=1, keepdim=True)
 
             # Target Q (NO dropout in target networks)
-            q1_target = self.target_critic1(next_laser, next_depth, next_proprio, next_action)
-            q2_target = self.target_critic2(next_laser, next_depth, next_proprio, next_action)
+            q1_target = self.target_critic1(next_bev, next_proprio, next_action)
+            q2_target = self.target_critic2(next_bev, next_proprio, next_action)
             min_q_target = torch.min(q1_target, q2_target) - alpha * next_log_prob
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
 
@@ -890,16 +858,16 @@ class V620SACTrainer:
                 self.critic2.train()
 
                 for _ in range(self.args.droq_samples):
-                    q1_samples.append(self.critic1(state_laser, state_depth, state_proprio, action))
-                    q2_samples.append(self.critic2(state_laser, state_depth, state_proprio, action))
+                    q1_samples.append(self.critic1(state_bev, state_proprio, action))
+                    q2_samples.append(self.critic2(state_bev, state_proprio, action))
 
                 # Average over samples
                 q1 = torch.stack(q1_samples).mean(dim=0)
                 q2 = torch.stack(q2_samples).mean(dim=0)
             else:
                 # Standard SAC: single forward pass
-                q1 = self.critic1(state_laser, state_depth, state_proprio, action)
-                q2 = self.critic2(state_laser, state_depth, state_proprio, action)
+                q1 = self.critic1(state_bev, state_proprio, action)
+                q2 = self.critic2(state_bev, state_proprio, action)
 
             # MSE loss against target
             critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
@@ -932,8 +900,7 @@ class V620SACTrainer:
         Returns:
             tuple: (actor_loss, log_prob, min_q_pi)
         """
-        state_laser = batch['laser']
-        state_depth = batch['depth']
+        state_bev = batch['bev']
         state_proprio = batch['proprio']
 
         alpha = self.log_alpha.exp().item()
@@ -941,7 +908,7 @@ class V620SACTrainer:
         # Use AMP for actor forward pass
         with torch.cuda.amp.autocast(enabled=self.use_amp):
             # Re-compute features for actor (gradient flows through encoder)
-            mean, log_std = self.actor(state_laser, state_depth, state_proprio)
+            mean, log_std = self.actor(state_bev, state_proprio)
 
             # Validate and sample
             self._validate_tensor(mean, "mean")
@@ -966,8 +933,8 @@ class V620SACTrainer:
             self.critic1.eval()
             self.critic2.eval()
 
-            q1_pi = self.critic1(state_laser, state_depth, state_proprio, current_action)
-            q2_pi = self.critic2(state_laser, state_depth, state_proprio, current_action)
+            q1_pi = self.critic1(state_bev, state_proprio, current_action)
+            q2_pi = self.critic2(state_bev, state_proprio, current_action)
             min_q_pi = torch.min(q1_pi, q2_pi)
 
             actor_loss = ((alpha * log_prob) - min_q_pi).mean()

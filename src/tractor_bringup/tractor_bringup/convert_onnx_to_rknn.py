@@ -61,33 +61,18 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
         for i, file_path in enumerate(calibration_files):
             try:
                 data = np.load(file_path)
-                data = np.load(file_path)
-                laser = data['laser']
-                depth = data['depth']
+                bev = data['bev']  # Unified BEV grid (2, 256, 256)
                 proprio = data['proprio']
 
-                # Validate shapes
-                # Validate and Fix Laser shape
-                if laser.ndim == 2 and laser.shape == (128, 128):
-                    laser = laser[None, ...]  # Add channel dim -> (1, 128, 128)
-
-                if laser.shape != (1, 128, 128):
-                    print(f"⚠ Warning: Expected laser shape (1, 128, 128), got {laser.shape} in {file_path}")
-                    continue
-
-                # Validate and Fix Depth shape
-                # Support old (424, 240) and new (100, 848) formats, but preference new
-                if depth.ndim == 2:
-                    if depth.shape == (100, 848):
-                        depth = depth[None, ...] # Add channel dim -> (1, 100, 848)
-                    elif depth.shape == (424, 240):
-                        # Resize old format to new format if needed, or just fail if model expects new
-                        # Since model expects (100, 848), we can't easily use (424, 240) data without complex cropping/resizing
-                        print(f"⚠ Warning: Skipping legacy depth shape {depth.shape} in {file_path}")
-                        continue
-                
-                if depth.shape != (1, 100, 848):
-                    print(f"⚠ Warning: Expected depth shape (1, 100, 848), got {depth.shape} in {file_path}")
+                # Validate and Fix BEV shape
+                # Expected: (2, 256, 256)
+                if bev.ndim == 2 and bev.shape == (256, 256):
+                    # Single channel, duplicate to 2 channels
+                    bev = np.stack([bev, bev], axis=0)
+                elif bev.ndim == 3 and bev.shape == (2, 256, 256):
+                    pass  # Already correct shape
+                else:
+                    print(f"⚠ Warning: Expected bev shape (2, 256, 256), got {bev.shape} in {file_path}")
                     continue
 
                 if proprio.shape != (10,):
@@ -98,21 +83,17 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
 
                 # Add batch dimension
-                # Add batch dimension
-                laser_batch = laser[None, ...]
-                depth_batch = depth[None, ...]
+                bev_batch = bev[None, ...]
                 proprio_batch = proprio[None, ...]
 
-                laser_path = os.path.abspath(os.path.join(dataset_dir, f"laser_{i}.npy"))
-                depth_path = os.path.abspath(os.path.join(dataset_dir, f"depth_{i}.npy"))
+                bev_path = os.path.abspath(os.path.join(dataset_dir, f"bev_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
 
-                np.save(laser_path, laser_batch.astype(np.float32))
-                np.save(depth_path, depth_batch.astype(np.float32))
+                np.save(bev_path, bev_batch.astype(np.float32))
                 np.save(proprio_path, proprio_batch.astype(np.float32))
 
                 # Write to dataset.txt (space separated)
-                f.write(f"{laser_path} {depth_path} {proprio_path}\n")
+                f.write(f"{bev_path} {proprio_path}\n")
 
                 valid_samples += 1
 
@@ -181,14 +162,12 @@ def convert_onnx_to_rknn(
             # Disable RKNN normalization - we'll normalize in calibration generator
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
-                [0],                 # Laser
-                [0],                 # Depth
-                [0] * 10,            # Proprio
+                [0, 0],           # BEV (2 channels)
+                [0] * 10,         # Proprio
             ],
             'std_values': [
-                [1],                 # Laser
-                [1],                 # Depth
-                [1] * 10,            # Proprio
+                [1, 1],           # BEV
+                [1] * 10,         # Proprio
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -207,10 +186,9 @@ def convert_onnx_to_rknn(
         # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
         ret = rknn.load_onnx(
             model=onnx_path,
-            inputs=['laser', 'depth', 'proprio'],
+            inputs=['bev', 'proprio'],
             input_size_list=[
-                [1, 1, 128, 128],   # Laser occupancy grid
-                [1, 1, 100, 848],   # Depth (848x100@100Hz mode - center crop, less floor)
+                [1, 2, 256, 256],   # Unified BEV grid (2 channels: LiDAR + Depth)
                 [1, 10],            # Proprio (10-dim)
             ]
         )
@@ -242,12 +220,11 @@ def convert_onnx_to_rknn(
                 print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
             else:
                 # Create test inputs (normalized like rover)
-                test_laser = np.random.rand(1, 1, 128, 128).astype(np.float32)
-                test_depth = np.random.rand(1, 1, 100, 848).astype(np.float32)  # 848x100@100Hz
+                test_bev = np.random.rand(1, 2, 256, 256).astype(np.float32)  # Unified BEV
                 test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference
-                outputs = rknn.inference(inputs=[test_laser, test_depth, test_proprio])
+                outputs = rknn.inference(inputs=[test_bev, test_proprio])
 
                 if outputs and len(outputs) > 0:
                     test_output = outputs[0]

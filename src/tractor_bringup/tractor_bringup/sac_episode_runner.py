@@ -35,7 +35,7 @@ from tractor_bringup.serialization_utils import (
     serialize_status, deserialize_status
 )
 
-from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, RawSensorProcessor, RGBDProcessor
+from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, UnifiedBEVProcessor, RGBDProcessor
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, MagneticField, LaserScan
@@ -312,10 +312,10 @@ class SACEpisodeRunner(Node):
 
         # ROS2 Setup
         self.bridge = CvBridge()
-        # Raw sensor processor for dual-encoder SAC architecture
-        # Processes laser to 128×128 binary occupancy, depth to full 424×240 resolution
-        self.occupancy_processor = RawSensorProcessor(
-            grid_size=128,  # Laser occupancy grid size
+        # Unified BEV processor for single-encoder SAC architecture
+        # Processes LiDAR + depth into 2-channel 256×256 BEV grid
+        self.occupancy_processor = UnifiedBEVProcessor(
+            grid_size=256,  # BEV grid size
             max_range=4.0   # Maximum sensor range for normalization
         )
         # Depth-only processing (no RGB needed)
@@ -809,40 +809,40 @@ class SACEpisodeRunner(Node):
         t0 = time.time()
 
         # Get robot pose for exploration history
-        # Process sensors with RawSensorProcessor
-        # Returns: laser_grid (128, 128), depth_processed (424, 240)
-        laser_grid, depth_processed = self.occupancy_processor.process(
+        # Process sensors with UnifiedBEVProcessor
+        # Returns: bev_grid (2, 256, 256) - Channel 0: LiDAR, Channel 1: Depth
+        bev_grid = self.occupancy_processor.process(
             depth_img=self._latest_depth_raw,
             laser_scan=self._latest_scan
         )
 
         # Store processed sensor data
-        self._latest_laser = laser_grid    # (128, 128) float32 [0, 1]
-        self._latest_depth = depth_processed  # (424, 240) float32 [0, 1]
+        self._latest_bev = bev_grid  # (2, 256, 256) float32 [0, 1]
 
-        # Gap Following Analysis using binary laser occupancy
-        # laser_grid: 0.0 = free, 1.0 = occupied
+        # Gap Following Analysis using LiDAR occupancy (channel 0)
+        # bev_grid[0]: 0.0 = free, 1.0 = occupied
         # For gap finding, invert: free space = high score
-        free_space = 1.0 - laser_grid  # (128, 128), free space = 1.0
+        laser_channel = bev_grid[0]  # (256, 256) LiDAR occupancy
+        free_space = 1.0 - laser_channel  # (256, 256), free space = 1.0
 
         # Simple heuristic: find column with maximum average free space
         col_scores = np.mean(free_space, axis=0)  # Average down columns
 
         # Smooth scores
-        col_scores = np.convolve(col_scores, np.ones(7)/7, mode='same')
+        col_scores = np.convolve(col_scores, np.ones(11)/11, mode='same')  # Wider window for 256 grid
 
         best_col = np.argmax(col_scores)
 
-        # Map col 0..127 to heading -1..1
-        # Col 0 = LEFT, Col 127 = RIGHT, Col 64 = CENTER
+        # Map col 0..255 to heading -1..1
+        # Col 0 = LEFT, Col 255 = RIGHT, Col 128 = CENTER
         # Angle: Left is +1.0, Right is -1.0
-        self._target_heading = (64 - best_col) / 64.0
+        self._target_heading = (128 - best_col) / 128.0
 
         # Calculate min_forward_dist from laser for reward function
-        # Laser: 0.0 = free, 1.0 = occupied
-        # Center strip: cols 59..69 (±5 from center col 64)
-        # Bottom 10 rows: 118..128 (closest to robot at row 127)
-        center_patch = laser_grid[118:128, 59:69]
+        # LiDAR: 0.0 = free, 1.0 = occupied
+        # Center strip: cols 118..138 (±10 from center col 128)
+        # Bottom 20 rows: 236..256 (closest to robot at row 255)
+        center_patch = laser_channel[236:256, 118:138]
 
         # If any obstacle in patch, we're close to collision
         # Sum up occupied cells - if any are occupied (>0.5), distance is small
@@ -884,14 +884,11 @@ class SACEpisodeRunner(Node):
         # Returns: [action_mean] (value head not exported in actor ONNX)
         if self._rknn_runtime:
             # Stateless inference (LSTM removed for export compatibility)
-            # Input: [laser, depth, proprio]
-            # Add Batch and Channel dimensions
-            laser_input = laser_grid[None, None, ...]  # (1, 1, 128, 128)
-            # Process depth to normalized (100, 848) float32 [0, 1]
-            depth_input = self._process_depth(self._latest_depth_raw)
-            depth_input = depth_input[None, None, ...]  # (1, 1, 100, 848)
+            # Input: [bev, proprio] - Unified BEV grid
+            # Add Batch dimension
+            bev_input = bev_grid[None, ...]  # (1, 2, 256, 256)
 
-            outputs = self._rknn_runtime.inference(inputs=[laser_input, depth_input, proprio])
+            outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio])
 
             # Output 0 is action (1, 2)
             action_mean = outputs[0][0] # (2,)
@@ -911,8 +908,7 @@ class SACEpisodeRunner(Node):
             if np.isnan(action).any() or np.isinf(action).any():
                 self.get_logger().error(f"❌ RKNN model output contains NaN/Inf!")
                 self.get_logger().error(f"   action: {action}")
-                self.get_logger().error(f"   Laser input range: [{laser_input.min():.3f}, {laser_input.max():.3f}]")
-                self.get_logger().error(f"   Depth input range: [{depth_input.min():.3f}, {depth_input.max():.3f}]")
+                self.get_logger().error(f"   BEV input range: [{bev_input.min():.3f}, {bev_input.max():.3f}]")
                 self.get_logger().error(f"   Proprio input: {proprio}")
                 # Use zeros and continue
                 action_mean = np.zeros(2)
