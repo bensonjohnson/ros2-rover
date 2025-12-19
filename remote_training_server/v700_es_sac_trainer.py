@@ -609,6 +609,10 @@ class ESSACTrainer:
                                 torch.cuda.empty_cache()
                             gc.collect()
 
+                        # Save Checkpoint
+                        if self.total_steps % 1000 == 0:
+                            self.save_checkpoint(f"step_{self.total_steps}.pt")
+                            
                     except RuntimeError as e:
                         if "out of memory" in str(e):
                             print(f"⚠ Training OOM, clearing cache and skipping step", flush=True)
@@ -730,6 +734,29 @@ class ESSACTrainer:
             target_param.data.copy_(0.005 * param.data + (1 - 0.005) * target_param.data)
             
         return {'actor_loss': actor_loss.item(), 'critic_loss': critic_loss.item()}
+
+    def save_checkpoint(self, filename):
+        """Save training checkpoint."""
+        path = os.path.join(self.args.checkpoint_dir, filename)
+        print(f"💾 Saving checkpoint: {path}...", flush=True)
+        
+        state = {
+            'actor': self.actor.state_dict(),
+            'critic1': self.critic1.state_dict(),
+            'critic2': self.critic2.state_dict(),
+            'log_alpha': self.log_alpha.detach(),
+            'actor_opt': self.actor_opt.state_dict(),
+            'critic_opt': self.critic_opt.state_dict(),
+            'alpha_opt': self.alpha_opt.state_dict(),
+            'total_steps': self.total_steps,
+            'pop_manager': {
+                'population': self.pop_manager.population,
+                'generation': self.pop_manager.generation,
+                'next_id': self.pop_manager.next_id
+            }
+        }
+        torch.save(state, path)
+        print("✅ Checkpoint saved", flush=True)
 
 if __name__ == "__main__":
     print("🔧 Parsing arguments...", flush=True)
