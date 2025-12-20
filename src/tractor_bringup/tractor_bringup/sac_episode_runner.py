@@ -833,20 +833,38 @@ class SACEpisodeRunner(Node):
         # bev_grid[0]: 0.0 = free, 1.0 = occupied
         # For gap finding, invert: free space = high score
         laser_channel = bev_grid[0]  # (256, 256) LiDAR occupancy
-        free_space = 1.0 - laser_channel  # (256, 256), free space = 1.0
+        
+        # FOCUS ON FRONT HALF ONLY (rows 128-256 = closer to robot)
+        # This prevents far-away features from affecting navigation
+        front_half = laser_channel[128:256, :]  # (128, 256) - front portion only
+        free_space = 1.0 - front_half  # (128, 256), free space = 1.0
 
-        # Simple heuristic: find column with maximum average free space
+        # Find column with maximum average free space
         col_scores = np.mean(free_space, axis=0)  # Average down columns
+        
+        # Add FORWARD BIAS: prefer driving straight unless gap is significantly better
+        # Center columns (118-138) get a bonus
+        forward_bias = np.zeros(256)
+        forward_bias[108:148] = 0.1  # Slight preference for center 40 columns
+        col_scores = col_scores + forward_bias
 
-        # Smooth scores
-        col_scores = np.convolve(col_scores, np.ones(11)/11, mode='same')  # Wider window for 256 grid
+        # WIDER smoothing window to reduce oscillation
+        col_scores = np.convolve(col_scores, np.ones(25)/25, mode='same')  # Was 11, now 25
 
         best_col = np.argmax(col_scores)
 
         # Map col 0..255 to heading -1..1
         # Col 0 = LEFT, Col 255 = RIGHT, Col 128 = CENTER
         # Angle: Left is +1.0, Right is -1.0
-        self._target_heading = (128 - best_col) / 128.0
+        raw_heading = (128 - best_col) / 128.0
+        
+        # TEMPORAL SMOOTHING: low-pass filter to prevent rapid oscillation
+        # new_heading = alpha * raw + (1 - alpha) * old
+        alpha = 0.3  # Low alpha = more smoothing
+        if hasattr(self, '_target_heading') and self._target_heading is not None:
+            self._target_heading = alpha * raw_heading + (1 - alpha) * self._target_heading
+        else:
+            self._target_heading = raw_heading
 
         # Calculate min_forward_dist from laser for reward function
         # LiDAR: 0.0 = free, 1.0 = occupied
