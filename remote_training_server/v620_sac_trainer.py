@@ -66,7 +66,7 @@ class ReplayBuffer:
         # Storage
         # Unified BEV: 2x256x256, uint8 (quantized 0-1 -> 0-255)
         # Channel 0: LiDAR occupancy, Channel 1: Depth occupancy
-        self.bev = torch.zeros((capacity, 2, 256, 256), dtype=torch.uint8, device=storage_device)
+        self.bev = torch.zeros((capacity, 2, 128, 128), dtype=torch.uint8, device=storage_device)
         self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32, device=storage_device)
         self.actions = torch.zeros((capacity, 2), dtype=torch.float32, device=storage_device)
         self.rewards = torch.zeros((capacity, 1), dtype=torch.float32, device=storage_device)
@@ -78,7 +78,7 @@ class ReplayBuffer:
         # We need to construct (s, a, r, s', d)
         # Since data is sequential, s'[t] = s[t+1]
 
-        bev = batch_data['bev']  # Unified BEV grid (N, 2, 256, 256)
+        bev = batch_data['bev']  # Unified BEV grid (N, 2, 128, 128)
         proprio = batch_data['proprio']
         actions = batch_data['actions']
         rewards = batch_data['rewards']
@@ -144,7 +144,7 @@ class ReplayBuffer:
         # Quantize BEV to uint8 (0-1 -> 0-255)
         bev_slice = torch.as_tensor(bev[start_idx:end_idx].copy())
 
-        # Ensure correct shape (N, 2, 256, 256)
+        # Ensure correct shape (N, 2, 128, 128)
         if bev_slice.ndim == 3:
             bev_slice = bev_slice.unsqueeze(1)
 
@@ -456,7 +456,7 @@ class V620SACTrainer:
             onnx_path = os.path.join(self.args.checkpoint_dir, "best_eval_actor.onnx")
             
             # Dummy inputs for unified BEV
-            dummy_bev = torch.randn(1, 2, 256, 256, device=self.device)
+            dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
             class ActorWrapper(nn.Module):
@@ -495,7 +495,7 @@ class V620SACTrainer:
             
             # Dummy inputs for unified BEV
             # BEV: (B, 2, 256, 256)
-            dummy_bev = torch.randn(1, 2, 256, 256, device=self.device)
+            dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
             # Proprio: (B, 10)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
@@ -550,29 +550,235 @@ class V620SACTrainer:
         except Exception as e:
             tqdm.write(f"❌ Export failed: {e}")
 
+    def pretrain_bc(self, warmup_dir: str, epochs: int = 50, batch_size: int = 64):
+        """
+        Behavior Cloning pre-training: train actor to mimic warmup policy.
+        
+        Args:
+            warmup_dir: Directory containing calibration .npz files from warmup
+            epochs: Number of training epochs
+            batch_size: Batch size for BC training
+        """
+        print(f"\n🎓 Starting Behavior Cloning Pre-training...")
+        print(f"   Loading warmup data from: {warmup_dir}")
+        
+        warmup_path = Path(warmup_dir)
+        if not warmup_path.exists():
+            print(f"   ⚠️ Warmup directory not found: {warmup_dir}")
+            print(f"   Skipping BC pre-training.")
+            return
+        
+        # Load all .npz files from warmup directory
+        npz_files = list(warmup_path.glob("*.npz"))
+        if len(npz_files) < 10:
+            print(f"   ⚠️ Not enough warmup data ({len(npz_files)} files). Need at least 10.")
+            print(f"   Skipping BC pre-training.")
+            return
+        
+        print(f"   Found {len(npz_files)} warmup samples")
+        
+        # Load data
+        bevs, proprios, actions = [], [], []
+        for file_path in npz_files:
+            try:
+                data = np.load(file_path)
+                bev = data['bev']  # (2, 128, 128)
+                proprio = data['proprio']  # (10,)
+                
+                # For warmup data, action is stored OR we can infer from warmup policy:
+                # Warmup policy: linear = uniform(0.3, 1.0), angular = uniform(-0.8, 0.8)
+                # If 'action' key exists, use it; otherwise generate random warmup-like action
+                if 'action' in data.files:
+                    action = data['action']
+                else:
+                    # Generate pseudo-action matching warmup distribution
+                    # Forward bias with moderate turning
+                    action = np.array([
+                        np.random.uniform(0.3, 0.8),  # Linear (forward bias)
+                        np.random.uniform(-0.3, 0.3)  # Angular (prefer straight)
+                    ], dtype=np.float32)
+                
+                bevs.append(bev)
+                proprios.append(proprio)
+                actions.append(action)
+            except Exception as e:
+                print(f"   ⚠️ Error loading {file_path}: {e}")
+                continue
+        
+        if len(bevs) < 10:
+            print(f"   ⚠️ Not enough valid data loaded. Skipping BC pre-training.")
+            return
+        
+        # Convert to tensors
+        bevs = torch.tensor(np.stack(bevs), dtype=torch.float32, device=self.device)
+        proprios = torch.tensor(np.stack(proprios), dtype=torch.float32, device=self.device)
+        actions = torch.tensor(np.stack(actions), dtype=torch.float32, device=self.device)
+        
+        print(f"   Loaded {len(bevs)} samples")
+        print(f"   BEV shape: {bevs.shape}, Proprio shape: {proprios.shape}, Actions shape: {actions.shape}")
+        
+        # BC training loop
+        dataset_size = len(bevs)
+        optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
+        
+        self.actor.train()
+        best_loss = float('inf')
+        
+        for epoch in range(epochs):
+            # Shuffle
+            perm = torch.randperm(dataset_size)
+            epoch_loss = 0.0
+            num_batches = 0
+            
+            for i in range(0, dataset_size - batch_size, batch_size):
+                indices = perm[i:i+batch_size]
+                bev_batch = bevs[indices]
+                proprio_batch = proprios[indices]
+                action_batch = actions[indices]
+                
+                # Forward pass
+                mean, _ = self.actor(bev_batch, proprio_batch)
+                predicted_action = torch.tanh(mean)  # Apply tanh like in inference
+                
+                # MSE loss
+                loss = F.mse_loss(predicted_action, action_batch)
+                
+                # Backward
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
+            
+            avg_loss = epoch_loss / max(num_batches, 1)
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                print(f"   Epoch {epoch+1}/{epochs}: Loss = {avg_loss:.6f}")
+            
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+        
+        print(f"✅ BC Pre-training complete! Best loss: {best_loss:.6f}")
+        print(f"   Actor now initialized to mimic warmup behavior.")
+        self.actor.eval()
+        
+    def pretrain_bc_from_buffer(self, epochs: int = 50, batch_size: int = 64):
+        """
+        Behavior Cloning pre-training using data from replay buffer.
+        
+        This runs AFTER warmup data has been collected via NATS and stored in buffer.
+        """
+        print(f"\n🎓 Starting Behavior Cloning Pre-training from Replay Buffer...")
+        print(f"   Buffer size: {self.buffer.size}")
+        
+        if self.buffer.size < batch_size * 10:
+            print(f"   ⚠️ Not enough data in buffer ({self.buffer.size}). Need at least {batch_size * 10}.")
+            return
+        
+        # BC training loop
+        optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
+        self.actor.train()
+        best_loss = float('inf')
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            num_batches = self.buffer.size // batch_size
+            
+            for _ in range(num_batches):
+                # Sample batch from replay buffer
+                batch = self.buffer.sample(batch_size)
+                bev = batch['states_bev']        # (B, 2, 128, 128)
+                proprio = batch['states_proprio'] # (B, 10)
+                actions = batch['actions']        # (B, 2)
+                
+                # Forward pass
+                mean, _ = self.actor(bev, proprio)
+                predicted_action = torch.tanh(mean)
+                
+                # MSE loss
+                loss = F.mse_loss(predicted_action, actions)
+                
+                # Backward
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+            
+            avg_loss = epoch_loss / max(num_batches, 1)
+            if (epoch + 1) % 10 == 0 or epoch == 0:
+                print(f"   Epoch {epoch+1}/{epochs}: Loss = {avg_loss:.6f}")
+            
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+        
+        print(f"✅ BC Pre-training from buffer complete! Best loss: {best_loss:.6f}")
+        self.actor.eval()
+
     def _training_loop(self):
-        """Continuous training loop: trains constantly while data streams in."""
-        print("🧵 Training thread started (CONTINUOUS MODE: train while collecting)")
+        """Continuous training loop with integrated BC pre-training phase."""
+        print("🧵 Training thread started (BC → SAC CONTINUOUS MODE)")
         pbar = None
         last_time = time.time()
-
-        min_buffer_size = 2000    # Need at least 2000 samples to start training
+        
+        # BC pre-training config
+        bc_warmup_samples = getattr(self.args, 'bc_warmup_samples', 10000)  # Wait for this many samples
+        bc_epochs = getattr(self.args, 'bc_epochs', 50)
+        bc_done = False
+        
+        min_buffer_size = 2000    # Minimum for SAC training
 
         while True:
-            # Wait for initial buffer warmup
+            # ==========================================
+            # PHASE 1: BC PRE-TRAINING (run once)
+            # ==========================================
+            if not bc_done and self.buffer.size >= bc_warmup_samples:
+                print(f"\n📊 Buffer has {self.buffer.size} samples. Starting BC pre-training phase...")
+                
+                # Run BC pre-training on buffer data
+                self.pretrain_bc_from_buffer(epochs=bc_epochs, batch_size=64)
+                bc_done = True
+                
+                # Publish BC-initialized model as v1
+                self.model_version = 1
+                print(f"🚀 Publishing BC-initialized model as v{self.model_version}...")
+                
+                # Schedule async publish
+                if hasattr(self, 'loop') and self.loop:
+                    asyncio.run_coroutine_threadsafe(self.publish_model_update(), self.loop)
+                
+                print("✅ BC phase complete. Switching to SAC training...")
+                continue
+            
+            # ==========================================
+            # PHASE 0: WAITING FOR BC WARMUP DATA
+            # ==========================================
+            if not bc_done:
+                if pbar is None:
+                    pbar = tqdm(total=bc_warmup_samples, desc="🔥 BC Warmup", unit="sample", dynamic_ncols=True)
+                pbar.n = self.buffer.size
+                pbar.set_description(f"🔥 BC Warmup ({self.buffer.size}/{bc_warmup_samples})")
+                pbar.refresh()
+                time.sleep(0.5)
+                continue
+            
+            # ==========================================
+            # PHASE 2: SAC TRAINING
+            # ==========================================
             if self.buffer.size < min_buffer_size:
-                if pbar:
-                    pbar.set_description(f"📥 Collecting (need {min_buffer_size - self.buffer.size} more)")
                 time.sleep(1.0)
                 continue
 
-            # Initialize display on first training
-            if pbar is None:
+            # Initialize SAC display on first SAC training
+            if pbar is None or not hasattr(self, '_sac_started'):
+                self._sac_started = True
                 print("\033[H\033[J", end="")
                 print("==================================================")
                 print("   SAC TRAINING DASHBOARD (CONTINUOUS MODE)     ")
                 print("==================================================")
-                pbar = tqdm(initial=self.total_steps, desc="🎯 Training", unit="step", dynamic_ncols=True)
+                pbar = tqdm(initial=self.total_steps, desc="🎯 SAC Training", unit="step", dynamic_ncols=True)
 
             # CONTINUOUS TRAINING: No bursts, no pauses
             # Just train continuously while data streams in from rover
@@ -1228,6 +1434,9 @@ class V620SACTrainer:
 
         # Initialize NATS connection
         await self.setup_nats()
+        
+        # BC pre-training is now integrated into _training_loop
+        # It will run automatically after buffer reaches bc_warmup_samples
 
         # Publish initial model (in case we resumed from checkpoint)
         tqdm.write("🚀 Publishing initial model state...")
@@ -1275,6 +1484,14 @@ if __name__ == '__main__':
     parser.add_argument('--augment_data', action='store_true',
                         help='Enable data augmentation for occupancy grids')
     parser.add_argument('--gpu-buffer', action='store_true', help='Store replay buffer on GPU (WARNING: Requires huge VRAM for depth)')
+    
+    # Behavior Cloning Pre-training (integrated with buffer)
+    parser.add_argument('--bc_warmup_samples', type=int, default=10000,
+                        help='Number of warmup samples to collect before BC pre-training (0 = skip BC)')
+    parser.add_argument('--bc_epochs', type=int, default=50,
+                        help='Number of epochs for BC pre-training')
+    parser.add_argument('--bc_batch_size', type=int, default=64,
+                        help='Batch size for BC pre-training')
 
 
 

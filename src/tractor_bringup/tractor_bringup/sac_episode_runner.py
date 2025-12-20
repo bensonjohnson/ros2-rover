@@ -235,7 +235,7 @@ class SACEpisodeRunner(Node):
         self._latest_depth_raw = None  # Raw depth from camera (424, 240) uint16
         self._latest_scan = None
         # Processed sensor data for model
-        self._latest_bev = None  # (2, 256, 256) float32 - Unified BEV grid
+        self._latest_bev = None  # (2, 128, 128) float32 - Unified BEV grid
         self._latest_odom = None
         self._latest_imu = None
         self._latest_mag = None
@@ -312,9 +312,9 @@ class SACEpisodeRunner(Node):
         # ROS2 Setup
         self.bridge = CvBridge()
         # Unified BEV processor for single-encoder SAC architecture
-        # Processes LiDAR + depth into 2-channel 256×256 BEV grid
+        # Processes LiDAR + depth into 2-channel 128×128 BEV grid
         self.occupancy_processor = UnifiedBEVProcessor(
-            grid_size=256,  # BEV grid size
+            grid_size=128,  # BEV grid size
             max_range=4.0   # Maximum sensor range for normalization
         )
         # Depth-only processing (no RGB needed)
@@ -812,43 +812,43 @@ class SACEpisodeRunner(Node):
 
         # Get robot pose for exploration history
         # Process sensors with UnifiedBEVProcessor
-        # Returns: bev_grid (2, 256, 256) - Channel 0: LiDAR, Channel 1: Depth
+        # Returns: bev_grid (2, 128, 128) - Channel 0: LiDAR, Channel 1: Depth
         bev_grid = self.occupancy_processor.process(
             depth_img=self._latest_depth_raw,
             laser_scan=self._latest_scan
         )
 
         # Store processed sensor data
-        self._latest_bev = bev_grid  # (2, 256, 256) float32 [0, 1]
+        self._latest_bev = bev_grid  # (2, 128, 128) float32 [0, 1]
 
         # Gap Following Analysis using LiDAR occupancy (channel 0)
         # bev_grid[0]: 0.0 = free, 1.0 = occupied
         # For gap finding, invert: free space = high score
-        laser_channel = bev_grid[0]  # (256, 256) LiDAR occupancy
+        laser_channel = bev_grid[0]  # (128, 128) LiDAR occupancy
         
-        # FOCUS ON FRONT HALF ONLY (rows 128-256 = closer to robot)
+        # FOCUS ON FRONT HALF ONLY (rows 64-128 = closer to robot)
         # This prevents far-away features from affecting navigation
-        front_half = laser_channel[128:256, :]  # (128, 256) - front portion only
-        free_space = 1.0 - front_half  # (128, 256), free space = 1.0
+        front_half = laser_channel[64:128, :]  # (64, 128) - front portion only
+        free_space = 1.0 - front_half  # (64, 128), free space = 1.0
 
         # Find column with maximum average free space
         col_scores = np.mean(free_space, axis=0)  # Average down columns
         
         # Add FORWARD BIAS: prefer driving straight unless gap is significantly better
-        # Center columns (118-138) get a bonus
-        forward_bias = np.zeros(256)
-        forward_bias[108:148] = 0.1  # Slight preference for center 40 columns
+        # Center columns (54-74) get a bonus (20 cols centered on 64)
+        forward_bias = np.zeros(128)
+        forward_bias[54:74] = 0.1  # Slight preference for center 20 columns
         col_scores = col_scores + forward_bias
 
-        # WIDER smoothing window to reduce oscillation
-        col_scores = np.convolve(col_scores, np.ones(25)/25, mode='same')  # Was 11, now 25
+        # WIDER smoothing window to reduce oscillation (scaled for 128: was 25 for 256)
+        col_scores = np.convolve(col_scores, np.ones(13)/13, mode='same')
 
         best_col = np.argmax(col_scores)
 
-        # Map col 0..255 to heading -1..1
-        # Col 0 = LEFT, Col 255 = RIGHT, Col 128 = CENTER
+        # Map col 0..127 to heading -1..1
+        # Col 0 = LEFT, Col 127 = RIGHT, Col 64 = CENTER
         # Angle: Left is +1.0, Right is -1.0
-        raw_heading = (128 - best_col) / 128.0
+        raw_heading = (64 - best_col) / 64.0
         
         # TEMPORAL SMOOTHING: low-pass filter to prevent rapid oscillation
         # new_heading = alpha * raw + (1 - alpha) * old
@@ -860,9 +860,9 @@ class SACEpisodeRunner(Node):
 
         # Calculate min_forward_dist from laser for reward function
         # LiDAR: 0.0 = free, 1.0 = occupied
-        # Center strip: cols 118..138 (±10 from center col 128)
-        # Bottom 20 rows: 236..256 (closest to robot at row 255)
-        center_patch = laser_channel[236:256, 118:138]
+        # Center strip: cols 59..69 (±5 from center col 64)
+        # Bottom 10 rows: 118..128 (closest to robot at row 127)
+        center_patch = laser_channel[118:128, 59:69]
 
         # If any obstacle in patch, we're close to collision
         # Sum up occupied cells - if any are occupied (>0.5), distance is small
@@ -906,7 +906,7 @@ class SACEpisodeRunner(Node):
             # Stateless inference (LSTM removed for export compatibility)
             # Input: [bev, proprio] - Unified BEV grid
             # Add Batch dimension
-            bev_input = bev_grid[None, ...]  # (1, 2, 256, 256)
+            bev_input = bev_grid[None, ...]  # (1, 2, 128, 128)
 
             outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio])
 
@@ -1101,7 +1101,7 @@ class SACEpisodeRunner(Node):
             return
 
         with self._buffer_lock:
-            self._data_buffer['bev'].append(self._latest_bev)  # (2, 256, 256)
+            self._data_buffer['bev'].append(self._latest_bev)  # (2, 128, 128)
             self._data_buffer['proprio'].append(proprio[0])
             self._data_buffer['actions'].append(actual_action)
             self._data_buffer['rewards'].append(reward)
@@ -1132,7 +1132,7 @@ class SACEpisodeRunner(Node):
 
                 np.savez_compressed(
                     save_path,
-                    bev=self._latest_bev,  # (2, 256, 256)
+                    bev=self._latest_bev,  # (2, 128, 128)
                     proprio=proprio[0]
                 )
             

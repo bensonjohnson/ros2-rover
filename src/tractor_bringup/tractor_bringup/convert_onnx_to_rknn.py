@@ -61,18 +61,18 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
         for i, file_path in enumerate(calibration_files):
             try:
                 data = np.load(file_path)
-                bev = data['bev']  # Unified BEV grid (2, 256, 256)
+                bev = data['bev']  # Unified BEV grid (2, 128, 128)
                 proprio = data['proprio']
 
                 # Validate and Fix BEV shape
-                # Expected: (2, 256, 256)
-                if bev.ndim == 2 and bev.shape == (256, 256):
+                # Expected: (2, 128, 128)
+                if bev.ndim == 2 and bev.shape == (128, 128):
                     # Single channel, duplicate to 2 channels
                     bev = np.stack([bev, bev], axis=0)
-                elif bev.ndim == 3 and bev.shape == (2, 256, 256):
+                elif bev.ndim == 3 and bev.shape == (2, 128, 128):
                     pass  # Already correct shape
                 else:
-                    print(f"⚠ Warning: Expected bev shape (2, 256, 256), got {bev.shape} in {file_path}")
+                    print(f"⚠ Warning: Expected bev shape (2, 128, 128), got {bev.shape} in {file_path}")
                     continue
 
                 if proprio.shape != (10,):
@@ -188,7 +188,7 @@ def convert_onnx_to_rknn(
             model=onnx_path,
             inputs=['bev', 'proprio'],
             input_size_list=[
-                [1, 2, 256, 256],   # Unified BEV grid (2 channels: LiDAR + Depth)
+                [1, 2, 128, 128],   # Unified BEV grid (2 channels: LiDAR + Depth)
                 [1, 10],            # Proprio (10-dim)
             ]
         )
@@ -220,7 +220,7 @@ def convert_onnx_to_rknn(
                 print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
             else:
                 # Create test inputs (normalized like rover)
-                test_bev = np.random.rand(1, 2, 256, 256).astype(np.float32)  # Unified BEV
+                test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)  # Unified BEV
                 test_proprio = np.random.rand(1, 10).astype(np.float32)
 
                 # Run inference

@@ -554,24 +554,23 @@ class RGBDEncoderQNetwork(nn.Module):
 
 class UnifiedBEVEncoder(nn.Module):
     """
-    Encoder for 2-channel 256×256 unified BEV grid.
+    Encoder for 2-channel 128×128 unified BEV grid.
     
-    Input: (B, 2, 256, 256)
+    Input: (B, 2, 128, 128)
         - Channel 0: LiDAR occupancy (360° top-down)
         - Channel 1: Depth occupancy (front arc projected)
     
     Output: (B, 4096) features
     
-    Architecture: 256 → 128 → 64 → 32 → 16 → 8
+    Architecture: 128 → 64 → 32 → 16 → 8 (4 stride-2 convolutions)
     """
     def __init__(self, input_channels: int = 2):
         super().__init__()
-        # 256 -> 128 -> 64 -> 32 -> 16 -> 8
-        self.conv1 = nn.Conv2d(input_channels, 16, kernel_size=3, stride=2, padding=1)   # 256->128
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)               # 128->64
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64->32
-        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32->16
-        self.conv5 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16->8
+        # 128 -> 64 -> 32 -> 16 -> 8
+        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1)   # 128->64
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64->32
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32->16
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16->8
 
         self.relu = nn.ReLU(inplace=True)
         
@@ -579,12 +578,11 @@ class UnifiedBEVEncoder(nn.Module):
         self._output_dim = 64 * 8 * 8
 
     def forward(self, x):
-        # Input: (B, 2, 256, 256)
-        x = self.relu(self.conv1(x))  # (B, 16, 128, 128)
-        x = self.relu(self.conv2(x))  # (B, 32, 64, 64)
-        x = self.relu(self.conv3(x))  # (B, 64, 32, 32)
-        x = self.relu(self.conv4(x))  # (B, 64, 16, 16)
-        x = self.relu(self.conv5(x))  # (B, 64, 8, 8)
+        # Input: (B, 2, 128, 128)
+        x = self.relu(self.conv1(x))  # (B, 32, 64, 64)
+        x = self.relu(self.conv2(x))  # (B, 64, 32, 32)
+        x = self.relu(self.conv3(x))  # (B, 64, 16, 16)
+        x = self.relu(self.conv4(x))  # (B, 64, 8, 8)
 
         x = x.flatten(start_dim=1)    # (B, 4096)
         return x

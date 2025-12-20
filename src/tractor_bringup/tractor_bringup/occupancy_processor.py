@@ -1307,7 +1307,7 @@ class UnifiedBEVProcessor:
     """
 
     def __init__(self,
-                 grid_size=256,
+                 grid_size=128,
                  max_range=4.0,
                  # D435i camera parameters
                  depth_width=848,

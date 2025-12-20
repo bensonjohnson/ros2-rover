@@ -194,22 +194,22 @@ class TrainingDashboard:
         try:
             bev = self.trainer.latest_bev_vis
             if bev is None:
-                vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                vis = np.zeros((128, 128, 3), dtype=np.uint8)
                 vis[:, :] = [40, 40, 40]  # Dark gray background
             else:
-                # bev is (2, 256, 256) float32 [0, 1]
+                # bev is (2, 128, 128) float32 [0, 1]
                 # Channel 0: LiDAR, Channel 1: Depth
                 if bev.ndim == 3 and bev.shape[0] == 2:
-                    lidar_ch = bev[0]  # (256, 256)
-                    depth_ch = bev[1]  # (256, 256)
+                    lidar_ch = bev[0]  # (128, 128)
+                    depth_ch = bev[1]  # (128, 128)
                 else:
                     # Fallback if shape is unexpected
-                    vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                    vis = np.zeros((128, 128, 3), dtype=np.uint8)
                     _, buffer = cv2.imencode('.png', vis)
                     return Response(buffer.tobytes(), mimetype='image/png')
                 
                 # Create RGB visualization
-                vis = np.zeros((256, 256, 3), dtype=np.uint8)
+                vis = np.zeros((128, 128, 3), dtype=np.uint8)
                 vis[:, :] = [40, 40, 40]  # Dark gray background (free space)
                 
                 # Red channel: LiDAR occupancy (Red)
