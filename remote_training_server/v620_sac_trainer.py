@@ -688,9 +688,9 @@ class V620SACTrainer:
             for _ in range(num_batches):
                 # Sample batch from replay buffer
                 batch = self.buffer.sample(batch_size)
-                bev = batch['states_bev']        # (B, 2, 128, 128)
-                proprio = batch['states_proprio'] # (B, 10)
-                actions = batch['actions']        # (B, 2)
+                bev = batch['bev']        # (B, 2, 128, 128)
+                proprio = batch['proprio'] # (B, 10)
+                actions = batch['action']  # (B, 2)
                 
                 # Forward pass
                 mean, _ = self.actor(bev, proprio)
