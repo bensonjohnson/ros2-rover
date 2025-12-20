@@ -662,19 +662,25 @@ class SACEpisodeRunner(Node):
         # Extract metrics
         min_dist = min_lidar_dist
 
-        # 1. Forward progress with safety scaling (PRIMARY OBJECTIVE)
-        # Safety factor: 0 at 0.15m, 1 at 0.8m
+        # 1. Forward progress - ALWAYS REWARD FORWARD MOTION
+        # Base reward for moving forward (doesn't scale to 0 near obstacles)
+        # Safety factor just provides BONUS, not zero-out
         safety_factor = np.clip((min_dist - 0.15) / 0.65, 0.0, 1.0)
         if linear_vel > 0.01:
             speed_ratio = linear_vel / target_speed
-            reward += speed_ratio * safety_factor * 2.0  # Max +2.0
+            # BASE reward for any forward motion (never zero)
+            base_forward_reward = speed_ratio * 1.0  # +1.0 max just for moving
+            # BONUS for moving safely (far from obstacles)
+            safety_bonus = speed_ratio * safety_factor * 1.0  # +1.0 max when safe
+            reward += base_forward_reward + safety_bonus  # Max +2.0 total
         else:
-            reward -= 1.0  # Strong idle penalty
+            # Idle penalty MUST be worse than collision to encourage trying
+            reward -= 2.5  # Stronger than collision (-2.0)!
 
-        # 2. Collision penalty (reduced from -5.0 to -2.0 to not dominate reward)
+        # 2. Collision penalty
         if collision or self._safety_override:
             reward -= 2.0
-            return np.clip(reward, -3.0, 2.0)
+            return np.clip(reward, -4.0, 2.0)
 
         # 3. DISTANCE TRAVELED REWARD (NEW - encourages continuous progress)
         # Track cumulative distance and reward for making progress
@@ -712,8 +718,8 @@ class SACEpisodeRunner(Node):
             spin_penalty = abs(angular_vel) * 1.5  # Reduced from 2.0
             reward -= spin_penalty
 
-        # Clip range: [-3, 2] (reduced from -5 to avoid dominating signal)
-        return np.clip(reward, -3.0, 2.0)
+        # Clip range: [-4, 2] (matches collision path)
+        return np.clip(reward, -4.0, 2.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.
