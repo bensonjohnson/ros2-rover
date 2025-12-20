@@ -662,65 +662,57 @@ class SACEpisodeRunner(Node):
         # Extract metrics
         min_dist = min_lidar_dist
 
-        # 1. Forward progress with safety scaling (primary objective)
-        # Safety factor: 0 at 0.15m, 1 at 0.8m (expanded range for better gradient)
+        # 1. Forward progress with safety scaling (PRIMARY OBJECTIVE)
+        # Safety factor: 0 at 0.15m, 1 at 0.8m
         safety_factor = np.clip((min_dist - 0.15) / 0.65, 0.0, 1.0)
         if linear_vel > 0.01:
             speed_ratio = linear_vel / target_speed
             reward += speed_ratio * safety_factor * 2.0  # Max +2.0
         else:
-            reward -= 1.0  # STRONGER idle penalty (was -0.5)
+            reward -= 1.0  # Strong idle penalty
 
-        # 2. Collision penalty (terminal signal - STRONG)
-        # Expanded clip range preserves this penalty's full strength
+        # 2. Collision penalty (STRONG terminal signal)
         if collision or self._safety_override:
             reward -= 5.0
-            return np.clip(reward, -5.0, 2.0)  # Collision penalty preserved!
+            return np.clip(reward, -5.0, 2.0)
 
-        # 3. Gap-following incentive: reward steering towards open space
-        # self._target_heading: -1 (right), 0 (straight), +1 (left)
-        # action[1]: angular command in same range
-        # Alignment error: 0 when perfectly aligned, 2 when opposite
-        alignment_error = abs(action[1] - self._target_heading)
+        # 3. DISTANCE TRAVELED REWARD (NEW - encourages continuous progress)
+        # Track cumulative distance and reward for making progress
+        if not hasattr(self, '_prev_position'):
+            self._prev_position = np.array([0.0, 0.0])
+            self._cumulative_distance = 0.0
         
-        # Only reward gap-following when moving forward MEANINGFULLY (prevent spinning in place)
-        if linear_vel > 0.15:  # INCREASED threshold from 0.05 to 0.15
-            # Max +0.5 when perfectly aligned with best gap
-            gap_following_reward = (1.0 - alignment_error / 2.0) * 0.5
-            reward += gap_following_reward
-            
-            # NEW: Straightness bonus - reward driving straight while moving
-            if abs(angular_vel) < 0.3:
-                straightness_bonus = 0.3 * (linear_vel / target_speed)
-                reward += straightness_bonus  # Max +0.3 for straight driving
+        # Estimate distance from velocity (assuming ~30Hz control loop)
+        dt = 1.0 / 30.0
+        distance_step = abs(linear_vel) * dt
+        if linear_vel > 0.05:  # Only count forward progress
+            self._cumulative_distance += distance_step
+            # Small bonus for each bit of forward progress
+            reward += distance_step * 0.5  # ~0.02 per step at 0.3m/s
 
-        # 4. Side clearance bonus: reward maintaining safe lateral distance
-        # side_clearance is average of left/right LiDAR distances
-        # Bonus when side clearance > 0.5m, max bonus at 1.5m+
+        # 4. Side clearance bonus (keep this - safety aware)
         if side_clearance > 0.5:
-            clearance_bonus = np.clip((side_clearance - 0.5) / 1.0, 0.0, 1.0) * 0.3
-            reward += clearance_bonus  # Max +0.3
+            clearance_bonus = np.clip((side_clearance - 0.5) / 1.0, 0.0, 1.0) * 0.2
+            reward += clearance_bonus  # Max +0.2
         elif side_clearance < 0.3:
-            # Penalty for being too close to walls
             reward -= (0.3 - side_clearance) / 0.3 * 0.2  # Max -0.2
 
-        # 5. Smooth control (anti-jerk)
+        # 5. Smooth control (anti-jerk) - REDUCED weight
         angular_change = abs(action[1] - self._prev_action[1])
-        if angular_change > 0.5:  # Large steering jerk
-            reward -= angular_change * 0.3
+        if angular_change > 0.6:  # Raised threshold
+            reward -= angular_change * 0.2  # Reduced from 0.3
 
-        # 6. Proximity penalty (gradual, not cliff)
+        # 6. Proximity penalty (gradual)
         if min_dist < 0.3:
-            proximity_penalty = (0.3 - min_dist) / 0.3  # 0 to 1
-            reward -= proximity_penalty * 1.0
+            proximity_penalty = (0.3 - min_dist) / 0.3
+            reward -= proximity_penalty * 0.8
 
-        # 7. NEW: Spinning-in-place penalty (CRITICAL for preventing oscillation)
-        # Strong penalty for turning while not moving forward
-        if abs(angular_vel) > 0.2 and linear_vel < 0.1:
-            spin_penalty = abs(angular_vel) * 2.0  # Strong penalty for spinning
-            reward -= spin_penalty  # Can be up to -2.0 for fast spinning
+        # 7. Spinning penalty (still needed for tank-steer)
+        if abs(angular_vel) > 0.3 and linear_vel < 0.08:
+            spin_penalty = abs(angular_vel) * 1.5  # Reduced from 2.0
+            reward -= spin_penalty
 
-        # Expanded clip range: [-5, 2] to preserve collision signal
+        # Clip range: [-5, 2]
         return np.clip(reward, -5.0, 2.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
@@ -1016,8 +1008,8 @@ class SACEpisodeRunner(Node):
                 if self._eval_log_count % 30 == 0:
                     self.get_logger().info(f"🧪 Evaluation Mode: deterministic action {action}")
             else:
-                # Training Mode: Add exploration noise
-                noise = np.random.normal(0, 0.5, size=2) # 0.5 std dev
+                # Training Mode: Add exploration noise (REDUCED from 0.5 to 0.15)
+                noise = np.random.normal(0, 0.15, size=2)  # Lower noise for stable learning
                 action = np.clip(action_mean + noise, -1.0, 1.0)
 
             # Safety check: if action_mean has NaN, use zero and warn
