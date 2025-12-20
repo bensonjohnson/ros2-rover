@@ -724,17 +724,20 @@ class V620SACTrainer:
         last_time = time.time()
         
         # BC pre-training config
-        bc_warmup_samples = getattr(self.args, 'bc_warmup_samples', 10000)  # Wait for this many samples
+        bc_warmup_samples = getattr(self.args, 'bc_warmup_samples', 0)  # Default 0 = skip BC
         bc_epochs = getattr(self.args, 'bc_epochs', 50)
-        bc_done = False
+        # Skip BC entirely if bc_warmup_samples <= 0
+        bc_done = bc_warmup_samples <= 0
+        if bc_done:
+            print("ℹ️ BC pre-training disabled (bc_warmup_samples=0). Starting SAC directly.")
         
         min_buffer_size = 2000    # Minimum for SAC training
 
         while True:
             # ==========================================
-            # PHASE 1: BC PRE-TRAINING (run once)
+            # PHASE 1: BC PRE-TRAINING (run once, only if enabled)
             # ==========================================
-            if not bc_done and self.buffer.size >= bc_warmup_samples:
+            if not bc_done and bc_warmup_samples > 0 and self.buffer.size >= bc_warmup_samples:
                 print(f"\n📊 Buffer has {self.buffer.size} samples. Starting BC pre-training phase...")
                 
                 # Run BC pre-training on buffer data
