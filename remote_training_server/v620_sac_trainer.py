@@ -1486,7 +1486,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu-buffer', action='store_true', help='Store replay buffer on GPU (WARNING: Requires huge VRAM for depth)')
     
     # Behavior Cloning Pre-training (integrated with buffer)
-    parser.add_argument('--bc_warmup_samples', type=int, default=10000,
+    parser.add_argument('--bc_warmup_samples', type=int, default=0,
                         help='Number of warmup samples to collect before BC pre-training (0 = skip BC)')
     parser.add_argument('--bc_epochs', type=int, default=50,
                         help='Number of epochs for BC pre-training')

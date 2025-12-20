@@ -671,10 +671,10 @@ class SACEpisodeRunner(Node):
         else:
             reward -= 1.0  # Strong idle penalty
 
-        # 2. Collision penalty (STRONG terminal signal)
+        # 2. Collision penalty (reduced from -5.0 to -2.0 to not dominate reward)
         if collision or self._safety_override:
-            reward -= 5.0
-            return np.clip(reward, -5.0, 2.0)
+            reward -= 2.0
+            return np.clip(reward, -3.0, 2.0)
 
         # 3. DISTANCE TRAVELED REWARD (NEW - encourages continuous progress)
         # Track cumulative distance and reward for making progress
@@ -712,8 +712,8 @@ class SACEpisodeRunner(Node):
             spin_penalty = abs(angular_vel) * 1.5  # Reduced from 2.0
             reward -= spin_penalty
 
-        # Clip range: [-5, 2]
-        return np.clip(reward, -5.0, 2.0)
+        # Clip range: [-3, 2] (reduced from -5 to avoid dominating signal)
+        return np.clip(reward, -3.0, 2.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.
