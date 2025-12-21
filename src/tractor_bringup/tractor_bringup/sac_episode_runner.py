@@ -671,6 +671,10 @@ class SACEpisodeRunner(Node):
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
             reward += speed_ratio * 0.8  # Up to +0.8 (cancels idle, net +0.6)
         
+        # Backward penalty: Prevent jittering backwards
+        if linear_vel < -0.01:
+            reward -= 0.5
+
         # 3. Gap Alignment Reward
         # Reward being aligned with the target heading found by gap detector
         alignment_error = abs(action[1] - self._target_heading)
@@ -1041,23 +1045,18 @@ class SACEpisodeRunner(Node):
             linear_action = action[0]
             angular_action = action[1]
             
-            # Dead zone: if model outputs small positive, bump up to minimum
-            MIN_LINEAR_ACTION = 0.3  # Minimum action to move motors
-            MIN_ANGULAR_ACTION = 0.2  # Minimum for turning
+            # SOFT DEADZONE Compensation
+            # Maps [-1, 1] model output to [-1, -MIN] and [MIN, 1] physical range
+            # This ensures that ANY model intent result in motor movement
+            def apply_soft_deadzone(val, min_val):
+                if abs(val) < 0.001: return 0.0
+                return math.copysign(min_val + (1.0 - min_val) * abs(val), val)
+
+            MIN_LINEAR = 0.3
+            MIN_ANGULAR = 0.2
             
-            if linear_action > 0.1:  # Model wants to go forward
-                linear_action = max(linear_action, MIN_LINEAR_ACTION)
-            elif linear_action < -0.1:  # Model wants to go backward
-                linear_action = min(linear_action, -MIN_LINEAR_ACTION)
-            else:
-                linear_action = 0.0  # True zero intent
-            
-            if angular_action > 0.1:
-                angular_action = max(angular_action, MIN_ANGULAR_ACTION)
-            elif angular_action < -0.1:
-                angular_action = min(angular_action, -MIN_ANGULAR_ACTION)
-            else:
-                angular_action = 0.0
+            linear_action = apply_soft_deadzone(action[0], MIN_LINEAR)
+            angular_action = apply_soft_deadzone(action[1], MIN_ANGULAR)
             
             # Apply velocity scaling
             if self._current_model_version <= 0:
