@@ -654,71 +654,30 @@ class SACEpisodeRunner(Node):
         6. Idle penalty
         7. Proximity penalty
         
-        Clip range expanded to [-5, 2] to preserve collision signal strength.
+        Clip range: [-4, 2]
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # Extract metrics
-        min_dist = min_lidar_dist
-
-        # 1. Forward progress - ALWAYS REWARD FORWARD MOTION
-        # Base reward for moving forward (doesn't scale to 0 near obstacles)
-        # Safety factor just provides BONUS, not zero-out
-        safety_factor = np.clip((min_dist - 0.15) / 0.65, 0.0, 1.0)
+        # 1. Forward motion reward (SIMPLE: just reward moving forward)
         if linear_vel > 0.01:
             speed_ratio = linear_vel / target_speed
-            # BASE reward for any forward motion (never zero)
-            base_forward_reward = speed_ratio * 1.0  # +1.0 max just for moving
-            # BONUS for moving safely (far from obstacles)
-            safety_bonus = speed_ratio * safety_factor * 1.0  # +1.0 max when safe
-            reward += base_forward_reward + safety_bonus  # Max +2.0 total
+            reward += speed_ratio * 2.0  # Max +2.0
         else:
-            # Idle penalty MUST be worse than collision to encourage trying
-            reward -= 2.5  # Stronger than collision (-2.0)!
+            # Idle penalty (worse than collision to force trying)
+            reward -= 2.5
 
-        # 2. Collision penalty
-        if collision or self._safety_override:
+        # 2. Collision penalty (ONLY from LiDAR safety monitor)
+        # Network learns distance→action from proprio (min_depth, min_lidar)
+        if self._safety_override:
             reward -= 2.0
             return np.clip(reward, -4.0, 2.0)
 
-        # 3. DISTANCE TRAVELED REWARD (NEW - encourages continuous progress)
-        # Track cumulative distance and reward for making progress
-        if not hasattr(self, '_prev_position'):
-            self._prev_position = np.array([0.0, 0.0])
-            self._cumulative_distance = 0.0
-        
-        # Estimate distance from velocity (assuming ~30Hz control loop)
-        dt = 1.0 / 30.0
-        distance_step = abs(linear_vel) * dt
-        if linear_vel > 0.05:  # Only count forward progress
-            self._cumulative_distance += distance_step
-            # Small bonus for each bit of forward progress
-            reward += distance_step * 0.5  # ~0.02 per step at 0.3m/s
-
-        # 4. Side clearance bonus (keep this - safety aware)
-        if side_clearance > 0.5:
-            clearance_bonus = np.clip((side_clearance - 0.5) / 1.0, 0.0, 1.0) * 0.2
-            reward += clearance_bonus  # Max +0.2
-        elif side_clearance < 0.3:
-            reward -= (0.3 - side_clearance) / 0.3 * 0.2  # Max -0.2
-
-        # 5. Smooth control (anti-jerk) - REDUCED weight
-        angular_change = abs(action[1] - self._prev_action[1])
-        if angular_change > 0.6:  # Raised threshold
-            reward -= angular_change * 0.2  # Reduced from 0.3
-
-        # 6. Proximity penalty (gradual)
-        if min_dist < 0.3:
-            proximity_penalty = (0.3 - min_dist) / 0.3
-            reward -= proximity_penalty * 0.8
-
-        # 7. Spinning penalty (still needed for tank-steer)
+        # 3. Spinning penalty (still needed for tank-steer)
         if abs(angular_vel) > 0.3 and linear_vel < 0.08:
-            spin_penalty = abs(angular_vel) * 1.5  # Reduced from 2.0
-            reward -= spin_penalty
+            reward -= abs(angular_vel) * 1.0
 
-        # Clip range: [-4, 2] (matches collision path)
+        # Clip range: [-4, 2]
         return np.clip(reward, -4.0, 2.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
