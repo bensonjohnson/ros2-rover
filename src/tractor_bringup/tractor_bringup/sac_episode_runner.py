@@ -871,14 +871,16 @@ class SACEpisodeRunner(Node):
         # Update target heading for Gap Follower (Warmup)
         self._target_heading = gap_heading
 
-        # Construct 10D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
+        # Construct 12D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, current_lin, current_ang]
         # Note: gap_heading removed - now implicit in exploration history channel
         proprio = np.array([[
             ax, ay, az, gx, gy, gz,
             self._min_forward_dist,     # Min Depth (Front)
             lidar_min,                  # Min LiDAR (360 Safety)
             self._prev_action[0],       # Previous linear action
-            self._prev_action[1]        # Previous angular action
+            self._prev_action[1],       # Previous angular action
+            current_linear,             # Current fused linear velocity
+            current_angular             # Current fused angular velocity
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)

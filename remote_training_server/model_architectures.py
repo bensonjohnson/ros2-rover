@@ -364,7 +364,7 @@ class DualEncoderPolicyNetwork(nn.Module):
     Input: Laser (1×128×128), Depth (1×100×848), Proprio (10)
     Depth uses 848x100@100Hz mode - center-cropped, less floor visibility
     """
-    def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
+    def __init__(self, action_dim=2, proprio_dim=12, hidden_size=128):
         super().__init__()
 
         # Separate encoders
@@ -413,7 +413,7 @@ class DualEncoderPolicyNetwork(nn.Module):
 
 class DualEncoderQNetwork(nn.Module):
     """Q-network using dual encoders (Laser + Depth)."""
-    def __init__(self, action_dim=2, proprio_dim=10, dropout=0.0):
+    def __init__(self, action_dim=2, proprio_dim=12, dropout=0.0):
         super().__init__()
 
         self.laser_encoder = LaserEncoder()
@@ -457,7 +457,7 @@ class DualEncoderQNetwork(nn.Module):
 
 class RGBDEncoderPolicyNetwork(nn.Module):
     """Policy network using RGBD + Laser encoders."""
-    def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
+    def __init__(self, action_dim=2, proprio_dim=12, hidden_size=128):
         super().__init__()
 
         # Separate encoders
@@ -505,7 +505,7 @@ class RGBDEncoderPolicyNetwork(nn.Module):
 
 class RGBDEncoderQNetwork(nn.Module):
     """Q-network using RGBD + Laser encoders."""
-    def __init__(self, action_dim=2, proprio_dim=10, dropout=0.0):
+    def __init__(self, action_dim=2, proprio_dim=12, dropout=0.0):
         super().__init__()
 
         self.laser_encoder = LaserEncoder()
@@ -599,7 +599,7 @@ class UnifiedBEVPolicyNetwork(nn.Module):
     Input: BEV grid (2, 256, 256), Proprio (10)
     Output: mean, log_std for Gaussian policy
     """
-    def __init__(self, action_dim=2, proprio_dim=10, hidden_size=128):
+    def __init__(self, action_dim=2, proprio_dim=12, hidden_size=128):
         super().__init__()
 
         # Unified BEV encoder
@@ -651,7 +651,7 @@ class UnifiedBEVQNetwork(nn.Module):
     Input: BEV grid (2, 256, 256), Proprio (10), Action (2)
     Output: Q-value
     """
-    def __init__(self, action_dim=2, proprio_dim=10, dropout=0.0):
+    def __init__(self, action_dim=2, proprio_dim=12, dropout=0.0):
         super().__init__()
 
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)

@@ -75,8 +75,8 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                     print(f"⚠ Warning: Expected bev shape (2, 128, 128), got {bev.shape} in {file_path}")
                     continue
 
-                if proprio.shape != (10,):
-                    print(f"⚠ Warning: Expected proprio shape (10,), got {proprio.shape} in {file_path}")
+                if proprio.shape != (12,):
+                    print(f"⚠ Warning: Expected proprio shape (12,), got {proprio.shape} in {file_path}")
                     continue
 
                 # Sanitize Proprio
@@ -163,11 +163,11 @@ def convert_onnx_to_rknn(
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
                 [0, 0],           # BEV (2 channels)
-                [0] * 10,         # Proprio
+                [0] * 12,         # Proprio
             ],
             'std_values': [
                 [1, 1],           # BEV
-                [1] * 10,         # Proprio
+                [1] * 12,         # Proprio
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -189,7 +189,7 @@ def convert_onnx_to_rknn(
             inputs=['bev', 'proprio'],
             input_size_list=[
                 [1, 2, 128, 128],   # Unified BEV grid (2 channels: LiDAR + Depth)
-                [1, 10],            # Proprio (10-dim)
+                [1, 12],            # Proprio (12-dim)
             ]
         )
         if ret != 0:
@@ -221,7 +221,7 @@ def convert_onnx_to_rknn(
             else:
                 # Create test inputs (normalized like rover)
                 test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)  # Unified BEV
-                test_proprio = np.random.rand(1, 10).astype(np.float32)
+                test_proprio = np.random.rand(1, 12).astype(np.float32)
 
                 # Run inference
                 outputs = rknn.inference(inputs=[test_bev, test_proprio])

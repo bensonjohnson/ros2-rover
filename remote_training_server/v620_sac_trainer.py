@@ -255,7 +255,7 @@ class V620SACTrainer:
              print(f"  Replay Buffer stored on System RAM (CPU)")
 
         # Dimensions
-        self.proprio_dim = 10 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang]
+        self.proprio_dim = 12 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, lin_vel, ang_vel]
         self.action_dim = 2
         
         # Visualization state
@@ -496,7 +496,7 @@ class V620SACTrainer:
             # Dummy inputs for unified BEV
             # BEV: (B, 2, 256, 256)
             dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
-            # Proprio: (B, 10)
+            # Proprio: (B, 12)
             dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
             
             class ActorWrapper(nn.Module):
