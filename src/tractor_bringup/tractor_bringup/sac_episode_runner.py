@@ -646,39 +646,51 @@ class SACEpisodeRunner(Node):
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
         """
         Enhanced reward function with 7 clear components:
-        1. Forward progress scaled by safety
-        2. Collision penalty (STRONG - preserved by expanded clip range)
-        3. Gap-following incentive (steer towards open space)
-        4. Side clearance bonus (maintain safe lateral distance)
-        5. Smooth control penalty
-        6. Idle penalty
-        7. Proximity penalty
+        1. Forward progress (Smoothly rewarded)
+        2. Collision penalty (Strong and consistent)
+        3. Gap-following alignment (Reward steering towards open space)
+        4. Side clearance (Encourage staying centered)
+        5. Control smoothness (Penalize jerky actions)
+        6. Idle penalty (Small constant to discourage sitting still)
         
-        Clip range: [-4, 2]
+        Range: [-1.0, 1.0]
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Forward motion reward (SIMPLE: just reward moving forward)
+        # 1. Collision Penalty (Strongest signal)
+        if collision:
+            return -1.0
+
+        # 2. Idle / Forward Motion Reward
+        # Small constant idle penalty to prevent sitting still
+        reward -= 0.2
+        
+        # Linear reward for forward velocity
         if linear_vel > 0.01:
-            speed_ratio = linear_vel / target_speed
-            reward += speed_ratio * 2.0  # Max +2.0
-        else:
-            # Idle penalty (worse than collision to force trying)
-            reward -= 2.5
+            speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
+            reward += speed_ratio * 0.8  # Up to +0.8 (cancels idle, net +0.6)
+        
+        # 3. Gap Alignment Reward
+        # Reward being aligned with the target heading found by gap detector
+        alignment_error = abs(action[1] - self._target_heading)
+        if linear_vel > 0.05:
+            # Only reward alignment when moving
+            reward += (1.0 - alignment_error) * 0.2  # Max +0.2
 
-        # 2. Collision penalty (ONLY from LiDAR safety monitor)
-        # Network learns distance→action from proprio (min_depth, min_lidar)
-        if self._safety_override:
-            reward -= 2.0
-            return np.clip(reward, -4.0, 2.0)
+        # 4. Side Clearance Reward
+        # Encourage staying away from walls (min_lidar_dist > 0.5m)
+        if min_lidar_dist > 0.5:
+            reward += 0.1
+        elif min_lidar_dist < 0.2:
+            reward -= 0.2
 
-        # 3. Spinning penalty (still needed for tank-steer)
-        if abs(angular_vel) > 0.3 and linear_vel < 0.08:
-            reward -= abs(angular_vel) * 1.0
+        # 5. Smooth Control Penalty
+        if hasattr(self, '_prev_action'):
+            action_diff = np.abs(action - self._prev_action)
+            reward -= np.mean(action_diff) * 0.1
 
-        # Clip range: [-4, 2]
-        return np.clip(reward, -4.0, 2.0)
+        return np.clip(reward, -1.0, 1.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
         """Aggressive reward function that DEMANDS forward movement.
@@ -1071,9 +1083,6 @@ class SACEpisodeRunner(Node):
             actual_action, current_linear, current_angular,
             lidar_min, lidar_sides, collision
         )
-
-        # Clip reward to prevent extreme values (already clipped in _compute_reward, but keep as safety)
-        reward = np.clip(reward, -1.0, 1.0)
 
         # Safety check: NaN in reward
         if np.isnan(reward) or np.isinf(reward):
