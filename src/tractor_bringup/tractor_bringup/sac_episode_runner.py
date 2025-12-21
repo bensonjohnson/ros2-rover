@@ -1024,14 +1024,36 @@ class SACEpisodeRunner(Node):
             collision = self._sensor_warmup_complete
         else:
             # Normal execution
-            # During warmup (model v0), use max_linear directly for better movement
-            # After training starts, use curriculum_max_speed which may be lower
-            if self._current_model_version <= 0:
-                cmd.linear.x = float(action[0] * self.max_linear)
+            # DEAD ZONE COMPENSATION: Motors need minimum power to overcome static friction
+            # If model wants to move forward at all, ensure minimum velocity
+            linear_action = action[0]
+            angular_action = action[1]
+            
+            # Dead zone: if model outputs small positive, bump up to minimum
+            MIN_LINEAR_ACTION = 0.3  # Minimum action to move motors
+            MIN_ANGULAR_ACTION = 0.2  # Minimum for turning
+            
+            if linear_action > 0.1:  # Model wants to go forward
+                linear_action = max(linear_action, MIN_LINEAR_ACTION)
+            elif linear_action < -0.1:  # Model wants to go backward
+                linear_action = min(linear_action, -MIN_LINEAR_ACTION)
             else:
-                cmd.linear.x = float(action[0] * self._curriculum_max_speed)
-            cmd.angular.z = float(action[1] * self.max_angular)
-            actual_action = action
+                linear_action = 0.0  # True zero intent
+            
+            if angular_action > 0.1:
+                angular_action = max(angular_action, MIN_ANGULAR_ACTION)
+            elif angular_action < -0.1:
+                angular_action = min(angular_action, -MIN_ANGULAR_ACTION)
+            else:
+                angular_action = 0.0
+            
+            # Apply velocity scaling
+            if self._current_model_version <= 0:
+                cmd.linear.x = float(linear_action * self.max_linear)
+            else:
+                cmd.linear.x = float(linear_action * self._curriculum_max_speed)
+            cmd.angular.z = float(angular_action * self.max_angular)
+            actual_action = np.array([linear_action, angular_action])
             collision = False
             
         self.cmd_pub.publish(cmd)
