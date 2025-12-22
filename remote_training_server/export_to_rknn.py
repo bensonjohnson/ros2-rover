@@ -60,9 +60,9 @@ class RKNNConverter:
         ret = self.rknn.config(
             # Input 0: Laser (1, 128, 128) float32, binary 0/1
             # Input 1: Depth (1, 100, 848) float32, normalized [0, 1] - 848x100@100Hz mode
-            # Input 2: Proprio (10,) float32, various ranges
-            mean_values=[[0], [0], [0]*10],  # Laser/Depth: no norm, Proprio: no norm
-            std_values=[[1], [1], [1]*10],   # Laser/Depth: already processed, Proprio: as-is
+            # Input 2: Proprio (12,) float32, various ranges
+            mean_values=[[0], [0], [0]*12],  # Laser/Depth: no norm, Proprio: no norm
+            std_values=[[1], [1], [1]*12],   # Laser/Depth: already processed, Proprio: as-is
             target_platform=target_platform,
             quantized_dtype='asymmetric_quantized-8' if quantize else 'float16',
             quantized_algorithm='normal',
@@ -114,7 +114,7 @@ class RKNNConverter:
         The calibration dataset should contain representative multi-channel grid samples
         collected from the rover during operation.
 
-        Expected format: laser (1, 128, 128) + depth (1, 240, 424) + proprio (10,)
+        Expected format: laser (1, 128, 128) + depth (1, 100, 848) + proprio (12,)
         """
         if not self.calibration_data_dir or not os.path.exists(self.calibration_data_dir):
             print(f"WARNING: Calibration data directory not found: {self.calibration_data_dir}")
@@ -142,7 +142,7 @@ class RKNNConverter:
                     proprio = data['proprio']
 
                     # Validate shapes (848x100@100Hz mode)
-                    if laser.shape == (1, 128, 128) and depth.shape == (1, 100, 848) and proprio.shape == (10,):
+                    if laser.shape == (1, 128, 128) and depth.shape == (1, 100, 848) and proprio.shape == (12,):
                         dataset.append({'laser': laser, 'depth': depth, 'proprio': proprio})
                     else:
                         print(f"WARNING: Unexpected shapes in {file_path}: laser={laser.shape}, depth={depth.shape}, proprio={proprio.shape}")
@@ -190,7 +190,7 @@ class RKNNConverter:
         # Validate inputs (848x100@100Hz mode)
         assert test_laser.shape == (1, 128, 128)
         assert test_depth.shape == (1, 100, 848)
-        assert test_proprio.shape == (10,)
+        assert test_proprio.shape == (12,)
 
         # Run inference
         outputs = self.rknn.inference(inputs=[test_laser, test_depth, test_proprio])
