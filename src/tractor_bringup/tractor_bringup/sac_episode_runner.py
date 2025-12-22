@@ -871,6 +871,14 @@ class SACEpisodeRunner(Node):
         # Update target heading for Gap Follower (Warmup)
         self._target_heading = gap_heading
 
+        # Get current velocities from odometry/IMU for proprioception
+        current_linear = self._latest_odom[2] if self._latest_odom else 0.0
+        # Use IMU Gyro Z for angular velocity if available (more reliable than encoders)
+        if self._latest_imu:
+            current_angular = self._latest_imu[5]
+        else:
+            current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+
         # Construct 12D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, current_lin, current_ang]
         # Note: gap_heading removed - now implicit in exploration history channel
         proprio = np.array([[
@@ -1070,15 +1078,9 @@ class SACEpisodeRunner(Node):
             collision = False
             
         self.cmd_pub.publish(cmd)
-        
+
         # 5. Compute Reward
-        current_linear = self._latest_odom[2] if self._latest_odom else 0.0
-        
-        # Use IMU Gyro Z for angular velocity if available (more reliable than encoders)
-        if self._latest_imu:
-            current_angular = self._latest_imu[5]
-        else:
-            current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+        # Note: current_linear and current_angular already extracted earlier for proprioception
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
