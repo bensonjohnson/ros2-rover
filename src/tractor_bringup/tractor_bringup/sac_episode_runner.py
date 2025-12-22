@@ -694,6 +694,21 @@ class SACEpisodeRunner(Node):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.1
 
+        # 6. Angular Velocity Penalty (CRITICAL - prevents spinning in place)
+        # Strong penalty for excessive turning, especially when stationary
+        if abs(angular_vel) > 0.2:
+            # Base penalty scales with rotation speed
+            ang_penalty = abs(angular_vel) * 0.3
+            
+            # MASSIVE penalty if stationary - spinning in place is useless exploration!
+            if linear_vel < 0.05:
+                ang_penalty *= 5.0  # 5x multiplier for spinning in place
+            # Reduced penalty if moving forward AND in open space
+            elif min_lidar_dist > 1.0 and linear_vel > 0.1:
+                ang_penalty *= 0.5  # Allow some turning when safe and moving
+            
+            reward -= min(ang_penalty, 0.8)  # Cap to prevent dominating the reward
+
         return np.clip(reward, -1.0, 1.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
