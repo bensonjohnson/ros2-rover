@@ -247,19 +247,11 @@ class LidarSafetyMonitor(Node):
                         estop_active = True
                         blocked_sectors.append('front')
                 else:
-                    # Not stopped - check if should stop
                     if front_dist < self.stop_dist:
                         self._sector_stopped['front'] = True
                         out_cmd.linear.x = 0.0
                         estop_active = True
                         blocked_sectors.append('front')
-                    elif front_dist < self.slow_dist:
-                        # Scale speed based on distance
-                        range_span = self.slow_dist - self.stop_dist
-                        if range_span > 0:
-                            factor = (front_dist - self.stop_dist) / range_span
-                            factor = np.clip(factor, 0.1, 1.0)
-                            out_cmd.linear.x = msg.linear.x * factor
             
             # === REAR SECTOR: Gate backward movement ===
             if msg.linear.x < -0.01:  # Trying to go backward
@@ -278,12 +270,6 @@ class LidarSafetyMonitor(Node):
                         out_cmd.linear.x = 0.0
                         estop_active = True
                         blocked_sectors.append('rear')
-                    elif rear_dist < self.slow_dist:
-                        range_span = self.slow_dist - self.stop_dist
-                        if range_span > 0:
-                            factor = (rear_dist - self.stop_dist) / range_span
-                            factor = np.clip(factor, 0.1, 1.0)
-                            out_cmd.linear.x = msg.linear.x * factor
             
             # === LEFT SECTOR: Gate left turns (positive angular.z for tank = turn left) ===
             if msg.angular.z > 0.05:  # Trying to turn left
@@ -300,12 +286,6 @@ class LidarSafetyMonitor(Node):
                         self._sector_stopped['left'] = True
                         out_cmd.angular.z = 0.0
                         blocked_sectors.append('left')
-                    elif left_dist < self.slow_dist:
-                        range_span = self.slow_dist - self.stop_dist
-                        if range_span > 0:
-                            factor = (left_dist - self.stop_dist) / range_span
-                            factor = np.clip(factor, 0.2, 1.0)
-                            out_cmd.angular.z = msg.angular.z * factor
             
             # === RIGHT SECTOR: Gate right turns (negative angular.z for tank = turn right) ===
             if msg.angular.z < -0.05:  # Trying to turn right
@@ -322,12 +302,6 @@ class LidarSafetyMonitor(Node):
                         self._sector_stopped['right'] = True
                         out_cmd.angular.z = 0.0
                         blocked_sectors.append('right')
-                    elif right_dist < self.slow_dist:
-                        range_span = self.slow_dist - self.stop_dist
-                        if range_span > 0:
-                            factor = (right_dist - self.stop_dist) / range_span
-                            factor = np.clip(factor, 0.2, 1.0)
-                            out_cmd.angular.z = msg.angular.z * factor
 
         # Publish estop state changes
         if estop_active != self._last_estop_state:
