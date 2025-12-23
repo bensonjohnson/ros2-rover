@@ -301,7 +301,7 @@ class SACEpisodeRunner(Node):
         # Rotation tracking for spin penalty (NEW)
         self._cumulative_rotation = 0.0  # Radians since last forward progress
         self._last_yaw_for_rotation = None  # Previous yaw for delta calculation
-        self._forward_progress_threshold = 0.05  # meters to reset rotation counter
+        self._forward_progress_threshold = 0.8  # meters to reset rotation counter
         self._last_position_for_rotation = None  # (x, y) for forward progress detection
         self._revolution_penalty_triggered = False
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
@@ -700,7 +700,25 @@ class SACEpisodeRunner(Node):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.1
 
-        # 5. Zero-Turn Inefficiency Penalty (NEW)
+        # 5. Sub-Deadzone Penalty (NEW)
+        # Penalize outputs that show intent to move but are too weak to overcome motor friction
+        # MIN_LINEAR = 0.3 in soft deadzone compensation, MIN_ANGULAR = 0.2
+        # Outputs in range (0.001, 0.3) for linear or (0.001, 0.2) for angular are "wasted effort"
+        linear_intent = abs(action[0])
+        angular_intent = abs(action[1])
+        
+        # Linear sub-deadzone: trying to move but too weak
+        if 0.001 < linear_intent < 0.3:
+            # Penalize proportionally to how far below threshold
+            sub_dz_penalty = (0.3 - linear_intent) / 0.3  # 0 to ~1
+            reward -= sub_dz_penalty * 0.4  # Moderate penalty to encourage stronger output
+        
+        # Angular sub-deadzone: trying to turn but too weak  
+        if 0.001 < angular_intent < 0.2:
+            sub_dz_penalty = (0.2 - angular_intent) / 0.2
+            reward -= sub_dz_penalty * 0.2
+
+        # 6. Zero-Turn Inefficiency Penalty
         # When stationary but rotating, penalize if not using proper zero-turn
         # Proper zero-turn: tracks spin in opposite directions at equal speeds
         # BAD: low angular action but still rotating (inefficient/slip)
@@ -714,13 +732,13 @@ class SACEpisodeRunner(Node):
             if ang_action_error > 0.3:
                 reward -= 0.3 * ang_action_error
 
-        # 6. Full Revolution Penalty (NEW)
+        # 7. Full Revolution Penalty
         # If accumulated rotation > 2π without forward progress, heavy penalty
         if self._revolution_penalty_triggered:
             reward -= 0.8
             self._revolution_penalty_triggered = False  # One-shot penalty
 
-        # 7. Angular velocity penalty (spinning deterrent)
+        # 8. Angular velocity penalty (spinning deterrent)
         if abs(angular_vel) > 0.2:
             ang_penalty = abs(angular_vel) * 0.3
             if abs(linear_vel) < 0.05:
