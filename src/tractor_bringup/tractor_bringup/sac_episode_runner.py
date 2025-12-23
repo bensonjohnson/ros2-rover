@@ -298,6 +298,14 @@ class SACEpisodeRunner(Node):
         self._latest_imu_yaw = 0.0
         self._prev_imu_yaw = None
 
+        # Rotation tracking for spin penalty (NEW)
+        self._cumulative_rotation = 0.0  # Radians since last forward progress
+        self._last_yaw_for_rotation = None  # Previous yaw for delta calculation
+        self._forward_progress_threshold = 0.05  # meters to reset rotation counter
+        self._last_position_for_rotation = None  # (x, y) for forward progress detection
+        self._revolution_penalty_triggered = False
+        self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
+
         # NATS Setup (will be initialized in background thread)
         self.nc = None
         self.js = None
@@ -391,12 +399,18 @@ class SACEpisodeRunner(Node):
         self._latest_scan = msg
         
     def _odom_cb(self, msg):
+        # Extract position and velocity
         self._latest_odom = (
             msg.pose.pose.position.x, 
             msg.pose.pose.position.y, 
             msg.twist.twist.linear.x, 
             msg.twist.twist.angular.z
         )
+        # Extract EKF-fused yaw from quaternion for rotation tracking
+        q = msg.pose.pose.orientation
+        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+        self._latest_fused_yaw = math.atan2(siny_cosp, cosy_cosp)
     def _imu_cb(self, msg): 
         self._latest_imu = (
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
@@ -645,69 +659,75 @@ class SACEpisodeRunner(Node):
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
         """
-        Enhanced reward function with 7 clear components:
-        1. Forward progress (Smoothly rewarded)
-        2. Collision penalty (Strong and consistent)
-        3. Gap-following alignment (Reward steering towards open space)
-        4. Side clearance (Encourage staying centered)
-        5. Control smoothness (Penalize jerky actions)
-        6. Idle penalty (Small constant to discourage sitting still)
+        Tank-steer optimized reward function:
+        1. Forward progress (primary objective)
+        2. Collision penalty
+        3. Side clearance bonus
+        4. Smooth control penalty
+        5. Idle penalty
+        6. Zero-turn inefficiency penalty (NEW)
+        7. Full revolution penalty (NEW)
         
+        Removes: Target heading alignment (let model learn navigation autonomously)
         Range: [-1.0, 1.0]
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Collision Penalty (Strongest signal)
+        # 1. Collision Penalty (strongest signal)
         if collision:
             return -1.0
 
         # 2. Idle / Forward Motion Reward
-        # Small constant idle penalty to prevent sitting still
-        reward -= 0.2
+        reward -= 0.2  # Base idle penalty
         
-        # Linear reward for forward velocity
         if linear_vel > 0.01:
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
             reward += speed_ratio * 0.8  # Up to +0.8 (cancels idle, net +0.6)
         
-        # Backward penalty: Prevent jittering backwards
+        # Backward penalty
         if linear_vel < -0.01:
             reward -= 0.5
 
-        # 3. Gap Alignment Reward
-        # Reward being aligned with the target heading found by gap detector
-        alignment_error = abs(action[1] - self._target_heading)
-        if linear_vel > 0.05:
-            # Only reward alignment when moving
-            reward += (1.0 - alignment_error) * 0.2  # Max +0.2
-
-        # 4. Side Clearance Reward
-        # Encourage staying away from walls (min_lidar_dist > 0.5m)
+        # 3. Side Clearance Reward
         if min_lidar_dist > 0.5:
             reward += 0.1
         elif min_lidar_dist < 0.2:
             reward -= 0.2
 
-        # 5. Smooth Control Penalty
+        # 4. Smooth Control Penalty
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.1
 
-        # 6. Angular Velocity Penalty (CRITICAL - prevents spinning in place)
-        # Strong penalty for excessive turning, especially when stationary
+        # 5. Zero-Turn Inefficiency Penalty (NEW)
+        # When stationary but rotating, penalize if not using proper zero-turn
+        # Proper zero-turn: tracks spin in opposite directions at equal speeds
+        # BAD: low angular action but still rotating (inefficient/slip)
+        # GOOD: high angular action for the angular velocity achieved
+        if abs(linear_vel) < 0.02 and abs(angular_vel) > 0.15:
+            # Expected: action[1] should match angular_vel direction and magnitude
+            expected_ang_action = np.sign(angular_vel) * min(1.0, abs(angular_vel))
+            ang_action_error = abs(action[1] - expected_ang_action)
+            
+            # Penalize inefficient rotation (low action but still turning = slip/waste)
+            if ang_action_error > 0.3:
+                reward -= 0.3 * ang_action_error
+
+        # 6. Full Revolution Penalty (NEW)
+        # If accumulated rotation > 2π without forward progress, heavy penalty
+        if self._revolution_penalty_triggered:
+            reward -= 0.8
+            self._revolution_penalty_triggered = False  # One-shot penalty
+
+        # 7. Angular velocity penalty (spinning deterrent)
         if abs(angular_vel) > 0.2:
-            # Base penalty scales with rotation speed
             ang_penalty = abs(angular_vel) * 0.3
-            
-            # MASSIVE penalty if stationary - spinning in place is useless exploration!
-            if linear_vel < 0.05:
-                ang_penalty *= 5.0  # 5x multiplier for spinning in place
-            # Reduced penalty if moving forward AND in open space
+            if abs(linear_vel) < 0.05:
+                ang_penalty *= 3.0  # Reduced from 5.0 since we have new penalties
             elif min_lidar_dist > 1.0 and linear_vel > 0.1:
-                ang_penalty *= 0.5  # Allow some turning when safe and moving
-            
-            reward -= min(ang_penalty, 0.8)  # Cap to prevent dominating the reward
+                ang_penalty *= 0.5
+            reward -= min(ang_penalty, 0.6)
 
         return np.clip(reward, -1.0, 1.0)
 
@@ -886,13 +906,43 @@ class SACEpisodeRunner(Node):
         # Update target heading for Gap Follower (Warmup)
         self._target_heading = gap_heading
 
-        # Get current velocities from odometry/IMU for proprioception
+        # Get current velocities from EKF-fused odometry for reward/proprioception
+        # EKF fuses IMU + wheel encoders for more accurate velocity estimates
         current_linear = self._latest_odom[2] if self._latest_odom else 0.0
-        # Use IMU Gyro Z for angular velocity if available (more reliable than encoders)
-        if self._latest_imu:
-            current_angular = self._latest_imu[5]
-        else:
-            current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+        current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+
+        # ========== ROTATION TRACKING FOR REVOLUTION PENALTY (NEW) ==========
+        # Track cumulative rotation using EKF-fused yaw for spin-in-place penalty
+        if self._last_yaw_for_rotation is not None:
+            # Calculate yaw delta (handle wrap-around at ±π)
+            yaw_delta = self._latest_fused_yaw - self._last_yaw_for_rotation
+            if yaw_delta > math.pi:
+                yaw_delta -= 2 * math.pi
+            elif yaw_delta < -math.pi:
+                yaw_delta += 2 * math.pi
+            
+            self._cumulative_rotation += abs(yaw_delta)
+            
+            # Check for full revolution without forward progress
+            if self._cumulative_rotation >= 2 * math.pi:
+                self._revolution_penalty_triggered = True
+                self._cumulative_rotation = 0.0  # Reset after penalty
+                self.get_logger().warn('⚠️ Full revolution detected without forward progress!')
+
+        self._last_yaw_for_rotation = self._latest_fused_yaw
+
+        # Check for forward progress to reset rotation counter
+        if self._latest_odom and self._last_position_for_rotation is not None:
+            x, y = self._latest_odom[0], self._latest_odom[1]
+            last_x, last_y = self._last_position_for_rotation
+            distance = math.sqrt((x - last_x)**2 + (y - last_y)**2)
+            
+            if distance > self._forward_progress_threshold:
+                self._cumulative_rotation = 0.0  # Reset rotation counter
+                self._last_position_for_rotation = (x, y)
+        elif self._latest_odom:
+            self._last_position_for_rotation = (self._latest_odom[0], self._latest_odom[1])
+        # ========== END ROTATION TRACKING ==========
 
         # Construct 12D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, current_lin, current_ang]
         # Note: gap_heading removed - now implicit in exploration history channel
