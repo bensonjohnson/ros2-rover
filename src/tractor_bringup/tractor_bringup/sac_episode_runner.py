@@ -674,9 +674,9 @@ class SACEpisodeRunner(Node):
         reward = 0.0
         target_speed = self._curriculum_max_speed
 
-        # 1. Collision Penalty (strongest signal)
-        if collision:
-            return -1.0
+        # NOTE: No explicit collision penalty - safety monitor forces hard stop,
+        # so the robot becomes stationary and the idle penalty handles it naturally.
+        # This prevents learned helplessness from overly harsh collision penalties.
 
         # 2. Idle / Forward Motion Reward
         reward -= 0.2  # Base idle penalty
