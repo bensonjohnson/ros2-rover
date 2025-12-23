@@ -255,7 +255,7 @@ class V620SACTrainer:
              print(f"  Replay Buffer stored on System RAM (CPU)")
 
         # Dimensions
-        self.proprio_dim = 12 # [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, lin_vel, ang_vel]
+        self.proprio_dim = 5 # [lidar_min, prev_lin, prev_ang, lin_vel, ang_vel]
         self.action_dim = 2
         
         # Visualization state

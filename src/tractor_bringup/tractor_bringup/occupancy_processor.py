@@ -729,8 +729,8 @@ class MultiChannelOccupancy:
                 np.minimum.at(grid, (rows, cols), ranges_filtered)
 
         # Force Clear Robot Footprint (Rectangular rover dimensions)
-        # Robot is at bottom center (127, 64)
-        r_center, c_center = self.grid_size - 1, self.grid_size // 2
+        # Robot is at CENTER (64, 64) for 128x128 grid
+        r_center, c_center = self.grid_size // 2, self.grid_size // 2
         grid = clear_rectangular_footprint(grid, r_center, c_center,
                                            0.30, 0.40, self.resolution)  # 30cm x 40cm rover
         grid[grid == 0.0] = self.range_m  # Set cleared area to max distance (free)
@@ -762,16 +762,15 @@ class MultiChannelOccupancy:
         distance_grid = distance_grid / self.range_m
 
         # FINAL SAFETY CHECK: Ensure center region (robot footprint) is never 0
-        # Robot is at (127, 64). The 10x10 patch we check in episode runner is rows 118-128, cols 59-69
-        # These should NEVER be 0.0 as the robot occupies this space (free by definition)
-        r_center, c_center = self.grid_size - 1, self.grid_size // 2
-        safety_patch = distance_grid[r_center-10:r_center+1, c_center-5:c_center+6]
+        # Robot is at CENTER (64, 64). The 10x10 patch around robot should be clear
+        r_center, c_center = self.grid_size // 2, self.grid_size // 2
+        safety_patch = distance_grid[r_center-5:r_center+6, c_center-5:c_center+6]
         if np.min(safety_patch) < 0.05:  # Less than 20cm (0.05 * 4.0m)
             # Something is wrong - footprint should be clear
             # Set to a safe minimum value (at least 0.5m)
             min_safe_val = 0.5 / self.range_m  # 0.125 normalized
-            distance_grid[r_center-10:r_center+1, c_center-5:c_center+6] = np.maximum(
-                distance_grid[r_center-10:r_center+1, c_center-5:c_center+6],
+            distance_grid[r_center-5:r_center+6, c_center-5:c_center+6] = np.maximum(
+                distance_grid[r_center-5:r_center+6, c_center-5:c_center+6],
                 min_safe_val
             )
 
@@ -1132,9 +1131,14 @@ class RawSensorProcessor:
         # Persistence buffer for laser scan (Decay)
         self.scan_buffer = np.zeros((grid_size, grid_size), dtype=np.float32)
 
-        # Robot position: bottom-center for consistency
-        self.robot_row = grid_size - 1  # 127 for 128x128
+        # Robot position: CENTER for full 360° awareness
+        # Rover now at (64, 64) for 128x128 grid - can see in all directions
+        self.robot_row = grid_size // 2  # 64 for 128x128
         self.robot_col = grid_size // 2  # 64 for 128x128
+        
+        # Rover dimensions for footprint marker (30cm x 40cm)
+        self.rover_width_px = int(0.30 / self.resolution)   # ~10 pixels
+        self.rover_length_px = int(0.40 / self.resolution)  # ~13 pixels
 
     def process(self, depth_img, laser_scan):
         """
@@ -1204,7 +1208,7 @@ class RawSensorProcessor:
         y = y[valid]
 
         # Project to grid
-        # Robot at bottom-center (row 127, col 64) for standardization
+        # Robot at CENTER (row 64, col 64) for 360° awareness
         scale = self.grid_size / self.max_range  # ~32 pixels/meter
 
         rows = self.robot_row - (x * scale).astype(np.int32)
@@ -1241,6 +1245,22 @@ class RawSensorProcessor:
         # Clear robot footprint (rectangular rover dimensions)
         grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
                                            0.30, 0.40, self.resolution)
+
+        # Add rover footprint marker (unique 0.5 value to distinguish from obstacles)
+        # This helps the model understand ego-centric perspective
+        # Rover is oriented facing "up" (row 0 direction) with forward arrow
+        r_center, c_center = self.robot_row, self.robot_col
+        half_w = self.rover_width_px // 2
+        half_l = self.rover_length_px // 2
+        
+        # Draw rover body as 0.5 (distinct from 0.0=free, 1.0=obstacle)
+        grid[r_center - half_l:r_center + half_l + 1,
+             c_center - half_w:c_center + half_w + 1] = 0.5
+        
+        # Draw forward arrow/triangle at front of rover (rows < center)
+        arrow_len = 3
+        for i in range(arrow_len):
+            grid[r_center - half_l - 1 - i, c_center - i:c_center + i + 1] = 0.7
 
         return grid
 
@@ -1350,9 +1370,13 @@ class UnifiedBEVProcessor:
         self.scan_decay_rate = scan_decay_rate
         self.scan_buffer = np.zeros((grid_size, grid_size), dtype=np.float32)
 
-        # Robot position: bottom-center for consistency
-        self.robot_row = grid_size - 1  # 255 for 256x256
-        self.robot_col = grid_size // 2  # 128 for 256x256
+        # Robot position: CENTER for full 360° awareness
+        self.robot_row = grid_size // 2  # 64 for 128x128
+        self.robot_col = grid_size // 2  # 64 for 128x128
+        
+        # Rover dimensions for footprint marker (30cm x 40cm)
+        self.rover_width_px = int(0.30 / self.resolution)   # ~10 pixels
+        self.rover_length_px = int(0.40 / self.resolution)  # ~13 pixels
 
         # Pre-compute depth unprojection matrices (for 848 x 100 depth)
         u, v = np.meshgrid(np.arange(depth_width), np.arange(depth_height))
@@ -1463,6 +1487,21 @@ class UnifiedBEVProcessor:
         # Clear robot footprint (30cm x 40cm rover)
         grid = clear_rectangular_footprint(grid, self.robot_row, self.robot_col,
                                            0.30, 0.40, self.resolution)
+
+        # Add rover footprint marker (unique 0.5 value to distinguish from obstacles)
+        # This helps the model understand ego-centric perspective
+        r_center, c_center = self.robot_row, self.robot_col
+        half_w = self.rover_width_px // 2
+        half_l = self.rover_length_px // 2
+        
+        # Draw rover body as 0.5 (distinct from 0.0=free, 1.0=obstacle)
+        grid[r_center - half_l:r_center + half_l + 1,
+             c_center - half_w:c_center + half_w + 1] = 0.5
+        
+        # Draw forward arrow at front of rover (rows < center)
+        arrow_len = 3
+        for i in range(arrow_len):
+            grid[r_center - half_l - 1 - i, c_center - i:c_center + i + 1] = 0.7
 
         return grid
 

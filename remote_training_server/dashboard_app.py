@@ -190,6 +190,8 @@ class TrainingDashboard:
         - Channel 0 (LiDAR): Red for occupied
         - Channel 1 (Depth): Blue for occupied
         - Both channels: Magenta overlap
+        - Rover marker: Cyan (0.5 value) at center
+        - Forward arrow: Green (0.7 value)
         """
         try:
             bev = self.trainer.latest_bev_vis
@@ -212,16 +214,24 @@ class TrainingDashboard:
                 vis = np.zeros((128, 128, 3), dtype=np.uint8)
                 vis[:, :] = [40, 40, 40]  # Dark gray background (free space)
                 
-                # Red channel: LiDAR occupancy (Red)
-                lidar_mask = (lidar_ch > 0.3)
-                vis[lidar_mask, 2] = 255  # Red channel in BGR
+                # Rover footprint marker (0.5 value) - Cyan
+                rover_mask = (lidar_ch > 0.4) & (lidar_ch < 0.6)
+                vis[rover_mask] = [255, 255, 0]  # Cyan (BGR)
+                
+                # Forward arrow marker (0.7 value) - Green
+                arrow_mask = (lidar_ch > 0.65) & (lidar_ch < 0.75)
+                vis[arrow_mask] = [0, 255, 0]  # Green (BGR)
+                
+                # Red channel: LiDAR occupancy (Red) - obstacles at 1.0
+                lidar_obstacle_mask = (lidar_ch > 0.8)
+                vis[lidar_obstacle_mask, 2] = 255  # Red channel in BGR
                 
                 # Blue channel: Depth occupancy (Blue)
                 depth_mask = (depth_ch > 0.3)
                 vis[depth_mask, 0] = 255  # Blue channel in BGR
                 
                 # Green channel: Both sensors agree (shows as Magenta/Cyan mix)
-                both_mask = lidar_mask & depth_mask
+                both_mask = lidar_obstacle_mask & depth_mask
                 vis[both_mask, 1] = 100  # Slight green to show overlap
                 
             _, buffer = cv2.imencode('.png', vis)
@@ -590,17 +600,18 @@ class TrainingDashboard:
 
         <!-- Live Sensors -->
         <div class="card wide-card">
-            <div class="card-title"><span class="icon">👁️</span> Live Sensors - Unified BEV Grid (256×256)</div>
+            <div class="card-title"><span class="icon">👁️</span> Live Sensors - Centered BEV Grid (128×128)</div>
             <div style="display: flex; gap: 20px; justify-content: center; flex-wrap: wrap;">
                 
                 <!-- Unified BEV Grid -->
                 <div class="grid-container">
-                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Unified Birds-Eye-View (LiDAR + Depth)</div>
+                    <div style="margin-bottom: 5px; color: var(--text-secondary); font-size: 0.9rem;">Unified Birds-Eye-View (360° LiDAR + Depth)</div>
                     <img id="bev-img" src="/api/bev" alt="Unified BEV Grid" class="grid-image" style="width: 256px; height: 256px;">
                     <div class="stat-row" style="margin-top: 5px; font-size: 0.8rem; justify-content: center; gap: 10px;">
-                        <span class="badgem" style="color: #ff0000;">🔴 LiDAR</span>
-                        <span class="badgem" style="color: #0000ff;">🔵 Depth</span>
-                        <span class="badgem" style="color: #ff00ff;">🟣 Both</span>
+                        <span class="badgem" style="color: #00ffff;">🤖 Rover</span>
+                        <span class="badgem" style="color: #00ff00;">▲ Forward</span>
+                        <span class="badgem" style="color: #ff0000;">� LiDAR</span>
+                        <span class="badgem" style="color: #0000ff;">� Depth</span>
                         <span class="badgem" style="color: #444444;">⚫ Free</span>
                     </div>
                 </div>

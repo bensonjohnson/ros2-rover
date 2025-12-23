@@ -962,16 +962,15 @@ class SACEpisodeRunner(Node):
             self._last_position_for_rotation = (self._latest_odom[0], self._latest_odom[1])
         # ========== END ROTATION TRACKING ==========
 
-        # Construct 12D proprio: [ax, ay, az, gx, gy, gz, min_depth, min_lidar, prev_lin, prev_ang, current_lin, current_ang]
-        # Note: gap_heading removed - now implicit in exploration history channel
+        # Construct 5D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang]
+        # Simplified from 12D - removed IMU data (current_angular already has fused yaw rate)
+        # and min_depth (redundant with lidar_min)
         proprio = np.array([[
-            ax, ay, az, gx, gy, gz,
-            self._min_forward_dist,     # Min Depth (Front)
-            lidar_min,                  # Min LiDAR (360 Safety)
+            lidar_min,                  # Min LiDAR distance (360 Safety)
             self._prev_action[0],       # Previous linear action
             self._prev_action[1],       # Previous angular action
-            current_linear,             # Current fused linear velocity
-            current_angular             # Current fused angular velocity
+            current_linear,             # Current fused linear velocity (from EKF)
+            current_angular             # Current fused angular velocity (from EKF)
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
