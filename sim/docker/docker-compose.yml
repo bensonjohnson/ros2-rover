@@ -1,0 +1,86 @@
+# Webots Simulation with ROS 2 Jazzy in Docker
+# Webots GUI runs on host (Fedora/Wayland), controller runs in container
+# Uses extern controller mechanism - Webots connects to controller via TCP
+
+services:
+  ros2_sim:
+    build:
+      context: ../..
+      dockerfile: sim/docker/Dockerfile
+    container_name: ros2_webots_sim
+
+    # Network and IPC host mode for Webots extern controller communication
+    network_mode: host
+    ipc: host
+    pid: host
+
+    # Use same user to avoid permission issues
+    user: "${UID:-1000}:${GID:-1000}"
+
+    # Environment for Webots extern controller
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - WEBOTS_HOME=/usr/local/webots
+      - PYTHONPATH=/usr/local/webots/lib/controller/python
+      - LD_LIBRARY_PATH=/usr/local/webots/lib/controller
+      - NATS_SERVER=nats://nats.gokickrocks.org:4222
+      # Extern controller connection to Webots on host
+      - WEBOTS_CONTROLLER_URL=tcp://localhost:1234
+      - WEBOTS_ROBOT_NAME=tractor_rover
+
+    # Mount workspace for development
+    volumes:
+      - ../../src/tractor_bringup:/ros2_ws/src/tractor_bringup:ro
+      - ../../calibration_data:/ros2_ws/calibration_data:rw
+      - ../../sim/controllers:/ros2_ws/src/webots_sim/controllers:ro
+
+    stdin_open: true
+    tty: true
+
+    # Run the extern controller - Python handles Webots path internally
+    command: >
+      bash -c "
+        source /opt/ros/jazzy/setup.bash &&
+        echo '✅ ROS 2 Jazzy + Webots controller ready' &&
+        echo '⏳ Waiting for Webots to start on host...' &&
+        sleep 3 &&
+        echo '🔗 Running extern controller...' &&
+        python3 /ros2_ws/src/webots_sim/controllers/ros2_driver/ros2_driver.py
+      "
+
+  # Optional: Run SAC episode runner in container
+  sac_runner:
+    build:
+      context: ../..
+      dockerfile: sim/docker/Dockerfile
+    container_name: ros2_sac_runner
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - NATS_SERVER=nats://nats.gokickrocks.org:4222
+
+    volumes:
+      - ../../src/tractor_bringup:/ros2_ws/src/tractor_bringup:ro
+      - ../../calibration_data:/ros2_ws/calibration_data:rw
+
+    depends_on:
+      - ros2_sim
+
+    # Don't start automatically
+    profiles:
+      - training
+
+    command: >
+      bash -c "
+        source /opt/ros/jazzy/setup.bash &&
+        source /ros2_ws/install/setup.bash &&
+        echo '🚀 Starting SAC Episode Runner...' &&
+        ros2 run tractor_bringup sac_episode_runner \
+          --ros-args \
+          -p nats_server:=nats://nats.gokickrocks.org:4222 \
+          -p use_sim_time:=true
+      "

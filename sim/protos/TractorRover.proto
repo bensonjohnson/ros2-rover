@@ -1,0 +1,261 @@
+#VRML_SIM R2023b utf8
+# TractorRover PROTO - Differential drive rover matching real rover specs
+# Based on tractor.urdf.xacro dimensions
+
+PROTO TractorRover [
+  field SFVec3f    translation     0 0 0.045
+  field SFRotation rotation        0 0 1 0
+  field SFString   name            "tractor_rover"
+  field SFString   controller      "ros2_driver"
+  field SFBool     synchronization TRUE
+]
+{
+  Robot {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+    controller IS controller
+    synchronization IS synchronization
+    
+    children [
+      # Main chassis body (266.7mm × 102mm × 58mm)
+      Solid {
+        name "chassis"
+        translation 0 0 0.029
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.5 0.2
+              roughness 0.8
+              metalness 0.1
+            }
+            geometry Box {
+              size 0.2667 0.102 0.058
+            }
+          }
+        ]
+        boundingObject Box {
+          size 0.2667 0.102 0.058
+        }
+        physics Physics {
+          density -1
+          mass 3.0
+        }
+      }
+      
+      # Platform (on top of chassis)
+      Solid {
+        name "platform"
+        translation 0 0 0.1085
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.2 0.6
+              roughness 0.6
+            }
+            geometry Box {
+              size 0.2667 0.102 0.0025
+            }
+          }
+        ]
+      }
+      
+      # Left track (simplified as wheel for differential drive)
+      HingeJoint {
+        jointParameters HingeJointParameters {
+          axis 0 1 0
+          anchor 0 0.072 0
+        }
+        device [
+          RotationalMotor {
+            name "left_motor"
+            maxVelocity 10.0
+            maxTorque 10.0
+          }
+          PositionSensor {
+            name "left_wheel_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "left_wheel"
+          translation 0 0.072 0
+          rotation 1 0 0 1.5708
+          children [
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.1 0.1 0.1
+                roughness 1.0
+              }
+              geometry Cylinder {
+                height 0.042
+                radius 0.0485
+              }
+            }
+          ]
+          boundingObject Cylinder {
+            height 0.042
+            radius 0.0485
+          }
+          physics Physics {
+            density -1
+            mass 0.5
+          }
+        }
+      }
+      
+      # Right track (simplified as wheel for differential drive)
+      HingeJoint {
+        jointParameters HingeJointParameters {
+          axis 0 1 0
+          anchor 0 -0.072 0
+        }
+        device [
+          RotationalMotor {
+            name "right_motor"
+            maxVelocity 10.0
+            maxTorque 10.0
+          }
+          PositionSensor {
+            name "right_wheel_sensor"
+          }
+        ]
+        endPoint Solid {
+          name "right_wheel"
+          translation 0 -0.072 0
+          rotation 1 0 0 1.5708
+          children [
+            Shape {
+              appearance PBRAppearance {
+                baseColor 0.1 0.1 0.1
+                roughness 1.0
+              }
+              geometry Cylinder {
+                height 0.042
+                radius 0.0485
+              }
+            }
+          ]
+          boundingObject Cylinder {
+            height 0.042
+            radius 0.0485
+          }
+          physics Physics {
+            density -1
+            mass 0.5
+          }
+        }
+      }
+      
+      # RealSense D435i depth camera (mounted on platform front)
+      Solid {
+        name "camera_mount"
+        translation 0.12085 0 0.187
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.05 0.05 0.05
+            }
+            geometry Box {
+              size 0.025 0.09 0.025
+            }
+          }
+          # Depth camera (RangeFinder)
+          RangeFinder {
+            name "depth_camera"
+            translation 0.0125 0 0
+            rotation 0 0 1 0
+            fieldOfView 1.20428  # 69 degrees horizontal
+            width 848
+            height 100
+            minRange 0.2
+            maxRange 4.0
+            noise 0.01
+          }
+        ]
+      }
+      
+      # LD19 LiDAR (mounted above camera)
+      Solid {
+        name "lidar_mount"
+        translation 0.07635 0 0.2195
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.1 0.1 0.1
+            }
+            geometry Cylinder {
+              height 0.035
+              radius 0.019
+            }
+          }
+          Lidar {
+            name "lidar"
+            translation 0 0 0.0175
+            horizontalResolution 360
+            fieldOfView 6.28318  # 360 degrees
+            numberOfLayers 1
+            minRange 0.15
+            maxRange 12.0
+            noise 0.01
+          }
+        ]
+      }
+      
+      # IMU (LSM9DS1)
+      Solid {
+        name "imu_mount"
+        translation 0.108 0 0.058
+        children [
+          InertialUnit {
+            name "imu"
+            noise 0.001
+          }
+          Gyro {
+            name "gyro"
+            xAxis TRUE
+            yAxis TRUE
+            zAxis TRUE
+          }
+          Accelerometer {
+            name "accelerometer"
+            xAxis TRUE
+            yAxis TRUE
+            zAxis TRUE
+          }
+        ]
+      }
+      
+      # GPS (for ground truth odometry in sim)
+      GPS {
+        name "gps"
+        translation 0 0 0.1
+      }
+      
+      # Compass (for ground truth heading)
+      Compass {
+        name "compass"
+        translation 0 0 0.1
+      }
+    ]
+    
+    boundingObject Group {
+      children [
+        # Chassis bounding
+        Transform {
+          translation 0 0 0.029
+          children [
+            Box {
+              size 0.2667 0.186 0.058
+            }
+          ]
+        }
+      ]
+    }
+    
+    physics Physics {
+      density -1
+      mass 5.0
+      centerOfMass [0 0 0.03]
+    }
+  }
+}
