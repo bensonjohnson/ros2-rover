@@ -24,12 +24,16 @@ NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
 BATCH_SIZE=${4:-1024}  # Default to 1024 for better gradient estimates
+BUFFER_SIZE=${5:-250000}  # 250k buffer for more experience data
+GPU_BUFFER=true  # Store buffer on GPU for faster sampling (requires ~40GB VRAM for 250k)
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
 echo "  Batch Size: ${BATCH_SIZE}"
+echo "  Buffer Size: ${BUFFER_SIZE}"
+echo "  GPU Buffer: ${GPU_BUFFER}"
 echo ""
 
 # Check we're in the right directory
@@ -175,11 +179,20 @@ LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
   fi
 
   echo "Starting V620 SAC Trainer..."
+  
+  # Build GPU buffer flag
+  GPU_BUFFER_FLAG=""
+  if [ "${GPU_BUFFER}" = "true" ]; then
+    GPU_BUFFER_FLAG="--gpu-buffer"
+  fi
+  
   exec python3 -u v620_sac_trainer.py \
   --nats_server "${NATS_SERVER}" \
   --checkpoint_dir "${CHECKPOINT_DIR}" \
   --log_dir "${LOG_DIR}" \
   --batch_size "${BATCH_SIZE}" \
+  --buffer_size "${BUFFER_SIZE}" \
+  ${GPU_BUFFER_FLAG} \
   "$@"
 } 2>&1 | tee "${LOG_FILE}" &
 
