@@ -18,7 +18,8 @@
       "Bash(pgrep:*)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(ros2 node list:*)"
     ],
     "deny": [],
     "ask": []

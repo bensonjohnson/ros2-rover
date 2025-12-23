@@ -322,15 +322,15 @@ class LidarSafetyMonitor(Node):
     def _publish_status(self) -> None:
         """Publish status and diagnostics."""
         # Publish overall front distance for backward compatibility
-        self.min_distance_pub.publish(Float32(data=self._sector_dists['front']))
-        
-        # Publish all sector distances [front, left, right, rear]
+        self.min_distance_pub.publish(Float32(data=float(self._sector_dists['front'])))
+
+        # Publish all sector distances [front, left, right, right, rear]
         sector_msg = Float32MultiArray()
         sector_msg.data = [
-            self._sector_dists['front'],
-            self._sector_dists['left'],
-            self._sector_dists['right'],
-            self._sector_dists['rear']
+            float(self._sector_dists['front']),
+            float(self._sector_dists['left']),
+            float(self._sector_dists['right']),
+            float(self._sector_dists['rear'])
         ]
         self.sector_dist_pub.publish(sector_msg)
 
