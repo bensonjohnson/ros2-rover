@@ -683,7 +683,7 @@ class SACEpisodeRunner(Node):
         
         if linear_vel > 0.01:
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            reward += speed_ratio * 0.8  # Up to +0.8 (cancels idle, net +0.6)
+            reward += speed_ratio * 1.2  # Up to +1.2 (cancels idle, net +1.0)
         
         # Backward penalty
         if linear_vel < -0.01:
@@ -711,12 +711,12 @@ class SACEpisodeRunner(Node):
         if 0.001 < linear_intent < 0.3:
             # Penalize proportionally to how far below threshold
             sub_dz_penalty = (0.3 - linear_intent) / 0.3  # 0 to ~1
-            reward -= sub_dz_penalty * 0.4  # Moderate penalty to encourage stronger output
+            reward -= sub_dz_penalty * 0.15  # Reduced penalty to not overwhelm forward motion reward
         
         # Angular sub-deadzone: trying to turn but too weak  
         if 0.001 < angular_intent < 0.2:
             sub_dz_penalty = (0.2 - angular_intent) / 0.2
-            reward -= sub_dz_penalty * 0.2
+            reward -= sub_dz_penalty * 0.1
 
         # 6. Zero-Turn Inefficiency Penalty
         # When stationary but rotating, penalize if not using proper zero-turn
@@ -741,8 +741,8 @@ class SACEpisodeRunner(Node):
         # 8. Angular velocity penalty (spinning deterrent)
         if abs(angular_vel) > 0.2:
             ang_penalty = abs(angular_vel) * 0.3
-            if abs(linear_vel) < 0.05:
-                ang_penalty *= 3.0  # Reduced from 5.0 since we have new penalties
+            if abs(linear_vel) < 0.05 and min_lidar_dist > 0.3:
+                ang_penalty *= 3.0  # Only harsh when stationary AND in open space
             elif min_lidar_dist > 1.0 and linear_vel > 0.1:
                 ang_penalty *= 0.5
             reward -= min(ang_penalty, 0.6)
