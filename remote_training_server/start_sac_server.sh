@@ -84,6 +84,13 @@ if torch.cuda.is_available():
     print(f'  Backend: CUDA')
     sys.exit(0)
 
+# Check MPS (Apple Silicon)
+if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    print('✓ MPS (Apple Silicon) GPU detected')
+    print(f'  MPS built: {torch.backends.mps.is_built()}')
+    print('  Backend: MPS')
+    sys.exit(0)
+
 # Fallback to CPU
 print('⚠ No GPU acceleration detected! Will use CPU (slower)')
 print('  Backend: CPU')
