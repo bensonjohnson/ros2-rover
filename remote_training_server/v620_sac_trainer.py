@@ -1458,7 +1458,7 @@ if __name__ == '__main__':
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222', help='NATS server URL')
 
     # Learning - Updated for improved convergence
-    parser.add_argument('--lr', type=float, default=3e-4,
+    parser.add_argument('--lr', type=float, default=7e-4,
                         help='Learning rate for Adam optimizer')
     parser.add_argument('--batch_size', type=int, default=256,  # Reduced from 768 for 3x more gradient steps/sec
                         help='Batch size for training (smaller = better for high UTD)')
