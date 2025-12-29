@@ -481,7 +481,11 @@ class SACEpisodeRunner(Node):
 
     def _find_best_gap_multiscale(self, ranges, angles, valid, scan_msg) -> Tuple[float, float]:
         """
-        Multi-scale gap detection with forward bias.
+        Full 360° multi-scale gap detection with forward bias.
+
+        Searches entire LiDAR field of view for gaps, allowing the rover to find
+        escape routes in any direction when blocked. Forward gaps are preferred
+        via scoring bias, but side/rear gaps can be found when needed.
 
         Args:
             ranges: Range array
@@ -490,33 +494,22 @@ class SACEpisodeRunner(Node):
             scan_msg: LaserScan message for increment
 
         Returns:
-            best_angle (float): Angle of best gap in radians
+            best_angle (float): Angle of best gap in radians [-π, π]
             best_depth (float): Average depth of best gap
         """
         if not np.any(valid):
             return 0.0, 0.0
 
-        # Focus on front sector ±60° (±1.05 rad)
-        front_mask = (angles > -1.05) & (angles < 1.05) & valid
-
-        if not np.any(front_mask):
-            return 0.0, 0.0
-
-        # Extract front arc
-        front_ranges = ranges.copy()
-        front_ranges[~valid] = 0.0  # Treat invalid as obstacles
+        # Use ALL valid ranges (full 360°)
+        all_ranges = ranges.copy()
+        all_ranges[~valid] = 0.0  # Treat invalid as obstacles
 
         # Sort by angle for proper convolution
         sort_idx = np.argsort(angles)
         sorted_angles = angles[sort_idx]
-        sorted_ranges = front_ranges[sort_idx]
+        sorted_ranges = all_ranges[sort_idx]
 
-        # Front sector only
-        front_sector_mask = (sorted_angles > -1.05) & (sorted_angles < 1.05)
-        sector_angles = sorted_angles[front_sector_mask]
-        sector_ranges = sorted_ranges[front_sector_mask]
-
-        if len(sector_ranges) < 5:
+        if len(sorted_ranges) < 5:
             return 0.0, 0.0
 
         best_gap = {'angle': 0.0, 'depth': 0.0, 'score': -np.inf}
@@ -525,11 +518,11 @@ class SACEpisodeRunner(Node):
         for window_deg in [15, 25, 35]:
             window_rad = np.radians(window_deg)
             window_size = int(window_rad / scan_msg.angle_increment)
-            window_size = max(3, min(window_size, len(sector_ranges) // 3))
+            window_size = max(3, min(window_size, len(sorted_ranges) // 3))
 
             # Convolve to smooth
-            if len(sector_ranges) >= window_size:
-                smoothed = np.convolve(sector_ranges, np.ones(window_size)/window_size, mode='same')
+            if len(sorted_ranges) >= window_size:
+                smoothed = np.convolve(sorted_ranges, np.ones(window_size)/window_size, mode='same')
 
                 # Find local maxima
                 for i in range(window_size, len(smoothed) - window_size):
@@ -538,16 +531,19 @@ class SACEpisodeRunner(Node):
 
                     # Check if local maximum
                     if smoothed[i] > smoothed[i-1] and smoothed[i] > smoothed[i+1]:
-                        # Scoring: depth × width_bonus × forward_bias
-                        angle = sector_angles[i]
-                        forward_bias = 1.0 - (abs(angle) / 1.05)  # 1.0 at center, 0.0 at ±60°
-
-                        # Increased forward bias from 10% to 30%
-                        forward_weight = 0.7 + 0.3 * forward_bias
+                        angle = sorted_angles[i]
+                        
+                        # Forward bias: prefer gaps ahead, but allow all directions
+                        # 1.0 at center (0°), 0.3 at sides (±90°), 0.1 at rear (±180°)
+                        abs_angle = abs(angle)
+                        if abs_angle < math.pi / 2:  # Front hemisphere
+                            forward_bias = 1.0 - (abs_angle / (math.pi / 2)) * 0.7  # 1.0 → 0.3
+                        else:  # Rear hemisphere
+                            forward_bias = 0.3 - ((abs_angle - math.pi / 2) / (math.pi / 2)) * 0.2  # 0.3 → 0.1
 
                         width_bonus = 1.0 + (window_deg / 35.0) * 0.3  # Prefer wider gaps
 
-                        score = smoothed[i] * forward_weight * width_bonus
+                        score = smoothed[i] * forward_bias * width_bonus
 
                         if score > best_gap['score']:
                             best_gap = {
@@ -632,7 +628,8 @@ class SACEpisodeRunner(Node):
         best_angle, best_depth = self._find_best_gap_multiscale(ranges, angles, valid, scan_msg)
 
         # 5. Corridor Detection and Centering (if enabled)
-        target = np.clip(best_angle / (math.pi/2), -1.0, 1.0)
+        # Normalize best_angle from [-π, π] to [-1, 1] for full 360° coverage
+        target = np.clip(best_angle / math.pi, -1.0, 1.0)
 
         if self._enable_corridor_centering:
             is_corridor, centering_error = self._detect_corridor_and_center(scan_msg)
@@ -962,15 +959,15 @@ class SACEpisodeRunner(Node):
             self._last_position_for_rotation = (self._latest_odom[0], self._latest_odom[1])
         # ========== END ROTATION TRACKING ==========
 
-        # Construct 5D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang]
-        # Simplified from 12D - removed IMU data (current_angular already has fused yaw rate)
-        # and min_depth (redundant with lidar_min)
+        # Construct 6D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang, gap_heading]
+        # Added gap_heading to give model explicit signal of where open space is
         proprio = np.array([[
             lidar_min,                  # Min LiDAR distance (360 Safety)
             self._prev_action[0],       # Previous linear action
             self._prev_action[1],       # Previous angular action
             current_linear,             # Current fused linear velocity (from EKF)
-            current_angular             # Current fused angular velocity (from EKF)
+            current_angular,            # Current fused angular velocity (from EKF)
+            self._target_heading        # Gap heading: direction to open space [-1, 1]
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
