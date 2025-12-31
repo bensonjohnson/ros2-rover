@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # SAC Autonomous Rover Startup Script
-# Runs continuous SAC inference and data collection
+# Runs continuous SAC inference and data collection using Unified BEV architecture
 
 echo "=================================================="
-echo "ROS2 Rover - SAC Autonomous Training"
+echo "ROS2 Rover - SAC Autonomous Training (Unified BEV)"
 echo "=================================================="
 
 if [ ! -f "install/setup.bash" ]; then
@@ -15,14 +15,13 @@ fi
 # Configuration
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 MAX_SPEED=${2:-"0.18"}
-ALGORITHM="sac"
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
-echo "  Algorithm: ${ALGORITHM}"
 echo "  Max Speed: ${MAX_SPEED} m/s"
-
+echo "  Architecture: Unified BEV (LiDAR + Depth fusion)"
 echo ""
+
 echo "⚠ WARNING: Rover will drive AUTONOMOUSLY!"
 echo "  - No teleoperation required"
 echo "  - Rover will explore on its own"
@@ -69,7 +68,6 @@ LOG_FILE="log/sac_rover_$(date +%Y%m%d_%H%M%S).log"
 
 ros2 launch tractor_bringup sac_autonomous.launch.py \
   nats_server:=${NATS_SERVER} \
-  algorithm:=${ALGORITHM} \
   max_speed:=${MAX_SPEED} \
   2>&1 | tee "$LOG_FILE" &
 
@@ -83,7 +81,7 @@ echo "Log file: $LOG_FILE"
 echo ""
 echo "What's happening:"
 echo "  1. Rover runs SAC policy on NPU (30Hz)"
-echo "  2. Collects experience (RGB, Depth, Actions, Rewards)"
+echo "  2. Collects experience (Unified BEV, Proprioception)"
 echo "  3. Sends batches to V620 server asynchronously"
 echo "  4. Downloads updated model weights periodically"
 echo ""

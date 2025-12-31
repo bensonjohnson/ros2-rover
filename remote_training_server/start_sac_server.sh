@@ -1,31 +1,21 @@
 #!/bin/bash
 
 # SAC Training Server Startup Script for V620
-# Trains a continuous SAC policy using ROCm acceleration
-#
-# Usage:
-#   ./start_sac_server.sh [nats_server] [checkpoint_dir] [log_dir] [additional_args...]
-#
-# Examples:
-#   # Basic usage
-#   ./start_sac_server.sh
-#
-#   # Custom NATS server
-#   ./start_sac_server.sh nats://nats.example.com:4222
+# Trains a continuous SAC policy using ROCm acceleration with Unified BEV architecture
 
 set -e
 
 echo "=================================================="
-echo "SAC Training Server (V620)"
+echo "SAC Training Server (V620) - Unified BEV Architecture"
 echo "=================================================="
 
 # Configuration
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
-BATCH_SIZE=${4:-1024}  # Default to 1024 for better gradient estimates
-BUFFER_SIZE=${5:-250000}  # 250k buffer for more experience data
-GPU_BUFFER=true  # Store buffer on GPU for faster sampling (requires ~40GB VRAM for 250k)
+BATCH_SIZE=${4:-256}  # Reduced from 1024 for faster gradient steps and lower memory usage
+BUFFER_SIZE=${5:-50000}  # Reduced from 250k to match rover's capacity (faster learning cycle)
+GPU_BUFFER=true  # Store buffer on GPU for faster sampling
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
@@ -34,6 +24,7 @@ echo "  Log Dir: ${LOG_DIR}"
 echo "  Batch Size: ${BATCH_SIZE}"
 echo "  Buffer Size: ${BUFFER_SIZE}"
 echo "  GPU Buffer: ${GPU_BUFFER}"
+echo "  Architecture: Unified BEV (LiDAR + Depth fusion)"
 echo ""
 
 # Check we're in the right directory
@@ -153,7 +144,7 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   if rocm-smi --showmeminfo vram 2>/dev/null | grep -q "Total"; then
     TOTAL_VRAM=$(rocm-smi --showmeminfo vram 2>/dev/null | grep "VRAM Total Memory" | awk '{print $5}')
     echo "  Total VRAM: ${TOTAL_VRAM} MB"
-    # Note: Batch size of 256 requires ~8GB, 768 requires ~20GB
+    # Note: Batch size of 256 requires ~8GB
   fi
 fi
 
