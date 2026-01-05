@@ -656,102 +656,85 @@ class SACEpisodeRunner(Node):
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
         """
-        Tank-steer optimized reward function:
-        1. Forward progress (primary objective)
-        2. Collision penalty
-        3. Side clearance bonus
-        4. Smooth control penalty
-        5. Idle penalty
-        6. Zero-turn inefficiency penalty (NEW)
-        7. Full revolution penalty (NEW)
+        Direct Track Control reward function:
+        - action[0] = left track speed (-1 to 1)
+        - action[1] = right track speed (-1 to 1)
         
-        Removes: Target heading alignment (let model learn navigation autonomously)
+        Rewards:
+        1. Forward progress (both tracks positive and similar)
+        2. Opposite track penalty (spinning in place)
+        3. Asymmetric track penalty (one track only) 
+        4. Side clearance bonus
+        5. Smooth control penalty
+        6. Full revolution penalty
+        
         Range: [-1.0, 1.0]
         """
         reward = 0.0
         target_speed = self._curriculum_max_speed
-
-        # NOTE: No explicit collision penalty - safety monitor forces hard stop,
-        # so the robot becomes stationary and the idle penalty handles it naturally.
-        # This prevents learned helplessness from overly harsh collision penalties.
-
-        # 2. Idle / Forward Motion Reward
-        reward -= 0.2  # Base idle penalty
         
+        left_track = action[0]
+        right_track = action[1]
+        
+        # 1. Base idle penalty - always applied, must be overcome by forward motion
+        reward -= 0.2
+        
+        # 2. Forward Motion Reward - based on actual velocity
         if linear_vel > 0.01:
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            reward += speed_ratio * 1.2  # Up to +1.2 (cancels idle, net +1.0)
+            reward += speed_ratio * 1.2  # Up to +1.0 net (cancels idle penalty)
         
-        # Backward penalty - more aggressive, scales with magnitude
+        # 3. Backward penalty - both tracks negative
         if linear_vel < -0.01:
-            backward_penalty = 0.5 + abs(linear_vel) * 2.0  # Up to -0.7 for full reverse
+            backward_penalty = 0.5 + abs(linear_vel) * 2.0
             reward -= backward_penalty
         
-        # Asymmetric action penalty: high angular intent with near-zero linear
-        # This breaks the local optimum of spinning one track backward
-        if abs(action[0]) < 0.15 and abs(action[1]) > 0.15:
-            # Penalty scales with how asymmetric the command is
-            asymmetry = abs(action[1]) - abs(action[0])
-            reward -= 0.4 * asymmetry  # Up to -0.4 for full spin with no forward
-
-        # 3. Side Clearance Reward
+        # 4. TRACK COORDINATION PENALTIES (new for direct track control)
+        
+        # 4a. Opposite Direction Penalty - tracks spinning in opposite directions = pure rotation
+        # This is the key penalty that prevents "spin in place" behavior
+        if left_track * right_track < 0:  # Different signs = opposite directions
+            # Penalty proportional to how opposite they are
+            opposition_magnitude = min(abs(left_track), abs(right_track))
+            reward -= opposition_magnitude * 0.8  # Strong penalty for spinning
+        
+        # 4b. Asymmetric Track Penalty - one track moving, other barely moving
+        # Prevents "spin one track backward" behavior
+        track_diff = abs(left_track - right_track)
+        track_avg = (abs(left_track) + abs(right_track)) / 2.0
+        
+        if track_avg > 0.1:  # Only apply if tracks are actually active
+            asymmetry_ratio = track_diff / (track_avg + 0.1)  # 0 = symmetric, 2 = max asymmetric
+            if asymmetry_ratio > 0.8:  # One track significantly different from other
+                reward -= 0.3 * asymmetry_ratio
+        
+        # 4c. Both Tracks Forward Bonus - reward coordinated forward motion
+        if left_track > 0.2 and right_track > 0.2:
+            # Both tracks are moving forward
+            coordination_bonus = min(left_track, right_track) * 0.3
+            reward += coordination_bonus
+        
+        # 5. Side Clearance Reward
         if min_lidar_dist > 0.5:
             reward += 0.1
         elif min_lidar_dist < 0.2:
             reward -= 0.2
-
-        # 4. Smooth Control Penalty
+        
+        # 6. Smooth Control Penalty
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.1
-
-        # 5. Sub-Deadzone Penalty (NEW)
-        # Penalize outputs that show intent to move but are too weak to overcome motor friction
-        # MIN_LINEAR = 0.3 in soft deadzone compensation, MIN_ANGULAR = 0.2
-        # Outputs in range (0.001, 0.3) for linear or (0.001, 0.2) for angular are "wasted effort"
-        linear_intent = abs(action[0])
-        angular_intent = abs(action[1])
         
-        # Linear sub-deadzone: trying to move but too weak
-        if 0.001 < linear_intent < 0.3:
-            # Penalize proportionally to how far below threshold
-            sub_dz_penalty = (0.3 - linear_intent) / 0.3  # 0 to ~1
-            reward -= sub_dz_penalty * 0.15  # Reduced penalty to not overwhelm forward motion reward
-        
-        # Angular sub-deadzone: trying to turn but too weak  
-        if 0.001 < angular_intent < 0.2:
-            sub_dz_penalty = (0.2 - angular_intent) / 0.2
-            reward -= sub_dz_penalty * 0.1
-
-        # 6. Zero-Turn Inefficiency Penalty
-        # When stationary but rotating, penalize if not using proper zero-turn
-        # Proper zero-turn: tracks spin in opposite directions at equal speeds
-        # BAD: low angular action but still rotating (inefficient/slip)
-        # GOOD: high angular action for the angular velocity achieved
-        if abs(linear_vel) < 0.02 and abs(angular_vel) > 0.15:
-            # Expected: action[1] should match angular_vel direction and magnitude
-            expected_ang_action = np.sign(angular_vel) * min(1.0, abs(angular_vel))
-            ang_action_error = abs(action[1] - expected_ang_action)
-            
-            # Penalize inefficient rotation (low action but still turning = slip/waste)
-            if ang_action_error > 0.3:
-                reward -= 0.3 * ang_action_error
-
         # 7. Full Revolution Penalty
-        # If accumulated rotation > 2π without forward progress, heavy penalty
         if self._revolution_penalty_triggered:
             reward -= 0.8
-            self._revolution_penalty_triggered = False  # One-shot penalty
-
-        # 8. Angular velocity penalty (spinning deterrent)
-        if abs(angular_vel) > 0.2:
-            ang_penalty = abs(angular_vel) * 0.3
-            if abs(linear_vel) < 0.05 and min_lidar_dist > 0.3:
-                ang_penalty *= 3.0  # Only harsh when stationary AND in open space
-            elif min_lidar_dist > 1.0 and linear_vel > 0.1:
-                ang_penalty *= 0.5
-            reward -= min(ang_penalty, 0.6)
-
+            self._revolution_penalty_triggered = False
+        
+        # 8. Angular velocity penalty (less harsh now that track penalties exist)
+        if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
+            # Spinning in place without forward progress
+            reward -= abs(angular_vel) * 0.3
+        
         return np.clip(reward, -1.0, 1.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
@@ -1032,13 +1015,16 @@ class SACEpisodeRunner(Node):
                 self.get_logger().info('🔥 Starting Random Exploration Warmup...')
                 self.pbar.set_description("🔥 Warmup: Random Exploration")
 
-            # Random action with forward bias and safety-based speed control
-            # Linear: bias towards moving forward (0.3 - 1.0 range)
-            # Angular: full range but with lower magnitude on average
+            # DIRECT TRACK CONTROL: Random exploration with forward bias
+            # action[0] = left track, action[1] = right track
+            # Bias towards both tracks forward for forward motion
 
-            # Base random actions
-            random_linear = np.random.uniform(0.3, 1.0)  # Forward bias
-            random_angular = np.random.uniform(-0.8, 0.8)  # Moderate turning
+            # Base random track speeds - bias towards forward
+            base_speed = np.random.uniform(0.3, 1.0)  # Forward bias
+            track_variance = np.random.uniform(-0.3, 0.3)  # Slight turn variance
+            
+            random_left = base_speed + track_variance
+            random_right = base_speed - track_variance
 
             # Safety-based speed scaling
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
@@ -1051,7 +1037,8 @@ class SACEpisodeRunner(Node):
             else:
                 speed_scale = 1.0
 
-            random_linear *= speed_scale
+            random_left = np.clip(random_left * speed_scale, -1.0, 1.0)
+            random_right = np.clip(random_right * speed_scale, -1.0, 1.0)
 
             # DEBUG: Log warmup state occasionally
             if not hasattr(self, '_debug_log_count'):
@@ -1060,11 +1047,11 @@ class SACEpisodeRunner(Node):
             if self._debug_log_count % 30 == 0:  # Log every 1 second
                 self.get_logger().info(
                     f"🔍 Warmup Random: LiDAR={lidar_min:.2f}m, Clearance={clearance_dist:.2f}m, "
-                    f"Linear={random_linear:.2f}, Angular={random_angular:.2f}"
+                    f"LeftTrack={random_left:.2f}, RightTrack={random_right:.2f}"
                 )
 
-            # Override model action with random exploration
-            action = np.array([random_linear, random_angular], dtype=np.float32)
+            # Override model action with random exploration (direct track format)
+            action = np.array([random_left, random_right], dtype=np.float32)
 
         elif self._warmup_active:
             self.get_logger().info('✅ Warmup Complete (Model v1+ loaded). Switching to learned policy.')
@@ -1130,38 +1117,43 @@ class SACEpisodeRunner(Node):
                  
             cmd.linear.x = -0.05
             cmd.angular.z = 0.0
-            actual_action = np.array([-0.5, 0.0]) # Record that we stopped
+            actual_action = np.array([-0.5, -0.5])  # Both tracks back = reverse
             
             # Only mark as collision if sensors are warmed up
             # During warmup, still stop but don't trigger episode resets
             collision = self._sensor_warmup_complete
         else:
-            # Normal execution
-            # DEAD ZONE COMPENSATION: Motors need minimum power to overcome static friction
-            # If model wants to move forward at all, ensure minimum velocity
-            linear_action = action[0]
-            angular_action = action[1]
+            # Normal execution with DIRECT TRACK CONTROL
+            # action[0] = left track speed (-1 to 1)
+            # action[1] = right track speed (-1 to 1)
+            left_track = action[0]
+            right_track = action[1]
             
-            # SOFT DEADZONE Compensation
+            # SOFT DEADZONE Compensation for each track
             # Maps [-1, 1] model output to [-1, -MIN] and [MIN, 1] physical range
-            # This ensures that ANY model intent result in motor movement
             def apply_soft_deadzone(val, min_val):
                 if abs(val) < 0.001: return 0.0
                 return math.copysign(min_val + (1.0 - min_val) * abs(val), val)
 
-            MIN_LINEAR = 0.3
-            MIN_ANGULAR = 0.2
+            MIN_TRACK = 0.25  # Minimum to overcome motor friction
             
-            linear_action = apply_soft_deadzone(action[0], MIN_LINEAR)
-            angular_action = apply_soft_deadzone(action[1], MIN_ANGULAR)
+            left_track = apply_soft_deadzone(action[0], MIN_TRACK)
+            right_track = apply_soft_deadzone(action[1], MIN_TRACK)
+            
+            # Convert track speeds to linear/angular for Twist message
+            # linear = (left + right) / 2
+            # angular = (right - left) / wheel_separation
+            wheel_sep = 0.3  # meters (matches motor driver)
+            linear_vel = (left_track + right_track) / 2.0
+            angular_vel = (right_track - left_track) / wheel_sep
             
             # Apply velocity scaling
-            if self._current_model_version <= 0:
-                cmd.linear.x = float(linear_action * self.max_linear)
-            else:
-                cmd.linear.x = float(linear_action * self._curriculum_max_speed)
-            cmd.angular.z = float(angular_action * self.max_angular)
-            actual_action = np.array([linear_action, angular_action])
+            max_speed = self.max_linear if self._current_model_version <= 0 else self._curriculum_max_speed
+            cmd.linear.x = float(linear_vel * max_speed)
+            cmd.angular.z = float(angular_vel * self.max_angular)
+            
+            # Record actual track commands (not converted values)
+            actual_action = np.array([left_track, right_track])
             collision = False
             
         self.cmd_pub.publish(cmd)
