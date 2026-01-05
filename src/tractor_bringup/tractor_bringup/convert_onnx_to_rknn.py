@@ -163,11 +163,11 @@ def convert_onnx_to_rknn(
             # This ensures exact match between calibration and inference preprocessing
             'mean_values': [
                 [0, 0],           # BEV (2 channels)
-                [0] * 5,          # Proprio (5-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang)
+                [0] * 6,          # Proprio (6-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading)
             ],
             'std_values': [
                 [1, 1],           # BEV
-                [1] * 5,          # Proprio (5-dim)
+                [1] * 6,          # Proprio (6-dim)
             ],
             'target_platform': target_platform,
             'optimization_level': 3
@@ -189,7 +189,7 @@ def convert_onnx_to_rknn(
             inputs=['bev', 'proprio'],
             input_size_list=[
                 [1, 2, 128, 128],   # Unified BEV grid (2 channels: LiDAR + Depth)
-                [1, 5],             # Proprio (5-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang)
+                [1, 6],             # Proprio (6-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading)
             ]
         )
         if ret != 0:
