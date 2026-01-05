@@ -682,9 +682,17 @@ class SACEpisodeRunner(Node):
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
             reward += speed_ratio * 1.2  # Up to +1.2 (cancels idle, net +1.0)
         
-        # Backward penalty
+        # Backward penalty - more aggressive, scales with magnitude
         if linear_vel < -0.01:
-            reward -= 0.5
+            backward_penalty = 0.5 + abs(linear_vel) * 2.0  # Up to -0.7 for full reverse
+            reward -= backward_penalty
+        
+        # Asymmetric action penalty: high angular intent with near-zero linear
+        # This breaks the local optimum of spinning one track backward
+        if abs(action[0]) < 0.15 and abs(action[1]) > 0.15:
+            # Penalty scales with how asymmetric the command is
+            asymmetry = abs(action[1]) - abs(action[0])
+            reward -= 0.4 * asymmetry  # Up to -0.4 for full spin with no forward
 
         # 3. Side Clearance Reward
         if min_lidar_dist > 0.5:
