@@ -290,7 +290,8 @@ class SACEpisodeRunner(Node):
         self._prev_angular_actions = deque(maxlen=10) # For action smoothness tracking
 
         # Gap Following State
-        self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right)
+        self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right) - 360 gap heading for reward
+        self._bev_heading = 0.0  # Front-biased BEV heading for proprioception
         self._prev_target_heading = 0.0 # For rate limiting
         self._max_depth_val = 0.0
 
@@ -298,10 +299,10 @@ class SACEpisodeRunner(Node):
         self._latest_imu_yaw = 0.0
         self._prev_imu_yaw = None
 
-        # Rotation tracking for spin penalty (NEW)
+        # Rotation tracking for spin penalty
         self._cumulative_rotation = 0.0  # Radians since last forward progress
         self._last_yaw_for_rotation = None  # Previous yaw for delta calculation
-        self._forward_progress_threshold = 0.8  # meters to reset rotation counter
+        self._forward_progress_threshold = 0.3  # meters to reset rotation counter (reduced from 0.8)
         self._last_position_for_rotation = None  # (x, y) for forward progress detection
         self._revolution_penalty_triggered = False
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
@@ -689,14 +690,14 @@ class SACEpisodeRunner(Node):
             backward_penalty = 0.5 + abs(linear_vel) * 2.0
             reward -= backward_penalty
         
-        # 4. TRACK COORDINATION PENALTIES (new for direct track control)
+        # 4. TRACK COORDINATION PENALTIES (strengthened for anti-spin)
         
         # 4a. Opposite Direction Penalty - tracks spinning in opposite directions = pure rotation
         # This is the key penalty that prevents "spin in place" behavior
         if left_track * right_track < 0:  # Different signs = opposite directions
-            # Penalty proportional to how opposite they are
+            # Penalty proportional to how opposite they are (STRENGTHENED from 0.8 to 1.2)
             opposition_magnitude = min(abs(left_track), abs(right_track))
-            reward -= opposition_magnitude * 0.8  # Strong penalty for spinning
+            reward -= opposition_magnitude * 1.2  # Very strong penalty for spinning
         
         # 4b. Asymmetric Track Penalty - one track moving, other barely moving
         # Prevents "spin one track backward" behavior
@@ -706,7 +707,7 @@ class SACEpisodeRunner(Node):
         if track_avg > 0.1:  # Only apply if tracks are actually active
             asymmetry_ratio = track_diff / (track_avg + 0.1)  # 0 = symmetric, 2 = max asymmetric
             if asymmetry_ratio > 0.8:  # One track significantly different from other
-                reward -= 0.3 * asymmetry_ratio
+                reward -= 0.4 * asymmetry_ratio  # Increased from 0.3
         
         # 4c. Both Tracks Forward Bonus - reward coordinated forward motion
         if left_track > 0.2 and right_track > 0.2:
@@ -730,10 +731,27 @@ class SACEpisodeRunner(Node):
             reward -= 0.8
             self._revolution_penalty_triggered = False
         
-        # 8. Angular velocity penalty (less harsh now that track penalties exist)
+        # 8. Stationary Spin Penalty (STRENGTHENED)
         if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
-            # Spinning in place without forward progress
-            reward -= abs(angular_vel) * 0.3
+            # Spinning in place without forward progress - harsh penalty
+            reward -= abs(angular_vel) * 0.5  # Increased from 0.3
+        
+        # 9. Gap-Heading Reward Shaping (NEW)
+        # Reward for making progress TOWARD the gap heading, not just aligning
+        if hasattr(self, '_target_heading') and abs(self._target_heading) > 0.1:
+            # How aligned are our tracks with the gap direction?
+            # If gap is left (positive), we want left track slower than right (turning left)
+            # If gap is right (negative), we want right track slower than left (turning right)
+            intended_turn = right_track - left_track  # Positive = turning left
+            gap_direction = self._target_heading  # Positive = gap on left
+            
+            # If turning toward gap while moving forward = bonus
+            if linear_vel > 0.03:
+                alignment_with_gap = intended_turn * gap_direction
+                if alignment_with_gap > 0:  # Turning toward gap
+                    reward += 0.2 * min(alignment_with_gap, 0.5)
+                elif abs(gap_direction) > 0.5:  # Strongly misaligned and not correcting
+                    reward -= 0.1
         
         return np.clip(reward, -1.0, 1.0)
 
@@ -875,10 +893,10 @@ class SACEpisodeRunner(Node):
         # TEMPORAL SMOOTHING: low-pass filter to prevent rapid oscillation
         # new_heading = alpha * raw + (1 - alpha) * old
         alpha = 0.3  # Low alpha = more smoothing
-        if hasattr(self, '_target_heading') and self._target_heading is not None:
-            self._target_heading = alpha * raw_heading + (1 - alpha) * self._target_heading
+        if hasattr(self, '_bev_heading'):
+            self._bev_heading = alpha * raw_heading + (1 - alpha) * self._bev_heading
         else:
-            self._target_heading = raw_heading
+            self._bev_heading = raw_heading
 
         # Calculate min_forward_dist from laser for reward function
         # LiDAR: 0.0 = free, 1.0 = occupied
@@ -906,10 +924,11 @@ class SACEpisodeRunner(Node):
         else:
             ax, ay, az, gx, gy, gz = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        # LiDAR Metrics for Reward
+        # LiDAR Metrics for Reward (360° gap heading)
         lidar_min, lidar_sides, gap_heading = self._process_lidar_metrics(self._latest_scan)
 
-        # Update target heading for Gap Follower (Warmup)
+        # Update target heading for reward shaping (360° awareness)
+        # Note: _bev_heading (front-biased) is used for proprioception
         self._target_heading = gap_heading
 
         # Get current velocities from EKF-fused odometry for reward/proprioception
@@ -950,15 +969,15 @@ class SACEpisodeRunner(Node):
             self._last_position_for_rotation = (self._latest_odom[0], self._latest_odom[1])
         # ========== END ROTATION TRACKING ==========
 
-        # Construct 6D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang, gap_heading]
-        # Added gap_heading to give model explicit signal of where open space is
+        # Construct 6D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang, bev_heading]
+        # Using front-biased BEV heading (not 360° gap) to encourage forward driving
         proprio = np.array([[
             lidar_min,                  # Min LiDAR distance (360 Safety)
-            self._prev_action[0],       # Previous linear action
-            self._prev_action[1],       # Previous angular action
+            self._prev_action[0],       # Previous linear action (left track)
+            self._prev_action[1],       # Previous angular action (right track)
             current_linear,             # Current fused linear velocity (from EKF)
             current_angular,            # Current fused angular velocity (from EKF)
-            self._target_heading        # Gap heading: direction to open space [-1, 1]
+            self._bev_heading           # Front-biased BEV heading [-1, 1] (prefers forward)
         ]], dtype=np.float32)
 
         # 2. Inference (RKNN)
