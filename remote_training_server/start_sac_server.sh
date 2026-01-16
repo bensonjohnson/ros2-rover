@@ -13,7 +13,7 @@ echo "=================================================="
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
-BATCH_SIZE=${4:-256}  # Reduced from 1024 for faster gradient steps and lower memory usage
+BATCH_SIZE=${4:-1536}  # Reduced from 1024 for faster gradient steps and lower memory usage
 BUFFER_SIZE=${5:-50000}  # Reduced from 250k to match rover's capacity (faster learning cycle)
 GPU_BUFFER=true  # Store buffer on GPU for faster sampling
 
