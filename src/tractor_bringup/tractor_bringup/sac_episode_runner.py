@@ -246,7 +246,7 @@ class SACEpisodeRunner(Node):
 
         # Curriculum State (updated by server)
         self._curriculum_collision_dist = 0.5
-        self._curriculum_max_speed = 0.1
+        self._curriculum_max_speed = self.max_linear  # Use configured max speed (0.18 m/s)
 
         # Buffers for batching (unified BEV mode)
         self._data_buffer = {
@@ -729,7 +729,7 @@ class SACEpisodeRunner(Node):
         Direct Track Control reward function:
         - action[0] = left track speed (-1 to 1)
         - action[1] = right track speed (-1 to 1)
-        
+
         Rewards:
         1. Forward progress (both tracks positive and similar)
         2. Opposite track penalty (spinning in place) - RELAXED
@@ -739,15 +739,20 @@ class SACEpisodeRunner(Node):
         6. Full revolution penalty
         7. Exploration bonus (state visitation)
         8. Action diversity bonus
-        
+
         Range: [-1.0, 1.0]
         """
+        # Apply velocity deadband to filter odometry noise
+        VELOCITY_DEADBAND = 0.03  # 3 cm/s - filter encoder noise and drift
+        if abs(linear_vel) < VELOCITY_DEADBAND:
+            linear_vel = 0.0
+
         reward = 0.0
         target_speed = self._curriculum_max_speed
-        
+
         left_track = action[0]
         right_track = action[1]
-        
+
         # Track current phase for reward scaling
         phase = self._get_current_phase()
         
@@ -778,9 +783,9 @@ class SACEpisodeRunner(Node):
         elif linear_vel > 0:  # Still moving, just very slow
             reward += 0.02
         
-        # 3. Backward penalty - MATCH collision penalty strength
-        if linear_vel < -0.01:
-            backward_penalty = 0.3 + abs(linear_vel) * 1.5
+        # 3. Backward penalty - reduced threshold and magnitude to avoid false penalties from noise
+        if linear_vel < -0.03:  # Increased from -0.01 to avoid triggering on odometry noise
+            backward_penalty = 0.15 + abs(linear_vel) * 0.8  # Reduced from 0.3 and 1.5
             reward -= backward_penalty
         
         # 4. TRACK COORDINATION PENALTIES (RELAXED)
