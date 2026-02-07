@@ -1237,12 +1237,7 @@ class SACEpisodeRunner(Node):
 
         # 4. Execute Action
         cmd = Twist()
-        
-        # Track action for diversity bonus (always, including eval episodes)
-        if self._current_model_version > 0:
-            # Store model action for diversity tracking
-            self._prev_actions_buffer.append(actual_action.copy())
-        
+
         # SENSOR WARMUP: Count down before enabling safety-triggered resets
         # This prevents false positives from unstable sensor data during startup
         if not self._sensor_warmup_complete:
@@ -1312,7 +1307,12 @@ class SACEpisodeRunner(Node):
             # Record actual track commands (not converted values)
             actual_action = np.array([left_track, right_track])
             collision = False
-            
+
+        # Track action for diversity bonus (always, including eval episodes)
+        if self._current_model_version > 0:
+            # Store actual executed action for diversity tracking
+            self._prev_actions_buffer.append(actual_action.copy())
+
         self.cmd_pub.publish(cmd)
 
         # 5. Compute Reward
