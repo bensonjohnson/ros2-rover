@@ -1341,11 +1341,11 @@ class SACEpisodeRunner(Node):
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
         
-        # Log reward breakdown occasionally for debugging
+        # Log reward breakdown occasionally for debugging (using lidar_sides instead of side_clearance)
         if np.random.rand() < 0.05:  # ~5% of steps
             self._log_reward_breakdown(
                 actual_action, current_linear, current_angular,
-                lidar_min, side_clearance
+                lidar_min, lidar_sides
             )
 
     def _trigger_episode_reset(self):
