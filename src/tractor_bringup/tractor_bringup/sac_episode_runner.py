@@ -295,6 +295,15 @@ class SACEpisodeRunner(Node):
         self._prev_target_heading = 0.0 # For rate limiting
         self._max_depth_val = 0.0
 
+        # Curriculum and Exploration State (NEW)
+        self._training_phase = 'exploration'  # exploration, learning, refinement
+        self._episode_reward_history = deque(maxlen=50)  # Track episode rewards
+        self._current_episode_reward = 0.0  # For episode-based phase tracking
+        self._last_phase_transition_step = 0
+        self._eval_reward_window = deque(maxlen=20)  # Last 20 eval episode rewards
+        self._state_visits = {}  # State visit counts for exploration bonus
+        self._prev_actions_buffer = deque(maxlen=30)  # Action history for diversity bonus
+
         # IMU State for Stitching
         self._latest_imu_yaw = 0.0
         self._prev_imu_yaw = None
@@ -655,6 +664,66 @@ class SACEpisodeRunner(Node):
 
         return min_dist_all, mean_side_dist, target
 
+    def _get_current_phase(self):
+        """Get current training phase based on performance metrics."""
+        if self._current_model_version <= 5:
+            return 'exploration'
+        elif self._current_model_version <= 15:
+            return 'learning'
+        else:
+            return 'refinement'
+    
+    def _compute_exploration_bonus(self, bev_grid):
+        """
+        Compute exploration bonus based on state visitation.
+        
+        Returns:
+            bonus (float): Additional reward for visiting novel states
+        """
+        # Quantize BEV to 16x16 for hashing (reduces state space)
+        bev_small = cv2.resize(bev_grid[0], (16, 16))
+        state_hash = tuple(bev_small.flatten().astype(np.uint8))
+        
+        # Count visits
+        if state_hash not in self._state_visits:
+            self._state_visits[state_hash] = 0
+        
+        visit_count = self._state_visits[state_hash]
+        
+        # Bonus: +0.1 for first visit, decays with visits
+        # Using inverse count heuristic: 1/sqrt(count)
+        bonus = 0.1 / (1.0 + np.sqrt(visit_count))
+        
+        # Increment visit count
+        self._state_visits[state_hash] += 1
+        
+        return bonus
+    
+    def _compute_action_diversity_bonus(self):
+        """
+        Compute bonus for action diversity.
+        
+        Returns:
+            bonus (float): Additional reward for varied actions
+        """
+        if len(self._prev_actions_buffer) < 10:
+            return 0.0
+        
+        # Compute std of recent actions
+        actions = np.array(list(self._prev_actions_buffer))
+        
+        # Linear action std (first column)
+        lin_std = np.std(actions[:, 0])
+        
+        # Angular action std (second column)
+        ang_std = np.std(actions[:, 1])
+        
+        # Reward for diversity in both dimensions
+        # Normalize to ~[0, 0.1] range
+        bonus = 0.05 * (lin_std + ang_std)
+        
+        return np.clip(bonus, 0.0, 0.15)
+    
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
         """
         Direct Track Control reward function:
@@ -663,11 +732,13 @@ class SACEpisodeRunner(Node):
         
         Rewards:
         1. Forward progress (both tracks positive and similar)
-        2. Opposite track penalty (spinning in place)
-        3. Asymmetric track penalty (one track only) 
+        2. Opposite track penalty (spinning in place) - RELAXED
+        3. Asymmetric track penalty (one track only) - RELAXED
         4. Side clearance bonus
         5. Smooth control penalty
         6. Full revolution penalty
+        7. Exploration bonus (state visitation)
+        8. Action diversity bonus
         
         Range: [-1.0, 1.0]
         """
@@ -677,42 +748,60 @@ class SACEpisodeRunner(Node):
         left_track = action[0]
         right_track = action[1]
         
-        # 1. Base idle penalty - always applied, must be overcome by forward motion
-        reward -= 0.2
+        # Track current phase for reward scaling
+        phase = self._get_current_phase()
+        
+        # ========== PHASE-DEPENDENT REWARD SCALING ==========
+        if phase == 'exploration':
+            # Phase 1: Exploration - relax all penalties, encourage ANY motion
+            idle_penalty = 0.05  # Very mild penalty
+            forward_bonus_mult = 1.5  # Strong encouragement
+            spin_penalty_scale = 0.3  # Very mild spin penalty
+        elif phase == 'learning':
+            # Phase 2: Learning - moderate penalties, encourage forward motion
+            idle_penalty = 0.15
+            forward_bonus_mult = 1.2
+            spin_penalty_scale = 0.6
+        else:  # refinement
+            # Phase 3: Refinement - full reward function
+            idle_penalty = 0.1
+            forward_bonus_mult = 1.0
+            spin_penalty_scale = 1.0
+        
+        # 1. Base idle penalty - RELAXED from -0.2 to -0.05 (exploration) / -0.1 (learning)
+        reward -= idle_penalty
         
         # 2. Forward Motion Reward - based on actual velocity
-        if linear_vel > 0.01:
+        if linear_vel > 0.005:  # Lower threshold from 0.01 to 0.005
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            reward += speed_ratio * 1.2  # Up to +1.0 net (cancels idle penalty)
+            reward += speed_ratio * forward_bonus_mult
+        elif linear_vel > 0:  # Still moving, just very slow
+            reward += 0.02
         
-        # 3. Backward penalty - both tracks negative
+        # 3. Backward penalty - MATCH collision penalty strength
         if linear_vel < -0.01:
-            backward_penalty = 0.5 + abs(linear_vel) * 2.0
+            backward_penalty = 0.3 + abs(linear_vel) * 1.5
             reward -= backward_penalty
         
-        # 4. TRACK COORDINATION PENALTIES (strengthened for anti-spin)
+        # 4. TRACK COORDINATION PENALTIES (RELAXED)
         
-        # 4a. Opposite Direction Penalty - tracks spinning in opposite directions = pure rotation
-        # This is the key penalty that prevents "spin in place" behavior
+        # 4a. Opposite Direction Penalty - RELAXED from -1.2 to -0.3
         if left_track * right_track < 0:  # Different signs = opposite directions
-            # Penalty proportional to how opposite they are (STRENGTHENED from 0.8 to 1.2)
             opposition_magnitude = min(abs(left_track), abs(right_track))
-            reward -= opposition_magnitude * 1.2  # Very strong penalty for spinning
+            reward -= opposition_magnitude * 0.3 * spin_penalty_scale
         
-        # 4b. Asymmetric Track Penalty - one track moving, other barely moving
-        # Prevents "spin one track backward" behavior
+        # 4b. Asymmetric Track Penalty - RELAXED from -0.4 to -0.15
         track_diff = abs(left_track - right_track)
         track_avg = (abs(left_track) + abs(right_track)) / 2.0
         
         if track_avg > 0.1:  # Only apply if tracks are actually active
-            asymmetry_ratio = track_diff / (track_avg + 0.1)  # 0 = symmetric, 2 = max asymmetric
-            if asymmetry_ratio > 0.8:  # One track significantly different from other
-                reward -= 0.4 * asymmetry_ratio  # Increased from 0.3
+            asymmetry_ratio = track_diff / (track_avg + 0.1)
+            if asymmetry_ratio > 0.8:
+                reward -= 0.15 * asymmetry_ratio * spin_penalty_scale
         
         # 4c. Both Tracks Forward Bonus - reward coordinated forward motion
         if left_track > 0.2 and right_track > 0.2:
-            # Both tracks are moving forward
-            coordination_bonus = min(left_track, right_track) * 0.3
+            coordination_bonus = min(left_track, right_track) * 0.15
             reward += coordination_bonus
         
         # 5. Side Clearance Reward
@@ -721,37 +810,43 @@ class SACEpisodeRunner(Node):
         elif min_lidar_dist < 0.2:
             reward -= 0.2
         
-        # 6. Smooth Control Penalty
+        # 6. Smooth Control Penalty (relaxed)
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
-            reward -= np.mean(action_diff) * 0.1
+            reward -= np.mean(action_diff) * 0.05
         
         # 7. Full Revolution Penalty
         if self._revolution_penalty_triggered:
-            reward -= 0.8
+            reward -= 0.5
             self._revolution_penalty_triggered = False
         
-        # 8. Stationary Spin Penalty (STRENGTHENED)
+        # 8. Stationary Spin Penalty (RELAXED from -0.5 to -0.2)
         if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
-            # Spinning in place without forward progress - harsh penalty
-            reward -= abs(angular_vel) * 0.5  # Increased from 0.3
+            reward -= abs(angular_vel) * 0.2
         
-        # 9. Gap-Heading Reward Shaping (NEW)
-        # Reward for making progress TOWARD the gap heading, not just aligning
+        # ========== EXPLORATION BONUS ==========
+        
+        # 9. State Visit Bonus (only in exploration/learning phases)
+        if phase != 'refinement' and hasattr(self, '_latest_bev'):
+            state_bonus = self._compute_exploration_bonus(self._latest_bev)
+            reward += state_bonus
+        
+        # 10. Action Diversity Bonus (always active)
+        if hasattr(self, '_prev_actions_buffer'):
+            action_bonus = self._compute_action_diversity_bonus()
+            reward += action_bonus
+        
+        # 11. Gap-Heading Reward Shaping
         if hasattr(self, '_target_heading') and abs(self._target_heading) > 0.1:
-            # How aligned are our tracks with the gap direction?
-            # If gap is left (positive), we want left track slower than right (turning left)
-            # If gap is right (negative), we want right track slower than left (turning right)
-            intended_turn = right_track - left_track  # Positive = turning left
-            gap_direction = self._target_heading  # Positive = gap on left
+            intended_turn = right_track - left_track
+            gap_direction = self._target_heading
             
-            # If turning toward gap while moving forward = bonus
             if linear_vel > 0.03:
                 alignment_with_gap = intended_turn * gap_direction
-                if alignment_with_gap > 0:  # Turning toward gap
-                    reward += 0.2 * min(alignment_with_gap, 0.5)
-                elif abs(gap_direction) > 0.5:  # Strongly misaligned and not correcting
-                    reward -= 0.1
+                if alignment_with_gap > 0:
+                    reward += 0.15 * min(alignment_with_gap, 0.4)
+                elif abs(gap_direction) > 0.5:
+                    reward -= 0.05
         
         return np.clip(reward, -1.0, 1.0)
 
@@ -1105,6 +1200,11 @@ class SACEpisodeRunner(Node):
         # 4. Execute Action
         cmd = Twist()
         
+        # Track action for diversity bonus (always, including eval episodes)
+        if self._current_model_version > 0:
+            # Store model action for diversity tracking
+            self._prev_actions_buffer.append(actual_action.copy())
+        
         # SENSOR WARMUP: Count down before enabling safety-triggered resets
         # This prevents false positives from unstable sensor data during startup
         if not self._sensor_warmup_complete:
@@ -1240,6 +1340,13 @@ class SACEpisodeRunner(Node):
         # Update state
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
+        
+        # Log reward breakdown occasionally for debugging
+        if np.random.rand() < 0.05:  # ~5% of steps
+            self._log_reward_breakdown(
+                actual_action, current_linear, current_angular,
+                lidar_min, side_clearance
+            )
 
     def _trigger_episode_reset(self):
         """Call motor driver to reset encoder baselines."""
@@ -1247,18 +1354,47 @@ class SACEpisodeRunner(Node):
             self.get_logger().warn('Episode reset service unavailable')
             return
 
+        # Record episode reward for phase tracking (before resetting)
+        episode_reward = self.episode_reward
+        
         # Update Evaluation State for NEXT episode
         if self._is_eval_episode:
-            self.get_logger().info(f"📊 Eval Episode Complete. Result: {'COLLISION' if self._latest_bev is not None and np.max(self._latest_bev[0, 236:, 118:138]) > 0.5 else 'TIMEOUT'}")
+            # Store eval reward for performance tracking
+            self._eval_reward_window.append(episode_reward)
+            
+            # Log eval episode summary
+            avg_eval = np.mean(list(self._eval_reward_window)[-10:]) if self._eval_reward_window else 0.0
+            self.get_logger().info(
+                f"📊 Eval Episode Complete: Reward={episode_reward:.2f}, "
+                f"Avg10={avg_eval:.2f}"
+            )
+            
             self._is_eval_episode = False
             self._episodes_since_eval = 0
+            
+            # Check for phase transition based on eval performance
+            self._check_phase_transition()
         else:
+            # Store training episode reward for history
+            if hasattr(self, '_episode_reward_history'):
+                self._episode_reward_history.append(episode_reward)
+            
+            # Log training episode summary
+            avg_train = np.mean(list(self._episode_reward_history)[-10:]) if self._episode_reward_history else 0.0
+            self.get_logger().info(
+                f"📊 Training Episode Complete: Reward={episode_reward:.2f}, "
+                f"Avg10={avg_train:.2f}"
+            )
+            
             self._episodes_since_eval += 1
             if self._episodes_since_eval >= 5:
                 self._is_eval_episode = True
                 self.get_logger().info("🧪 Next episode will be EVALUATION (No Noise)")
             else:
                 self._is_eval_episode = False
+
+        # Reset episode reward counter
+        self.episode_reward = 0.0
 
         request = Trigger.Request()
         future = self.reset_episode_client.call_async(request)
@@ -1274,6 +1410,90 @@ class SACEpisodeRunner(Node):
                 self.get_logger().error(f'Episode reset error: {e}')
 
         future.add_done_callback(_log_response)
+    
+    def _log_reward_breakdown(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance):
+        """Log detailed reward components for debugging."""
+        # Get phase
+        phase = self._get_current_phase()
+        
+        # Calculate components
+        components = {'forward': 0.0, 'idle_penalty': 0.0, 'backward': 0.0,
+                      'spin': 0.0, 'smoothness': 0.0, 'exploration': 0.0,
+                      'diversity': 0.0}
+        
+        target_speed = self._curriculum_max_speed
+        
+        if phase == 'exploration':
+            idle_penalty = 0.05
+            forward_mult = 1.5
+        elif phase == 'learning':
+            idle_penalty = 0.15
+            forward_mult = 1.2
+        else:
+            idle_penalty = 0.1
+            forward_mult = 1.0
+        
+        components['idle_penalty'] = -idle_penalty
+        
+        if linear_vel > 0.005:
+            components['forward'] = (linear_vel / target_speed) * forward_mult
+        elif linear_vel > 0:
+            components['forward'] = 0.02
+        
+        if linear_vel < -0.01:
+            components['backward'] = -(0.3 + abs(linear_vel) * 1.5)
+        
+        if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
+            components['spin'] = -abs(angular_vel) * 0.2
+        
+        if hasattr(self, '_prev_action'):
+            components['smoothness'] = -np.mean(np.abs(action - self._prev_action)) * 0.05
+        
+        if hasattr(self, '_latest_bev') and phase != 'refinement':
+            components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
+        
+        if hasattr(self, '_prev_actions_buffer'):
+            components['diversity'] = self._compute_action_diversity_bonus()
+        
+        # Log
+        total = sum(components.values())
+        self.get_logger().info(
+            f"📊 Reward Breakdown (phase={phase}): "
+            f"Total={total:.3f} | Fwd={components['forward']:.2f} "
+            f"(idle:{components['idle_penalty']:+.2f}) | "
+            f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
+            f"Smooth={components['smoothness']:.2f} Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f}"
+        )
+    
+    def _check_phase_transition(self):
+        """Check if eval performance warrants phase transition."""
+        if len(self._eval_reward_window) < 5:
+            return
+        
+        # Only check for transitions after model v6 (exploration phase done)
+        if self._current_model_version < 6:
+            return
+        
+        # Calculate recent average
+        avg_reward = np.mean(list(self._eval_reward_window)[-5:])
+        
+        # Get current and target phase
+        current_phase = self._get_current_phase()
+        
+        if current_phase == 'exploration' and avg_reward > -0.3:
+            # Phase 1 -> 2: Exploration -> Learning
+            self._current_model_version = max(self._current_model_version, 6)
+            self.get_logger().info(
+                f"⭐ PHASE TRANSITION: exploration → learning "
+                f"(avg eval reward = {avg_reward:.3f} > -0.3)"
+            )
+        elif current_phase == 'learning' and avg_reward > -0.1:
+            # Phase 2 -> 3: Learning → Refinement
+            self._current_model_version = max(self._current_model_version, 16)
+            self.get_logger().info(
+                f"⭐ PHASE TRANSITION: learning → refinement "
+                f"(avg eval reward = {avg_reward:.3f} > -0.1)"
+            )
 
     def _run_nats_loop(self):
         """Entry point for NATS background thread."""
