@@ -271,37 +271,50 @@ class LidarSafetyMonitor(Node):
                         estop_active = True
                         blocked_sectors.append('rear')
             
-            # === LEFT SECTOR: Gate left turns (positive angular.z for tank = turn left) ===
-            if msg.angular.z > 0.05:  # Trying to turn left
-                left_dist = self._sector_dists['left']
-                
-                if self._sector_stopped['left']:
-                    if left_dist > self.resume_dist:
-                        self._sector_stopped['left'] = False
+            # === LEFT/RIGHT SECTORS: Only gate turns when ALSO moving forward/backward ===
+            # For tank-drive robots, allow zero-turns (pure rotation) to escape tight spaces
+            # Only block turns when combined with forward/backward motion that could hit obstacles
+
+            is_zero_turn = abs(msg.linear.x) < 0.05  # Pure rotation if not moving forward/back
+
+            if not is_zero_turn:
+                # Only check side sectors when moving forward/backward
+
+                # LEFT SECTOR: Gate left turns when moving
+                if msg.angular.z > 0.05:  # Trying to turn left
+                    left_dist = self._sector_dists['left']
+
+                    if self._sector_stopped['left']:
+                        if left_dist > self.resume_dist:
+                            self._sector_stopped['left'] = False
+                        else:
+                            out_cmd.angular.z = 0.0
+                            blocked_sectors.append('left')
                     else:
-                        out_cmd.angular.z = 0.0
-                        blocked_sectors.append('left')
-                else:
-                    if left_dist < self.stop_dist:
-                        self._sector_stopped['left'] = True
-                        out_cmd.angular.z = 0.0
-                        blocked_sectors.append('left')
-            
-            # === RIGHT SECTOR: Gate right turns (negative angular.z for tank = turn right) ===
-            if msg.angular.z < -0.05:  # Trying to turn right
-                right_dist = self._sector_dists['right']
-                
-                if self._sector_stopped['right']:
-                    if right_dist > self.resume_dist:
-                        self._sector_stopped['right'] = False
+                        if left_dist < self.stop_dist:
+                            self._sector_stopped['left'] = True
+                            out_cmd.angular.z = 0.0
+                            blocked_sectors.append('left')
+
+                # RIGHT SECTOR: Gate right turns when moving
+                if msg.angular.z < -0.05:  # Trying to turn right
+                    right_dist = self._sector_dists['right']
+
+                    if self._sector_stopped['right']:
+                        if right_dist > self.resume_dist:
+                            self._sector_stopped['right'] = False
+                        else:
+                            out_cmd.angular.z = 0.0
+                            blocked_sectors.append('right')
                     else:
-                        out_cmd.angular.z = 0.0
-                        blocked_sectors.append('right')
-                else:
-                    if right_dist < self.stop_dist:
-                        self._sector_stopped['right'] = True
-                        out_cmd.angular.z = 0.0
-                        blocked_sectors.append('right')
+                        if right_dist < self.stop_dist:
+                            self._sector_stopped['right'] = True
+                            out_cmd.angular.z = 0.0
+                            blocked_sectors.append('right')
+            else:
+                # Zero-turn: always clear side sector stops to allow rotation
+                self._sector_stopped['left'] = False
+                self._sector_stopped['right'] = False
 
         # Publish estop state changes
         if estop_active != self._last_estop_state:
