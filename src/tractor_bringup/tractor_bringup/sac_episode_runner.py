@@ -764,26 +764,29 @@ class SACEpisodeRunner(Node):
         if phase == 'exploration':
             # Phase 1: Exploration - relax all penalties, encourage ANY motion
             idle_penalty = 0.05  # Very mild penalty
-            forward_bonus_mult = 1.5  # Strong encouragement
+            forward_bonus_mult = 3.0  # VERY strong encouragement (increased from 1.5)
             spin_penalty_scale = 0.3  # Very mild spin penalty
         elif phase == 'learning':
             # Phase 2: Learning - moderate penalties, encourage forward motion
             idle_penalty = 0.15
-            forward_bonus_mult = 1.2
+            forward_bonus_mult = 2.0  # Increased from 1.2
             spin_penalty_scale = 0.6
         else:  # refinement
             # Phase 3: Refinement - full reward function
             idle_penalty = 0.1
-            forward_bonus_mult = 1.0
+            forward_bonus_mult = 1.5  # Increased from 1.0
             spin_penalty_scale = 1.0
-        
-        # 1. Base idle penalty - RELAXED from -0.2 to -0.05 (exploration) / -0.1 (learning)
-        reward -= idle_penalty
-        
+
+        # 1. Base idle penalty - only apply when NOT moving forward
+        # If moving forward, skip idle penalty (already rewarded via forward bonus)
+        if linear_vel < 0.05:  # Only penalize when nearly stationary
+            reward -= idle_penalty
+
         # 2. Forward Motion Reward - based on actual velocity
         if linear_vel > 0.005:  # Lower threshold from 0.01 to 0.005
             speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            reward += speed_ratio * forward_bonus_mult
+            # Add base bonus + speed-scaled bonus
+            reward += 0.1 + (speed_ratio * forward_bonus_mult)
         elif linear_vel > 0:  # Still moving, just very slow
             reward += 0.02
         
@@ -1501,18 +1504,24 @@ class SACEpisodeRunner(Node):
 
         if phase == 'exploration':
             idle_penalty = 0.05
-            forward_mult = 1.5
+            forward_mult = 3.0
         elif phase == 'learning':
             idle_penalty = 0.15
-            forward_mult = 1.2
+            forward_mult = 2.0
         else:
             idle_penalty = 0.1
-            forward_mult = 1.0
+            forward_mult = 1.5
 
-        components['idle_penalty'] = -idle_penalty
+        # Idle penalty only when nearly stationary
+        if linear_vel < 0.05:
+            components['idle_penalty'] = -idle_penalty
+        else:
+            components['idle_penalty'] = 0.0
 
+        # Forward reward with base bonus
         if linear_vel > 0.005:
-            components['forward'] = (linear_vel / target_speed) * forward_mult
+            speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
+            components['forward'] = 0.1 + (speed_ratio * forward_mult)
         elif linear_vel > 0:
             components['forward'] = 0.02
 
@@ -1535,13 +1544,16 @@ class SACEpisodeRunner(Node):
         # Track coordination penalties (matches reward function 4a, 4b, 4c)
         left_track, right_track = action[0], action[1]
 
-        # Get phase-specific spin_penalty_scale
+        # Get phase-specific parameters
         if phase == 'exploration':
             spin_penalty_scale = 0.3
+            forward_mult = 3.0
         elif phase == 'learning':
             spin_penalty_scale = 0.6
+            forward_mult = 2.0
         else:
             spin_penalty_scale = 1.0
+            forward_mult = 1.5
 
         # Opposite direction penalty
         if left_track * right_track < 0:
