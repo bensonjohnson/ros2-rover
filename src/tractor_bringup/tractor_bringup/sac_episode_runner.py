@@ -314,6 +314,10 @@ class SACEpisodeRunner(Node):
         self._forward_progress_threshold = 0.3  # meters to reset rotation counter (reduced from 0.8)
         self._last_position_for_rotation = None  # (x, y) for forward progress detection
         self._revolution_penalty_triggered = False
+
+        # Unstuck reward tracking
+        self._prev_min_clearance = 10.0  # Previous step's minimum clearance distance
+        self._steps_in_tight_space = 0  # Counter for how long in tight space
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
 
         # NATS Setup (will be initialized in background thread)
@@ -845,14 +849,43 @@ class SACEpisodeRunner(Node):
         if hasattr(self, '_target_heading') and abs(self._target_heading) > 0.1:
             intended_turn = right_track - left_track
             gap_direction = self._target_heading
-            
+
             if linear_vel > 0.03:
                 alignment_with_gap = intended_turn * gap_direction
                 if alignment_with_gap > 0:
                     reward += 0.15 * min(alignment_with_gap, 0.4)
                 elif abs(gap_direction) > 0.5:
                     reward -= 0.05
-        
+
+        # 12. Unstuck Reward Shaping - Encourage escaping tight spaces
+        if hasattr(self, '_prev_min_clearance'):
+            TIGHT_SPACE_THRESHOLD = 0.35  # Meters - consider "tight" if closer than this
+
+            # Track if we're in a tight space
+            if min_lidar_dist < TIGHT_SPACE_THRESHOLD:
+                self._steps_in_tight_space += 1
+            else:
+                self._steps_in_tight_space = 0
+
+            # Clearance improvement bonus - reward escaping from tight spaces
+            clearance_delta = min_lidar_dist - self._prev_min_clearance
+
+            if min_lidar_dist < TIGHT_SPACE_THRESHOLD and clearance_delta > 0.02:
+                # Escaping! Bonus scales with improvement and how tight it was
+                tightness_factor = (TIGHT_SPACE_THRESHOLD - min_lidar_dist) / TIGHT_SPACE_THRESHOLD
+                escape_bonus = clearance_delta * 2.0 * (1.0 + tightness_factor)
+                reward += np.clip(escape_bonus, 0.0, 0.3)
+
+            # Angular action bonus when stuck - encourage trying to rotate out
+            if min_lidar_dist < TIGHT_SPACE_THRESHOLD and self._steps_in_tight_space > 15:
+                # Stuck for 0.5s+, encourage rotation attempts
+                angular_action_magnitude = abs(right_track - left_track)
+                if angular_action_magnitude > 0.3:  # Significant rotation attempt
+                    reward += 0.1 * angular_action_magnitude
+
+            # Update previous clearance for next step
+            self._prev_min_clearance = min_lidar_dist
+
         return np.clip(reward, -1.0, 1.0)
 
     def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
@@ -1424,10 +1457,10 @@ class SACEpisodeRunner(Node):
         # Calculate components
         components = {'forward': 0.0, 'idle_penalty': 0.0, 'backward': 0.0,
                       'spin': 0.0, 'smoothness': 0.0, 'exploration': 0.0,
-                      'diversity': 0.0}
-        
+                      'diversity': 0.0, 'unstuck': 0.0}
+
         target_speed = self._curriculum_max_speed
-        
+
         if phase == 'exploration':
             idle_penalty = 0.05
             forward_mult = 1.5
@@ -1437,29 +1470,45 @@ class SACEpisodeRunner(Node):
         else:
             idle_penalty = 0.1
             forward_mult = 1.0
-        
+
         components['idle_penalty'] = -idle_penalty
-        
+
         if linear_vel > 0.005:
             components['forward'] = (linear_vel / target_speed) * forward_mult
         elif linear_vel > 0:
             components['forward'] = 0.02
-        
-        if linear_vel < -0.01:
-            components['backward'] = -(0.3 + abs(linear_vel) * 1.5)
-        
+
+        if linear_vel < -0.03:  # Updated threshold
+            components['backward'] = -(0.15 + abs(linear_vel) * 0.8)  # Updated penalty
+
         if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
             components['spin'] = -abs(angular_vel) * 0.2
-        
+
         if hasattr(self, '_prev_action'):
             components['smoothness'] = -np.mean(np.abs(action - self._prev_action)) * 0.05
-        
+
         if hasattr(self, '_latest_bev') and phase != 'refinement':
             components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
-        
+
         if hasattr(self, '_prev_actions_buffer'):
             components['diversity'] = self._compute_action_diversity_bonus()
-        
+
+        # Unstuck bonus computation (matches reward function)
+        if hasattr(self, '_prev_min_clearance'):
+            TIGHT_SPACE_THRESHOLD = 0.35
+            clearance_delta = min_lidar_dist - self._prev_min_clearance
+
+            if min_lidar_dist < TIGHT_SPACE_THRESHOLD and clearance_delta > 0.02:
+                tightness_factor = (TIGHT_SPACE_THRESHOLD - min_lidar_dist) / TIGHT_SPACE_THRESHOLD
+                escape_bonus = clearance_delta * 2.0 * (1.0 + tightness_factor)
+                components['unstuck'] += np.clip(escape_bonus, 0.0, 0.3)
+
+            if min_lidar_dist < TIGHT_SPACE_THRESHOLD and self._steps_in_tight_space > 15:
+                left_track, right_track = action[0], action[1]
+                angular_action_magnitude = abs(right_track - left_track)
+                if angular_action_magnitude > 0.3:
+                    components['unstuck'] += 0.1 * angular_action_magnitude
+
         # Log
         total = sum(components.values())
         self.get_logger().info(
@@ -1467,7 +1516,8 @@ class SACEpisodeRunner(Node):
             f"Total={total:.3f} | Fwd={components['forward']:.2f} "
             f"(idle:{components['idle_penalty']:+.2f}) | "
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
-            f"Smooth={components['smoothness']:.2f} Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f}"
+            f"Smooth={components['smoothness']:.2f} Exp={components['exploration']:+.2f} "
+            f"Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}"
         )
     
     def _check_phase_transition(self):
