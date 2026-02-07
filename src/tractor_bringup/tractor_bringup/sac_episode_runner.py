@@ -799,16 +799,32 @@ class SACEpisodeRunner(Node):
             opposition_magnitude = min(abs(left_track), abs(right_track))
             reward -= opposition_magnitude * 0.3 * spin_penalty_scale
         
-        # 4b. Asymmetric Track Penalty - RELAXED from -0.4 to -0.15
-        track_diff = abs(left_track - right_track)
-        track_avg = (abs(left_track) + abs(right_track)) / 2.0
+        # 4b. Asymmetric Track Penalty - ONLY at slow speeds
+        # At speed, asymmetric tracks are NORMAL (that's how tank-drive turns!)
+        # Only penalize asymmetry when moving slowly or stationary
+        if abs(linear_vel) < 0.08:  # Only when slow/stationary
+            track_diff = abs(left_track - right_track)
+            track_avg = (abs(left_track) + abs(right_track)) / 2.0
+
+            if track_avg > 0.1:  # Only apply if tracks are actually active
+                asymmetry_ratio = track_diff / (track_avg + 0.1)
+                if asymmetry_ratio > 0.5:
+                    # Penalize unproductive asymmetry at low speeds
+                    reward -= 0.25 * asymmetry_ratio * spin_penalty_scale
+
+        # 4c. Single-Track Motion Penalty - ONLY at slow speeds
+        # When moving fast, one track can briefly idle during sharp turns
+        # Only penalize single-track motion when slow/stationary (unproductive oscillation)
+        if abs(linear_vel) < 0.08:
+            left_active = abs(left_track) > 0.15
+            right_active = abs(right_track) > 0.15
+
+            if left_active != right_active:  # One active, one idle (XOR)
+                # This catches oscillation of one track while other does nothing
+                active_magnitude = max(abs(left_track), abs(right_track))
+                reward -= 0.3 * active_magnitude * spin_penalty_scale
         
-        if track_avg > 0.1:  # Only apply if tracks are actually active
-            asymmetry_ratio = track_diff / (track_avg + 0.1)
-            if asymmetry_ratio > 0.8:
-                reward -= 0.15 * asymmetry_ratio * spin_penalty_scale
-        
-        # 4c. Both Tracks Forward Bonus - reward coordinated forward motion
+        # 4d. Both Tracks Forward Bonus - reward coordinated forward motion
         if left_track > 0.2 and right_track > 0.2:
             coordination_bonus = min(left_track, right_track) * 0.15
             reward += coordination_bonus
@@ -823,6 +839,15 @@ class SACEpisodeRunner(Node):
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.05
+
+            # 6b. Track Oscillation Penalty - detect rapid direction changes
+            # Check if either track is oscillating (changing sign frequently)
+            for i, (current, prev) in enumerate(zip(action, self._prev_action)):
+                if abs(current) > 0.15 and abs(prev) > 0.15:  # Both non-zero
+                    if current * prev < 0:  # Different signs = direction change
+                        # Penalize direction reversal
+                        reversal_magnitude = (abs(current) + abs(prev)) / 2.0
+                        reward -= 0.2 * reversal_magnitude
         
         # 7. Full Revolution Penalty
         if self._revolution_penalty_triggered:
@@ -1456,8 +1481,8 @@ class SACEpisodeRunner(Node):
         
         # Calculate components
         components = {'forward': 0.0, 'idle_penalty': 0.0, 'backward': 0.0,
-                      'spin': 0.0, 'smoothness': 0.0, 'exploration': 0.0,
-                      'diversity': 0.0, 'unstuck': 0.0}
+                      'spin': 0.0, 'smoothness': 0.0, 'track_coord': 0.0,
+                      'exploration': 0.0, 'diversity': 0.0, 'unstuck': 0.0}
 
         target_speed = self._curriculum_max_speed
 
@@ -1486,6 +1511,46 @@ class SACEpisodeRunner(Node):
 
         if hasattr(self, '_prev_action'):
             components['smoothness'] = -np.mean(np.abs(action - self._prev_action)) * 0.05
+
+            # Track oscillation penalty (matches reward function 6b)
+            for i, (current, prev) in enumerate(zip(action, self._prev_action)):
+                if abs(current) > 0.15 and abs(prev) > 0.15:
+                    if current * prev < 0:
+                        reversal_magnitude = (abs(current) + abs(prev)) / 2.0
+                        components['track_coord'] -= 0.2 * reversal_magnitude
+
+        # Track coordination penalties (matches reward function 4a, 4b, 4c)
+        left_track, right_track = action[0], action[1]
+
+        # Get phase-specific spin_penalty_scale
+        if phase == 'exploration':
+            spin_penalty_scale = 0.3
+        elif phase == 'learning':
+            spin_penalty_scale = 0.6
+        else:
+            spin_penalty_scale = 1.0
+
+        # Opposite direction penalty
+        if left_track * right_track < 0:
+            opposition_magnitude = min(abs(left_track), abs(right_track))
+            components['track_coord'] -= opposition_magnitude * 0.3 * spin_penalty_scale
+
+        # Asymmetric penalty - ONLY at slow speeds
+        if abs(linear_vel) < 0.08:
+            track_diff = abs(left_track - right_track)
+            track_avg = (abs(left_track) + abs(right_track)) / 2.0
+            if track_avg > 0.1:
+                asymmetry_ratio = track_diff / (track_avg + 0.1)
+                if asymmetry_ratio > 0.5:
+                    components['track_coord'] -= 0.25 * asymmetry_ratio * spin_penalty_scale
+
+        # Single-track motion penalty - ONLY at slow speeds
+        if abs(linear_vel) < 0.08:
+            left_active = abs(left_track) > 0.15
+            right_active = abs(right_track) > 0.15
+            if left_active != right_active:
+                active_magnitude = max(abs(left_track), abs(right_track))
+                components['track_coord'] -= 0.3 * active_magnitude * spin_penalty_scale
 
         if hasattr(self, '_latest_bev') and phase != 'refinement':
             components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
@@ -1516,8 +1581,8 @@ class SACEpisodeRunner(Node):
             f"Total={total:.3f} | Fwd={components['forward']:.2f} "
             f"(idle:{components['idle_penalty']:+.2f}) | "
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
-            f"Smooth={components['smoothness']:.2f} Exp={components['exploration']:+.2f} "
-            f"Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}"
+            f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
+            f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}"
         )
     
     def _check_phase_transition(self):
