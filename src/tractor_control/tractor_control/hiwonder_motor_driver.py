@@ -936,18 +936,34 @@ class HiwonderMotorDriver(Node):
         return max(0.0, runtime_hours)
 
     def watchdog_check(self):
-        """Stop motors if /cmd_vel not received recently."""
+        """Stop motors if /cmd_vel not received recently.
+
+        This safety feature protects against:
+        - Safety monitor crashes
+        - VFC crashes
+        - Network issues
+        - SAC runner hangs
+        """
         if self.cmd_vel_timeout_secs <= 0:
             return
         elapsed = time.time() - self.last_cmd_vel_msg_time
         if elapsed > self.cmd_vel_timeout_secs:
             # Timeout expired; ensure motors stopped
             if self.last_sent_left != 0 or self.last_sent_right != 0:
-                self.get_logger().warn(
-                    f"/cmd_vel timeout ({elapsed:.2f}s > {self.cmd_vel_timeout_secs}s). Stopping motors." 
+                self.get_logger().error(
+                    f"🚨 WATCHDOG TIMEOUT: No /cmd_vel for {elapsed:.2f}s (limit: {self.cmd_vel_timeout_secs}s). "
+                    "STOPPING MOTORS. Possible safety monitor or VFC crash!"
                 )
                 self.send_motor_speeds(0, 0)
-        # (Optional future: publish diagnostic status)
+            elif not self.watchdog_last_active:
+                # Log once when entering idle state
+                self.get_logger().info(
+                    f"Watchdog: Motors idle, no commands for {elapsed:.2f}s (normal)"
+                )
+                self.watchdog_last_active = True
+        else:
+            # Commands being received normally
+            self.watchdog_last_active = False
 
     def destroy_node(self):
         """Clean shutdown"""

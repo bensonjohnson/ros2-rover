@@ -17,6 +17,9 @@ hiwonder_motor_driver:
     motor_command_rate_limit_secs: 0.1 # Minimum interval between motor commands (seconds)
     init_motor_type_delay_secs: 0.5   # Delay after setting motor type in initialization (seconds)
     init_encoder_polarity_delay_secs: 0.1 # Delay after setting encoder polarity in initialization (seconds)
+    # Watchdog safety - stops motors if cmd_vel not received
+    cmd_vel_timeout_secs: 0.5  # Stop motors if no cmd_vel for 0.5s (catches safety monitor crash)
+    watchdog_check_hz: 20.0     # Check for timeout at 20Hz (every 50ms)
     # Odometry publishing
     publish_odom: true
     odom_frame_id: "odom"
