@@ -799,30 +799,43 @@ class SACEpisodeRunner(Node):
             opposition_magnitude = min(abs(left_track), abs(right_track))
             reward -= opposition_magnitude * 0.3 * spin_penalty_scale
         
-        # 4b. Asymmetric Track Penalty - ONLY at slow speeds
-        # At speed, asymmetric tracks are NORMAL (that's how tank-drive turns!)
-        # Only penalize asymmetry when moving slowly or stationary
-        if abs(linear_vel) < 0.08:  # Only when slow/stationary
+        # 4b. Asymmetric Track Penalty - ONLY when both tracks aren't at speed
+        # At high throttle, asymmetric tracks are NORMAL (that's how tank-drive turns!)
+        # Only penalize asymmetry when NOT both tracks commanding significant motion
+        min_throttle = min(abs(left_track), abs(right_track))  # Slowest track
+        max_throttle = max(abs(left_track), abs(right_track))  # Fastest track
+
+        # Allow asymmetry only when BOTH tracks are commanding significant motion (>0.4)
+        both_tracks_active = min_throttle > 0.4
+
+        if not both_tracks_active and max_throttle > 0.1:
+            # At least one track commanding something, but not both at speed
             track_diff = abs(left_track - right_track)
             track_avg = (abs(left_track) + abs(right_track)) / 2.0
 
             if track_avg > 0.1:  # Only apply if tracks are actually active
                 asymmetry_ratio = track_diff / (track_avg + 0.1)
                 if asymmetry_ratio > 0.5:
-                    # Penalize unproductive asymmetry at low speeds
+                    # Penalize unproductive asymmetry
                     reward -= 0.25 * asymmetry_ratio * spin_penalty_scale
 
-        # 4c. Single-Track Motion Penalty - ONLY at slow speeds
-        # When moving fast, one track can briefly idle during sharp turns
-        # Only penalize single-track motion when slow/stationary (unproductive oscillation)
-        if abs(linear_vel) < 0.08:
-            left_active = abs(left_track) > 0.15
-            right_active = abs(right_track) > 0.15
+        # 4c. Single-Track Motion Penalty - one track active, other idle
+        # This directly catches L=0, R=1 or L=1, R=0 behavior
+        left_active = abs(left_track) > 0.15
+        right_active = abs(right_track) > 0.15
 
-            if left_active != right_active:  # One active, one idle (XOR)
-                # This catches oscillation of one track while other does nothing
-                active_magnitude = max(abs(left_track), abs(right_track))
-                reward -= 0.3 * active_magnitude * spin_penalty_scale
+        if left_active != right_active:  # One active, one idle (XOR)
+            # This catches oscillation of one track while other does nothing
+            active_magnitude = max(abs(left_track), abs(right_track))
+            penalty = 0.3 * active_magnitude * spin_penalty_scale
+            reward -= penalty
+            # Debug log for single-track oscillation detection
+            if penalty > 0.05:  # Only log significant penalties
+                self.get_logger().info(
+                    f"⚠️ Single-track oscillation detected: L={left_track:.2f}, R={right_track:.2f}, "
+                    f"min_throttle={min_throttle:.3f}, penalty=-{penalty:.3f}",
+                    throttle_duration_sec=2.0
+                )
         
         # 4d. Both Tracks Forward Bonus - reward coordinated forward motion
         if left_track > 0.2 and right_track > 0.2:
@@ -1535,8 +1548,12 @@ class SACEpisodeRunner(Node):
             opposition_magnitude = min(abs(left_track), abs(right_track))
             components['track_coord'] -= opposition_magnitude * 0.3 * spin_penalty_scale
 
-        # Asymmetric penalty - ONLY at slow speeds
-        if abs(linear_vel) < 0.08:
+        # Asymmetric penalty - only when both tracks aren't at speed
+        min_throttle = min(abs(left_track), abs(right_track))
+        max_throttle = max(abs(left_track), abs(right_track))
+        both_tracks_active = min_throttle > 0.4
+
+        if not both_tracks_active and max_throttle > 0.1:
             track_diff = abs(left_track - right_track)
             track_avg = (abs(left_track) + abs(right_track)) / 2.0
             if track_avg > 0.1:
@@ -1544,13 +1561,12 @@ class SACEpisodeRunner(Node):
                 if asymmetry_ratio > 0.5:
                     components['track_coord'] -= 0.25 * asymmetry_ratio * spin_penalty_scale
 
-        # Single-track motion penalty - ONLY at slow speeds
-        if abs(linear_vel) < 0.08:
-            left_active = abs(left_track) > 0.15
-            right_active = abs(right_track) > 0.15
-            if left_active != right_active:
-                active_magnitude = max(abs(left_track), abs(right_track))
-                components['track_coord'] -= 0.3 * active_magnitude * spin_penalty_scale
+        # Single-track motion penalty
+        left_active = abs(left_track) > 0.15
+        right_active = abs(right_track) > 0.15
+        if left_active != right_active:
+            active_magnitude = max(abs(left_track), abs(right_track))
+            components['track_coord'] -= 0.3 * active_magnitude * spin_penalty_scale
 
         if hasattr(self, '_latest_bev') and phase != 'refinement':
             components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
