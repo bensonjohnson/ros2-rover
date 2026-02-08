@@ -685,70 +685,58 @@ class SACEpisodeRunner(Node):
         if linear_vel < 0.05:  # Only penalize when nearly stationary
             reward -= idle_penalty
 
-        # 2. Forward Motion Reward - based on actual velocity
-        if linear_vel > 0.005:  # Lower threshold from 0.01 to 0.005
-            speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            # Add base bonus + speed-scaled bonus
-            reward += 0.1 + (speed_ratio * forward_bonus_mult)
-        elif linear_vel > 0:  # Still moving, just very slow
-            reward += 0.02
+        # 2. Coupled Forward Reward (Action + Velocity)
+        # Verify that INTENT (Action) matches OUTCOME (Velocity)
+        cmd_fwd = (left_track + right_track) / 2.0
         
-        # 3. Backward penalty - reduced threshold and magnitude to avoid false penalties from noise
-        if linear_vel < -0.03:  # Increased from -0.01 to avoid triggering on odometry noise
-            backward_penalty = 0.15 + abs(linear_vel) * 0.8  # Reduced from 0.3 and 1.5
+        # Normalized measured velocity (0 to 1+)
+        meas_fwd = linear_vel / target_speed if target_speed > 0 else 0.0
+
+        # Only reward if BOTH are positive
+        # If cmd is high but meas is low -> Stuck/Slipping -> Low Reward
+        # If meas is high but cmd is low -> Drifting -> Low Reward
+        # If cmd is zero (spinning) -> Zero Forward Reward (Neutral)
+        base_fwd_reward = 0.0
+        if cmd_fwd > 0 and meas_fwd > 0:
+            base_fwd_reward = min(cmd_fwd, meas_fwd) * forward_bonus_mult
+
+        reward += base_fwd_reward
+
+        # 3. Backward penalty (unchanged)
+        if linear_vel < -0.03:
+            backward_penalty = 0.15 + abs(linear_vel) * 0.8
             reward -= backward_penalty
         
-        # 4. TRACK COORDINATION PENALTIES (RELAXED)
+        # 4. Tank Steering Efficiency Rules
         
-        # 4a. Opposite Direction Penalty - RELAXED from -1.2 to -0.3
-        if left_track * right_track < 0:  # Different signs = opposite directions
-            opposition_magnitude = min(abs(left_track), abs(right_track))
-            reward -= opposition_magnitude * 0.3 * spin_penalty_scale
+        # 4a. Zero Turn Logic (Spinning in place)
+        # If commanded forward speed is low (spinning), enforce symmetry
+        if abs(cmd_fwd) < 0.1: 
+            # Check for Dragging/Drifting (one track moving, one stopped)
+            # Valid spin: L=-0.5, R=0.5 -> diff=1.0, sum_abs=1.0 -> ratio=1.0
+            # Invalid spin: L=0.0, R=0.5 -> diff=0.5, sum_abs=0.5 -> ratio=1.0 (Wait, ratio doesn't catch this)
+            
+            # Better check: Symmetry Error
+            # abs(abs(L) - abs(R)) should be low
+            symmetry_error = abs(abs(left_track) - abs(right_track))
+            
+            if symmetry_error > 0.2:
+                # Penalize asymmetric zero turns (drifting/pivoting on dead track)
+                reward -= 0.2 * symmetry_error * spin_penalty_scale
         
-        # 4b. Asymmetric Track Penalty - ONLY when both tracks aren't at speed
-        # At high throttle, asymmetric tracks are NORMAL (that's how tank-drive turns!)
-        # Only penalize asymmetry when NOT both tracks commanding significant motion
-        min_throttle = min(abs(left_track), abs(right_track))  # Slowest track
-        max_throttle = max(abs(left_track), abs(right_track))  # Fastest track
+        # 4b. Forward Turn Logic (Arcing)
+        # If commanded forward is high, allow asymmetry
+        elif cmd_fwd > 0.3:
+            # Check if one track is dragging (too slow for the speed)
+            min_track = min(left_track, right_track)
+            max_track = max(left_track, right_track)
+            
+            # If fast track is fast (>0.6) but slow track is dead (<0.1) -> Pivot Turn (Inefficient)
+            if max_track > 0.6 and min_track < 0.1:
+                 # Penalize "Curve Dragging"
+                 reward -= 0.1
 
-        # Allow asymmetry only when BOTH tracks are commanding significant motion (>0.4)
-        both_tracks_active = min_throttle > 0.4
-
-        if not both_tracks_active and max_throttle > 0.1:
-            # At least one track commanding something, but not both at speed
-            track_diff = abs(left_track - right_track)
-            track_avg = (abs(left_track) + abs(right_track)) / 2.0
-
-            if track_avg > 0.1:  # Only apply if tracks are actually active
-                asymmetry_ratio = track_diff / (track_avg + 0.1)
-                if asymmetry_ratio > 0.5:
-                    # Penalize unproductive asymmetry
-                    reward -= 0.25 * asymmetry_ratio * spin_penalty_scale
-
-        # 4c. Single-Track Motion Penalty - one track active, other idle
-        # This directly catches L=0, R=1 or L=1, R=0 behavior
-        left_active = abs(left_track) > 0.15
-        right_active = abs(right_track) > 0.15
-
-        if left_active != right_active:  # One active, one idle (XOR)
-            # This catches oscillation of one track while other does nothing
-            active_magnitude = max(abs(left_track), abs(right_track))
-            penalty = 0.3 * active_magnitude * spin_penalty_scale
-            reward -= penalty
-            # Debug log for single-track oscillation detection
-            if penalty > 0.05:  # Only log significant penalties
-                self.get_logger().info(
-                    f"⚠️ Single-track oscillation detected: L={left_track:.2f}, R={right_track:.2f}, "
-                    f"min_throttle={min_throttle:.3f}, penalty=-{penalty:.3f}",
-                    throttle_duration_sec=2.0
-                )
-        
-        # 4d. Both Tracks Forward Bonus - reward coordinated forward motion
-        if left_track > 0.2 and right_track > 0.2:
-            coordination_bonus = min(left_track, right_track) * 0.15
-            reward += coordination_bonus
-        
-        # 5. Side Clearance Reward
+        # 5. Side Clearance Reward (unchanged)
         if min_lidar_dist > 0.5:
             reward += 0.1
         elif min_lidar_dist < 0.2:
@@ -759,23 +747,6 @@ class SACEpisodeRunner(Node):
             action_diff = np.abs(action - self._prev_action)
             reward -= np.mean(action_diff) * 0.05
 
-            # 6b. Track Oscillation Penalty - detect rapid direction changes
-            # Check if either track is oscillating (changing sign frequently)
-            for i, (current, prev) in enumerate(zip(action, self._prev_action)):
-                if abs(current) > 0.15 and abs(prev) > 0.15:  # Both non-zero
-                    if current * prev < 0:  # Different signs = direction change
-                        # Penalize direction reversal
-                        reversal_magnitude = (abs(current) + abs(prev)) / 2.0
-                        reward -= 0.2 * reversal_magnitude
-        
-        # 7. Full Revolution Penalty
-        if self._revolution_penalty_triggered:
-            reward -= 0.5
-            self._revolution_penalty_triggered = False
-        
-        # 8. Stationary Spin Penalty (RELAXED from -0.5 to -0.2)
-        if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
-            reward -= abs(angular_vel) * 0.2
         
         # ========== EXPLORATION BONUS ==========
         
@@ -1059,31 +1030,47 @@ class SACEpisodeRunner(Node):
                 self.get_logger().info('🔥 Starting Random Exploration Warmup...')
                 self.pbar.set_description("🔥 Warmup: Random Exploration")
 
-            # DIRECT TRACK CONTROL: Random Uniform Exploration (Chaos Mode)
+            # DIRECT TRACK CONTROL: Tank-Style Warmup (Diverse Dynamics)
             # action[0] = left track, action[1] = right track
-            # Full -1.0 to 1.0 range to seed buffer with ALL possible dynamics
             
-            # 1. Pure Random Action
-            random_left = np.random.uniform(-1.0, 1.0)
-            random_right = np.random.uniform(-1.0, 1.0)
+            # Modes:
+            # 1. Zero Turn (Low speed, opposite tracks) - 20%
+            # 2. Arc Turn (High speed, asymmetric) - 40%
+            # 3. Straight (High speed, equal) - 20%
+            # 4. Recovery/Chaos (Full random) - 20%
             
-            # 2. Occasional "Coordinated" Actions (to help it find useful modes)
-            # 30% chance to pick a coordinated move (Forward, Spin, or Stop)
             rand_mode = np.random.rand()
-            if rand_mode < 0.1: # Forward
-                random_left = np.random.uniform(0.5, 1.0)
-                random_right = np.random.uniform(0.5, 1.0)
-            elif rand_mode < 0.2: # Spin
-                val = np.random.uniform(0.4, 0.6) # Safer spin speed
-                if np.random.rand() < 0.5: # Random direction
-                    random_left = val
-                    random_right = -val
+            
+            if rand_mode < 0.2: # Zero Turn
+                # Spin in place at controlled speed (0.4 to 0.6)
+                spin_speed = np.random.uniform(0.4, 0.6)
+                if np.random.rand() < 0.5:
+                    random_left = spin_speed
+                    random_right = -spin_speed
                 else:
-                    random_left = -val
-                    random_right = val
-            elif rand_mode < 0.3: # Stop/Slow
-                random_left = np.random.uniform(-0.1, 0.1)
-                random_right = np.random.uniform(-0.1, 0.1)
+                    random_left = -spin_speed
+                    random_right = spin_speed
+                    
+            elif rand_mode < 0.6: # Arc Turn (Forward biased)
+                # Base forward speed (0.5 to 1.0)
+                base_speed = np.random.uniform(0.5, 1.0)
+                # Apply turn offset to one track
+                turn_offset = np.random.uniform(0.2, 0.5)
+                if np.random.rand() < 0.5:
+                    random_left = base_speed
+                    random_right = base_speed - turn_offset
+                else:
+                    random_left = base_speed - turn_offset
+                    random_right = base_speed
+                    
+            elif rand_mode < 0.8: # Straight Forward
+                speed = np.random.uniform(0.5, 1.0)
+                random_left = speed
+                random_right = speed
+                
+            else: # Recovery / Chaos (Full range)
+                random_left = np.random.uniform(-1.0, 1.0)
+                random_right = np.random.uniform(-1.0, 1.0)
 
             # Safety-based speed scaling (prevent high-speed crashes)
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
@@ -1382,68 +1369,29 @@ class SACEpisodeRunner(Node):
         else:
             components['idle_penalty'] = 0.0
 
-        # Forward reward with base bonus
-        if linear_vel > 0.005:
-            speed_ratio = np.clip(linear_vel / target_speed, 0.0, 1.0)
-            components['forward'] = 0.1 + (speed_ratio * forward_mult)
-        elif linear_vel > 0:
-            components['forward'] = 0.02
+        # Coupled Forward Reward
+        cmd_fwd = (left_track + right_track) / 2.0
+        meas_fwd = linear_vel / target_speed if target_speed > 0 else 0.0
+        
+        if cmd_fwd > 0 and meas_fwd > 0:
+            components['forward'] = min(cmd_fwd, meas_fwd) * forward_mult
+        
+        # Backward Penalty (unchanged)
+        if linear_vel < -0.03:
+            components['backward'] = -(0.15 + abs(linear_vel) * 0.8)
 
-        if linear_vel < -0.03:  # Updated threshold
-            components['backward'] = -(0.15 + abs(linear_vel) * 0.8)  # Updated penalty
-
-        if abs(angular_vel) > 0.3 and abs(linear_vel) < 0.05:
-            components['spin'] = -abs(angular_vel) * 0.2
-
-        if hasattr(self, '_prev_action'):
-            components['smoothness'] = -np.mean(np.abs(action - self._prev_action)) * 0.05
-
-            # Track oscillation penalty (matches reward function 6b)
-            for i, (current, prev) in enumerate(zip(action, self._prev_action)):
-                if abs(current) > 0.15 and abs(prev) > 0.15:
-                    if current * prev < 0:
-                        reversal_magnitude = (abs(current) + abs(prev)) / 2.0
-                        components['track_coord'] -= 0.2 * reversal_magnitude
-
-        # Track coordination penalties (matches reward function 4a, 4b, 4c)
-        left_track, right_track = action[0], action[1]
-
-        # Get phase-specific parameters
-        if phase == 'exploration':
-            spin_penalty_scale = 0.3
-            forward_mult = 1.5
-        elif phase == 'learning':
-            spin_penalty_scale = 0.6
-            forward_mult = 1.0
-        else:
-            spin_penalty_scale = 1.0
-            forward_mult = 0.8
+        # Tank Steering Rules
+        if abs(cmd_fwd) < 0.1:
+            symmetry_error = abs(abs(left_track) - abs(right_track))
+            if symmetry_error > 0.2:
+                components['track_coord'] = -0.2 * symmetry_error * spin_penalty_scale
+        elif cmd_fwd > 0.3:
+            min_track = min(left_track, right_track)
+            max_track = max(left_track, right_track)
+            if max_track > 0.6 and min_track < 0.1:
+                components['track_coord'] = -0.1 * 0.3 * spin_penalty_scale
 
 
-        # Opposite direction penalty
-        if left_track * right_track < 0:
-            opposition_magnitude = min(abs(left_track), abs(right_track))
-            components['track_coord'] -= opposition_magnitude * 0.3 * spin_penalty_scale
-
-        # Asymmetric penalty - only when both tracks aren't at speed
-        min_throttle = min(abs(left_track), abs(right_track))
-        max_throttle = max(abs(left_track), abs(right_track))
-        both_tracks_active = min_throttle > 0.4
-
-        if not both_tracks_active and max_throttle > 0.1:
-            track_diff = abs(left_track - right_track)
-            track_avg = (abs(left_track) + abs(right_track)) / 2.0
-            if track_avg > 0.1:
-                asymmetry_ratio = track_diff / (track_avg + 0.1)
-                if asymmetry_ratio > 0.5:
-                    components['track_coord'] -= 0.25 * asymmetry_ratio * spin_penalty_scale
-
-        # Single-track motion penalty
-        left_active = abs(left_track) > 0.15
-        right_active = abs(right_track) > 0.15
-        if left_active != right_active:
-            active_magnitude = max(abs(left_track), abs(right_track))
-            components['track_coord'] -= 0.3 * active_magnitude * spin_penalty_scale
 
         if hasattr(self, '_latest_bev') and phase != 'refinement':
             components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
