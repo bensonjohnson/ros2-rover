@@ -1356,12 +1356,15 @@ class SACEpisodeRunner(Node):
         if phase == 'exploration':
             idle_penalty = 0.05
             forward_mult = 1.5
+            spin_penalty_scale = 0.3
         elif phase == 'learning':
             idle_penalty = 0.15
             forward_mult = 1.0
+            spin_penalty_scale = 0.6
         else:
             idle_penalty = 0.1
             forward_mult = 0.8
+            spin_penalty_scale = 1.0
 
 
         # Idle penalty only when nearly stationary
