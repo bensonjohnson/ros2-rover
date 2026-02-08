@@ -38,7 +38,7 @@ from tractor_bringup.serialization_utils import (
 from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, UnifiedBEVProcessor, RGBDProcessor
 
 # ROS2 Messages
-from sensor_msgs.msg import Image, Imu, JointState, MagneticField, LaserScan
+from sensor_msgs.msg import Image, Imu, JointState, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Bool
 from geometry_msgs.msg import Twist
@@ -231,7 +231,6 @@ class SACEpisodeRunner(Node):
         self.episode_reward = 0.0
 
         # State (raw sensors)
-        self._latest_rgb = None # Keep for debug/logging if needed, but not used for model
         self._latest_depth_raw = None  # Raw depth from camera (424, 240) uint16
         self._latest_scan = None
         # Processed sensor data for model
@@ -239,7 +238,6 @@ class SACEpisodeRunner(Node):
         self._latest_odom = None  # EKF fused odometry (position from LiDAR, velocity from wheels)
         self._latest_rf2o_odom = None  # LiDAR-only odometry from rf2o (for velocity)
         self._latest_imu = None
-        self._latest_mag = None
         self._latest_wheel_vels = None
         self._min_forward_dist = 10.0
         self._safety_override = False
@@ -271,24 +269,13 @@ class SACEpisodeRunner(Node):
         self._is_eval_episode = False  # Current episode type
         
         # Warmup State
-        self._warmup_start_time = 0.0
         self._warmup_active = False
         self._sensor_warmup_complete = False  # Flag for sensor stabilization
         self._sensor_warmup_countdown = 90  # ~3.0 seconds at 30Hz (increased from 50)
-        self._prev_odom_update = None
 
-        # Warmup Controllers (improved)
-        self._pd_controller = PDController(kp=0.5, kd=0.15, deadband=0.05, max_rate=0.3)
-        self._stuck_detector = StuckDetector(window_size=60, stuck_threshold=0.15)
-
-        # Safety flags for new features
-        self._enable_corridor_centering = False  # Disabled by default until tested
-        self._enable_stuck_recovery = True
-        
         # Previous action for smoothness reward
         self._prev_action = np.array([0.0, 0.0])
         self._prev_linear_cmds = deque(maxlen=20) # For oscillation detection
-        self._prev_angular_actions = deque(maxlen=10) # For action smoothness tracking
 
         # Gap Following State
         self._target_heading = 0.0 # -1.0 (Left) to 1.0 (Right) - 360 gap heading for reward
@@ -388,30 +375,6 @@ class SACEpisodeRunner(Node):
         d = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
         self._latest_depth_raw = d  # Store raw for processing in control loop
 
-    def _process_depth(self, depth_raw):
-        """Process raw depth to normalized (100, 848) float32 [0, 1].
-
-        848x100 mode is center-cropped - captures less floor, more forward view.
-        """
-        if depth_raw is None or depth_raw.size == 0:
-            return np.ones((100, 848), dtype=np.float32)  # All far/unknown
-
-        # Convert uint16 mm → float32 meters
-        if depth_raw.dtype == np.uint16:
-            depth = depth_raw.astype(np.float32) * 0.001
-        else:
-            depth = depth_raw.astype(np.float32)
-
-        # Apply median filter to reduce noise
-        depth_uint16 = np.clip(depth * 1000, 0, 65535).astype(np.uint16)
-        depth = cv2.medianBlur(depth_uint16, 3).astype(np.float32) * 0.001
-
-        # Normalize to [0, 1] with max_range=4.0
-        depth_clipped = np.clip(depth, 0.0, 4.0)
-        depth_normalized = depth_clipped / 4.0
-        depth_normalized[depth == 0.0] = 1.0  # Invalid -> far
-
-        return depth_normalized  # (100, 848) float32
     def _scan_cb(self, msg):
         self._latest_scan = msg
         
@@ -442,68 +405,10 @@ class SACEpisodeRunner(Node):
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
             msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z
         )
-        
-        # Extract Yaw from Quaternion
-        q = msg.orientation
-        # Yaw (z-axis rotation)
-        siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-        self._latest_imu_yaw = math.atan2(siny_cosp, cosy_cosp)
-    def _mag_cb(self, msg): self._latest_mag = (msg.magnetic_field.x, msg.magnetic_field.y, msg.magnetic_field.z)
     def _joint_cb(self, msg):
         if len(msg.velocity) >= 4: self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
     def _safety_cb(self, msg): self._safety_override = msg.data
     def _vel_conf_cb(self, msg): self._velocity_confidence = msg.data
-
-    def _detect_corridor_and_center(self, scan_msg) -> Tuple[bool, float]:
-        """
-        Detect if robot is in a corridor and compute centering correction.
-
-        Args:
-            scan_msg: LaserScan message
-
-        Returns:
-            is_corridor (bool): True if symmetric environment detected
-            centering_error (float): [-1, 1] where negative = too far left, positive = too far right
-        """
-        if not scan_msg:
-            return False, 0.0
-
-        ranges = np.array(scan_msg.ranges)
-        angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
-        angles = (angles + np.pi) % (2 * np.pi) - np.pi
-        valid = (ranges > 0.15) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
-
-        # Left/Right 90° sectors (perpendicular to robot)
-        # Left: 20° to 90° (avoiding too far forward/back)
-        # Right: -90° to -20°
-        left_mask = (angles > 0.35) & (angles < 1.57) & valid  # ~20° to 90°
-        right_mask = (angles > -1.57) & (angles < -0.35) & valid  # -90° to -20°
-
-        if not (np.any(left_mask) and np.any(right_mask)):
-            return False, 0.0
-
-        # Use median for robustness against outliers
-        left_dist = np.median(ranges[left_mask])
-        right_dist = np.median(ranges[right_mask])
-
-        # Corridor detection: Both sides at similar distance (within 20% for stricter detection)
-        avg_side = (left_dist + right_dist) / 2.0
-        diff = abs(left_dist - right_dist)
-
-        # Stricter corridor criteria: very similar side distances AND close walls
-        # Reduced threshold from 30% to 20% to avoid false positives
-        # Increased min distance to 0.5m to only activate in actual corridors
-        is_corridor = (diff / (avg_side + 0.01) < 0.20) and (avg_side < 1.5) and (avg_side > 0.5)
-
-        if is_corridor:
-            # Centering error: positive = too far left (need to move right)
-            # Negative = too far right (need to move left)
-            # right_dist > left_dist means right wall is farther, robot is too far left
-            centering_error = (right_dist - left_dist) / avg_side
-            return True, np.clip(centering_error, -1.0, 1.0)
-
-        return False, 0.0
 
     def _find_best_gap_multiscale(self, ranges, angles, valid, scan_msg) -> Tuple[float, float]:
         """
@@ -650,28 +555,11 @@ class SACEpisodeRunner(Node):
         r_dist = np.mean(ranges[right_mask]) if np.any(right_mask) else 3.0
         mean_side_dist = (l_dist + r_dist) / 2.0
 
-        # 4. Improved Multi-Scale Gap Finding
+        # Improved Multi-Scale Gap Finding
         best_angle, best_depth = self._find_best_gap_multiscale(ranges, angles, valid, scan_msg)
 
-        # 5. Corridor Detection and Centering (if enabled)
-        # Normalize best_angle from [-π, π] to [-1, 1] for full 360° coverage
+        # Normalize best_angle from [-π, π] to [-1, 1]
         target = np.clip(best_angle / math.pi, -1.0, 1.0)
-
-        if self._enable_corridor_centering:
-            is_corridor, centering_error = self._detect_corridor_and_center(scan_msg)
-
-            if is_corridor:
-                # In corridor: blend gap following with lateral centering
-                # Use 85% gap heading + 15% centering correction
-                gap_target = target
-                target = 0.85 * gap_target + 0.15 * centering_error
-
-                # DEBUG: Log corridor centering
-                if not hasattr(self, '_corridor_log_count'):
-                    self._corridor_log_count = 0
-                self._corridor_log_count += 1
-                if self._corridor_log_count % 30 == 0:  # Every 1 second
-                    self.get_logger().info(f"🛤️  Corridor Mode: Gap={gap_target:.2f}, Center={centering_error:.2f}, Blended={target:.2f}")
 
         # DEBUG: Log if target is stuck at extremes
         if abs(target) > 0.9:
@@ -940,82 +828,6 @@ class SACEpisodeRunner(Node):
             self._prev_min_clearance = min_lidar_dist
 
         return np.clip(reward, -1.0, 1.0)
-
-    def _compute_reward_old(self, action, linear_vel, angular_vel, clearance, collision):
-        """Aggressive reward function that DEMANDS forward movement.
-
-        Normalized to [-1, 1] range for stable SAC training.
-        Core principle: Forward movement is THE primary objective.
-        """
-        reward = 0.0
-        target_speed = self._curriculum_max_speed
-
-        # 1. Forward Progress - DOMINANT REWARD (up to 1.0)
-        forward_vel = max(0.0, linear_vel)
-        if forward_vel > 0.01:
-            # Strong reward for forward motion - this should be the main signal
-            speed_reward = (forward_vel / target_speed) * 1.0
-            reward += speed_reward
-        else:
-            # IDLE PENALTY: Penalize not moving forward
-            # This prevents the "safe but useless" behavior of sitting still
-            reward -= 0.4
-
-        # Backward penalty - MATCH collision penalty strength
-        if linear_vel < -0.01:
-            # Driving backwards is as bad as a collision!
-            reward -= abs(linear_vel / target_speed) * 1.0
-
-        # 2. Collision Penalty
-        if collision or self._safety_override:
-            reward -= 1.0  # Maximum negative reward
-
-        # 3. Gap Alignment Reward - ONLY when making good forward progress
-        # This prevents rewarding spinning in place to "align"
-        alignment_error = abs(action[1] - self._target_heading)
-
-        if forward_vel > 0.1:  # Increased threshold from 0.05 to 0.1
-            # Only reward alignment when moving at meaningful speed
-            alignment_reward = (0.5 - alignment_error) * 0.3
-            reward += alignment_reward
-
-            # Strong bonus for moving forward WHILE aligned
-            if alignment_error < 0.3:
-                reward += 0.3 * (forward_vel / target_speed)
-        # NO reward/penalty when not moving - let idle penalty handle it
-
-        # 4. Straightness Bonus
-        # Reward driving straight (low angular velocity while moving forward)
-        if forward_vel > 0.08 and abs(angular_vel) < 0.3:
-            straightness_bonus = 0.3 * (forward_vel / target_speed)
-            reward += straightness_bonus
-
-        # 5. Action Smoothness
-        if len(self._prev_angular_actions) > 0:
-            angular_jerk = abs(action[1] - self._prev_angular_actions[-1])
-            if angular_jerk > 0.4:
-                reward -= min(angular_jerk * 0.3, 0.3)
-        self._prev_angular_actions.append(action[1])
-
-        # 6. Angular Velocity Penalty (prefer straight motion)
-        # Strong penalty for excessive turning, especially when stationary
-        if abs(angular_vel) > 0.2:
-            # Base penalty for turning
-            ang_penalty = abs(angular_vel) * 0.3
-
-            # MASSIVE penalty if stationary - we want forward motion, not spinning!
-            if forward_vel < 0.05:
-                ang_penalty *= 5.0  # Spinning in place is nearly useless
-            # Reduced penalty if we have good clearance and moving forward
-            elif clearance >= 1.0 and forward_vel > 0.1:
-                ang_penalty *= 0.5  # Allow exploration when safe and moving
-
-            reward -= min(ang_penalty, 0.8)
-
-        # Final normalization: ensure [-1, 1] range
-        reward = np.clip(reward, -1.0, 1.0)
-
-        return reward
 
     def _control_loop(self):
         """Main control loop running at 30Hz."""
