@@ -666,18 +666,19 @@ class SACEpisodeRunner(Node):
         if phase == 'exploration':
             # Phase 1: Exploration - relax all penalties, encourage ANY motion
             idle_penalty = 0.05  # Very mild penalty
-            forward_bonus_mult = 3.0  # VERY strong encouragement (increased from 1.5)
+            forward_bonus_mult = 1.5  # Normalized from 3.0
             spin_penalty_scale = 0.3  # Very mild spin penalty
         elif phase == 'learning':
             # Phase 2: Learning - moderate penalties, encourage forward motion
             idle_penalty = 0.15
-            forward_bonus_mult = 2.0  # Increased from 1.2
+            forward_bonus_mult = 1.0  # Normalized from 2.0
             spin_penalty_scale = 0.6
         else:  # refinement
             # Phase 3: Refinement - full reward function
             idle_penalty = 0.1
-            forward_bonus_mult = 1.5  # Increased from 1.0
+            forward_bonus_mult = 0.8  # Normalized from 1.5
             spin_penalty_scale = 1.0
+
 
         # 1. Base idle penalty - only apply when NOT moving forward
         # If moving forward, skip idle penalty (already rewarded via forward bonus)
@@ -1058,25 +1059,38 @@ class SACEpisodeRunner(Node):
                 self.get_logger().info('🔥 Starting Random Exploration Warmup...')
                 self.pbar.set_description("🔥 Warmup: Random Exploration")
 
-            # DIRECT TRACK CONTROL: Random exploration with forward bias
+            # DIRECT TRACK CONTROL: Random Uniform Exploration (Chaos Mode)
             # action[0] = left track, action[1] = right track
-            # Bias towards both tracks forward for forward motion
-
-            # Base random track speeds - bias towards forward
-            base_speed = np.random.uniform(0.3, 1.0)  # Forward bias
-            track_variance = np.random.uniform(-0.3, 0.3)  # Slight turn variance
+            # Full -1.0 to 1.0 range to seed buffer with ALL possible dynamics
             
-            random_left = base_speed + track_variance
-            random_right = base_speed - track_variance
+            # 1. Pure Random Action
+            random_left = np.random.uniform(-1.0, 1.0)
+            random_right = np.random.uniform(-1.0, 1.0)
+            
+            # 2. Occasional "Coordinated" Actions (to help it find useful modes)
+            # 30% chance to pick a coordinated move (Forward, Spin, or Stop)
+            rand_mode = np.random.rand()
+            if rand_mode < 0.1: # Forward
+                random_left = np.random.uniform(0.5, 1.0)
+                random_right = np.random.uniform(0.5, 1.0)
+            elif rand_mode < 0.2: # Spin
+                val = np.random.uniform(0.4, 0.6) # Safer spin speed
+                if np.random.rand() < 0.5: # Random direction
+                    random_left = val
+                    random_right = -val
+                else:
+                    random_left = -val
+                    random_right = val
+            elif rand_mode < 0.3: # Stop/Slow
+                random_left = np.random.uniform(-0.1, 0.1)
+                random_right = np.random.uniform(-0.1, 0.1)
 
-            # Safety-based speed scaling
+            # Safety-based speed scaling (prevent high-speed crashes)
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
 
             # Slow down if close to obstacles
-            if clearance_dist < 0.25:
-                speed_scale = 0.3
-            elif clearance_dist < 0.4:
-                speed_scale = 0.6
+            if clearance_dist < 0.4:
+                speed_scale = 0.5
             else:
                 speed_scale = 1.0
 
@@ -1089,8 +1103,8 @@ class SACEpisodeRunner(Node):
             self._debug_log_count += 1
             if self._debug_log_count % 30 == 0:  # Log every 1 second
                 self.get_logger().info(
-                    f"🔍 Warmup Random: LiDAR={lidar_min:.2f}m, Clearance={clearance_dist:.2f}m, "
-                    f"LeftTrack={random_left:.2f}, RightTrack={random_right:.2f}"
+                    f"🎲 Warmup Chaos: LiDAR={lidar_min:.2f}m, "
+                    f"L={random_left:.2f}, R={random_right:.2f}"
                 )
 
             # Override model action with random exploration (direct track format)
@@ -1353,13 +1367,14 @@ class SACEpisodeRunner(Node):
 
         if phase == 'exploration':
             idle_penalty = 0.05
-            forward_mult = 3.0
+            forward_mult = 1.5
         elif phase == 'learning':
             idle_penalty = 0.15
-            forward_mult = 2.0
+            forward_mult = 1.0
         else:
             idle_penalty = 0.1
-            forward_mult = 1.5
+            forward_mult = 0.8
+
 
         # Idle penalty only when nearly stationary
         if linear_vel < 0.05:
@@ -1396,13 +1411,14 @@ class SACEpisodeRunner(Node):
         # Get phase-specific parameters
         if phase == 'exploration':
             spin_penalty_scale = 0.3
-            forward_mult = 3.0
+            forward_mult = 1.5
         elif phase == 'learning':
             spin_penalty_scale = 0.6
-            forward_mult = 2.0
+            forward_mult = 1.0
         else:
             spin_penalty_scale = 1.0
-            forward_mult = 1.5
+            forward_mult = 0.8
+
 
         # Opposite direction penalty
         if left_track * right_track < 0:
