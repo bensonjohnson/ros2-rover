@@ -236,7 +236,8 @@ class SACEpisodeRunner(Node):
         self._latest_scan = None
         # Processed sensor data for model
         self._latest_bev = None  # (2, 128, 128) float32 - Unified BEV grid
-        self._latest_odom = None
+        self._latest_odom = None  # EKF fused odometry (position from LiDAR, velocity from wheels)
+        self._latest_rf2o_odom = None  # LiDAR-only odometry from rf2o (for velocity)
         self._latest_imu = None
         self._latest_mag = None
         self._latest_wheel_vels = None
@@ -364,8 +365,10 @@ class SACEpisodeRunner(Node):
         # No RGB camera subscription - depth-only mode
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self._depth_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
-        # Odometry: Use Fused EKF Output
+        # Odometry: Use Fused EKF Output (for position/yaw)
         self.create_subscription(Odometry, '/odometry/filtered', self._odom_cb, 10)
+        # LiDAR odometry from rf2o (for velocity - more reliable for reward calculation)
+        self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
         self.create_subscription(Imu, '/imu/data', self._imu_cb, qos_profile_sensor_data)
         # self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data) # Removed due to noise
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
@@ -425,7 +428,16 @@ class SACEpisodeRunner(Node):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         self._latest_fused_yaw = math.atan2(siny_cosp, cosy_cosp)
-    def _imu_cb(self, msg): 
+
+    def _rf2o_odom_cb(self, msg):
+        """Callback for rf2o LiDAR odometry - stores velocity from LiDAR scan matching."""
+        # Extract linear and angular velocity from rf2o (LiDAR-derived, more reliable)
+        self._latest_rf2o_odom = (
+            msg.twist.twist.linear.x,   # LiDAR-derived forward velocity
+            msg.twist.twist.angular.z   # LiDAR-derived angular velocity
+        )
+        
+    def _imu_cb(self, msg):
         self._latest_imu = (
             msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
             msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z
@@ -1105,10 +1117,28 @@ class SACEpisodeRunner(Node):
         # Note: _bev_heading (front-biased) is used for proprioception
         self._target_heading = gap_heading
 
-        # Get current velocities from EKF-fused odometry for reward/proprioception
-        # EKF fuses IMU + wheel encoders for more accurate velocity estimates
-        current_linear = self._latest_odom[2] if self._latest_odom else 0.0
-        current_angular = self._latest_odom[3] if self._latest_odom else 0.0
+        # Get current velocities from rf2o LiDAR odometry for reward calculation
+        # rf2o provides more reliable velocity from scan matching (ignores wheel slip)
+        # Falls back to EKF odometry if rf2o data unavailable
+        current_linear = 0.0
+        current_angular = 0.0
+        
+        if self._latest_rf2o_odom:
+            # Use rf2o LiDAR odometry (primary source - more reliable)
+            current_linear = self._latest_rf2o_odom[0]  # LiDAR-derived forward velocity
+            current_angular = self._latest_rf2o_odom[1]  # LiDAR-derived angular velocity
+        elif self._latest_odom:
+            # Fallback to EKF odometry if rf2o unavailable
+            current_linear = self._latest_odom[2]
+            current_angular = self._latest_odom[3]
+        
+        # Log once when switching sources
+        if not hasattr(self, '_odom_source_log'):
+            self._odom_source_log = 0
+        if self._odom_source_log < 5:
+            source = "rf2o (LiDAR)" if self._latest_rf2o_odom else "EKF fallback"
+            self.get_logger().info(f"odom velocity source: {source}")
+            self._odom_source_log += 1
 
         # ========== ROTATION TRACKING FOR REVOLUTION PENALTY (NEW) ==========
         # Track cumulative rotation using EKF-fused yaw for spin-in-place penalty
