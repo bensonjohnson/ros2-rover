@@ -55,12 +55,12 @@ ekf_filter_node:
     ]
     
     # Sensor configurations
-    # Laser odometry from LD19 LiDAR (rf2o) - replaces wheel encoders for better accuracy
+    # Laser odometry from LD19 LiDAR (rf2o) - Use for position/yaw ONLY, not velocity
     odom0: odom_rf2o
     odom0_config: [true,  true,  false,  # x, y, z position - Use position from laser odometry
                    false, false, true,   # roll, pitch, yaw orientation - Use yaw from laser odometry
-                   true,  true,  false,  # x, y, z linear velocity
-                   false, false, true,   # roll, pitch, yaw angular velocity
+                   false, false, false,  # x, y, z linear velocity - DISABLED (use wheel encoders instead)
+                   false, false, false,  # roll, pitch, yaw angular velocity - DISABLED (use wheel encoders + IMU)
                    false, false, false] # x, y, z linear acceleration
     odom0_queue_size: 10
     odom0_nodelay: false
