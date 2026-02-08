@@ -1344,6 +1344,7 @@ class SACEpisodeRunner(Node):
         """Log detailed reward components for debugging."""
         # Get phase
         phase = self._get_current_phase()
+        left_track, right_track = action[0], action[1]
         
         # Calculate components
         components = {'forward': 0.0, 'idle_penalty': 0.0, 'backward': 0.0,
