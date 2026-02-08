@@ -1253,8 +1253,7 @@ class SACEpisodeRunner(Node):
                 timestamp = int(time.time() * 1000)
                 save_path = self._calibration_dir / f"calib_{timestamp}.npz"
 
-                # Save depth-only for calibration
-                depth_calib = self._process_depth(self._latest_depth_raw)  # (100, 848)
+                save_path = self._calibration_dir / f"calib_{timestamp}.npz"
 
                 np.savez_compressed(
                     save_path,
