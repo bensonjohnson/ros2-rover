@@ -220,6 +220,8 @@ class SACEpisodeRunner(Node):
         self.inference_rate = float(self.get_parameter('inference_rate_hz').value)
         self.batch_size = int(self.get_parameter('batch_size').value)
         self.collection_duration = float(self.get_parameter('collection_duration').value)
+        self.invert_linear_vel = self.declare_parameter('invert_linear_vel', False).value
+
 
         # TQDM Dashboard (Initialize FIRST to avoid race conditions with threads)
         print("\033[H\033[J", end="") # Clear screen
@@ -950,7 +952,13 @@ class SACEpisodeRunner(Node):
         if self._odom_source_log < 5:
             source = "rf2o (LiDAR)" if self._latest_rf2o_odom else "EKF fallback"
             self.get_logger().info(f"odom velocity source: {source}")
+            self.get_logger().info(f"odom velocity source: {source}")
             self._odom_source_log += 1
+
+        # Apply velocity inversion if configured (fixes backwards mounting/penalty issues)
+        if self.invert_linear_vel:
+            current_linear = -current_linear
+
 
         # ========== ROTATION TRACKING FOR REVOLUTION PENALTY (NEW) ==========
         # Track cumulative rotation using EKF-fused yaw for spin-in-place penalty

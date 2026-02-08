@@ -36,6 +36,14 @@ def generate_launch_description():
         default_value='0.12',
         description='Collision detection distance (m)'
     )
+
+
+    invert_vel_arg = DeclareLaunchArgument(
+        'invert_linear_vel',
+        default_value='true',
+        description='Invert linear velocity from odometry (fixes backwards penalty on some hardware)'
+    )
+
     
     # 1. Robot Description
     robot_description_launch = IncludeLaunchDescription(
@@ -156,7 +164,8 @@ def generate_launch_description():
             'max_linear_speed': LaunchConfiguration('max_speed'),
             'max_angular_speed': 1.0,
             'inference_rate_hz': 30.0,
-            'batch_size': 64
+            'batch_size': 64,
+            'invert_linear_vel': LaunchConfiguration('invert_linear_vel')
         }]
     )
     
@@ -166,6 +175,8 @@ def generate_launch_description():
         algorithm_arg,
         max_speed_arg,
         collision_dist_arg,
+        invert_vel_arg,
+
         
         # Core
         robot_description_launch,
