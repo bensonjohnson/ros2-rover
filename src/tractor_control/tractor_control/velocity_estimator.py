@@ -77,8 +77,9 @@ class HybridVelocityEstimator:
             VelocityEstimate with confidence metric
         """
         # 1. Encoder-based estimate (primary)
-        encoder_linear = (w_left + w_right) * self.wheel_radius / 2.0
-        encoder_angular = -(w_left - w_right) * self.wheel_radius / self.wheel_separation
+        # Negate to correct for encoder wiring direction
+        encoder_linear = -(w_left + w_right) * self.wheel_radius / 2.0
+        encoder_angular = (w_left - w_right) * self.wheel_radius / self.wheel_separation
 
         # 2. IMU-based estimate (backup/validation)
         imu_linear = None
