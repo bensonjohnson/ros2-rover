@@ -309,6 +309,10 @@ class SACEpisodeRunner(Node):
         self._prev_min_clearance = 10.0  # Previous step's minimum clearance distance
         self._steps_in_tight_space = 0  # Counter for how long in tight space
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
+        
+        # Stuck Detector
+        self.stuck_detector = StuckDetector(stuck_threshold=0.15)
+        self._is_stuck = False
 
         # NATS Setup (will be initialized in background thread)
         self.nc = None
@@ -393,6 +397,9 @@ class SACEpisodeRunner(Node):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         self._latest_fused_yaw = math.atan2(siny_cosp, cosy_cosp)
+        
+        # Update stuck detector
+        self._is_stuck = self.stuck_detector.update(msg)
 
     def _rf2o_odom_cb(self, msg):
         """Callback for rf2o LiDAR odometry - stores velocity from LiDAR scan matching."""
@@ -630,7 +637,7 @@ class SACEpisodeRunner(Node):
         
         return np.clip(bonus, 0.0, 0.15)
     
-    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision):
+    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision, is_stuck):
         """
         Direct Track Control reward function:
         - action[0] = left track speed (-1 to 1)
@@ -797,6 +804,38 @@ class SACEpisodeRunner(Node):
                 angular_action_magnitude = abs(right_track - left_track)
                 if angular_action_magnitude > 0.3:  # Significant rotation attempt
                     reward += 0.1 * angular_action_magnitude
+
+        # 13. STUCK RECOVERY OVERRIDE (High Priority)
+        # If physically stuck (detected by odometry), FORCE the policy to learn zero-turns
+        if is_stuck:
+            # Penalize ANY forward/backward command attempts when stuck
+            # (Spinning wheels in place is bad)
+            fwd_effort = abs(left_track + right_track)
+            reward -= 1.0 * fwd_effort
+            
+            # Reward PURE rotation (Zero Turn)
+            # Max difference is 2.0 (-1 vs 1)
+            rot_effort = abs(left_track - right_track)
+            reward += 1.0 * rot_effort
+            
+            # Additional penalty if tracks are not opposing
+            if left_track * right_track > 0: # Both positive or both negative
+                reward -= 0.5
+                
+        # 14. ARC TURN BONUS (Agile Obstacle Avoidance)
+        # If moving fast AND turning, while near obstacles but safe -> Good!
+        # Encourages "swooping" around mapped obstacles rather than stop-turn-go
+        if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
+            # Reward maintaining speed while turning
+            # Max bonus ~ 0.3 * 0.5 * 1.0 = 0.15
+            reward += 0.3 * abs(linear_vel) * abs(angular_vel)
+
+        # 15. WALL PROXIMITY PENALTY (Don't drive into walls)
+        # If very close to wall and driving TOWARDS it -> Penalty
+        if min_lidar_dist < 0.5 and linear_vel > 0.1:
+            # Check if driving towards the closest point
+            # We don't have exact vector here, but high linear velocity when close is dangerous
+            reward -= 0.5 * (0.5 - min_lidar_dist) * linear_vel
 
             # Update previous clearance for next step
             self._prev_min_clearance = min_lidar_dist
@@ -1152,7 +1191,19 @@ class SACEpisodeRunner(Node):
                 self.get_logger().debug(f'📏 Using LiDAR fallback: Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m')
         
         # Safety Override Logic
-        safety_triggered = self._safety_override or effective_min_dist < 0.12
+        # Allow rotation if stuck, even if close!
+        is_stuck = self._is_stuck
+        
+        # If stuck, RELAX the safety distance to allow zero-turn recovery
+        # But force stop of linear motion if very close
+        if is_stuck and effective_min_dist < 0.12:
+            safety_triggered = False # Allow control, but reward will penalize forward
+            # Force zero linear command in safety check? No, let RL learn it via reward
+            # But limits might be needed to prevent damage
+            if effective_min_dist < 0.05: # Extremely close
+                safety_triggered = True
+        else:
+             safety_triggered = self._safety_override or effective_min_dist < 0.12
         
         if safety_triggered:
             # Override: Stop and reverse slightly
@@ -1212,7 +1263,7 @@ class SACEpisodeRunner(Node):
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
-            lidar_min, lidar_sides, collision
+            lidar_min, lidar_sides, collision, is_stuck
         )
 
         # Safety check: NaN in reward
@@ -1274,7 +1325,7 @@ class SACEpisodeRunner(Node):
         if np.random.rand() < 0.05:  # ~5% of steps
             self._log_reward_breakdown(
                 actual_action, current_linear, current_angular,
-                lidar_min, lidar_sides
+                lidar_min, lidar_sides, is_stuck
             )
 
     def _trigger_episode_reset(self):
@@ -1340,7 +1391,7 @@ class SACEpisodeRunner(Node):
 
         future.add_done_callback(_log_response)
     
-    def _log_reward_breakdown(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance):
+    def _log_reward_breakdown(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, is_stuck=False):
         """Log detailed reward components for debugging."""
         # Get phase
         phase = self._get_current_phase()
@@ -1419,6 +1470,27 @@ class SACEpisodeRunner(Node):
                 if angular_action_magnitude > 0.3:
                     components['unstuck'] += 0.1 * angular_action_magnitude
 
+        if is_stuck:
+             fwd_effort = abs(left_track + right_track)
+             rot_effort = abs(left_track - right_track)
+             components['stuck_state'] = -1.0 * fwd_effort + 1.0 * rot_effort
+             if left_track * right_track > 0:
+                 components['stuck_state'] -= 0.5
+        else:
+             components['stuck_state'] = 0.0
+             
+        # Arc Turn Bonus
+        if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
+            components['arc_turn'] = 0.3 * abs(linear_vel) * abs(angular_vel)
+        else:
+            components['arc_turn'] = 0.0
+            
+        # Wall Avoidance
+        if min_lidar_dist < 0.5 and linear_vel > 0.1:
+            components['wall_avoid'] = -0.5 * (0.5 - min_lidar_dist) * linear_vel
+        else:
+            components['wall_avoid'] = 0.0
+
         # Log
         total = sum(components.values())
         self.get_logger().info(
@@ -1427,7 +1499,8 @@ class SACEpisodeRunner(Node):
             f"(idle:{components['idle_penalty']:+.2f}) | "
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
             f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
-            f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}"
+            f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
+            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f}"
         )
     
     def _check_phase_transition(self):
