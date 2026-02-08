@@ -279,7 +279,8 @@ class HiwonderMotorDriver(Node):
             # Set encoder polarity - using official documentation method
             # Default: 0. Try 1 if motors behave unexpectedly or don't respond
             # with encoders.
-            encoder_polarity = 0
+            # CHANGED TO 1: Motors were reporting backwards velocity
+            encoder_polarity = 1
             self.bus.write_byte_data(
                 self.motor_address, self.MOTOR_ENCODER_POLARITY_ADDR, encoder_polarity
             )
