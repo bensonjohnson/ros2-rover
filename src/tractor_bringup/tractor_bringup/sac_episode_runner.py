@@ -314,6 +314,17 @@ class SACEpisodeRunner(Node):
         self.stuck_detector = StuckDetector(stuck_threshold=0.15)
         self._is_stuck = False
 
+        # Slip Detection
+        self._fwd_cmd_no_motion_count = 0       # Consecutive frames: forward cmd but no motion
+        self._slip_detected = False              # True when sustained slip confirmed
+        self._slip_recovery_active = False       # True when backing up from slip
+        self._slip_backup_origin = None          # (x, y) position when backup started
+        self._slip_backup_distance = 0.0         # Distance traveled backward so far
+        self.SLIP_DETECTION_FRAMES = 15          # ~0.5s at 30Hz to confirm slip
+        self.SLIP_CMD_THRESHOLD = 0.2            # Commanding >20% forward
+        self.SLIP_VEL_THRESHOLD = 0.03           # Moving <3 cm/s = no motion
+        self.SLIP_BACKUP_LIMIT = 0.15            # ~6 inches max backup
+
         # NATS Setup (will be initialized in background thread)
         self.nc = None
         self.js = None
@@ -637,7 +648,7 @@ class SACEpisodeRunner(Node):
         
         return np.clip(bonus, 0.0, 0.15)
     
-    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision, is_stuck):
+    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision, is_stuck, is_slipping=False, slip_recovery_active=False):
         """
         Direct Track Control reward function:
         - action[0] = left track speed (-1 to 1)
@@ -709,10 +720,14 @@ class SACEpisodeRunner(Node):
 
         reward += base_fwd_reward
 
-        # 3. Backward penalty (unchanged)
+        # 3. Backward penalty - RELAXED during slip recovery
         if linear_vel < -0.03:
-            backward_penalty = 0.15 + abs(linear_vel) * 0.8
-            reward -= backward_penalty
+            if slip_recovery_active:
+                # Allow backward movement during slip recovery (reward it mildly)
+                reward += 0.1
+            else:
+                backward_penalty = 0.15 + abs(linear_vel) * 0.8
+                reward -= backward_penalty
         
         # 4. Tank Steering Efficiency Rules
         
@@ -822,7 +837,14 @@ class SACEpisodeRunner(Node):
             if left_track * right_track > 0: # Both positive or both negative
                 reward -= 0.5
                 
-        # 14. ARC TURN BONUS (Agile Obstacle Avoidance)
+        # 14. SLIP PENALTY & RECOVERY
+        # Penalize commanding forward when wheels are slipping (no forward progress)
+        # Encourage backing up to free the rover
+        if is_slipping:
+            # Penalize continued forward effort proportional to command magnitude
+            reward -= 0.3 * max(cmd_fwd, 0.0)
+
+        # 15. ARC TURN BONUS (Agile Obstacle Avoidance)
         # If moving fast AND turning, while near obstacles but safe -> Good!
         # Encourages "swooping" around mapped obstacles rather than stop-turn-go
         if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
@@ -830,7 +852,7 @@ class SACEpisodeRunner(Node):
             # Max bonus ~ 0.3 * 0.5 * 1.0 = 0.15
             reward += 0.3 * abs(linear_vel) * abs(angular_vel)
 
-        # 15. WALL PROXIMITY PENALTY (Don't drive into walls)
+        # 16. WALL PROXIMITY PENALTY (Don't drive into walls)
         # If very close to wall and driving TOWARDS it -> Penalty
         if min_lidar_dist < 0.5 and linear_vel > 0.1:
             # Check if driving towards the closest point
@@ -970,6 +992,48 @@ class SACEpisodeRunner(Node):
         if self.invert_linear_vel:
             current_linear = -current_linear
 
+        # ========== SLIP DETECTION ==========
+        # Detect when forward commands produce no forward motion (wheel slip)
+        # Uses rf2o LiDAR odometry (slip-immune) as ground truth
+        cmd_fwd_for_slip = (self._prev_action[0] + self._prev_action[1]) / 2.0
+
+        if cmd_fwd_for_slip > self.SLIP_CMD_THRESHOLD and abs(current_linear) < self.SLIP_VEL_THRESHOLD:
+            self._fwd_cmd_no_motion_count += 1
+            if self._fwd_cmd_no_motion_count >= self.SLIP_DETECTION_FRAMES and not self._slip_detected:
+                self._slip_detected = True
+                self.get_logger().warn(
+                    f'⚠️ SLIP DETECTED: Commanding fwd={cmd_fwd_for_slip:.2f} '
+                    f'but measured vel={current_linear:.3f} m/s for {self._fwd_cmd_no_motion_count} frames'
+                )
+                # Start slip recovery - record position for backup distance tracking
+                if self._latest_odom and not self._slip_recovery_active:
+                    self._slip_recovery_active = True
+                    self._slip_backup_origin = (self._latest_odom[0], self._latest_odom[1])
+                    self._slip_backup_distance = 0.0
+                    self.get_logger().info(f'🔄 Slip recovery started - allowing backup up to {self.SLIP_BACKUP_LIMIT:.2f}m')
+        else:
+            # Clear slip if forward motion resumes or command stops
+            if self._fwd_cmd_no_motion_count > 0:
+                self._fwd_cmd_no_motion_count = 0
+            if self._slip_detected:
+                self._slip_detected = False
+                self._slip_recovery_active = False
+                self._slip_backup_origin = None
+                self._slip_backup_distance = 0.0
+                self.get_logger().info('✅ Slip cleared - forward motion restored')
+
+        # Track backward distance during slip recovery
+        if self._slip_recovery_active and self._slip_backup_origin and self._latest_odom:
+            x, y = self._latest_odom[0], self._latest_odom[1]
+            ox, oy = self._slip_backup_origin
+            self._slip_backup_distance = math.sqrt((x - ox)**2 + (y - oy)**2)
+
+            if self._slip_backup_distance >= self.SLIP_BACKUP_LIMIT:
+                self.get_logger().info(
+                    f'🛑 Slip backup limit reached ({self._slip_backup_distance:.3f}m >= {self.SLIP_BACKUP_LIMIT:.2f}m)'
+                )
+                self._slip_recovery_active = False
+        # ========== END SLIP DETECTION ==========
 
         # ========== ROTATION TRACKING FOR REVOLUTION PENALTY (NEW) ==========
         # Track cumulative rotation using EKF-fused yaw for spin-in-place penalty
@@ -1263,7 +1327,9 @@ class SACEpisodeRunner(Node):
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
-            lidar_min, lidar_sides, collision, is_stuck
+            lidar_min, lidar_sides, collision, is_stuck,
+            is_slipping=self._slip_detected,
+            slip_recovery_active=self._slip_recovery_active
         )
 
         # Safety check: NaN in reward
@@ -1431,9 +1497,12 @@ class SACEpisodeRunner(Node):
         if cmd_fwd > 0 and meas_fwd > 0:
             components['forward'] = min(cmd_fwd, meas_fwd) * forward_mult
         
-        # Backward Penalty (unchanged)
+        # Backward Penalty (relaxed during slip recovery)
         if linear_vel < -0.03:
-            components['backward'] = -(0.15 + abs(linear_vel) * 0.8)
+            if self._slip_recovery_active:
+                components['backward'] = 0.1  # Reward backup during slip recovery
+            else:
+                components['backward'] = -(0.15 + abs(linear_vel) * 0.8)
 
         # Tank Steering Rules
         if abs(cmd_fwd) < 0.1:
@@ -1478,7 +1547,12 @@ class SACEpisodeRunner(Node):
                  components['stuck_state'] -= 0.5
         else:
              components['stuck_state'] = 0.0
-             
+
+        # Slip penalty
+        components['slip'] = 0.0
+        if self._slip_detected:
+            components['slip'] = -0.3 * max(cmd_fwd, 0.0)
+
         # Arc Turn Bonus
         if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
             components['arc_turn'] = 0.3 * abs(linear_vel) * abs(angular_vel)
@@ -1500,7 +1574,7 @@ class SACEpisodeRunner(Node):
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
             f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
             f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
-            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f}"
+            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f}"
         )
     
     def _check_phase_transition(self):
