@@ -859,8 +859,15 @@ class SACEpisodeRunner(Node):
             # We don't have exact vector here, but high linear velocity when close is dangerous
             reward -= 0.5 * (0.5 - min_lidar_dist) * linear_vel
 
-            # Update previous clearance for next step
-            self._prev_min_clearance = min_lidar_dist
+        # 17. SLIP RECOVERY BONUS - Reward backing up during slip recovery
+        # This encourages the rover to back up to free itself when slip is detected
+        if slip_recovery_active and linear_vel < -0.02:
+            # Reward proportional to how much we're backing up
+            backup_bonus = 0.2 * abs(linear_vel)
+            reward += backup_bonus
+            
+        # Always update previous clearance for next step (moved outside conditional)
+        self._prev_min_clearance = min_lidar_dist
 
         return np.clip(reward, -1.0, 1.0)
 
@@ -995,6 +1002,9 @@ class SACEpisodeRunner(Node):
         # ========== SLIP DETECTION ==========
         # Detect when forward commands produce no forward motion (wheel slip)
         # Uses rf2o LiDAR odometry (slip-immune) as ground truth
+        # NOTE: Use actual_action (current command) not _prev_action for real-time detection
+        # We use _prev_action here because actual_action hasn't been computed yet in this loop
+        # But we need to check what we LAST commanded vs what we're NOW measuring
         cmd_fwd_for_slip = (self._prev_action[0] + self._prev_action[1]) / 2.0
 
         if cmd_fwd_for_slip > self.SLIP_CMD_THRESHOLD and abs(current_linear) < self.SLIP_VEL_THRESHOLD:
@@ -1269,7 +1279,45 @@ class SACEpisodeRunner(Node):
         else:
              safety_triggered = self._safety_override or effective_min_dist < 0.12
         
-        if safety_triggered:
+        # ========== SLIP RECOVERY OVERRIDE ==========
+        # When slip is detected, FORCE a backup action to free the rover
+        # This overrides the policy to ensure recovery happens
+        if self._slip_detected and self._slip_recovery_active and not safety_triggered:
+            # Forced slip recovery: back up with slight turn
+            # Alternate turn direction to help break free
+            if not hasattr(self, '_slip_recovery_turn_dir'):
+                self._slip_recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
+            
+            # Back up both tracks, one slightly faster to induce turn
+            recovery_left = -0.4 + self._slip_recovery_turn_dir * 0.15
+            recovery_right = -0.4 - self._slip_recovery_turn_dir * 0.15
+            
+            # Apply deadzone compensation
+            MIN_TRACK = 0.25
+            recovery_left = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_left), recovery_left)
+            recovery_right = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_right), recovery_right)
+            
+            # Convert to Twist
+            wheel_sep = 0.3
+            linear_vel_recovery = (recovery_left + recovery_right) / 2.0
+            angular_vel_recovery = (recovery_right - recovery_left) / wheel_sep
+            
+            cmd.linear.x = float(linear_vel_recovery * self._curriculum_max_speed)
+            cmd.angular.z = float(angular_vel_recovery * self.max_angular)
+            
+            actual_action = np.array([recovery_left, recovery_right])
+            collision = False
+            
+            # Log recovery action periodically
+            if not hasattr(self, '_slip_recovery_log_count'):
+                self._slip_recovery_log_count = 0
+            self._slip_recovery_log_count += 1
+            if self._slip_recovery_log_count % 15 == 0:  # Log every 0.5s
+                self.get_logger().info(
+                    f"🔄 Slip Recovery: Backing up L={recovery_left:.2f}, R={recovery_right:.2f} "
+                    f"(distance: {self._slip_backup_distance:.3f}m/{self.SLIP_BACKUP_LIMIT:.2f}m)"
+                )
+        elif safety_triggered:
             # Override: Stop and reverse slightly
             if effective_min_dist < 0.12 and self._sensor_warmup_complete:
                 self.get_logger().warn(f"🛑 Safety Stop! MinDist={effective_min_dist:.3f}m (Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m)")
@@ -1281,7 +1329,18 @@ class SACEpisodeRunner(Node):
             # Only mark as collision if sensors are warmed up
             # During warmup, still stop but don't trigger episode resets
             collision = self._sensor_warmup_complete
+            
+            # Reset slip recovery turn direction for next time
+            if hasattr(self, '_slip_recovery_turn_dir'):
+                delattr(self, '_slip_recovery_turn_dir')
+            if hasattr(self, '_slip_recovery_log_count'):
+                delattr(self, '_slip_recovery_log_count')
         else:
+            # Normal operation - reset slip recovery tracking
+            if hasattr(self, '_slip_recovery_turn_dir'):
+                delattr(self, '_slip_recovery_turn_dir')
+            if hasattr(self, '_slip_recovery_log_count'):
+                delattr(self, '_slip_recovery_log_count')
             # Normal execution with DIRECT TRACK CONTROL
             # action[0] = left track speed (-1 to 1)
             # action[1] = right track speed (-1 to 1)
