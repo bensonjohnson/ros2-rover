@@ -37,6 +37,19 @@ from tractor_bringup.serialization_utils import (
 
 from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, UnifiedBEVProcessor, RGBDProcessor
 
+# Proprioception normalization constants (must match convert_onnx_to_rknn.py)
+# proprio = [lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading]
+PROPRIO_MEAN = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+PROPRIO_STD = np.array([2.0, 1.0, 1.0, 0.2, 1.0, 1.0], dtype=np.float32)
+
+def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
+    """Normalize proprioception for RKNN quantization.
+    
+    This MUST match the normalization in convert_onnx_to_rknn.py for consistent quantization.
+    """
+    normalized = (proprio - PROPRIO_MEAN) / PROPRIO_STD
+    return np.clip(normalized, -3.0, 3.0).astype(np.float32)
+
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, LaserScan
 from nav_msgs.msg import Odometry
@@ -986,13 +999,12 @@ class SACEpisodeRunner(Node):
             current_linear = self._latest_odom[2]
             current_angular = self._latest_odom[3]
         
-        # Log once when switching sources
+        # Log once when switching sources (reduced verbosity)
         if not hasattr(self, '_odom_source_log'):
             self._odom_source_log = 0
-        if self._odom_source_log < 5:
+        if self._odom_source_log < 1:  # Only log once
             source = "rf2o (LiDAR)" if self._latest_rf2o_odom else "EKF fallback"
-            self.get_logger().info(f"odom velocity source: {source}")
-            self.get_logger().info(f"odom velocity source: {source}")
+            self.get_logger().debug(f"odom velocity source: {source}")
             self._odom_source_log += 1
 
         # Apply velocity inversion if configured (fixes backwards mounting/penalty issues)
@@ -1080,14 +1092,18 @@ class SACEpisodeRunner(Node):
 
         # Construct 6D proprio: [lidar_min, prev_lin, prev_ang, current_lin, current_ang, bev_heading]
         # Using front-biased BEV heading (not 360° gap) to encourage forward driving
-        proprio = np.array([[
+        proprio_raw = np.array([
             lidar_min,                  # Min LiDAR distance (360 Safety)
             self._prev_action[0],       # Previous linear action (left track)
             self._prev_action[1],       # Previous angular action (right track)
             current_linear,             # Current fused linear velocity (from EKF)
             current_angular,            # Current fused angular velocity (from EKF)
             self._bev_heading           # Front-biased BEV heading [-1, 1] (prefers forward)
-        ]], dtype=np.float32)
+        ], dtype=np.float32)
+        
+        # CRITICAL: Normalize proprio for RKNN quantization
+        # This MUST match the normalization in convert_onnx_to_rknn.py
+        proprio = normalize_proprio(proprio_raw)[None, ...]  # Add batch dimension: (1, 6)
 
         # 2. Inference (RKNN)
         # Returns: [action_mean] (value head not exported in actor ONNX)

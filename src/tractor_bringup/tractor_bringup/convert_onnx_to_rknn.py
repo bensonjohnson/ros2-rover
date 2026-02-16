@@ -31,6 +31,31 @@ except ImportError:
 import numpy as np
 
 
+# Proprioception normalization constants
+# proprio = [lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading]
+# Normalize each dimension to [-1, 1] or [0, 1] range for INT8 quantization
+PROPRIO_MEAN = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)  # Mean values
+PROPRIO_STD = np.array([2.0, 1.0, 1.0, 0.2, 1.0, 1.0], dtype=np.float32)   # Std/range for normalization
+
+def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
+    """Normalize proprioception vector for RKNN quantization.
+    
+    Input proprio = [lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading]
+    - lidar_min: 0-4m -> normalize to [-1, 1] using mean=2, std=2
+    - prev_lin: -1 to 1 -> already normalized
+    - prev_ang: -1 to 1 -> already normalized
+    - cur_lin: ~-0.2 to 0.2 m/s -> normalize by 0.2 (max speed)
+    - cur_ang: ~-1 to 1 rad/s -> already normalized
+    - gap_heading: -1 to 1 -> already normalized
+    
+    Returns normalized proprio in approximately [-1, 1] range per dimension.
+    """
+    normalized = (proprio - PROPRIO_MEAN) / PROPRIO_STD
+    # Clip to safe range for quantization
+    normalized = np.clip(normalized, -3.0, 3.0)
+    return normalized.astype(np.float32)
+
+
 def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
     """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
 
@@ -81,6 +106,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
 
                 # Sanitize Proprio
                 proprio = np.nan_to_num(proprio, nan=0.0, posinf=100.0, neginf=-100.0)
+                
+                # CRITICAL: Normalize proprio for quantization
+                proprio = normalize_proprio(proprio)
 
                 # Add batch dimension
                 bev_batch = bev[None, ...]
@@ -211,35 +239,123 @@ def convert_onnx_to_rknn(
             print(f"❌ Failed to build RKNN: {ret}")
             return False
 
-        # Test inference BEFORE export to validate model
-        print("Testing RKNN model with sample inputs...")
+        # Run comprehensive quantization validation tests
+        print("\n" + "=" * 60)
+        print("QUANTIZATION VALIDATION TESTS")
+        print("=" * 60)
+        
         try:
             # Initialize runtime for testing
             ret = rknn.init_runtime()
             if ret != 0:
                 print(f"⚠ Warning: Failed to init runtime for testing: {ret}")
             else:
-                # Create test inputs (normalized like rover)
-                test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)  # Unified BEV
-                test_proprio = np.random.rand(1, 6).astype(np.float32)  # 6-dim to match model
-
-                # Run inference
-                outputs = rknn.inference(inputs=[test_bev, test_proprio])
-
-                if outputs and len(outputs) > 0:
-                    test_output = outputs[0]
-                    print(f"  Test output: {test_output}")
-                    print(f"  Range: [{test_output.min():.6f}, {test_output.max():.6f}]")
-
-                    if np.isnan(test_output).any() or np.isinf(test_output).any():
-                        print(f"  ❌ RKNN model produces NaN/Inf! Conversion may be broken.")
-                        print(f"  This indicates an issue with FP16 precision or RKNN compatibility.")
-                    else:
-                        print(f"  ✓ RKNN test inference passed")
+                all_tests_passed = True
+                
+                # Test 1: NaN/Inf Check
+                print("\n📊 Test 1: NaN/Inf Detection...")
+                nan_count = 0
+                inf_count = 0
+                for i in range(50):
+                    test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
+                    test_proprio_raw = np.array([
+                        np.random.uniform(0.0, 4.0),    # lidar_min
+                        np.random.uniform(-1.0, 1.0),   # prev_lin
+                        np.random.uniform(-1.0, 1.0),   # prev_ang
+                        np.random.uniform(-0.2, 0.2),   # cur_lin
+                        np.random.uniform(-1.0, 1.0),   # cur_ang
+                        np.random.uniform(-1.0, 1.0),   # gap_heading
+                    ], dtype=np.float32)
+                    test_proprio = normalize_proprio(test_proprio_raw)[None, ...]
+                    
+                    outputs = rknn.inference(inputs=[test_bev, test_proprio])
+                    if outputs and outputs[0] is not None:
+                        if np.isnan(outputs[0]).any():
+                            nan_count += 1
+                        if np.isinf(outputs[0]).any():
+                            inf_count += 1
+                
+                if nan_count == 0 and inf_count == 0:
+                    print(f"  ✅ PASS: No NaN/Inf in 50 random tests")
                 else:
-                    print(f"  ⚠ Warning: No outputs from test inference")
+                    print(f"  ❌ FAIL: Found NaN in {nan_count}/50, Inf in {inf_count}/50 tests")
+                    all_tests_passed = False
+                
+                # Test 2: Output Range Check (tanh should give [-1, 1])
+                print("\n📊 Test 2: Output Range Validation...")
+                outputs_list = []
+                for _ in range(20):
+                    test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
+                    test_proprio = normalize_proprio(np.array([
+                        np.random.uniform(0.5, 3.0),
+                        0.0, 0.0, 0.1, 0.0, 0.0
+                    ], dtype=np.float32))[None, ...]
+                    outputs = rknn.inference(inputs=[test_bev, test_proprio])
+                    if outputs:
+                        outputs_list.append(outputs[0])
+                
+                if outputs_list:
+                    all_outputs = np.concatenate(outputs_list, axis=0)
+                    min_val, max_val = np.min(all_outputs), np.max(all_outputs)
+                    if min_val >= -1.0 and max_val <= 1.0:
+                        print(f"  ✅ PASS: Output range [{min_val:.4f}, {max_val:.4f}] is within [-1, 1]")
+                    else:
+                        print(f"  ⚠️ WARNING: Output range [{min_val:.4f}, {max_val:.4f}] outside [-1, 1]")
+                        # Not a hard fail - quantization can slightly exceed tanh range
+                
+                # Test 3: Determinism Check
+                print("\n📊 Test 3: Output Determinism...")
+                np.random.seed(42)
+                test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
+                test_proprio = normalize_proprio(np.array([2.0, 0.0, 0.0, 0.1, 0.0, 0.0], dtype=np.float32))[None, ...]
+                
+                outputs = []
+                for _ in range(10):
+                    out = rknn.inference(inputs=[test_bev, test_proprio])
+                    if out:
+                        outputs.append(out[0])
+                
+                if len(outputs) >= 2:
+                    max_diff = np.max(np.abs(outputs[0] - np.array(outputs[1:])))
+                    if max_diff < 1e-5:
+                        print(f"  ✅ PASS: Outputs deterministic (max diff: {max_diff:.2e})")
+                    else:
+                        print(f"  ⚠️ WARNING: Outputs vary (max diff: {max_diff:.2e})")
+                
+                # Test 4: Calibration Data Check (if available)
+                if quantize and calibration_dir:
+                    print("\n📊 Test 4: Calibration Data Validation...")
+                    calib_files = list(Path(calibration_dir).glob('*.npz'))[:5]
+                    if calib_files:
+                        calib_nan = 0
+                        for cf in calib_files:
+                            try:
+                                data = np.load(cf)
+                                bev = data['bev'][None, ...].astype(np.float32)
+                                proprio = normalize_proprio(data['proprio'])[None, ...]
+                                out = rknn.inference(inputs=[bev, proprio])
+                                if out and np.isnan(out[0]).any():
+                                    calib_nan += 1
+                            except:
+                                pass
+                        if calib_nan == 0:
+                            print(f"  ✅ PASS: No NaN with {len(calib_files)} calibration samples")
+                        else:
+                            print(f"  ❌ FAIL: NaN with {calib_nan}/{len(calib_files)} calibration samples")
+                            all_tests_passed = False
+                    else:
+                        print("  ⚠️ SKIP: No calibration files found")
+                
+                # Summary
+                print("\n" + "-" * 60)
+                if all_tests_passed:
+                    print("✅ All validation tests passed!")
+                else:
+                    print("❌ Some tests failed - check calibration data and normalization")
+                print("-" * 60)
+                
         except Exception as exc:
-            print(f"⚠ Warning: Test inference failed: {exc}")
+            print(f"⚠ Warning: Validation tests failed: {exc}")
 
         # Export
         print(f"Exporting to {output_path}...")

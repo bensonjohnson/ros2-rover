@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Convert ONNX model to RKNN format for RK3588 NPU deployment.
 
-This script takes an ONNX model exported from the V620 training server
-and converts it to RKNN format optimized for the RK3588 NPU on the rover.
+⚠️ DEPRECATED: This script is outdated and references the old dual-encoder architecture.
 
-Requirements:
-- RKNN-Toolkit2 (only works on x86_64 Linux)
-- Calibration dataset (sample images from rover)
+The current SAC rover uses the Unified BEV architecture:
+- Input: BEV (2, 128, 128) + Proprio (6,)
+- Use convert_onnx_to_rknn.py in src/tractor_bringup/tractor_bringup/ instead
+
+This file is kept for reference only. Do not use for new conversions.
+
+For current conversion workflow, see:
+- convert_onnx_to_rknn.sh (shell wrapper)
+- src/tractor_bringup/tractor_bringup/convert_onnx_to_rknn.py (actual converter)
+- CALIBRATION_AND_QUANTIZATION.md (documentation)
 """
 
 import argparse
