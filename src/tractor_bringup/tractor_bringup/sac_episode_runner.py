@@ -1842,6 +1842,12 @@ class SACEpisodeRunner(Node):
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 
+                # Print conversion output (including validation tests)
+                if result.stdout:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.strip():
+                            self.pbar.write(f"  {line}")
+                
                 # Check if output file was created despite potential crash (e.g. double free on exit)
                 if os.path.exists(rknn_path):
                     if result.returncode != 0:
