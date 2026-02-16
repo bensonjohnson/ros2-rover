@@ -136,6 +136,12 @@ if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   export MIOPEN_FIND_MODE=NORMAL  # Use normal find mode
   export HSA_OVERRIDE_GFX_VERSION=10.3.0  # Ensure correct GFX version
 
+  # Memory allocator tuning for torch.compile + training workloads
+  export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
+
+  # torch.compile backend for ROCm
+  export TORCHINDUCTOR_FORCE_DISABLE_CACHES=0  # Enable inductor caching
+
   echo "✓ V620-optimized ROCm environment variables set"
 
   # Check available VRAM

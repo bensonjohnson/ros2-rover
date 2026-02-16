@@ -178,7 +178,7 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         """Sample a batch of transitions."""
-        indices = np.random.randint(0, self.size - 1, size=batch_size) # -1 to ensure i+1 exists
+        indices = torch.randint(0, self.size - 1, (batch_size,))  # -1 to ensure i+1 exists
 
         # Retrieve s
         bev = self.bev[indices].to(self.device, non_blocking=True).float() / 255.0
@@ -297,9 +297,18 @@ class V620SACTrainer:
             torch.backends.cudnn.benchmark = True # REQUIRED for speed
             print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
 
+            # Enable TF32 for faster matmul/conv on supported hardware
+            torch.set_float32_matmul_precision('high')
+            try:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                print("✓ TF32 precision enabled (matmul + cudnn)")
+            except AttributeError:
+                pass
+
             # Enable Automatic Mixed Precision for 2x speedup
             self.use_amp = True
-            self.scaler = torch.cuda.amp.GradScaler()
+            self.scaler = torch.amp.GradScaler('cuda')
             print("✓ Enabled AMP (Automatic Mixed Precision)")
         else:
             self.device = torch.device('cpu')
@@ -352,6 +361,18 @@ class V620SACTrainer:
         # Disable dropout in target networks (deterministic targets)
         self.target_critic1.eval()
         self.target_critic2.eval()
+
+        # torch.compile for kernel fusion and reduced launch overhead (ROCm/CUDA)
+        if self.device.type == 'cuda':
+            try:
+                self.actor = torch.compile(self.actor, mode='reduce-overhead')
+                self.critic1 = torch.compile(self.critic1, mode='reduce-overhead')
+                self.critic2 = torch.compile(self.critic2, mode='reduce-overhead')
+                self.target_critic1 = torch.compile(self.target_critic1, mode='reduce-overhead')
+                self.target_critic2 = torch.compile(self.target_critic2, mode='reduce-overhead')
+                print("✓ torch.compile enabled (reduce-overhead mode)")
+            except Exception as e:
+                print(f"⚠ torch.compile failed, continuing without: {e}")
 
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.lr)
@@ -951,9 +972,6 @@ class V620SACTrainer:
                 self.writer.add_scalar('LR/Actor', self.actor_optimizer.param_groups[0]['lr'], self.total_steps)
                 self.writer.add_scalar('LR/Critic', self.critic_optimizer.param_groups[0]['lr'], self.total_steps)
 
-            # Periodic GPU memory cleanup (prevents fragmentation)
-            if self.total_steps % 1000 == 0:
-                torch.cuda.empty_cache()
 
     def _validate_tensor(self, tensor, name):
         """Validate tensor for NaN/Inf values."""
@@ -980,15 +998,16 @@ class V620SACTrainer:
             # TODO: Implement dual augmentation
             pass
 
-        # Validate batch data
-        try:
-            self._validate_tensor(batch['bev'], "state_bev")
-            self._validate_tensor(batch['proprio'], "state_proprio")
-            self._validate_tensor(batch['next_bev'], "next_bev")
-            self._validate_tensor(batch['next_proprio'], "next_proprio")
-        except ValueError as e:
-            tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
-            return self._dummy_metrics()
+        # Validate batch data periodically (every 100 steps to avoid GPU sync overhead)
+        if self.total_steps % 100 == 0:
+            try:
+                self._validate_tensor(batch['bev'], "state_bev")
+                self._validate_tensor(batch['proprio'], "state_proprio")
+                self._validate_tensor(batch['next_bev'], "next_bev")
+                self._validate_tensor(batch['next_proprio'], "next_proprio")
+            except ValueError as e:
+                tqdm.write(f"⚠️ Skipping batch due to corrupted data: {e}")
+                return self._dummy_metrics()
 
         # Accumulators for metrics (average over UTD steps)
         total_critic_loss = 0.0
@@ -1126,17 +1145,11 @@ class V620SACTrainer:
             # Get next action from actor
             next_mean, next_log_std = self.actor(next_bev, next_proprio)
 
-            # Sample and validate
             next_log_std = torch.clamp(next_log_std, -20, 2)
             next_std = next_log_std.exp() + 1e-6
-            self._validate_tensor(next_std, "next_std")
-
-            if self.device.type == 'cuda':
-                torch.cuda.synchronize()
 
             dist = torch.distributions.Normal(next_mean, next_std)
             next_action_sample = dist.rsample()
-            self._validate_tensor(next_action_sample, "next_action_sample")
             next_action = torch.tanh(next_action_sample)
 
             # Log prob for entropy
@@ -1151,7 +1164,7 @@ class V620SACTrainer:
 
         # --- Current Q with DroQ (M forward passes with dropout) ---
         # Use AMP for forward pass and loss computation
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.amp.autocast('cuda', enabled=self.use_amp):
             if self.args.droq_samples > 1 and self.args.droq_dropout > 0.0:
                 # DroQ: Multiple forward passes with dropout
                 q1_samples = []
@@ -1177,7 +1190,7 @@ class V620SACTrainer:
             critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
 
         # Backprop with AMP scaling
-        self.critic_optimizer.zero_grad()
+        self.critic_optimizer.zero_grad(set_to_none=True)
         if self.use_amp:
             self.scaler.scale(critic_loss).backward()
             self.scaler.unscale_(self.critic_optimizer)
@@ -1210,23 +1223,15 @@ class V620SACTrainer:
         alpha = self.log_alpha.exp().item()
 
         # Use AMP for actor forward pass
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.amp.autocast('cuda', enabled=self.use_amp):
             # Re-compute features for actor (gradient flows through encoder)
             mean, log_std = self.actor(state_bev, state_proprio)
 
-            # Validate and sample
-            self._validate_tensor(mean, "mean")
-            self._validate_tensor(log_std, "log_std")
             log_std = torch.clamp(log_std, -20, 2)
             std = log_std.exp() + 1e-6
-            self._validate_tensor(std, "std")
-
-            if self.device.type == 'cuda':
-                torch.cuda.synchronize()
 
             dist = torch.distributions.Normal(mean, std)
             action_sample = dist.rsample()
-            self._validate_tensor(action_sample, "action_sample")
             current_action = torch.tanh(action_sample)
 
             log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
@@ -1244,7 +1249,7 @@ class V620SACTrainer:
             actor_loss = ((alpha * log_prob) - min_q_pi).mean()
 
         # Backprop with AMP scaling
-        self.actor_optimizer.zero_grad()
+        self.actor_optimizer.zero_grad(set_to_none=True)
         if self.use_amp:
             self.scaler.scale(actor_loss).backward()
             self.scaler.unscale_(self.actor_optimizer)
@@ -1271,7 +1276,7 @@ class V620SACTrainer:
         """
         alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean()
 
-        self.alpha_optimizer.zero_grad()
+        self.alpha_optimizer.zero_grad(set_to_none=True)
         alpha_loss.backward()
         self.alpha_optimizer.step()
 
