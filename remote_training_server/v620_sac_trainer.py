@@ -362,18 +362,6 @@ class V620SACTrainer:
         self.target_critic1.eval()
         self.target_critic2.eval()
 
-        # torch.compile for kernel fusion and reduced launch overhead (ROCm/CUDA)
-        if self.device.type == 'cuda':
-            try:
-                self.actor = torch.compile(self.actor, mode='reduce-overhead')
-                self.critic1 = torch.compile(self.critic1, mode='reduce-overhead')
-                self.critic2 = torch.compile(self.critic2, mode='reduce-overhead')
-                self.target_critic1 = torch.compile(self.target_critic1, mode='reduce-overhead')
-                self.target_critic2 = torch.compile(self.target_critic2, mode='reduce-overhead')
-                print("✓ torch.compile enabled (reduce-overhead mode)")
-            except Exception as e:
-                print(f"⚠ torch.compile failed, continuing without: {e}")
-
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.lr)
         self.critic_optimizer = optim.Adam(
@@ -451,6 +439,19 @@ class V620SACTrainer:
         # Load Checkpoint
         # Load checkpoint before exporting
         self.load_latest_checkpoint()
+
+        # torch.compile for kernel fusion and reduced launch overhead (ROCm/CUDA)
+        # Must be applied AFTER checkpoint loading (compiled modules prefix keys with _orig_mod.)
+        if self.device.type == 'cuda':
+            try:
+                self.actor = torch.compile(self.actor, mode='reduce-overhead')
+                self.critic1 = torch.compile(self.critic1, mode='reduce-overhead')
+                self.critic2 = torch.compile(self.critic2, mode='reduce-overhead')
+                self.target_critic1 = torch.compile(self.target_critic1, mode='reduce-overhead')
+                self.target_critic2 = torch.compile(self.target_critic2, mode='reduce-overhead')
+                print("✓ torch.compile enabled (reduce-overhead mode)")
+            except Exception as e:
+                print(f"⚠ torch.compile failed, continuing without: {e}")
 
         # Load replay buffer if exists
         buffer_path = os.path.join(args.checkpoint_dir, "replay_buffer.pt")
@@ -542,14 +543,21 @@ class V620SACTrainer:
         self.model_version = ckpt.get('model_version', max(1, self.total_steps // 100))
         self.episode_count = ckpt.get('episode_count', 0)
 
+    @staticmethod
+    def _unwrap_model(model):
+        """Get the underlying module from a torch.compile'd model."""
+        if hasattr(model, '_orig_mod'):
+            return model._orig_mod
+        return model
+
     def save_checkpoint(self):
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
         checkpoint = {
-            'actor': self.actor.state_dict(),
-            'critic1': self.critic1.state_dict(),
-            'critic2': self.critic2.state_dict(),
-            'target_critic1': self.target_critic1.state_dict(),
-            'target_critic2': self.target_critic2.state_dict(),
+            'actor': self._unwrap_model(self.actor).state_dict(),
+            'critic1': self._unwrap_model(self.critic1).state_dict(),
+            'critic2': self._unwrap_model(self.critic2).state_dict(),
+            'target_critic1': self._unwrap_model(self.target_critic1).state_dict(),
+            'target_critic2': self._unwrap_model(self.target_critic2).state_dict(),
             'log_alpha': self.log_alpha,
             'actor_opt': self.actor_optimizer.state_dict(),
             'critic_opt': self.critic_optimizer.state_dict(),
@@ -583,9 +591,9 @@ class V620SACTrainer:
                     mean, _ = self.actor(bev, proprio)
                     return torch.tanh(mean)
             
-            model = ActorWrapper(self.actor)
+            model = ActorWrapper(self._unwrap_model(self.actor))
             model.eval()
-            
+
             torch.onnx.export(
                 model,
                 (dummy_bev, dummy_proprio),
@@ -623,9 +631,9 @@ class V620SACTrainer:
                     mean, _ = self.actor(bev, proprio)
                     return torch.tanh(mean)  # Deterministic action
             
-            model = ActorWrapper(self.actor)
+            model = ActorWrapper(self._unwrap_model(self.actor))
             model.eval()
-            
+
             torch.onnx.export(
                 model,
                 (dummy_bev, dummy_proprio),
