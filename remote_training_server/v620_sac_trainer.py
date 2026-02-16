@@ -444,12 +444,12 @@ class V620SACTrainer:
         # Must be applied AFTER checkpoint loading (compiled modules prefix keys with _orig_mod.)
         if self.device.type == 'cuda':
             try:
-                self.actor = torch.compile(self.actor, mode='reduce-overhead')
-                self.critic1 = torch.compile(self.critic1, mode='reduce-overhead')
-                self.critic2 = torch.compile(self.critic2, mode='reduce-overhead')
-                self.target_critic1 = torch.compile(self.target_critic1, mode='reduce-overhead')
-                self.target_critic2 = torch.compile(self.target_critic2, mode='reduce-overhead')
-                print("✓ torch.compile enabled (reduce-overhead mode)")
+                self.actor = torch.compile(self.actor)
+                self.critic1 = torch.compile(self.critic1)
+                self.critic2 = torch.compile(self.critic2)
+                self.target_critic1 = torch.compile(self.target_critic1)
+                self.target_critic2 = torch.compile(self.target_critic2)
+                print("✓ torch.compile enabled (default mode)")
             except Exception as e:
                 print(f"⚠ torch.compile failed, continuing without: {e}")
 
