@@ -22,6 +22,7 @@ import queue
 import asyncio
 import traceback
 import warnings
+import signal
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
@@ -212,6 +213,71 @@ class ReplayBuffer:
         self.rewards.copy_(other.rewards)
         self.dones.copy_(other.dones)
 
+    def save(self, path: str):
+        """Save buffer state to disk.
+        
+        Args:
+            path: File path to save buffer (e.g., 'checkpoints_sac/replay_buffer.pt')
+        """
+        print(f"💾 Saving replay buffer ({self.size} samples) to {path}...")
+        import time
+        start = time.time()
+        
+        # Save only the filled portion of the buffer
+        torch.save({
+            'bev': self.bev[:self.size].cpu(),  # Move to CPU for saving
+            'proprio': self.proprio[:self.size].cpu(),
+            'actions': self.actions[:self.size].cpu(),
+            'rewards': self.rewards[:self.size].cpu(),
+            'dones': self.dones[:self.size].cpu(),
+            'ptr': self.ptr,
+            'size': self.size,
+            'full': self.full,
+            'capacity': self.capacity,
+        }, path)
+        
+        elapsed = time.time() - start
+        print(f"✅ Buffer saved in {elapsed:.1f}s")
+
+    def load(self, path: str):
+        """Load buffer state from disk.
+        
+        Args:
+            path: File path to load buffer from
+        """
+        if not os.path.exists(path):
+            print(f"ℹ️ No existing buffer found at {path}, starting fresh")
+            return False
+        
+        print(f"📂 Loading replay buffer from {path}...")
+        import time
+        start = time.time()
+        
+        data = torch.load(path, map_location='cpu')
+        
+        # Validate capacity matches
+        if data['size'] > self.capacity:
+            print(f"⚠️ Warning: Saved buffer has {data['size']} samples but capacity is {self.capacity}")
+            print(f"   Loading first {self.capacity} samples...")
+            size_to_load = self.capacity
+        else:
+            size_to_load = data['size']
+        
+        # Load data (will be moved to storage_device when assigned)
+        self.bev[:size_to_load] = data['bev'][:size_to_load].to(self.storage_device)
+        self.proprio[:size_to_load] = data['proprio'][:size_to_load].to(self.storage_device)
+        self.actions[:size_to_load] = data['actions'][:size_to_load].to(self.storage_device)
+        self.rewards[:size_to_load] = data['rewards'][:size_to_load].to(self.storage_device)
+        self.dones[:size_to_load] = data['dones'][:size_to_load].to(self.storage_device)
+        
+        self.size = size_to_load
+        self.ptr = data['ptr'] if data['ptr'] < self.capacity else self.capacity - 1
+        self.full = data.get('full', False)
+        
+        elapsed = time.time() - start
+        print(f"✅ Loaded {self.size} samples in {elapsed:.1f}s")
+        return True
+
 class V620SACTrainer:
     """SAC Trainer optimized for V620 ROCm."""
     
@@ -365,12 +431,41 @@ class V620SACTrainer:
         # Load checkpoint before exporting
         self.load_latest_checkpoint()
 
+        # Load replay buffer if exists
+        buffer_path = os.path.join(args.checkpoint_dir, "replay_buffer.pt")
+        self.buffer.load(buffer_path)
+
+        # Set up signal handler for graceful shutdown
+        self._shutdown_requested = False
+        signal.signal(signal.SIGINT, self._save_on_shutdown)
+        signal.signal(signal.SIGTERM, self._save_on_shutdown)
+
         # Export initial model
         self.export_onnx(increment_version=False)
 
         # Start Dashboard
         self.dashboard = TrainingDashboard(self)
         self.dashboard.start()
+
+    def _save_on_shutdown(self, signum, frame):
+        """Signal handler to save replay buffer on Ctrl+C or kill."""
+        if self._shutdown_requested:
+            return  # Prevent double handling
+        self._shutdown_requested = True
+        
+        print("\n")
+        print("=" * 50)
+        print("🛑 Shutdown signal received!")
+        print("=" * 50)
+        
+        # Save replay buffer
+        buffer_path = os.path.join(self.args.checkpoint_dir, "replay_buffer.pt")
+        self.buffer.save(buffer_path)
+        
+        print("=" * 50)
+        print("✅ Shutdown complete. Buffer saved!")
+        print("=" * 50)
+        sys.exit(0)
 
     def load_latest_checkpoint(self):
         checkpoints = list(Path(self.args.checkpoint_dir).glob('sac_step_*.pt'))
