@@ -172,33 +172,32 @@ echo "TensorBoard running on http://localhost:6006 (PID: ${TB_PID})"
 
 LOG_FILE="${LOG_DIR}/sac_server_$(date +%Y%m%d_%H%M%S).log"
 
-# Launch Python with proper ulimit applied (if possible)
-# Note: We use a block {} to group commands for the pipe, instead of bash -c string interpolation
-{
-  if ! ulimit -n 65535 2>/dev/null; then
-      echo "⚠ Warning: Failed to raise ulimit to 65535. Current limit: $(ulimit -n)"
-      echo "  Proceeding anyway..."
-  else
-      echo "✓ Raised file descriptor limit to 65535"
-  fi
+# Raise file descriptor limit if possible
+if ! ulimit -n 65535 2>/dev/null; then
+    echo "⚠ Warning: Failed to raise ulimit to 65535. Current limit: $(ulimit -n)"
+    echo "  Proceeding anyway..."
+else
+    echo "✓ Raised file descriptor limit to 65535"
+fi
 
-  echo "Starting V620 SAC Trainer..."
-  
-  # Build GPU buffer flag
-  GPU_BUFFER_FLAG=""
-  if [ "${GPU_BUFFER}" = "true" ]; then
-    GPU_BUFFER_FLAG="--gpu-buffer"
-  fi
-  
-  exec python3 -u v620_sac_trainer.py \
+echo "Starting V620 SAC Trainer..."
+
+# Build GPU buffer flag
+GPU_BUFFER_FLAG=""
+if [ "${GPU_BUFFER}" = "true" ]; then
+  GPU_BUFFER_FLAG="--gpu-buffer"
+fi
+
+# Launch Python with process substitution so $! captures Python's PID (not tee's).
+# This ensures kill $TRAINER_PID sends SIGTERM to Python, which runs the buffer save handler.
+python3 -u v620_sac_trainer.py \
   --nats_server "${NATS_SERVER}" \
   --checkpoint_dir "${CHECKPOINT_DIR}" \
   --log_dir "${LOG_DIR}" \
   --batch_size "${BATCH_SIZE}" \
   --buffer_size "${BUFFER_SIZE}" \
   ${GPU_BUFFER_FLAG} \
-  "$@"
-} 2>&1 | tee "${LOG_FILE}" &
+  "$@" > >(tee "${LOG_FILE}") 2>&1 &
 
 TRAINER_PID=$!
 
@@ -206,11 +205,13 @@ echo "SAC server PID: ${TRAINER_PID}"
 echo "Log file: ${LOG_FILE}"
 echo ""
 
-# Set up signal handling
+# Set up signal handling — send SIGTERM to Python directly
 cleanup() {
   echo ""
   echo "🛑 Shutting down SAC server..."
-  kill $TRAINER_PID 2>/dev/null || true
+  kill -TERM $TRAINER_PID 2>/dev/null || true
+  # Wait for Python to finish saving replay buffer
+  wait $TRAINER_PID 2>/dev/null
   kill $TB_PID 2>/dev/null || true
   echo "✅ Shutdown complete"
   exit 0
