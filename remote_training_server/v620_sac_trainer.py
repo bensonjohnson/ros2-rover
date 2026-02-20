@@ -598,13 +598,15 @@ class V620SACTrainer:
                 mean, _, hx_out, cx_out = self.actor(bev, proprio, hx, cx)
                 return torch.tanh(mean), hx_out, cx_out
 
-        model = ActorWrapper(self._unwrap_model(self.actor))
+        # Export on CPU — CUDA uses fused LSTM kernel (aten::_thnn_fused_lstm_cell)
+        # which the ONNX exporter doesn't support. CPU uses decomposed ops that export cleanly.
+        model = ActorWrapper(copy.deepcopy(self._unwrap_model(self.actor)).cpu())
         model.eval()
 
-        dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
-        dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-        dummy_hx = torch.zeros(1, self.lstm_hidden_size, device=self.device)
-        dummy_cx = torch.zeros(1, self.lstm_hidden_size, device=self.device)
+        dummy_bev = torch.randn(1, 2, 128, 128)
+        dummy_proprio = torch.randn(1, self.proprio_dim)
+        dummy_hx = torch.zeros(1, self.lstm_hidden_size)
+        dummy_cx = torch.zeros(1, self.lstm_hidden_size)
 
         torch.onnx.export(
             model,
