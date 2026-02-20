@@ -549,42 +549,66 @@ class RGBDEncoderQNetwork(nn.Module):
 
 
 # =============================================================================
-# Unified BEV Architecture (256×256 2-channel input)
+# Unified BEV Architecture (128×128 2-channel input)
 # =============================================================================
+
+class ResBlock(nn.Module):
+    """Residual block for spatial feature learning.
+
+    Two 3×3 convolutions with a skip connection. Lets the network learn
+    complex spatial patterns (gaps, corners, corridors) that plain conv
+    stacks cannot represent.
+    """
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        return self.relu(x + self.conv2(self.relu(self.conv1(x))))
+
 
 class UnifiedBEVEncoder(nn.Module):
     """
-    Encoder for 2-channel 128×128 unified BEV grid.
-    
+    Encoder for 2-channel 128×128 unified BEV grid with residual blocks.
+
     Input: (B, 2, 128, 128)
         - Channel 0: LiDAR occupancy (360° top-down)
         - Channel 1: Depth occupancy (front arc projected)
-    
-    Output: (B, 4096) features
-    
-    Architecture: 128 → 64 → 32 → 16 → 8 (4 stride-2 convolutions)
+
+    Output: (B, 512) features
+
+    Architecture: 128 → 64 (res) → 32 (res) → 16 → 8 → 4
+    Residual blocks at 64×64 and 32×32 enable learning spatial relationships
+    (gaps between obstacles, wall corners, corridor structure).
     """
     def __init__(self, input_channels: int = 2):
         super().__init__()
-        # 128 -> 64 -> 32 -> 16 -> 8
-        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1)   # 128->64
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64->32
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32->16
-        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16->8
+        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1)  # 128→64
+        self.res1 = ResBlock(32)                                                          # 64×64
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64→32
+        self.res2 = ResBlock(64)                                                          # 32×32
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32→16
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16→8
+        self.conv5 = nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1)               # 8→4
 
         self.relu = nn.ReLU(inplace=True)
-        
-        # Output: 64 channels × 8 × 8 = 4096 features
-        self._output_dim = 64 * 8 * 8
+
+        # Output: 32 channels × 4 × 4 = 512 features
+        self._output_dim = 32 * 4 * 4
 
     def forward(self, x):
         # Input: (B, 2, 128, 128)
         x = self.relu(self.conv1(x))  # (B, 32, 64, 64)
+        x = self.res1(x)              # (B, 32, 64, 64)
         x = self.relu(self.conv2(x))  # (B, 64, 32, 32)
+        x = self.res2(x)              # (B, 64, 32, 32)
         x = self.relu(self.conv3(x))  # (B, 64, 16, 16)
         x = self.relu(self.conv4(x))  # (B, 64, 8, 8)
+        x = self.relu(self.conv5(x))  # (B, 32, 4, 4)
 
-        x = x.flatten(start_dim=1)    # (B, 4096)
+        x = x.flatten(start_dim=1)    # (B, 512)
         return x
 
     @property
@@ -594,18 +618,22 @@ class UnifiedBEVEncoder(nn.Module):
 
 class UnifiedBEVPolicyNetwork(nn.Module):
     """
-    Policy network using unified BEV encoder.
-    
-    Input: BEV grid (2, 256, 256), Proprio (10)
-    Output: mean, log_std for Gaussian policy
+    SAC policy network with residual BEV encoder and LSTMCell temporal memory.
+
+    Input: BEV grid (2, 128, 128), Proprio (6), hidden state (hx, cx)
+    Output: mean, log_std for Gaussian policy, updated hidden state (hx, cx)
+
+    The LSTMCell provides temporal context at inference (hidden state carried
+    across timesteps). During training with replay buffer, hidden state is
+    zeroed per sample — the LSTM still learns useful gated transformations.
     """
-    def __init__(self, action_dim=2, proprio_dim=6, hidden_size=128):
+    LSTM_HIDDEN = 128
+
+    def __init__(self, action_dim=2, proprio_dim=6):
         super().__init__()
 
-        # Unified BEV encoder
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
 
-        # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 32),
             nn.ReLU(inplace=True),
@@ -613,56 +641,71 @@ class UnifiedBEVPolicyNetwork(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # Fusion: BEV features + proprio
-        fusion_dim = self.bev_encoder.output_dim + 32  # 4096 + 32 = 4128
+        # LSTMCell for temporal memory (single timestep, RKNN-compatible)
+        fusion_dim = self.bev_encoder.output_dim + 32  # 512 + 32 = 544
+        self.lstm_cell = nn.LSTMCell(fusion_dim, self.LSTM_HIDDEN)
 
-        self.net = nn.Sequential(
-            nn.Linear(fusion_dim, 256),
+        # Policy heads from LSTM hidden state
+        self.mean_head = nn.Sequential(
+            nn.Linear(self.LSTM_HIDDEN, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(256, hidden_size),
+            nn.Linear(64, action_dim),
+        )
+        self.log_std_head = nn.Sequential(
+            nn.Linear(self.LSTM_HIDDEN, 64),
             nn.ReLU(inplace=True),
+            nn.Linear(64, action_dim),
         )
 
-        self.mean_layer = nn.Linear(hidden_size, action_dim)
-        self.log_std_layer = nn.Linear(hidden_size, action_dim)
+    def forward(self, bev_grid, proprio, hx=None, cx=None):
+        """Forward pass.
 
-    def forward(self, bev_grid, proprio):
-        # Encode BEV
+        Args:
+            bev_grid: (B, 2, 128, 128)
+            proprio: (B, 6)
+            hx: (B, 128) LSTM hidden state, or None for zeros
+            cx: (B, 128) LSTM cell state, or None for zeros
+
+        Returns:
+            mean, log_std, hx_new, cx_new
+        """
         bev_feats = self.bev_encoder(bev_grid)
         proprio_feats = self.proprio_encoder(proprio)
+        fused = torch.cat([bev_feats, proprio_feats], dim=1)  # (B, 544)
 
-        # Concatenate features
-        fused = torch.cat([bev_feats, proprio_feats], dim=1)
+        if hx is None:
+            hx = torch.zeros(bev_grid.size(0), self.LSTM_HIDDEN, device=bev_grid.device)
+        if cx is None:
+            cx = torch.zeros(bev_grid.size(0), self.LSTM_HIDDEN, device=bev_grid.device)
 
-        x = self.net(fused)
-        mean = self.mean_layer(x)
-        log_std = self.log_std_layer(x)
+        hx_new, cx_new = self.lstm_cell(fused, (hx, cx))
 
-        # Clamp log_std
+        mean = self.mean_head(hx_new)
+        log_std = self.log_std_head(hx_new)
         log_std = torch.clamp(log_std, -20, 2)
 
-        return mean, log_std
+        return mean, log_std, hx_new, cx_new
 
 
 class UnifiedBEVQNetwork(nn.Module):
     """
-    Q-network using unified BEV encoder.
-    
-    Input: BEV grid (2, 256, 256), Proprio (10), Action (2)
-    Output: Q-value
+    Q-network using residual BEV encoder (no LSTM — critics are stateless).
+
+    Input: BEV grid (2, 128, 128), Proprio (6), Action (2)
+    Output: Q-value scalar
     """
     def __init__(self, action_dim=2, proprio_dim=6, dropout=0.0):
         super().__init__()
 
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
-        
+
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 32),
             nn.ReLU(inplace=True),
         )
 
         # Q-network: BEV features + proprio + action
-        fusion_dim = self.bev_encoder.output_dim + 32 + action_dim  # 4096 + 32 + 2 = 4130
+        fusion_dim = self.bev_encoder.output_dim + 32 + action_dim  # 512 + 32 + 2 = 546
 
         layers = [
             nn.Linear(fusion_dim, 256),

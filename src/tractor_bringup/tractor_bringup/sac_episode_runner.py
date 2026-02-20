@@ -278,6 +278,11 @@ class SACEpisodeRunner(Node):
         self._calibration_dir.mkdir(exist_ok=True)
         self._current_model_version = -1
         self._model_update_needed = False
+
+        # LSTM hidden state (carried across timesteps, reset on episode boundary)
+        self._lstm_hidden_size = 128  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
+        self._lstm_hx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
+        self._lstm_cx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
         
         # Evaluation State
         self._episodes_since_eval = 0
@@ -1106,17 +1111,19 @@ class SACEpisodeRunner(Node):
         proprio = normalize_proprio(proprio_raw)[None, ...]  # Add batch dimension: (1, 6)
 
         # 2. Inference (RKNN)
-        # Returns: [action_mean] (value head not exported in actor ONNX)
+        # Returns: [action, hx_out, cx_out] — actor with LSTM temporal memory
         if self._rknn_runtime:
-            # Stateless inference (LSTM removed for export compatibility)
-            # Input: [bev, proprio] - Unified BEV grid
-            # Add Batch dimension
+            # Input: [bev, proprio, hx, cx] — carry LSTM state across timesteps
             bev_input = bev_grid[None, ...]  # (1, 2, 128, 128)
 
-            outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio])
+            outputs = self._rknn_runtime.inference(
+                inputs=[bev_input, proprio, self._lstm_hx, self._lstm_cx]
+            )
 
-            # Output 0 is action (1, 2)
-            action_mean = outputs[0][0] # (2,)
+            # Output 0: action (1, 2), Output 1: hx_out (1, 128), Output 2: cx_out (1, 128)
+            action_mean = outputs[0][0]  # (2,)
+            self._lstm_hx = outputs[1]   # (1, 128) — carry to next timestep
+            self._lstm_cx = outputs[2]   # (1, 128)
             action = action_mean
 
 
@@ -1516,6 +1523,10 @@ class SACEpisodeRunner(Node):
 
         # Reset episode reward counter
         self.episode_reward = 0.0
+
+        # Reset LSTM hidden state for new episode
+        self._lstm_hx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
+        self._lstm_cx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
 
         request = Trigger.Request()
         future = self.reset_episode_client.call_async(request)

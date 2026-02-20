@@ -114,14 +114,23 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 bev_batch = bev[None, ...]
                 proprio_batch = proprio[None, ...]
 
+                # LSTM hidden states: zeros for calibration (episode start)
+                LSTM_HIDDEN = 128
+                hx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
+                cx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
+
                 bev_path = os.path.abspath(os.path.join(dataset_dir, f"bev_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
+                hx_path = os.path.abspath(os.path.join(dataset_dir, f"hx_{i}.npy"))
+                cx_path = os.path.abspath(os.path.join(dataset_dir, f"cx_{i}.npy"))
 
                 np.save(bev_path, bev_batch.astype(np.float32))
                 np.save(proprio_path, proprio_batch.astype(np.float32))
+                np.save(hx_path, hx_batch)
+                np.save(cx_path, cx_batch)
 
                 # Write to dataset.txt (space separated)
-                f.write(f"{bev_path} {proprio_path}\n")
+                f.write(f"{bev_path} {proprio_path} {hx_path} {cx_path}\n")
 
                 valid_samples += 1
 
@@ -185,39 +194,46 @@ def convert_onnx_to_rknn(
         # RK3588 supports: 'asymmetric_quantized-8', 'asymmetric_quantized-16', 'fp16'
         # asymmetric_quantized-8 = INT8 quantization (requires calibration dataset)
         # fp16 = Floating Point 16 (default if no quantization)
-        
+
+        LSTM_HIDDEN = 128  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
+
         config_args = {
-            # Disable RKNN normalization - we'll normalize in calibration generator
-            # This ensures exact match between calibration and inference preprocessing
+            # Disable RKNN normalization - we normalize in preprocessing
             'mean_values': [
                 [0, 0],           # BEV (2 channels)
-                [0] * 6,          # Proprio (6-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading)
+                [0] * 6,          # Proprio (6-dim)
+                [0] * LSTM_HIDDEN,  # hx (LSTM hidden state)
+                [0] * LSTM_HIDDEN,  # cx (LSTM cell state)
             ],
             'std_values': [
                 [1, 1],           # BEV
-                [1] * 6,          # Proprio (6-dim)
+                [1] * 6,          # Proprio
+                [1] * LSTM_HIDDEN,  # hx
+                [1] * LSTM_HIDDEN,  # cx
             ],
             'target_platform': target_platform,
             'optimization_level': 3
         }
-        
+
         if quantize:
             config_args['quantized_dtype'] = 'asymmetric_quantized-8'
-            
+
         ret = rknn.config(**config_args)
         if ret != 0:
             print(f"❌ Failed to configure RKNN: {ret}")
             return False
 
         # Load ONNX
-        print("Loading ONNX model (stateless)...")
+        print("Loading ONNX model (with LSTM hidden state)...")
         # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
         ret = rknn.load_onnx(
             model=onnx_path,
-            inputs=['bev', 'proprio'],
+            inputs=['bev', 'proprio', 'hx', 'cx'],
             input_size_list=[
                 [1, 2, 128, 128],   # Unified BEV grid (2 channels: LiDAR + Depth)
-                [1, 6],             # Proprio (6-dim: lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading)
+                [1, 6],             # Proprio (6-dim)
+                [1, LSTM_HIDDEN],   # LSTM hidden state
+                [1, LSTM_HIDDEN],   # LSTM cell state
             ]
         )
         if ret != 0:
@@ -262,6 +278,8 @@ def convert_onnx_to_rknn(
                 print("\n📊 Test 1: NaN/Inf Detection...")
                 nan_count = 0
                 inf_count = 0
+                test_hx = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
+                test_cx = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
                 for i in range(50):
                     test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
                     test_proprio_raw = np.array([
@@ -273,9 +291,9 @@ def convert_onnx_to_rknn(
                         np.random.uniform(-1.0, 1.0),   # gap_heading
                     ], dtype=np.float32)
                     test_proprio = normalize_proprio(test_proprio_raw)[None, ...]
-                    
+
                     try:
-                        outputs = rknn.inference(inputs=[test_bev, test_proprio])
+                        outputs = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
                         if outputs and outputs[0] is not None:
                             if np.isnan(outputs[0]).any():
                                 nan_count += 1
@@ -306,7 +324,7 @@ def convert_onnx_to_rknn(
                             0.0, 0.0, 0.1, 0.0, 0.0
                         ], dtype=np.float32))[None, ...]
                         try:
-                            outputs = rknn.inference(inputs=[test_bev, test_proprio])
+                            outputs = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
                             if outputs:
                                 outputs_list.append(outputs[0])
                         except:
@@ -328,11 +346,11 @@ def convert_onnx_to_rknn(
                     np.random.seed(42)
                     test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
                     test_proprio = normalize_proprio(np.array([2.0, 0.0, 0.0, 0.1, 0.0, 0.0], dtype=np.float32))[None, ...]
-                    
+
                     outputs = []
                     for _ in range(10):
                         try:
-                            out = rknn.inference(inputs=[test_bev, test_proprio])
+                            out = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
                             if out:
                                 outputs.append(out[0])
                         except:
@@ -359,7 +377,7 @@ def convert_onnx_to_rknn(
                                 data = np.load(cf)
                                 bev = data['bev'][None, ...].astype(np.float32)
                                 proprio = normalize_proprio(data['proprio'])[None, ...]
-                                out = rknn.inference(inputs=[bev, proprio])
+                                out = rknn.inference(inputs=[bev, proprio, test_hx, test_cx])
                                 if out:
                                     calib_success += 1
                                     if np.isnan(out[0]).any():

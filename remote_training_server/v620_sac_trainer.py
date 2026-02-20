@@ -337,8 +337,9 @@ class V620SACTrainer:
         self.latest_bev_vis = None
 
         # --- Actor ---
-        # Use unified BEV network (2-channel 256x256 input)
+        # Unified BEV network with residual encoder + LSTMCell temporal memory
         self.actor = UnifiedBEVPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
+        self.lstm_hidden_size = UnifiedBEVPolicyNetwork.LSTM_HIDDEN
 
         # --- Critics ---
         # Unified BEV Q-Networks
@@ -499,18 +500,18 @@ class V620SACTrainer:
         print(f"🔄 Resuming from {latest}")
         ckpt = torch.load(latest, map_location=self.device)
 
-        # Check if checkpoint is from old architecture
+        # Check if checkpoint is from current architecture (residual encoder + LSTM)
         try:
             actor_state = ckpt.get('actor', {})
-            # Check if it's UnifiedBEV-based (has bev_encoder)
-            has_bev_encoder = 'bev_encoder.conv1.weight' in actor_state
+            has_res_encoder = 'bev_encoder.res1.conv1.weight' in actor_state
+            has_lstm = 'lstm_cell.weight_ih' in actor_state
 
-            if has_bev_encoder:
-                print("✅ Checkpoint uses UnifiedBEV architecture - compatible")
+            if has_res_encoder and has_lstm:
+                print("✅ Checkpoint uses current architecture (ResBlock + LSTM) - compatible")
                 is_compatible = True
             else:
-                print("⚠️  Checkpoint is from old dual-encoder architecture")
-                print("   Starting fresh with UnifiedBEV architecture...")
+                print("⚠️  Checkpoint is from older architecture")
+                print("   Starting fresh with ResBlock + LSTM architecture...")
                 is_compatible = False
         except Exception:
             print("⚠️  Checkpoint loading failed - starting fresh")
@@ -578,75 +579,52 @@ class V620SACTrainer:
         """Save the current model as 'best_eval_actor.onnx'."""
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "best_eval_actor.onnx")
-            
-            # Dummy inputs for unified BEV
-            dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
-            dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-            
-            class ActorWrapper(nn.Module):
-                def __init__(self, actor):
-                    super().__init__()
-                    self.actor = actor
-                def forward(self, bev, proprio):
-                    mean, _ = self.actor(bev, proprio)
-                    return torch.tanh(mean)
-            
-            model = ActorWrapper(self._unwrap_model(self.actor))
-            model.eval()
-
-            torch.onnx.export(
-                model,
-                (dummy_bev, dummy_proprio),
-                onnx_path,
-                opset_version=11,
-                input_names=['bev', 'proprio'],
-                output_names=['action'],
-                export_params=True,
-                do_constant_folding=True,
-                keep_initializers_as_inputs=False,
-                verbose=False,
-                dynamo=False
-            )
+            self._export_actor_onnx(onnx_path)
             tqdm.write(f"🏆 Saved BEST EVAL model to {onnx_path}")
-            
         except Exception as e:
             tqdm.write(f"❌ Failed to save best model: {e}")
 
+    def _export_actor_onnx(self, onnx_path: str):
+        """Export actor to ONNX with LSTMCell hidden state inputs/outputs.
+
+        Inputs: bev (1,2,128,128), proprio (1,6), hx (1,128), cx (1,128)
+        Outputs: action (1,2), hx_out (1,128), cx_out (1,128)
+        """
+        class ActorWrapper(nn.Module):
+            def __init__(self, actor):
+                super().__init__()
+                self.actor = actor
+            def forward(self, bev, proprio, hx, cx):
+                mean, _, hx_out, cx_out = self.actor(bev, proprio, hx, cx)
+                return torch.tanh(mean), hx_out, cx_out
+
+        model = ActorWrapper(self._unwrap_model(self.actor))
+        model.eval()
+
+        dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
+        dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
+        dummy_hx = torch.zeros(1, self.lstm_hidden_size, device=self.device)
+        dummy_cx = torch.zeros(1, self.lstm_hidden_size, device=self.device)
+
+        torch.onnx.export(
+            model,
+            (dummy_bev, dummy_proprio, dummy_hx, dummy_cx),
+            onnx_path,
+            opset_version=11,
+            input_names=['bev', 'proprio', 'hx', 'cx'],
+            output_names=['action', 'hx_out', 'cx_out'],
+            export_params=True,
+            do_constant_folding=True,
+            keep_initializers_as_inputs=False,
+            verbose=False,
+            dynamo=False
+        )
+
     def export_onnx(self, increment_version=True):
-        """Export Actor mean to ONNX."""
+        """Export Actor mean to ONNX with LSTM hidden states."""
         try:
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
-            
-            # Dummy inputs for unified BEV
-            # BEV: (B, 2, 256, 256)
-            dummy_bev = torch.randn(1, 2, 128, 128, device=self.device)
-            # Proprio: (B, 12)
-            dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-            
-            class ActorWrapper(nn.Module):
-                def __init__(self, actor):
-                    super().__init__()
-                    self.actor = actor
-                def forward(self, bev, proprio):
-                    mean, _ = self.actor(bev, proprio)
-                    return torch.tanh(mean)  # Deterministic action
-            
-            model = ActorWrapper(self._unwrap_model(self.actor))
-            model.eval()
-
-            torch.onnx.export(
-                model,
-                (dummy_bev, dummy_proprio),
-                onnx_path,
-                opset_version=11,
-                input_names=['bev', 'proprio'],
-                output_names=['action'],
-                export_params=True,
-                do_constant_folding=True,
-                keep_initializers_as_inputs=False,
-                verbose=False,
-                dynamo=False  # Force legacy exporter
-            )
+            self._export_actor_onnx(onnx_path)
             
             if increment_version:
                 self.model_version += 1
@@ -761,7 +739,7 @@ class V620SACTrainer:
                 action_batch = actions[indices]
                 
                 # Forward pass
-                mean, _ = self.actor(bev_batch, proprio_batch)
+                mean, _, _, _ = self.actor(bev_batch, proprio_batch)
                 predicted_action = torch.tanh(mean)  # Apply tanh like in inference
                 
                 # MSE loss
@@ -817,7 +795,7 @@ class V620SACTrainer:
                 actions = batch['action']  # (B, 2)
                 
                 # Forward pass
-                mean, _ = self.actor(bev, proprio)
+                mean, _, _, _ = self.actor(bev, proprio)
                 predicted_action = torch.tanh(mean)
                 
                 # MSE loss
@@ -1150,8 +1128,8 @@ class V620SACTrainer:
 
         # --- Compute Target Q-values (no dropout, deterministic) ---
         with torch.no_grad():
-            # Get next action from actor
-            next_mean, next_log_std = self.actor(next_bev, next_proprio)
+            # Get next action from actor (zero hidden state — replay buffer samples are independent)
+            next_mean, next_log_std, _, _ = self.actor(next_bev, next_proprio)
 
             next_log_std = torch.clamp(next_log_std, -20, 2)
             next_std = next_log_std.exp() + 1e-6
@@ -1233,7 +1211,8 @@ class V620SACTrainer:
         # Use AMP for actor forward pass
         with torch.amp.autocast('cuda', enabled=self.use_amp):
             # Re-compute features for actor (gradient flows through encoder)
-            mean, log_std = self.actor(state_bev, state_proprio)
+            # Zero hidden state — replay buffer samples are independent
+            mean, log_std, _, _ = self.actor(state_bev, state_proprio)
 
             log_std = torch.clamp(log_std, -20, 2)
             std = log_std.exp() + 1e-6
