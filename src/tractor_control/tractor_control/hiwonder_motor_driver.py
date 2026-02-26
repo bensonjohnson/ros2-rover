@@ -543,9 +543,6 @@ class HiwonderMotorDriver(Node):
 
         try:
             speeds = [right_speed, left_speed, 0, 0]
-            # Clamp to ±100 (board's valid range for both PWM and speed registers)
-            # Then convert to unsigned bytes for I2C (two's complement for negatives)
-            speeds_bytes = [max(-100, min(100, int(s))) & 0xFF for s in speeds]
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
@@ -555,14 +552,18 @@ class HiwonderMotorDriver(Node):
             elif bypass_rate_limit:
                 self.get_logger().debug("Immediate STOP command sent (bypassed rate limit)")
 
-            control_addr = (
+            base_addr = (
                 self.MOTOR_FIXED_PWM_ADDR
                 if self.use_pwm_control
                 else self.MOTOR_FIXED_SPEED_ADDR
             )
-            self.bus.write_i2c_block_data(
-                self.motor_address, control_addr, speeds_bytes
-            )
+            # Write one byte per motor to sequential registers (base+0, base+1, ...)
+            # matching Hiwonder's reference implementation
+            for i, speed in enumerate(speeds):
+                val = max(-100, min(100, int(speed))) & 0xFF
+                self.bus.write_byte_data(self.motor_address, base_addr + i, val)
+                if self.i2c_write_delay > 0:
+                    time.sleep(self.i2c_write_delay)
             if left_speed != 0 or right_speed != 0:
                 self.get_logger().debug("Motor command sent successfully")
             self.last_motor_command_time = current_time
