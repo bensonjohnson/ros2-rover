@@ -4,11 +4,11 @@ hiwonder_motor_driver:
     motor_controller_address: 0x34 # Hexadecimal 52
     wheel_separation: 0.5
     wheel_radius: 0.15
-    max_motor_speed: 556
+    max_motor_speed: 100
     deadband: 0.05
     encoder_ppr: 1980
     publish_rate: 100.0 # Note: Driver comments suggest sensor data published at 100Hz timer, not via this param.
-    use_pwm_control: True # Direct PWM - bypasses board's internal PID for predictable SAC control
+    use_pwm_control: False # Board's speed control PID - sustains drive between commands
     motor_type: 3
     min_samples_for_estimation: 10
     max_history_minutes: 60
@@ -17,7 +17,7 @@ hiwonder_motor_driver:
     motor_command_rate_limit_secs: 0.04 # 25Hz keeps up with 30Hz SAC without overloading I2C
     init_motor_type_delay_secs: 0.5   # Delay after setting motor type in initialization (seconds)
     init_encoder_polarity_delay_secs: 0.1 # Delay after setting encoder polarity in initialization (seconds)
-    encoder_polarity: 0  # No inversion needed - PWM mode bypasses board PID so encoder polarity doesn't affect motor control
+    encoder_polarity: 1  # Invert M1 (right track) encoder - fixes reverse direction in speed control mode
     # Watchdog safety - stops motors if cmd_vel not received
     cmd_vel_timeout_secs: 0.5  # Stop motors if no cmd_vel for 0.5s (catches safety monitor crash)
     watchdog_check_hz: 20.0     # Check for timeout at 20Hz (every 50ms)
