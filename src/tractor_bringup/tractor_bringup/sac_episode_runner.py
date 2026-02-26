@@ -1184,17 +1184,49 @@ class SACEpisodeRunner(Node):
 
             # DIRECT TRACK CONTROL: Tank-Style Warmup (Diverse Dynamics)
             # action[0] = left track, action[1] = right track
-            
-            # Modes:
-            # 1. Zero Turn (Low speed, opposite tracks) - 20%
-            # 2. Arc Turn (High speed, asymmetric) - 40%
-            # 3. Straight (High speed, equal) - 20%
-            # 4. Recovery/Chaos (Full random) - 20%
-            
+            #
+            # Modes (designed to seed replay buffer with useful driving patterns):
+            # 1. Differential Forward (both tracks fwd, different speeds) - 30%
+            # 2. Arc Turn (forward-biased with turn offset)             - 25%
+            # 3. Straight Forward (equal tracks)                        - 15%
+            # 4. Zero Turn (opposite tracks, in-place spin)             - 10%
+            # 5. Controlled Backup (both tracks negative)               - 10%
+            # 6. Recovery/Chaos (full random)                           - 10%
+
             rand_mode = np.random.rand()
-            
-            if rand_mode < 0.2: # Zero Turn
-                # Spin in place at controlled speed (0.4 to 0.6)
+
+            if rand_mode < 0.30:  # Differential Forward (most common real driving)
+                # Both tracks forward but at different speeds for gentle curves
+                # Floor at 0.3 so slow track survives deadzone (MIN_TRACK=0.25)
+                # even after safety speed scaling
+                fast_track = np.random.uniform(0.5, 1.0)
+                slow_ratio = np.random.uniform(0.5, 0.9)
+                slow_track = max(fast_track * slow_ratio, 0.3)
+                if np.random.rand() < 0.5:
+                    random_left = fast_track
+                    random_right = slow_track
+                else:
+                    random_left = slow_track
+                    random_right = fast_track
+
+            elif rand_mode < 0.55:  # Arc Turn (forward biased with sharper turn)
+                # Floor the slow track so it always engages the motor
+                base_speed = np.random.uniform(0.6, 1.0)
+                turn_offset = np.random.uniform(0.15, 0.35)
+                slow_track = max(base_speed - turn_offset, 0.3)
+                if np.random.rand() < 0.5:
+                    random_left = base_speed
+                    random_right = slow_track
+                else:
+                    random_left = slow_track
+                    random_right = base_speed
+
+            elif rand_mode < 0.70:  # Straight Forward
+                speed = np.random.uniform(0.5, 1.0)
+                random_left = speed
+                random_right = speed
+
+            elif rand_mode < 0.80:  # Zero Turn (in-place spin)
                 spin_speed = np.random.uniform(0.4, 0.6)
                 if np.random.rand() < 0.5:
                     random_left = spin_speed
@@ -1202,34 +1234,30 @@ class SACEpisodeRunner(Node):
                 else:
                     random_left = -spin_speed
                     random_right = spin_speed
-                    
-            elif rand_mode < 0.6: # Arc Turn (Forward biased)
-                # Base forward speed (0.5 to 1.0)
-                base_speed = np.random.uniform(0.5, 1.0)
-                # Apply turn offset to one track
-                turn_offset = np.random.uniform(0.2, 0.5)
+
+            elif rand_mode < 0.90:  # Controlled Backup
+                backup_speed = np.random.uniform(0.3, 0.6)
+                # Mostly straight back, slight turn offset for variety
+                turn_offset = np.random.uniform(0.0, 0.15)
                 if np.random.rand() < 0.5:
-                    random_left = base_speed
-                    random_right = base_speed - turn_offset
+                    random_left = -backup_speed
+                    random_right = -(backup_speed - turn_offset)
                 else:
-                    random_left = base_speed - turn_offset
-                    random_right = base_speed
-                    
-            elif rand_mode < 0.8: # Straight Forward
-                speed = np.random.uniform(0.5, 1.0)
-                random_left = speed
-                random_right = speed
-                
-            else: # Recovery / Chaos (Full range)
+                    random_left = -(backup_speed - turn_offset)
+                    random_right = -backup_speed
+
+            else:  # Recovery / Chaos (full range)
                 random_left = np.random.uniform(-1.0, 1.0)
                 random_right = np.random.uniform(-1.0, 1.0)
 
-            # Safety-based speed scaling (prevent high-speed crashes)
+            # Safety-based speed scaling (smooth ramp near obstacles)
             clearance_dist = lidar_min if lidar_min > 0.05 else self._min_forward_dist
 
-            # Slow down if close to obstacles
-            if clearance_dist < 0.4:
-                speed_scale = 0.5
+            if clearance_dist < 0.2:
+                speed_scale = 0.3  # Very close - crawl
+            elif clearance_dist < 0.5:
+                # Smooth linear ramp from 0.3 at 0.2m to 1.0 at 0.5m
+                speed_scale = 0.3 + 0.7 * (clearance_dist - 0.2) / 0.3
             else:
                 speed_scale = 1.0
 
