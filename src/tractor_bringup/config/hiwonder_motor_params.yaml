@@ -4,7 +4,7 @@ hiwonder_motor_driver:
     motor_controller_address: 0x34 # Hexadecimal 52
     wheel_separation: 0.5
     wheel_radius: 0.15
-    max_motor_speed: 100
+    max_motor_speed: 560
     deadband: 0.05
     encoder_ppr: 1980
     publish_rate: 100.0 # Note: Driver comments suggest sensor data published at 100Hz timer, not via this param.
