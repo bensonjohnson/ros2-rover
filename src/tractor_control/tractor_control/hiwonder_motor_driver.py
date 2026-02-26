@@ -557,11 +557,11 @@ class HiwonderMotorDriver(Node):
                 if self.use_pwm_control
                 else self.MOTOR_FIXED_SPEED_ADDR
             )
-            # Write one byte per motor to sequential registers (base+0, base+1, ...)
-            # matching Hiwonder's reference implementation
+            # Write one motor at a time using write_i2c_block_data with single-element list
+            # Matches official Hiwonder SDK: bus.write_i2c_block_data(addr, 50 + motor_id, [speed])
             for i, speed in enumerate(speeds):
                 val = max(-100, min(100, int(speed))) & 0xFF
-                self.bus.write_byte_data(self.motor_address, base_addr + i, val)
+                self.bus.write_i2c_block_data(self.motor_address, base_addr + i, [val])
                 if self.i2c_write_delay > 0:
                     time.sleep(self.i2c_write_delay)
             if left_speed != 0 or right_speed != 0:
