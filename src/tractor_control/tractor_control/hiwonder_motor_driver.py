@@ -554,12 +554,12 @@ class HiwonderMotorDriver(Node):
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"I2C WRITE: reg=0x{base_addr:02X} bytes={speeds_bytes} "
                     f"(signed: M1/R={right_speed}, M2/L={left_speed})"
                 )
             elif bypass_rate_limit:
-                self.get_logger().info("Immediate STOP command sent")
+                self.get_logger().debug("Immediate STOP command sent")
 
             self.bus.write_i2c_block_data(
                 self.motor_address, base_addr, speeds_bytes

@@ -237,37 +237,41 @@ class LidarSafetyMonitor(Node):
             # === FRONT SECTOR: Gate forward movement ===
             if msg.linear.x > 0.01:  # Trying to go forward
                 front_dist = self._sector_dists['front']
-                
+
                 if self._sector_stopped['front']:
                     # Currently stopped - need to clear resume threshold
                     if front_dist > self.resume_dist:
                         self._sector_stopped['front'] = False
                     else:
                         out_cmd.linear.x = 0.0
+                        out_cmd.angular.z = 0.0
                         estop_active = True
                         blocked_sectors.append('front')
                 else:
                     if front_dist < self.stop_dist:
                         self._sector_stopped['front'] = True
                         out_cmd.linear.x = 0.0
+                        out_cmd.angular.z = 0.0
                         estop_active = True
                         blocked_sectors.append('front')
             
             # === REAR SECTOR: Gate backward movement ===
             if msg.linear.x < -0.01:  # Trying to go backward
                 rear_dist = self._sector_dists['rear']
-                
+
                 if self._sector_stopped['rear']:
                     if rear_dist > self.resume_dist:
                         self._sector_stopped['rear'] = False
                     else:
                         out_cmd.linear.x = 0.0
+                        out_cmd.angular.z = 0.0
                         estop_active = True
                         blocked_sectors.append('rear')
                 else:
                     if rear_dist < self.stop_dist:
                         self._sector_stopped['rear'] = True
                         out_cmd.linear.x = 0.0
+                        out_cmd.angular.z = 0.0
                         estop_active = True
                         blocked_sectors.append('rear')
             
