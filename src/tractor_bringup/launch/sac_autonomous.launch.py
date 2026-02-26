@@ -114,16 +114,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # 5. Velocity Feedback Controller
-    vfc_node = Node(
-        package="tractor_control",
-        executable="velocity_feedback_controller",
-        name="velocity_feedback_controller",
-        output="screen",
-        parameters=[{"control_frequency": 50.0}]
-    )
-
-    # 6. Safety Monitor (LIDAR-based)
+    # 5. Safety Monitor (LIDAR-based)
     safety_monitor_node = Node(
         package="tractor_bringup",
         executable="lidar_safety_monitor.py",
@@ -132,7 +123,7 @@ def generate_launch_description():
         parameters=[{
             "scan_topic": "/scan",
             "input_cmd_topic": "/cmd_vel_ai",
-            "output_cmd_topic": "/cmd_vel_raw",
+            "output_cmd_topic": "/cmd_vel",
             "stop_distance": 0.20,
             "slow_distance": 0.30,
             "hysteresis": 0.05,
@@ -192,8 +183,7 @@ def generate_launch_description():
         TimerAction(period=7.0, actions=[robot_localization_launch]),
 
         # Control (delayed)
-        TimerAction(period=8.0, actions=[vfc_node]),
-        TimerAction(period=9.0, actions=[safety_monitor_node]),
+        TimerAction(period=8.0, actions=[safety_monitor_node]),
         
         # AI (last)
         TimerAction(period=10.0, actions=[sac_runner_node])
