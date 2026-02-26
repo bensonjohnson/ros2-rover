@@ -34,35 +34,37 @@ if ! kill -0 $DRIVER_PID 2>/dev/null; then
 fi
 echo "       Motor driver running (PID $DRIVER_PID)"
 
-# Helper to send cmd_vel
+# Helper: publish cmd_vel at 10Hz for a duration, then stop
 send_cmd() {
     local desc="$1" lx="$2" az="$3" duration="$4"
     echo "       -> $desc (linear=$lx, angular=$az) for ${duration}s"
-    ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: $lx}, angular: {z: $az}}"
-    sleep "$duration"
+    # Publish at 10Hz to keep watchdog happy
+    timeout "$duration" ros2 topic pub --rate 10 /cmd_vel geometry_msgs/msg/Twist \
+        "{linear: {x: $lx}, angular: {z: $az}}" > /dev/null 2>&1 || true
     # Stop
-    ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.0}}"
+    ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+        "{linear: {x: 0.0}, angular: {z: 0.0}}" > /dev/null 2>&1
     sleep 1
 }
 
 echo ""
-echo "[3/8] Test: LEFT track forward only (turn right)"
-send_cmd "left fwd / right stopped" 0.0 -0.5 2
+echo "[3/8] Test: Both tracks FORWARD (linear=0.5)"
+send_cmd "both forward" 0.5 0.0 3
 
-echo "[4/8] Test: RIGHT track forward only (turn left)"
-send_cmd "right fwd / left stopped" 0.0 0.5 2
+echo "[4/8] Test: Both tracks REVERSE (linear=-0.5)"
+send_cmd "both reverse" -0.5 0.0 3
 
-echo "[5/8] Test: Both tracks FORWARD"
-send_cmd "both forward" 0.1 0.0 2
+echo "[5/8] Test: LEFT track only (angular=-2.0 -> L fwd, R rev)"
+send_cmd "left fwd, right rev" 0.0 -2.0 3
 
-echo "[6/8] Test: Both tracks REVERSE"
-send_cmd "both reverse" -0.1 0.0 2
+echo "[6/8] Test: RIGHT track only (angular=2.0 -> R fwd, L rev)"
+send_cmd "right fwd, left rev" 0.0 2.0 3
 
-echo "[7/8] Test: Zero turn (left fwd, right rev)"
-send_cmd "zero turn CW" 0.0 -1.0 2
+echo "[7/8] Test: Zero turn CW (angular=-4.0 -> strong spin)"
+send_cmd "zero turn CW" 0.0 -4.0 3
 
-echo "[8/8] Test: Zero turn (right fwd, left rev)"
-send_cmd "zero turn CCW" 0.0 1.0 2
+echo "[8/8] Test: Zero turn CCW (angular=4.0 -> strong spin)"
+send_cmd "zero turn CCW" 0.0 4.0 3
 
 # Cleanup
 echo ""
