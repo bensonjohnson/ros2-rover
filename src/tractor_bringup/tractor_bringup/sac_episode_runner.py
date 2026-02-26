@@ -716,9 +716,9 @@ class SACEpisodeRunner(Node):
             spin_penalty_scale = 1.0
 
 
-        # 1. Base idle penalty - only apply when NOT moving forward
-        # If moving forward, skip idle penalty (already rewarded via forward bonus)
-        if linear_vel < 0.05:  # Only penalize when nearly stationary
+        # 1. Base idle penalty - only apply when NOT moving meaningfully
+        # Threshold raised to 0.08 to catch one-track crawling (~0.05 m/s)
+        if linear_vel < 0.08:
             reward -= idle_penalty
 
         # 2. Coupled Forward Reward (Action + Velocity)
@@ -734,9 +734,17 @@ class SACEpisodeRunner(Node):
         # If cmd is zero (spinning) -> Zero Forward Reward (Neutral)
         base_fwd_reward = 0.0
         if cmd_fwd > 0 and meas_fwd > 0:
-            base_fwd_reward = min(cmd_fwd, meas_fwd) * forward_bonus_mult
+            # Scale by track agreement: both tracks contributing = full reward
+            # One track only = 30% reward (penalizes single-track crawling)
+            max_abs = max(abs(left_track), abs(right_track))
+            track_agreement = min(abs(left_track), abs(right_track)) / (max_abs + 1e-6) if max_abs > 0.05 else 1.0
+            base_fwd_reward = min(cmd_fwd, meas_fwd) * forward_bonus_mult * (0.3 + 0.7 * track_agreement)
 
         reward += base_fwd_reward
+
+        # 2b. Minimum speed bonus - reward reaching meaningful velocity
+        if linear_vel > 0.10:
+            reward += 0.15 * min(linear_vel / target_speed, 1.0)
 
         # 3. Backward penalty - RELAXED during slip recovery
         if linear_vel < -0.03:
@@ -764,9 +772,17 @@ class SACEpisodeRunner(Node):
                 # Penalize asymmetric zero turns (drifting/pivoting on dead track)
                 reward -= 0.2 * symmetry_error * spin_penalty_scale
         
-        # 4b. Forward Turn Logic (Arcing)
+        # 4b. Track Utilization Penalty - penalize one-track-only crawling
+        # Covers the gap between zero-turn (cmd_fwd < 0.1) and arc (cmd_fwd > 0.3)
+        max_abs_track = max(abs(left_track), abs(right_track))
+        if max_abs_track > 0.1:  # Only when commanding meaningful output
+            utilization = min(abs(left_track), abs(right_track)) / max_abs_track
+            if utilization < 0.3:  # One track doing <30% of the other
+                reward -= 0.3 * (1.0 - utilization) * spin_penalty_scale
+
+        # 4c. Forward Turn Logic (Arcing)
         # If commanded forward is high, allow asymmetry
-        elif cmd_fwd > 0.3:
+        if cmd_fwd > 0.3:
             # Check if one track is dragging (too slow for the speed)
             min_track = min(left_track, right_track)
             max_track = max(left_track, right_track)
