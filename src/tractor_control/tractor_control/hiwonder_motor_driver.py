@@ -543,7 +543,9 @@ class HiwonderMotorDriver(Node):
 
         try:
             speeds = [right_speed, left_speed, 0, 0]
-            speeds_bytes = [max(-127, min(127, int(s))) for s in speeds]
+            # Clamp to ±100 (board's valid range for both PWM and speed registers)
+            # Then convert to unsigned bytes for I2C (two's complement for negatives)
+            speeds_bytes = [max(-100, min(100, int(s))) & 0xFF for s in speeds]
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
