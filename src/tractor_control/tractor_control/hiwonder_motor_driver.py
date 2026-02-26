@@ -74,6 +74,9 @@ class HiwonderMotorDriver(Node):
         self.declare_parameter("init_motor_type_delay_secs", 0.5)
         # Delay after setting encoder polarity during initialization.
         self.declare_parameter("init_encoder_polarity_delay_secs", 0.1)
+        # Encoder polarity bitmask: 0=none, 1=invert M1, 2=invert M2, 3=invert both.
+        # Fix for motors that drive forward but won't reverse in speed control mode.
+        self.declare_parameter("encoder_polarity", 0)
         # Use hardware encoder clear/reset on startup (I2C register 0x52)?
         # If false, will establish software baseline for encoder counts.
         self.declare_parameter("hardware_clear_encoders", True)
@@ -276,10 +279,11 @@ class HiwonderMotorDriver(Node):
                 # Delay based on official documentation or hardware needs.
                 time.sleep(self.init_motor_type_delay)
 
-            # Set encoder polarity - using official documentation method
-            # Default: 0. Try 1 if motors behave unexpectedly or don't respond
-            # with encoders.
-            encoder_polarity = 0
+            # Set encoder polarity - per-motor bitmask for encoder direction
+            # 0 = no inversion, 1 = invert M1, 2 = invert M2, 3 = invert both
+            # If a motor can drive forward but won't reverse in speed control mode,
+            # its encoder polarity likely needs flipping.
+            encoder_polarity = self.get_parameter("encoder_polarity").value
             self.bus.write_byte_data(
                 self.motor_address, self.MOTOR_ENCODER_POLARITY_ADDR, encoder_polarity
             )
@@ -538,14 +542,13 @@ class HiwonderMotorDriver(Node):
             return
 
         try:
-            # Clamp to signed byte range
-            right_clamped = max(-127, min(127, int(right_speed)))
-            left_clamped = max(-127, min(127, int(left_speed)))
+            speeds = [right_speed, left_speed, 0, 0]
+            speeds_bytes = [max(-127, min(127, int(s))) for s in speeds]
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
                 self.get_logger().debug(
-                    f"Sending {control_type} motor command: L={left_clamped}, R={right_clamped}"
+                    f"Sending {control_type} motor command: L={left_speed}, R={right_speed}"
                 )
             elif bypass_rate_limit:
                 self.get_logger().debug("Immediate STOP command sent (bypassed rate limit)")
@@ -555,15 +558,9 @@ class HiwonderMotorDriver(Node):
                 if self.use_pwm_control
                 else self.MOTOR_FIXED_SPEED_ADDR
             )
-
-            # Write each motor individually to avoid block write quirks
-            # where the first data byte may be handled differently by smbus.
-            # Register layout: control_addr+0 = motor1 (right), +1 = motor2 (left),
-            #                   +2 = motor3, +3 = motor4
-            self.bus.write_byte_data(self.motor_address, control_addr, right_clamped & 0xFF)
-            self.bus.write_byte_data(self.motor_address, control_addr + 1, left_clamped & 0xFF)
-            self.bus.write_byte_data(self.motor_address, control_addr + 2, 0)
-            self.bus.write_byte_data(self.motor_address, control_addr + 3, 0)
+            self.bus.write_i2c_block_data(
+                self.motor_address, control_addr, speeds_bytes
+            )
             if left_speed != 0 or right_speed != 0:
                 self.get_logger().debug("Motor command sent successfully")
             self.last_motor_command_time = current_time
