@@ -256,6 +256,8 @@ class LidarSafetyMonitor(Node):
                         blocked_sectors.append('front')
             
             # === REAR SECTOR: Gate backward movement ===
+            # Only blocks linear.x, keeps angular.z so rover can turn away from wall
+            # Does NOT set estop_active to avoid log spam on noisy rear readings
             if msg.linear.x < -0.01:  # Trying to go backward
                 rear_dist = self._sector_dists['rear']
 
@@ -264,15 +266,11 @@ class LidarSafetyMonitor(Node):
                         self._sector_stopped['rear'] = False
                     else:
                         out_cmd.linear.x = 0.0
-                        out_cmd.angular.z = 0.0
-                        estop_active = True
                         blocked_sectors.append('rear')
                 else:
                     if rear_dist < self.stop_dist:
                         self._sector_stopped['rear'] = True
                         out_cmd.linear.x = 0.0
-                        out_cmd.angular.z = 0.0
-                        estop_active = True
                         blocked_sectors.append('rear')
             
             # === LEFT/RIGHT SECTORS: Only gate turns when ALSO moving forward/backward ===
