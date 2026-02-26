@@ -538,18 +538,14 @@ class HiwonderMotorDriver(Node):
             return
 
         try:
-            speeds = [right_speed, left_speed, 0, 0]
-            # Clamp to signed range then convert to unsigned bytes (two's complement)
-            # smbus expects unsigned 0-255; Hiwonder controller expects signed -127..127
-            # as two's complement: e.g. -31 -> 0xE1 (225)
-            speeds_clamped = [max(-127, min(127, int(s))) for s in speeds]
-            speeds_bytes = [v & 0xFF for v in speeds_clamped]
+            # Clamp to signed byte range
+            right_clamped = max(-127, min(127, int(right_speed)))
+            left_clamped = max(-127, min(127, int(left_speed)))
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
                 self.get_logger().debug(
-                    f"Sending {control_type} motor command: L={left_speed}, R={right_speed} "
-                    f"(bytes: {[hex(b) for b in speeds_bytes]})"
+                    f"Sending {control_type} motor command: L={left_clamped}, R={right_clamped}"
                 )
             elif bypass_rate_limit:
                 self.get_logger().debug("Immediate STOP command sent (bypassed rate limit)")
@@ -559,9 +555,15 @@ class HiwonderMotorDriver(Node):
                 if self.use_pwm_control
                 else self.MOTOR_FIXED_SPEED_ADDR
             )
-            self.bus.write_i2c_block_data(
-                self.motor_address, control_addr, speeds_bytes
-            )
+
+            # Write each motor individually to avoid block write quirks
+            # where the first data byte may be handled differently by smbus.
+            # Register layout: control_addr+0 = motor1 (right), +1 = motor2 (left),
+            #                   +2 = motor3, +3 = motor4
+            self.bus.write_byte_data(self.motor_address, control_addr, right_clamped & 0xFF)
+            self.bus.write_byte_data(self.motor_address, control_addr + 1, left_clamped & 0xFF)
+            self.bus.write_byte_data(self.motor_address, control_addr + 2, 0)
+            self.bus.write_byte_data(self.motor_address, control_addr + 3, 0)
             if left_speed != 0 or right_speed != 0:
                 self.get_logger().debug("Motor command sent successfully")
             self.last_motor_command_time = current_time
