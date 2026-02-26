@@ -1364,8 +1364,8 @@ class SACEpisodeRunner(Node):
             recovery_left = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_left), recovery_left)
             recovery_right = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_right), recovery_right)
             
-            # Convert to Twist
-            wheel_sep = 0.3
+            # Convert to Twist (must match motor driver's wheel_separation=0.5)
+            wheel_sep = 0.5
             linear_vel_recovery = (recovery_left + recovery_right) / 2.0
             angular_vel_recovery = (recovery_right - recovery_left) / wheel_sep
             
@@ -1428,7 +1428,8 @@ class SACEpisodeRunner(Node):
             # Convert track speeds to linear/angular for Twist message
             # linear = (left + right) / 2
             # angular = (right - left) / wheel_separation
-            wheel_sep = 0.3  # meters (matches motor driver)
+            # MUST match motor driver's wheel_separation (0.5m) for round-trip consistency
+            wheel_sep = 0.5  # meters (matches hiwonder_motor_driver param)
             linear_vel = (left_track + right_track) / 2.0
             angular_vel = (right_track - left_track) / wheel_sep
             
