@@ -539,12 +539,17 @@ class HiwonderMotorDriver(Node):
 
         try:
             speeds = [right_speed, left_speed, 0, 0]
-            speeds_bytes = [max(-127, min(127, int(s))) for s in speeds]
+            # Clamp to signed range then convert to unsigned bytes (two's complement)
+            # smbus expects unsigned 0-255; Hiwonder controller expects signed -127..127
+            # as two's complement: e.g. -31 -> 0xE1 (225)
+            speeds_clamped = [max(-127, min(127, int(s))) for s in speeds]
+            speeds_bytes = [v & 0xFF for v in speeds_clamped]
 
             if left_speed != 0 or right_speed != 0:
                 control_type = "PWM" if self.use_pwm_control else "Speed"
                 self.get_logger().debug(
-                    f"Sending {control_type} motor command: L={left_speed}, R={right_speed}"
+                    f"Sending {control_type} motor command: L={left_speed}, R={right_speed} "
+                    f"(bytes: {[hex(b) for b in speeds_bytes]})"
                 )
             elif bypass_rate_limit:
                 self.get_logger().debug("Immediate STOP command sent (bypassed rate limit)")
