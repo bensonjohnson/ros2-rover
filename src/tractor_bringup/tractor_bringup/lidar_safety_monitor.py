@@ -240,30 +240,28 @@ class LidarSafetyMonitor(Node):
             if self._commands_received % 30 == 0:
                 self.get_logger().warn(f'STALE DATA ({time_since_scan:.2f}s) - Stopping all')
         else:
-            # === FRONT SECTOR: Gate forward movement with speed scaling ===
-            if msg.linear.x > 0.01:  # Trying to go forward
-                front_dist = self._sector_dists['front']
+            # === FRONT SECTOR: Detect obstacles and gate movement ===
+            front_dist = self._sector_dists['front']
 
-                if self._sector_stopped['front']:
-                    if front_dist > self.resume_dist:
-                        self._sector_stopped['front'] = False
-                    else:
-                        out_cmd.linear.x = 0.0
-                        out_cmd.angular.z = 0.0
-                        estop_active = True
-                        blocked_sectors.append('front')
-                else:
-                    if front_dist < self.stop_dist:
-                        self._sector_stopped['front'] = True
-                        out_cmd.linear.x = 0.0
-                        out_cmd.angular.z = 0.0
-                        estop_active = True
-                        blocked_sectors.append('front')
-                    elif front_dist < self.slow_dist:
-                        # Linear speed scaling: 0% at stop_dist → 100% at slow_dist
-                        scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
-                        out_cmd.linear.x = msg.linear.x * scale
-                        out_cmd.angular.z = msg.angular.z * scale
+            # Update front sector stopped state based on distance
+            if self._sector_stopped['front']:
+                if front_dist > self.resume_dist:
+                    self._sector_stopped['front'] = False
+            else:
+                if front_dist < self.stop_dist:
+                    self._sector_stopped['front'] = True
+
+            # When front sector is in estop, block ALL movement (forward + backward)
+            if self._sector_stopped['front']:
+                out_cmd.linear.x = 0.0
+                out_cmd.angular.z = 0.0
+                estop_active = True
+                blocked_sectors.append('front')
+            elif msg.linear.x > 0.01 and front_dist < self.slow_dist:
+                # Speed scaling in slow zone (only for forward movement)
+                scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
+                out_cmd.linear.x = msg.linear.x * scale
+                out_cmd.angular.z = msg.angular.z * scale
             
             # === REAR SECTOR: Gate backward movement ===
             # Only blocks linear.x, keeps angular.z so rover can turn away from wall
