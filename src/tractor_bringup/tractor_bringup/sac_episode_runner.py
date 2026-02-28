@@ -900,7 +900,18 @@ class SACEpisodeRunner(Node):
             backup_bonus = 0.2 * abs(linear_vel)
             reward += backup_bonus
             
-        # 18. SAFETY MONITOR BLOCKED PENALTY
+        # 18. HEADING TRACKING PENALTY
+        # When the model commands "go straight" (similar track values) but the robot
+        # drifts, penalize the unwanted angular velocity. This teaches the model to
+        # output asymmetric track values to compensate for mechanical track drag bias.
+        if cmd_fwd > 0.05:
+            track_diff = abs(right_track - left_track)
+            # straight_intent: 1.0 when tracks equal, fades to 0 when |diff| > 0.2
+            straight_intent = max(0.0, 1.0 - track_diff * 5.0)
+            if straight_intent > 0.1 and abs(angular_vel) > 0.1:
+                reward -= 0.2 * abs(angular_vel) * straight_intent
+
+        # 19. SAFETY MONITOR BLOCKED PENALTY
         # Penalize being close enough that the safety monitor had to intervene.
         # The idle penalty alone (~0.1) is too mild — this teaches the model to
         # maintain safe distances proactively rather than relying on the monitor.
@@ -1751,6 +1762,14 @@ class SACEpisodeRunner(Node):
         else:
             components['wall_avoid'] = 0.0
 
+        # Heading Tracking
+        components['heading_track'] = 0.0
+        if cmd_fwd > 0.05:
+            track_diff = abs(right_track - left_track)
+            straight_intent = max(0.0, 1.0 - track_diff * 5.0)
+            if straight_intent > 0.1 and abs(angular_vel) > 0.1:
+                components['heading_track'] = -0.2 * abs(angular_vel) * straight_intent
+
         # Safety Monitor Blocked
         components['safety_block'] = 0.0
         if self._safety_override:
@@ -1770,7 +1789,7 @@ class SACEpisodeRunner(Node):
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
             f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
             f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
-            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} SafeBlock={components['safety_block']:+.2f}"
+            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} SafeBlock={components['safety_block']:+.2f} HdgTrk={components['heading_track']:+.2f}"
         )
     
     def _check_phase_transition(self):
