@@ -1384,16 +1384,41 @@ class SACEpisodeRunner(Node):
                     f"(distance: {self._slip_backup_distance:.3f}m/{self.SLIP_BACKUP_LIMIT:.2f}m)"
                 )
         elif monitor_blocking:
-            # Safety monitor is BLOCKING — send ZERO, don't fight with backward
-            # commands that cause oscillation. The safety monitor handles
-            # direction-specific gating (allows turning/backward on its own).
+            # Safety monitor is BLOCKING front — zero forward linear only.
+            # Let the model turn and back up to escape. The safety monitor
+            # already gates direction-specific commands (blocks forward,
+            # allows rotation and backward).
+
+            # Still run normal action computation so model can learn
+            left_track = action[0]
+            right_track = action[1]
+
+            def apply_soft_deadzone(val, min_val):
+                if abs(val) < 0.001: return 0.0
+                return math.copysign(min_val + (1.0 - min_val) * abs(val), val)
+
+            MIN_TRACK = 0.25
+            left_track = apply_soft_deadzone(action[0], MIN_TRACK)
+            right_track = apply_soft_deadzone(action[1], MIN_TRACK)
+
+            wheel_sep = 0.5
+            linear_vel = (left_track + right_track) / 2.0
+            angular_vel = (right_track - left_track) / wheel_sep
+
+            max_speed = self.max_linear if self._current_model_version <= 0 else self._curriculum_max_speed
+            cmd.linear.x = float(linear_vel * max_speed)
+            cmd.angular.z = float(angular_vel * self.max_angular)
+
+            # Clamp forward motion — only allow zero or backward
+            if cmd.linear.x > 0:
+                cmd.linear.x = 0.0
+
+            actual_action = np.array([left_track, right_track])
+            collision = False  # Not a collision, just blocked — let model learn
+
             self.get_logger().warn(
-                f"🛑 Monitor Block! front blocked by safety monitor",
+                f"🛑 Monitor Block! Allowing turn/backup: lin={cmd.linear.x:.3f} ang={cmd.angular.z:.2f}",
                 throttle_duration_sec=1.0)
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            actual_action = np.array([0.0, 0.0])
-            collision = self._sensor_warmup_complete
 
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
