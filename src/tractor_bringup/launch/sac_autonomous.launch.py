@@ -123,7 +123,7 @@ def generate_launch_description():
         parameters=[{
             "scan_topic": "/scan",
             "input_cmd_topic": "/cmd_vel_ai",
-            "output_cmd_topic": "/cmd_vel",
+            "output_cmd_topic": "/cmd_vel_raw",
             "stop_distance": 0.30,             # Hard stop 300mm from bumper
             "slow_distance": 0.60,             # Start slowing 600mm from bumper
             "hysteresis": 0.10,                # Resume at stop + 100mm
@@ -136,6 +136,23 @@ def generate_launch_description():
         }],
     )
     
+    # 6. Velocity Feedback Controller (heading drift correction)
+    # Subscribes to cmd_vel_raw (from safety monitor), publishes to cmd_vel (to motor driver)
+    velocity_feedback_node = Node(
+        package="tractor_control",
+        executable="velocity_feedback_controller",
+        name="velocity_feedback_controller",
+        output="screen",
+        parameters=[{
+            "control_frequency": 30.0,
+            "heading_correction_gain": 0.5,
+            "max_heading_correction": 0.3,
+            "straight_threshold": 0.05,
+            "min_linear_for_correction": 0.03,
+            "cmd_timeout_sec": 0.2,
+        }],
+    )
+
     # 6b. Robot Localization (EKF)
     # Fuses Wheel Odom, RF2O, and IMU
     robot_localization_launch = IncludeLaunchDescription(
@@ -188,7 +205,8 @@ def generate_launch_description():
 
         # Control (delayed)
         TimerAction(period=8.0, actions=[safety_monitor_node]),
-        
+        TimerAction(period=9.0, actions=[velocity_feedback_node]),
+
         # AI (last)
-        TimerAction(period=10.0, actions=[sac_runner_node])
+        TimerAction(period=11.0, actions=[sac_runner_node])
     ])
