@@ -30,7 +30,7 @@ class XboxControllerTeleop(Node):
             "use_feedback_control", False
         )  # Use velocity feedback controller
         # meters, for tank drive calculations
-        self.declare_parameter("wheel_separation", 0.5)
+        self.declare_parameter("wheel_separation", 0.154)
 
         self.max_linear_speed = self.get_parameter("max_linear_speed").value
         self.max_angular_speed = self.get_parameter("max_angular_speed").value

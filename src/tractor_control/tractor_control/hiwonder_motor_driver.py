@@ -39,9 +39,9 @@ class HiwonderMotorDriver(Node):
         # testing.
         self.declare_parameter("motor_controller_address", 0x34)
         # meters, distance between the centers of the two wheels.
-        self.declare_parameter("wheel_separation", 0.5)
+        self.declare_parameter("wheel_separation", 0.154)
         # meters, radius of the drive wheels.
-        self.declare_parameter("wheel_radius", 0.15)
+        self.declare_parameter("wheel_radius", 0.025)
         # Max speed value sent to controller. Matches Arduino MAX_MOTOR_SPEED
         # from Hiwonder examples.
         self.declare_parameter("max_motor_speed", 50)

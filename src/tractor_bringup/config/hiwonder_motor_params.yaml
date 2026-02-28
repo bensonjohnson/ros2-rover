@@ -2,8 +2,8 @@ hiwonder_motor_driver:
   ros__parameters:
     i2c_bus: 5
     motor_controller_address: 0x34 # Hexadecimal 52
-    wheel_separation: 0.5
-    wheel_radius: 0.15
+    wheel_separation: 0.154  # Distance between left/right track centers (measured)
+    wheel_radius: 0.025     # 50mm diameter drive wheels
     max_motor_speed: 100
     deadband: 0.05
     encoder_ppr: 1980

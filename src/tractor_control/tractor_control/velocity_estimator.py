@@ -35,7 +35,7 @@ class HybridVelocityEstimator:
     - Confidence metric: Indicates estimate reliability
     """
 
-    def __init__(self, wheel_radius=0.15, wheel_separation=0.5, encoder_ppr=1980):
+    def __init__(self, wheel_radius=0.025, wheel_separation=0.154, encoder_ppr=1980):
         """Initialize hybrid velocity estimator.
 
         Args:

@@ -124,8 +124,8 @@ def generate_launch_description():
             "scan_topic": "/scan",
             "input_cmd_topic": "/cmd_vel_ai",
             "output_cmd_topic": "/cmd_vel",
-            "stop_distance": 0.25,             # Hard stop 250mm from bumper
-            "slow_distance": 0.50,             # Start slowing 500mm from bumper
+            "stop_distance": 0.30,             # Hard stop 300mm from bumper
+            "slow_distance": 0.60,             # Start slowing 600mm from bumper
             "hysteresis": 0.10,                # Resume at stop + 100mm
             "min_valid_range": 0.05,
             "max_eval_distance": 5.0,

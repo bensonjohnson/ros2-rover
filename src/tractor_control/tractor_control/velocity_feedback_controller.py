@@ -13,8 +13,8 @@ class VelocityFeedbackController(Node):
         super().__init__("velocity_feedback_controller")
 
         # Parameters
-        self.declare_parameter("wheel_separation", 0.5)  # meters
-        self.declare_parameter("wheel_radius", 0.15)  # meters
+        self.declare_parameter("wheel_separation", 0.154)  # meters
+        self.declare_parameter("wheel_radius", 0.025)  # meters
         # Proportional gain for linear velocity
         self.declare_parameter("kp_linear", 0.8)
         # Proportional gain for angular velocity
