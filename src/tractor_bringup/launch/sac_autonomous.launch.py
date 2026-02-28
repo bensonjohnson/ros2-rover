@@ -129,6 +129,9 @@ def generate_launch_description():
             "hysteresis": 0.15,
             "min_valid_range": 0.05,
             "max_eval_distance": 5.0,
+            "robot_front_offset": 0.06,       # LiDAR center to front bumper (m)
+            "front_sector_half_angle": 55.0,   # ±55° front sector to cover corners
+            "stale_timeout": 0.2,              # 200ms stale scan timeout for 10Hz LiDAR
         }],
     )
     

@@ -40,7 +40,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import model architectures
-from model_architectures import UnifiedBEVPolicyNetwork, UnifiedBEVQNetwork
+from model_architectures import UnifiedBEVPolicyNetwork, UnifiedBEVQNetwork, SharedBEVCriticPair
 
 # Import serialization utilities
 from serialization_utils import (
@@ -341,32 +341,21 @@ class V620SACTrainer:
         self.actor = UnifiedBEVPolicyNetwork(action_dim=self.action_dim, proprio_dim=self.proprio_dim).to(self.device)
         self.lstm_hidden_size = UnifiedBEVPolicyNetwork.LSTM_HIDDEN
 
-        # --- Critics ---
-        # Unified BEV Q-Networks
-        self.critic1 = UnifiedBEVQNetwork(
+        # --- Critics (shared BEV encoder) ---
+        self.critic_pair = SharedBEVCriticPair(
             action_dim=self.action_dim,
             proprio_dim=self.proprio_dim,
             dropout=args.droq_dropout
         ).to(self.device)
 
-        self.critic2 = UnifiedBEVQNetwork(
-            action_dim=self.action_dim,
-            proprio_dim=self.proprio_dim,
-            dropout=args.droq_dropout
-        ).to(self.device)
-
-        # --- Target Critics ---
-        self.target_critic1 = copy.deepcopy(self.critic1)
-        self.target_critic2 = copy.deepcopy(self.critic2)
-
-        # Disable dropout in target networks (deterministic targets)
-        self.target_critic1.eval()
-        self.target_critic2.eval()
+        # --- Target Critics (shared BEV encoder, no dropout) ---
+        self.target_critic_pair = copy.deepcopy(self.critic_pair)
+        self.target_critic_pair.eval()
 
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.lr)
         self.critic_optimizer = optim.Adam(
-            list(self.critic1.parameters()) + list(self.critic2.parameters()),
+            self.critic_pair.parameters(),
             lr=args.lr
         )
 
@@ -446,10 +435,8 @@ class V620SACTrainer:
         if self.device.type == 'cuda':
             try:
                 self.actor = torch.compile(self.actor)
-                self.critic1 = torch.compile(self.critic1)
-                self.critic2 = torch.compile(self.critic2)
-                self.target_critic1 = torch.compile(self.target_critic1)
-                self.target_critic2 = torch.compile(self.target_critic2)
+                self.critic_pair = torch.compile(self.critic_pair)
+                self.target_critic_pair = torch.compile(self.target_critic_pair)
                 print("✓ torch.compile enabled (default mode)")
             except Exception as e:
                 print(f"⚠ torch.compile failed, continuing without: {e}")
@@ -521,16 +508,25 @@ class V620SACTrainer:
             # Don't load anything, start fresh
             return
 
-        # Load everything normally
+        # Detect checkpoint format: shared critic pair vs separate critics
+        has_shared_critics = 'critic_pair' in ckpt
+
         self.actor.load_state_dict(ckpt['actor'])
-        self.critic1.load_state_dict(ckpt['critic1'])
-        self.critic2.load_state_dict(ckpt['critic2'])
-        self.target_critic1.load_state_dict(ckpt['target_critic1'])
-        self.target_critic2.load_state_dict(ckpt['target_critic2'])
         self.log_alpha.data = ckpt['log_alpha']
 
+        if has_shared_critics:
+            # New format: shared encoder critic pair
+            print("  Loading shared-encoder critic pair checkpoint")
+            self.critic_pair.load_state_dict(ckpt['critic_pair'])
+            self.target_critic_pair.load_state_dict(ckpt['target_critic_pair'])
+        else:
+            # Old format: separate critic1/critic2 — incompatible with shared encoder
+            print("⚠️  Old separate-critic checkpoint detected, starting critics fresh")
+
         self.actor_optimizer.load_state_dict(ckpt['actor_opt'])
-        self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
+        # Only load critic optimizer state if architecture matches
+        if has_shared_critics:
+            self.critic_optimizer.load_state_dict(ckpt['critic_opt'])
         self.alpha_optimizer.load_state_dict(ckpt['alpha_opt'])
 
         # Load schedulers if available
@@ -555,10 +551,8 @@ class V620SACTrainer:
         path = os.path.join(self.args.checkpoint_dir, f"sac_step_{self.total_steps}.pt")
         checkpoint = {
             'actor': self._unwrap_model(self.actor).state_dict(),
-            'critic1': self._unwrap_model(self.critic1).state_dict(),
-            'critic2': self._unwrap_model(self.critic2).state_dict(),
-            'target_critic1': self._unwrap_model(self.target_critic1).state_dict(),
-            'target_critic2': self._unwrap_model(self.target_critic2).state_dict(),
+            'critic_pair': self._unwrap_model(self.critic_pair).state_dict(),
+            'target_critic_pair': self._unwrap_model(self.target_critic_pair).state_dict(),
             'log_alpha': self.log_alpha,
             'actor_opt': self.actor_optimizer.state_dict(),
             'critic_opt': self.critic_optimizer.state_dict(),
@@ -1111,6 +1105,9 @@ class V620SACTrainer:
     def _update_critic_droq(self, batch):
         """Update critics with DroQ (M forward passes with dropout).
 
+        Uses SharedBEVCriticPair: BEV encoder runs once, Q-head MLPs run M times
+        with different dropout masks.
+
         Args:
             batch: Dictionary with 'bev', 'proprio', 'action', 'reward', 'done',
                    'next_bev', 'next_proprio'
@@ -1144,9 +1141,8 @@ class V620SACTrainer:
             next_log_prob = dist.log_prob(next_action_sample).sum(dim=-1, keepdim=True)
             next_log_prob -= (2 * (np.log(2) - next_action_sample - F.softplus(-2 * next_action_sample))).sum(dim=1, keepdim=True)
 
-            # Target Q (NO dropout in target networks)
-            q1_target = self.target_critic1(next_bev, next_proprio, next_action)
-            q2_target = self.target_critic2(next_bev, next_proprio, next_action)
+            # Target Q — encode next_bev once, pass features to both heads
+            q1_target, q2_target = self.target_critic_pair(next_bev, next_proprio, next_action)
             min_q_target = torch.min(q1_target, q2_target) - alpha * next_log_prob
             next_q_value = reward + (1 - done) * self.args.gamma * min_q_target
 
@@ -1154,25 +1150,22 @@ class V620SACTrainer:
         # Use AMP for forward pass and loss computation
         with torch.amp.autocast('cuda', enabled=self.use_amp):
             if self.args.droq_samples > 1 and self.args.droq_dropout > 0.0:
-                # DroQ: Multiple forward passes with dropout
+                # DroQ: encode BEV once, re-run Q-head MLPs M times with different dropout masks
+                self.critic_pair.train()
+                bev_feats = self.critic_pair.encode(state_bev)
+
                 q1_samples = []
                 q2_samples = []
-
-                # Enable dropout
-                self.critic1.train()
-                self.critic2.train()
-
                 for _ in range(self.args.droq_samples):
-                    q1_samples.append(self.critic1(state_bev, state_proprio, action))
-                    q2_samples.append(self.critic2(state_bev, state_proprio, action))
+                    q1_samples.append(self.critic_pair.forward_q1(bev_feats, state_proprio, action))
+                    q2_samples.append(self.critic_pair.forward_q2(bev_feats, state_proprio, action))
 
                 # Average over samples
                 q1 = torch.stack(q1_samples).mean(dim=0)
                 q2 = torch.stack(q2_samples).mean(dim=0)
             else:
-                # Standard SAC: single forward pass
-                q1 = self.critic1(state_bev, state_proprio, action)
-                q2 = self.critic2(state_bev, state_proprio, action)
+                # Standard SAC: single forward pass (encoder + heads)
+                q1, q2 = self.critic_pair(state_bev, state_proprio, action)
 
             # MSE loss against target
             critic_loss = F.mse_loss(q1, next_q_value) + F.mse_loss(q2, next_q_value)
@@ -1182,16 +1175,12 @@ class V620SACTrainer:
         if self.use_amp:
             self.scaler.scale(critic_loss).backward()
             self.scaler.unscale_(self.critic_optimizer)
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.critic_pair.parameters(), max_norm=1.0)
             self.scaler.step(self.critic_optimizer)
             self.scaler.update()
         else:
             critic_loss.backward()
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.critic1.parameters(), max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(self.critic2.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.critic_pair.parameters(), max_norm=1.0)
             self.critic_optimizer.step()
 
         return critic_loss, q1, q2, next_q_value
@@ -1227,12 +1216,8 @@ class V620SACTrainer:
             log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
 
             # Use critic to evaluate action (NO dropout, deterministic)
-            # Disable dropout for actor evaluation
-            self.critic1.eval()
-            self.critic2.eval()
-
-            q1_pi = self.critic1(state_bev, state_proprio, current_action)
-            q2_pi = self.critic2(state_bev, state_proprio, current_action)
+            self.critic_pair.eval()
+            q1_pi, q2_pi = self.critic_pair(state_bev, state_proprio, current_action)
             min_q_pi = torch.min(q1_pi, q2_pi)
 
             actor_loss = ((alpha * log_prob) - min_q_pi).mean()
@@ -1242,13 +1227,11 @@ class V620SACTrainer:
         if self.use_amp:
             self.scaler.scale(actor_loss).backward()
             self.scaler.unscale_(self.actor_optimizer)
-            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
             self.scaler.step(self.actor_optimizer)
             self.scaler.update()
         else:
             actor_loss.backward()
-            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
             self.actor_optimizer.step()
 
@@ -1272,14 +1255,12 @@ class V620SACTrainer:
         return alpha_loss
 
     def _soft_update_targets(self):
-        """Soft update target networks."""
-        tau = 0.001  # Could make this a hyperparameter
-        self.soft_update(self.critic1, self.target_critic1, tau)
-        self.soft_update(self.critic2, self.target_critic2, tau)
-
-    def soft_update(self, source, target, tau=0.001):
-        for param, target_param in zip(source.parameters(), target.parameters()):
-            target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+        """Soft update target networks (vectorized)."""
+        tau = 0.001
+        with torch.no_grad():
+            params = list(self.critic_pair.parameters())
+            target_params = list(self.target_critic_pair.parameters())
+            torch._foreach_lerp_(target_params, params, tau)
 
     async def setup_nats(self):
         """Initialize NATS connection and JetStream."""
@@ -1448,11 +1429,9 @@ class V620SACTrainer:
                             print(f"📥 Processed batch of {len(batch['rewards'])} eval steps (not added to buffer)")
 
                     except Exception as e:
-                        print(f"❌ Error processing batch: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        # Negative ack for redelivery
-                        await msg.nak()
+                        print(f"⚠ Dropping corrupt batch: {e}")
+                        # Ack to remove from stream — corrupt data can't be fixed by redelivery
+                        await msg.ack()
 
             except nats.errors.TimeoutError:
                 # No messages available, continue waiting

@@ -13,7 +13,7 @@ echo "=================================================="
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
-BATCH_SIZE=${4:-1536}  # Reduced from 1024 for faster gradient steps and lower memory usage
+BATCH_SIZE=${4:-256}  # Standard SAC batch size; more gradient steps/sec > larger batches for off-policy RL
 BUFFER_SIZE=${5:-500000}  # 500k samples (~16.5GB VRAM on 32GB GPU)
 GPU_BUFFER=true  # Store buffer on GPU for faster sampling
 

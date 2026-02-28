@@ -3,10 +3,17 @@
 
 Enhanced safety monitor that blocks movement in specific directions based on
 where obstacles are detected:
-- Front sector (±45°): Blocks forward movement
-- Left sector (45° to 135°): Blocks left turns (negative angular.z)  
-- Right sector (-45° to -135°): Blocks right turns (positive angular.z)
-- Rear sector (±135° to ±180°): Blocks backward movement
+- Front sector (±N°, configurable): Blocks forward movement + speed scaling
+- Left sector: Blocks left turns when moving forward/backward
+- Right sector: Blocks right turns when moving forward/backward
+- Rear sector: Blocks backward movement
+
+Features:
+- Gradual speed scaling in the slow zone (slow_distance → stop_distance)
+- robot_front_offset compensates for LiDAR-to-bumper distance
+- Configurable front sector angle to cover robot corners
+- Vectorized numpy scan processing for low latency
+- Hysteresis-based gating to prevent oscillation
 
 For tank-steer rovers, this allows intelligent avoidance - the rover can
 still turn away from an obstacle even when it can't go forward.
@@ -41,6 +48,9 @@ class LidarSafetyMonitor(Node):
         self.declare_parameter('hysteresis', 0.05)        # Gap to resume
         self.declare_parameter('max_eval_distance', 4.0)  # Ignore ranges > 4m
         self.declare_parameter('min_valid_range', 0.10)   # Ignore ranges < 10cm (noise/self-hits)
+        self.declare_parameter('robot_front_offset', 0.06) # LiDAR to front bumper (m)
+        self.declare_parameter('front_sector_half_angle', 55.0)  # Front sector half-width (degrees)
+        self.declare_parameter('stale_timeout', 0.2)      # Stale scan timeout (s)
 
         # Load parameters
         self._load_parameters()
@@ -101,20 +111,28 @@ class LidarSafetyMonitor(Node):
         self.scan_topic = str(self.get_parameter('scan_topic').value)
         self.input_cmd_topic = str(self.get_parameter('input_cmd_topic').value)
         self.output_cmd_topic = str(self.get_parameter('output_cmd_topic').value)
-        
+
         self.stop_dist = float(self.get_parameter('stop_distance').value)
         self.slow_dist = float(self.get_parameter('slow_distance').value)
         self.hysteresis = float(self.get_parameter('hysteresis').value)
         self.max_distance = float(self.get_parameter('max_eval_distance').value)
         self.min_valid_range = float(self.get_parameter('min_valid_range').value)
+        self.robot_front_offset = float(self.get_parameter('robot_front_offset').value)
+        self.front_sector_half_angle = float(self.get_parameter('front_sector_half_angle').value)
+        self.stale_timeout = float(self.get_parameter('stale_timeout').value)
 
         # Computed thresholds
         self.resume_dist = self.stop_dist + self.hysteresis
+        # Pre-compute sector boundaries in radians
+        self._front_half_rad = math.radians(self.front_sector_half_angle)
+        self._rear_half_rad = math.radians(180.0 - self.front_sector_half_angle)
 
     def _log_params(self):
         self.get_logger().info(
             f'Params: Stop={self.stop_dist:.2f}m (Resume={self.resume_dist:.2f}m), '
-            f'Slow={self.slow_dist:.2f}m, MaxRange={self.max_distance:.1f}m'
+            f'Slow={self.slow_dist:.2f}m, FrontOffset={self.robot_front_offset:.3f}m, '
+            f'FrontSector=±{self.front_sector_half_angle:.0f}°, '
+            f'StaleTimeout={self.stale_timeout:.1f}s'
         )
 
     def _parameters_callback(self, params):
@@ -128,57 +146,37 @@ class LidarSafetyMonitor(Node):
                 self.resume_dist = self.stop_dist + self.hysteresis
             elif param.name == 'slow_distance':
                 self.slow_dist = param.value
-            
+            elif param.name == 'robot_front_offset':
+                self.robot_front_offset = param.value
+            elif param.name == 'front_sector_half_angle':
+                self.front_sector_half_angle = param.value
+                self._front_half_rad = math.radians(param.value)
+                self._rear_half_rad = math.radians(180.0 - param.value)
+            elif param.name == 'stale_timeout':
+                self.stale_timeout = param.value
+
         self._log_params()
         return SetParametersResult(successful=True)
 
-    def _get_sector(self, angle_rad: float) -> str:
-        """Determine which sector an angle belongs to.
-        
-        Args:
-            angle_rad: Angle in radians [-π, π], 0 = forward, positive = left
-            
-        Returns:
-            Sector name: 'front', 'left', 'right', or 'rear'
-        """
-        angle_deg = math.degrees(angle_rad)
-        
-        # Normalize to [-180, 180]
-        while angle_deg > 180:
-            angle_deg -= 360
-        while angle_deg < -180:
-            angle_deg += 360
-            
-        if -45 <= angle_deg <= 45:
-            return 'front'
-        elif 45 < angle_deg <= 135:
-            return 'left'
-        elif -135 <= angle_deg < -45:
-            return 'right'
-        else:
-            return 'rear'
-
     def scan_callback(self, msg: LaserScan) -> None:
-        """Process LIDAR scan and compute distance metrics per sector."""
+        """Process LIDAR scan and compute distance metrics per sector (vectorized)."""
         self._last_scan_time = self.get_clock().now()
-        
+
         try:
-            # Convert to numpy arrays
             ranges = np.array(msg.ranges)
             angles = np.arange(len(ranges)) * msg.angle_increment + msg.angle_min
-            
+
             # Wrap angles to [-π, π]
             angles = (angles + np.pi) % (2 * np.pi) - np.pi
-            
-            # Valid mask: reasonable range
+
+            # Valid mask: finite and within range
             valid_mask = (
-                np.isfinite(ranges) & 
-                (ranges > self.min_valid_range) & 
+                np.isfinite(ranges) &
+                (ranges > self.min_valid_range) &
                 (ranges <= self.max_distance)
             )
-            
+
             if not np.any(valid_mask):
-                # No valid data - assume all clear  
                 for sector in self._sector_dists:
                     self._sector_dists[sector] = self.max_distance
                 self._min_overall_dist = self.max_distance
@@ -186,23 +184,31 @@ class LidarSafetyMonitor(Node):
 
             valid_ranges = ranges[valid_mask]
             valid_angles = angles[valid_mask]
-            
-            # Initialize sector minimums
-            sector_mins = {
-                'front': self.max_distance,
-                'left': self.max_distance,
-                'right': self.max_distance,
-                'rear': self.max_distance
+            abs_angles = np.abs(valid_angles)
+
+            # Vectorized sector classification using configurable front sector angle
+            front_mask = abs_angles <= self._front_half_rad
+            rear_mask = abs_angles >= self._rear_half_rad
+            side_mask = ~front_mask & ~rear_mask
+            left_mask = side_mask & (valid_angles > 0)
+            right_mask = side_mask & (valid_angles < 0)
+
+            max_d = self.max_distance
+            offset = self.robot_front_offset
+
+            # Compute per-sector min distances, subtracting front offset for front sector
+            front_min = float(np.min(valid_ranges[front_mask]) - offset) if np.any(front_mask) else max_d
+            left_min = float(np.min(valid_ranges[left_mask])) if np.any(left_mask) else max_d
+            right_min = float(np.min(valid_ranges[right_mask])) if np.any(right_mask) else max_d
+            rear_min = float(np.min(valid_ranges[rear_mask])) if np.any(rear_mask) else max_d
+
+            self._sector_dists = {
+                'front': max(front_min, 0.0),
+                'left': left_min,
+                'right': right_min,
+                'rear': rear_min,
             }
-            
-            # Assign each point to a sector and track minimum
-            for r, theta in zip(valid_ranges, valid_angles):
-                sector = self._get_sector(theta)
-                if r < sector_mins[sector]:
-                    sector_mins[sector] = r
-            
-            self._sector_dists = sector_mins
-            self._min_overall_dist = min(sector_mins.values())
+            self._min_overall_dist = min(self._sector_dists.values())
 
         except Exception as exc:
             self.get_logger().warn(f'LIDAR processing error: {exc}')
@@ -226,7 +232,7 @@ class LidarSafetyMonitor(Node):
 
         # Check for stale data
         time_since_scan = (self.get_clock().now() - self._last_scan_time).nanoseconds / 1e9
-        if time_since_scan > 0.5:
+        if time_since_scan > self.stale_timeout:
             # Stale data safety - block all movement
             out_cmd.linear.x = 0.0
             out_cmd.angular.z = 0.0
@@ -234,12 +240,11 @@ class LidarSafetyMonitor(Node):
             if self._commands_received % 30 == 0:
                 self.get_logger().warn(f'STALE DATA ({time_since_scan:.2f}s) - Stopping all')
         else:
-            # === FRONT SECTOR: Gate forward movement ===
+            # === FRONT SECTOR: Gate forward movement with speed scaling ===
             if msg.linear.x > 0.01:  # Trying to go forward
                 front_dist = self._sector_dists['front']
 
                 if self._sector_stopped['front']:
-                    # Currently stopped - need to clear resume threshold
                     if front_dist > self.resume_dist:
                         self._sector_stopped['front'] = False
                     else:
@@ -254,6 +259,11 @@ class LidarSafetyMonitor(Node):
                         out_cmd.angular.z = 0.0
                         estop_active = True
                         blocked_sectors.append('front')
+                    elif front_dist < self.slow_dist:
+                        # Linear speed scaling: 0% at stop_dist → 100% at slow_dist
+                        scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
+                        out_cmd.linear.x = msg.linear.x * scale
+                        out_cmd.angular.z = msg.angular.z * scale
             
             # === REAR SECTOR: Gate backward movement ===
             # Only blocks linear.x, keeps angular.z so rover can turn away from wall

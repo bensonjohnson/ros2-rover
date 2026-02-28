@@ -734,3 +734,75 @@ class UnifiedBEVQNetwork(nn.Module):
         q_value = self.q_net(fused)
         return q_value
 
+
+class _QHead(nn.Module):
+    """MLP Q-head (proprio_encoder + q_net) without BEV encoder.
+
+    Takes pre-computed BEV features and outputs a Q-value scalar.
+    Dropout lives here so DroQ re-runs only this lightweight MLP.
+    """
+    def __init__(self, proprio_dim=6, action_dim=2, bev_feat_dim=512, dropout=0.0):
+        super().__init__()
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        fusion_dim = bev_feat_dim + 32 + action_dim
+        layers = [
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+        ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+        layers.extend([
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+        ])
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+        layers.append(nn.Linear(128, 1))
+        self.q_net = nn.Sequential(*layers)
+
+    def forward(self, bev_feats, proprio, action):
+        proprio_feats = self.proprio_encoder(proprio)
+        fused = torch.cat([bev_feats, proprio_feats, action], dim=1)
+        return self.q_net(fused)
+
+
+class SharedBEVCriticPair(nn.Module):
+    """Twin Q-networks sharing a single BEV encoder.
+
+    One UnifiedBEVEncoder is evaluated once per step; its features feed two
+    independent _QHead MLPs. This halves encoder forward passes compared to
+    two separate UnifiedBEVQNetwork instances.
+
+    DroQ dropout lives in the Q-head MLPs only — encoder features are reused
+    across DroQ samples without re-computation.
+    """
+    def __init__(self, action_dim=2, proprio_dim=6, dropout=0.0):
+        super().__init__()
+        self.encoder = UnifiedBEVEncoder(input_channels=2)
+        bev_feat_dim = self.encoder.output_dim
+        self.q1_head = _QHead(proprio_dim, action_dim, bev_feat_dim, dropout)
+        self.q2_head = _QHead(proprio_dim, action_dim, bev_feat_dim, dropout)
+
+    def forward(self, bev_grid, proprio, action):
+        """Encode BEV once, return (q1, q2)."""
+        bev_feats = self.encoder(bev_grid)
+        q1 = self.q1_head(bev_feats, proprio, action)
+        q2 = self.q2_head(bev_feats, proprio, action)
+        return q1, q2
+
+    def encode(self, bev_grid):
+        """Compute BEV features (useful for DroQ where heads run multiple times)."""
+        return self.encoder(bev_grid)
+
+    def forward_q1(self, bev_feats, proprio, action):
+        """Q1 from pre-computed BEV features."""
+        return self.q1_head(bev_feats, proprio, action)
+
+    def forward_q2(self, bev_feats, proprio, action):
+        """Q2 from pre-computed BEV features."""
+        return self.q2_head(bev_feats, proprio, action)
+
