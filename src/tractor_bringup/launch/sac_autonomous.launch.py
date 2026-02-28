@@ -132,6 +132,7 @@ def generate_launch_description():
             "robot_front_offset": 0.06,        # LiDAR center to front bumper (m)
             "robot_half_width": 0.12,          # 97mm half-width + 23mm margin
             "stale_timeout": 0.2,
+            "min_block_duration": 0.3,         # Hold block for 300ms minimum
         }],
     )
     

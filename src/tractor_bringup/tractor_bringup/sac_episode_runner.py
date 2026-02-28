@@ -395,7 +395,7 @@ class SACEpisodeRunner(Node):
         # self.create_subscription(MagneticField, '/imu/mag', self._mag_cb, qos_profile_sensor_data) # Removed due to noise
         self.create_subscription(JointState, '/joint_states', self._joint_cb, 10)
         # self.create_subscription(Float32, '/min_forward_distance', self._dist_cb, 10) # Calculated locally now
-        self.create_subscription(Bool, '/safety_monitor_status', self._safety_cb, 10)
+        self.create_subscription(Bool, '/emergency_stop', self._safety_cb, 10)
         self.create_subscription(Float32, '/velocity_confidence', self._vel_conf_cb, 10)
         # Initialize collection timer
         self._collection_start_time = time.time()
@@ -1332,20 +1332,19 @@ class SACEpisodeRunner(Node):
                 self.get_logger().debug(f'📏 Using LiDAR fallback: Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m')
         
         # Safety Override Logic
-        # Allow rotation if stuck, even if close!
         is_stuck = self._is_stuck
-        
-        # If stuck, RELAX the safety distance to allow zero-turn recovery
-        # But force stop of linear motion if very close
+
+        # Safety monitor blocking (authoritative — from /emergency_stop Bool)
+        monitor_blocking = self._safety_override
+
+        # Depth-camera fallback (independent check, only when monitor isn't blocking)
         if is_stuck and effective_min_dist < 0.12:
-            safety_triggered = False # Allow control, but reward will penalize forward
-            # Force zero linear command in safety check? No, let RL learn it via reward
-            # But limits might be needed to prevent damage
-            if effective_min_dist < 0.05: # Extremely close
-                safety_triggered = True
+            depth_safety = effective_min_dist < 0.05  # Relaxed when stuck
         else:
-             safety_triggered = self._safety_override or effective_min_dist < 0.12
-        
+            depth_safety = not monitor_blocking and effective_min_dist < 0.12
+
+        safety_triggered = monitor_blocking or depth_safety
+
         # ========== SLIP RECOVERY OVERRIDE ==========
         # When slip is detected, FORCE a backup action to free the rover
         # This overrides the policy to ensure recovery happens
@@ -1384,20 +1383,34 @@ class SACEpisodeRunner(Node):
                     f"🔄 Slip Recovery: Backing up L={recovery_left:.2f}, R={recovery_right:.2f} "
                     f"(distance: {self._slip_backup_distance:.3f}m/{self.SLIP_BACKUP_LIMIT:.2f}m)"
                 )
-        elif safety_triggered:
-            # Override: Stop and reverse slightly
-            if effective_min_dist < 0.12 and self._sensor_warmup_complete:
-                self.get_logger().warn(f"🛑 Safety Stop! MinDist={effective_min_dist:.3f}m (Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m)")
-                 
+        elif monitor_blocking:
+            # Safety monitor is BLOCKING — send ZERO, don't fight with backward
+            # commands that cause oscillation. The safety monitor handles
+            # direction-specific gating (allows turning/backward on its own).
+            self.get_logger().warn(
+                f"🛑 Monitor Block! front blocked by safety monitor",
+                throttle_duration_sec=1.0)
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            actual_action = np.array([0.0, 0.0])
+            collision = self._sensor_warmup_complete
+
+            if hasattr(self, '_slip_recovery_turn_dir'):
+                delattr(self, '_slip_recovery_turn_dir')
+            if hasattr(self, '_slip_recovery_log_count'):
+                delattr(self, '_slip_recovery_log_count')
+        elif depth_safety:
+            # Depth-camera-only detection — safety monitor hasn't blocked
+            # (LiDAR may not see this obstacle). Back up slightly.
+            self.get_logger().warn(
+                f"🛑 Depth Safety! MinDist={effective_min_dist:.3f}m "
+                f"(Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m)",
+                throttle_duration_sec=1.0)
             cmd.linear.x = -0.05
             cmd.angular.z = 0.0
-            actual_action = np.array([-0.5, -0.5])  # Both tracks back = reverse
-            
-            # Only mark as collision if sensors are warmed up
-            # During warmup, still stop but don't trigger episode resets
+            actual_action = np.array([-0.5, -0.5])
             collision = self._sensor_warmup_complete
-            
-            # Reset slip recovery turn direction for next time
+
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
             if hasattr(self, '_slip_recovery_log_count'):

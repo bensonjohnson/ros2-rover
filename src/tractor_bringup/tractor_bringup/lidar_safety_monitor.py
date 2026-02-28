@@ -12,9 +12,10 @@ Behavior:
 - Side sectors: block turns toward nearby obstacles when moving.
 - Rear sector: blocks backward movement toward obstacles.
 - Pure rotation (zero-turn) is always allowed for escaping tight spaces.
+- Minimum hold time prevents rapid oscillation between BLOCKED/CLEAR states.
 
-For tank-steer rovers this allows intelligent avoidance — the rover can
-always turn away from or back away from an obstacle.
+The front blocked state is updated scan-driven (not per-command) and published
+continuously on /emergency_stop so upstream nodes can respect it.
 """
 
 import numpy as np
@@ -50,6 +51,7 @@ class LidarSafetyMonitor(Node):
         self.declare_parameter('max_eval_distance', 4.0)
         self.declare_parameter('min_valid_range', 0.05)
         self.declare_parameter('stale_timeout', 0.2)
+        self.declare_parameter('min_block_duration', 0.3)  # Minimum hold time (seconds)
 
         # Robot geometry
         self.declare_parameter('robot_front_offset', 0.06)  # LiDAR to front bumper (m)
@@ -77,7 +79,7 @@ class LidarSafetyMonitor(Node):
         self._sector_stopped = {
             'front': False, 'left': False, 'right': False, 'rear': False
         }
-        self._last_estop_state = False
+        self._front_blocked_time = None   # Timestamp when front block started
         self._last_scan_time = self.get_clock().now()
 
         # Subscribers
@@ -95,7 +97,7 @@ class LidarSafetyMonitor(Node):
         self.min_distance_pub = self.create_publisher(Float32, 'min_forward_distance', 5)
         self.sector_dist_pub = self.create_publisher(Float32MultiArray, 'sector_distances', 5)
 
-        # Status timer
+        # Status timer (10Hz)
         self.create_timer(0.1, self._publish_status)
 
         self.get_logger().info('Path-based LIDAR safety monitor initialized')
@@ -116,6 +118,7 @@ class LidarSafetyMonitor(Node):
         self.max_distance = float(self.get_parameter('max_eval_distance').value)
         self.min_valid_range = float(self.get_parameter('min_valid_range').value)
         self.stale_timeout = float(self.get_parameter('stale_timeout').value)
+        self.min_block_duration = float(self.get_parameter('min_block_duration').value)
         self.robot_front_offset = float(self.get_parameter('robot_front_offset').value)
         self.robot_half_width = float(self.get_parameter('robot_half_width').value)
 
@@ -125,9 +128,9 @@ class LidarSafetyMonitor(Node):
         self.get_logger().info(
             f'Params: Stop={self.stop_dist:.2f}m  Slow={self.slow_dist:.2f}m  '
             f'Resume={self.resume_dist:.2f}m  '
+            f'MinHold={self.min_block_duration:.2f}s  '
             f'HalfWidth={self.robot_half_width:.3f}m  '
-            f'FrontOffset={self.robot_front_offset:.3f}m  '
-            f'StaleTimeout={self.stale_timeout:.2f}s'
+            f'FrontOffset={self.robot_front_offset:.3f}m'
         )
 
     def _parameters_callback(self, params):
@@ -146,15 +149,21 @@ class LidarSafetyMonitor(Node):
                 self.robot_half_width = param.value
             elif param.name == 'stale_timeout':
                 self.stale_timeout = param.value
+            elif param.name == 'min_block_duration':
+                self.min_block_duration = param.value
         self._log_params()
         return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------
-    # Scan processing
+    # Scan processing — updates distances AND front blocked state
     # ------------------------------------------------------------------
 
     def scan_callback(self, msg: LaserScan) -> None:
-        """Process LIDAR scan with path-based front detection."""
+        """Process LIDAR scan with path-based front detection.
+
+        The front blocked state is updated here (scan-driven) with hysteresis
+        and a minimum hold time to prevent oscillation.
+        """
         self._last_scan_time = self.get_clock().now()
 
         try:
@@ -173,6 +182,8 @@ class LidarSafetyMonitor(Node):
                 for k in self._sector_dists:
                     self._sector_dists[k] = self.max_distance
                 self._min_overall_dist = self.max_distance
+                self._update_front_blocked_state()
+                self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
                 return
 
             r = ranges[valid]
@@ -193,6 +204,9 @@ class LidarSafetyMonitor(Node):
             else:
                 self._front_path_dist = self.max_distance
 
+            # === Update front blocked state (scan-driven) ===
+            self._update_front_blocked_state()
+
             # === SIDES & REAR: sector-based using absolute angle ===
             abs_a = np.abs(a)
             left_mask = (a > _SIDE_MIN) & (a < _SIDE_MAX)
@@ -206,15 +220,56 @@ class LidarSafetyMonitor(Node):
             self._sector_dists['rear'] = float(np.min(r[rear_mask])) if np.any(rear_mask) else max_d
             self._min_overall_dist = min(self._sector_dists.values())
 
+            # Publish estop on every scan so subscribers always have latest state
+            self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
+
         except Exception as exc:
             self.get_logger().warn(f'LIDAR processing error: {exc}')
+
+    def _update_front_blocked_state(self) -> None:
+        """Update front blocked state with hysteresis and minimum hold time.
+
+        - Block when front_path_dist < stop_dist
+        - Release when front_path_dist > resume_dist AND min_block_duration has elapsed
+        - Prevents rapid oscillation that confuses the motor controller
+        """
+        now = self.get_clock().now()
+
+        if self._sector_stopped['front']:
+            # Currently blocked — release only if BOTH conditions met:
+            # 1. Distance exceeds resume threshold (hysteresis)
+            # 2. Minimum hold time has elapsed
+            if self._front_path_dist > self.resume_dist:
+                if self._front_blocked_time is not None:
+                    elapsed = (now - self._front_blocked_time).nanoseconds / 1e9
+                    if elapsed >= self.min_block_duration:
+                        self._sector_stopped['front'] = False
+                        self._front_blocked_time = None
+                        self.get_logger().info(
+                            f'CLEAR (held {elapsed:.1f}s, dist={self._front_path_dist:.2f}m)')
+                else:
+                    # Edge case: no blocked_time recorded
+                    self._sector_stopped['front'] = False
+        else:
+            # Currently clear — block if too close
+            if self._front_path_dist < self.stop_dist:
+                self._sector_stopped['front'] = True
+                self._front_blocked_time = now
+                self._emergency_stops += 1
+                self.get_logger().warn(
+                    f'BLOCKED front={self._front_path_dist:.2f}m '
+                    f'(stop={self.stop_dist:.2f}m)')
 
     # ------------------------------------------------------------------
     # Command gating
     # ------------------------------------------------------------------
 
     def cmd_callback(self, msg: Twist) -> None:
-        """Gate velocity commands based on obstacle proximity."""
+        """Gate velocity commands based on obstacle proximity.
+
+        Front blocked state is already managed by scan_callback — this only
+        applies the gating to individual commands without updating state.
+        """
         self._latest_cmd = msg
         self._commands_received += 1
 
@@ -226,34 +281,21 @@ class LidarSafetyMonitor(Node):
         out_cmd.angular.y = msg.angular.y
         out_cmd.angular.z = msg.angular.z
 
-        estop_active = False
-        blocked_sectors = []
-
         time_since_scan = (self.get_clock().now() - self._last_scan_time).nanoseconds / 1e9
 
         if time_since_scan > self.stale_timeout:
             # No recent scan — stop everything
             out_cmd.linear.x = 0.0
             out_cmd.angular.z = 0.0
-            estop_active = True
             if self._commands_received % 30 == 0:
                 self.get_logger().warn(f'STALE DATA ({time_since_scan:.2f}s) — stopping')
         else:
             front_dist = self._front_path_dist
 
-            # --- Update front stopped state (hysteresis) ---
-            if self._sector_stopped['front']:
-                if front_dist > self.resume_dist:
-                    self._sector_stopped['front'] = False
-            else:
-                if front_dist < self.stop_dist:
-                    self._sector_stopped['front'] = True
-
-            # --- FRONT: only block forward linear.x, keep angular.z ---
+            # --- FRONT: block forward linear.x, keep angular.z for turning ---
             if self._sector_stopped['front'] and msg.linear.x > 0:
                 out_cmd.linear.x = 0.0
-                estop_active = True
-                blocked_sectors.append('front')
+                self._commands_blocked += 1
             elif msg.linear.x > 0.01 and front_dist < self.slow_dist:
                 # Gradual slowdown in the slow zone
                 scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
@@ -268,12 +310,10 @@ class LidarSafetyMonitor(Node):
                         self._sector_stopped['rear'] = False
                     else:
                         out_cmd.linear.x = 0.0
-                        blocked_sectors.append('rear')
                 else:
                     if rear_dist < self.stop_dist:
                         self._sector_stopped['rear'] = True
                         out_cmd.linear.x = 0.0
-                        blocked_sectors.append('rear')
 
             # --- SIDES: block turns toward obstacles when moving ---
             is_zero_turn = abs(msg.linear.x) < 0.05
@@ -286,12 +326,10 @@ class LidarSafetyMonitor(Node):
                             self._sector_stopped['left'] = False
                         else:
                             out_cmd.angular.z = 0.0
-                            blocked_sectors.append('left')
                     else:
                         if left_dist < self.stop_dist:
                             self._sector_stopped['left'] = True
                             out_cmd.angular.z = 0.0
-                            blocked_sectors.append('left')
 
                 if msg.angular.z < -0.05:
                     right_dist = self._sector_dists['right']
@@ -300,30 +338,14 @@ class LidarSafetyMonitor(Node):
                             self._sector_stopped['right'] = False
                         else:
                             out_cmd.angular.z = 0.0
-                            blocked_sectors.append('right')
                     else:
                         if right_dist < self.stop_dist:
                             self._sector_stopped['right'] = True
                             out_cmd.angular.z = 0.0
-                            blocked_sectors.append('right')
             else:
                 # Pure rotation — always allow, clear side stops
                 self._sector_stopped['left'] = False
                 self._sector_stopped['right'] = False
-
-        # --- Publish estop transitions ---
-        if estop_active != self._last_estop_state:
-            self.estop_pub.publish(Bool(data=estop_active))
-            self._last_estop_state = estop_active
-            if estop_active:
-                self._emergency_stops += 1
-                s = ', '.join(blocked_sectors) if blocked_sectors else 'stale'
-                self.get_logger().warn(f'BLOCKED ({s}) front={self._front_path_dist:.2f}m')
-            else:
-                self.get_logger().info('CLEAR')
-
-        if blocked_sectors:
-            self._commands_blocked += 1
 
         self.cmd_pub.publish(out_cmd)
 
@@ -342,6 +364,9 @@ class LidarSafetyMonitor(Node):
             float(self._sector_dists['rear']),
         ]
         self.sector_dist_pub.publish(sector_msg)
+
+        # Publish estop continuously so late-joining subscribers get current state
+        self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
 
         blocked = [s for s, v in self._sector_stopped.items() if v]
         f = self._sector_dists
