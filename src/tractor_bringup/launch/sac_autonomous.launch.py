@@ -124,14 +124,14 @@ def generate_launch_description():
             "scan_topic": "/scan",
             "input_cmd_topic": "/cmd_vel_ai",
             "output_cmd_topic": "/cmd_vel",
-            "stop_distance": 0.35,
-            "slow_distance": 0.60,
-            "hysteresis": 0.15,
+            "stop_distance": 0.25,             # Hard stop 250mm from bumper
+            "slow_distance": 0.50,             # Start slowing 500mm from bumper
+            "hysteresis": 0.10,                # Resume at stop + 100mm
             "min_valid_range": 0.05,
             "max_eval_distance": 5.0,
-            "robot_front_offset": 0.06,       # LiDAR center to front bumper (m)
-            "front_sector_half_angle": 55.0,   # ±55° front sector to cover corners
-            "stale_timeout": 0.2,              # 200ms stale scan timeout for 10Hz LiDAR
+            "robot_front_offset": 0.06,        # LiDAR center to front bumper (m)
+            "robot_half_width": 0.12,          # 97mm half-width + 23mm margin
+            "stale_timeout": 0.2,
         }],
     )
     
