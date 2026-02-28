@@ -666,7 +666,7 @@ class SACEpisodeRunner(Node):
         
         return np.clip(bonus, 0.0, 0.15)
     
-    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision, is_stuck, is_slipping=False, slip_recovery_active=False):
+    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist, side_clearance, collision, is_stuck, is_slipping=False, slip_recovery_active=False, safety_blocked=False):
         """
         Direct Track Control reward function:
         - action[0] = left track speed (-1 to 1)
@@ -900,6 +900,22 @@ class SACEpisodeRunner(Node):
             backup_bonus = 0.2 * abs(linear_vel)
             reward += backup_bonus
             
+        # 18. SAFETY MONITOR BLOCKED PENALTY
+        # Penalize being close enough that the safety monitor had to intervene.
+        # The idle penalty alone (~0.1) is too mild — this teaches the model to
+        # maintain safe distances proactively rather than relying on the monitor.
+        if safety_blocked:
+            reward -= 0.3  # Significant per-step penalty for triggering the monitor
+
+            # Reward rotation attempts to escape (model should learn to turn away)
+            rot_effort = abs(left_track - right_track)
+            if rot_effort > 0.3:
+                reward += 0.15 * rot_effort
+
+            # Reward backward attempts to create distance
+            if linear_vel < -0.02:
+                reward += 0.1
+
         # Always update previous clearance for next step (moved outside conditional)
         self._prev_min_clearance = min_lidar_dist
 
@@ -1494,7 +1510,8 @@ class SACEpisodeRunner(Node):
             actual_action, current_linear, current_angular,
             lidar_min, lidar_sides, collision, is_stuck,
             is_slipping=self._slip_detected,
-            slip_recovery_active=self._slip_recovery_active
+            slip_recovery_active=self._slip_recovery_active,
+            safety_blocked=monitor_blocking
         )
 
         # Safety check: NaN in reward
@@ -1734,6 +1751,16 @@ class SACEpisodeRunner(Node):
         else:
             components['wall_avoid'] = 0.0
 
+        # Safety Monitor Blocked
+        components['safety_block'] = 0.0
+        if self._safety_override:
+            components['safety_block'] = -0.3
+            rot_effort = abs(left_track - right_track)
+            if rot_effort > 0.3:
+                components['safety_block'] += 0.15 * rot_effort
+            if linear_vel < -0.02:
+                components['safety_block'] += 0.1
+
         # Log
         total = sum(components.values())
         self.get_logger().info(
@@ -1743,7 +1770,7 @@ class SACEpisodeRunner(Node):
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
             f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
             f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
-            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f}"
+            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} SafeBlock={components['safety_block']:+.2f}"
         )
     
     def _check_phase_transition(self):
