@@ -292,12 +292,11 @@ class LidarSafetyMonitor(Node):
         else:
             front_dist = self._front_path_dist
 
-            # --- FRONT: block forward, add backward bias for drift compensation ---
-            # Tank steering can't perfectly zero-turn — it drifts forward.
-            # When blocked, enforce a slight backward bias so the robot creates
-            # distance while turning. Backward commands pass through unchanged.
+            # --- FRONT: block all forward motion ---
+            # When blocked, hard-zero any forward command. Allow backward commands
+            # to pass through so the rover can reverse away from obstacles.
             if self._sector_stopped['front']:
-                out_cmd.linear.x = min(msg.linear.x, -0.06)
+                out_cmd.linear.x = min(msg.linear.x, 0.0)
                 if msg.linear.x > 0:
                     self._commands_blocked += 1
             elif msg.linear.x > 0.01 and front_dist < self.slow_dist:
@@ -307,7 +306,6 @@ class LidarSafetyMonitor(Node):
                 out_cmd.linear.x = msg.linear.x * scale
 
             # --- REAR: only block backward linear.x ---
-            # Check out_cmd (not msg) because front block may have added backward bias
             if out_cmd.linear.x < -0.01:
                 rear_dist = self._sector_dists['rear']
                 if self._sector_stopped['rear']:
