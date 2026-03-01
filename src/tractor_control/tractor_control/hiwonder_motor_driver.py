@@ -10,7 +10,7 @@ and publishes odometry, joint states, and battery information.
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, TransformStamped
-from std_msgs.msg import Float32MultiArray, Float32
+from std_msgs.msg import Bool, Float32MultiArray, Float32
 from sensor_msgs.msg import JointState, Imu
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
@@ -197,12 +197,18 @@ class HiwonderMotorDriver(Node):
         self.last_cmd_vel_msg_time = time.time()
         self.watchdog_last_active = True  # motors considered active until proven idle
 
+        # Front-blocked state from safety monitor (independent safety layer)
+        self._front_blocked = False
+
         # Subscribers
         self.cmd_vel_sub = self.create_subscription(
             Twist, "cmd_vel", self.cmd_vel_callback, 10
         )
         self.imu_sub = self.create_subscription(
             Imu, "/imu/data", self.imu_callback, 10
+        )
+        self.estop_sub = self.create_subscription(
+            Bool, "/emergency_stop", self._estop_callback, 10
         )
 
         # Publishers
@@ -480,6 +486,9 @@ class HiwonderMotorDriver(Node):
             )
             return None
 
+    def _estop_callback(self, msg):
+        self._front_blocked = msg.data
+
     def cmd_vel_callback(self, msg):
         """Convert twist command to tank steering motor speeds"""
         linear_vel = msg.linear.x
@@ -494,6 +503,16 @@ class HiwonderMotorDriver(Node):
         # Tank steering kinematics
         left_speed = linear_vel - (angular_vel * self.wheel_separation / 2.0)
         right_speed = linear_vel + (angular_vel * self.wheel_separation / 2.0)
+
+        # SAFETY: When front is blocked, clamp each track to <= 0.
+        # A rotation command (linear=0, angular!=0) still drives one track
+        # forward, pushing the robot into the obstacle on tank treads.
+        # Clamping to zero converts zero-turns into pivot turns (one track
+        # stopped, one backward) — the robot can still rotate to escape
+        # but won't push into obstacles.
+        if self._front_blocked:
+            left_speed = min(left_speed, 0.0)
+            right_speed = min(right_speed, 0.0)
 
         # Convert to motor speeds (-max_motor_speed to max_motor_speed)
         left_motor = int(left_speed * self.max_motor_speed)
