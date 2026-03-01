@@ -210,6 +210,9 @@ class HiwonderMotorDriver(Node):
         self.estop_sub = self.create_subscription(
             Bool, "/emergency_stop", self._estop_callback, 10
         )
+        self.track_cmd_sub = self.create_subscription(
+            Float32MultiArray, "track_cmd", self.track_cmd_callback, 10
+        )
 
         # Publishers
         self.motor_speeds_pub = self.create_publisher(
@@ -532,6 +535,45 @@ class HiwonderMotorDriver(Node):
 
         if left_motor != 0 or right_motor != 0:
             self.get_logger().debug(f"Motor speeds: L={left_motor}, R={right_motor}")
+
+        # Update watchdog timestamp
+        self.last_cmd_vel_msg_time = time.time()
+
+    def track_cmd_callback(self, msg):
+        """Direct track speed control [-1, 1] → motor speeds.
+
+        Receives Float32MultiArray with data[0]=left, data[1]=right.
+        Maps directly to full motor speed range (0-100), bypassing
+        the Twist → differential-drive conversion.
+        """
+        if len(msg.data) < 2:
+            return
+
+        left_track = float(msg.data[0])
+        right_track = float(msg.data[1])
+
+        # SAFETY: When front is blocked, clamp each track to <= 0
+        if self._front_blocked:
+            left_track = min(left_track, 0.0)
+            right_track = min(right_track, 0.0)
+
+        # Map [-1, 1] directly to motor speed range
+        left_motor = int(left_track * self.max_motor_speed)
+        right_motor = int(right_track * self.max_motor_speed)
+
+        # Clamp
+        left_motor = max(-self.max_motor_speed, min(self.max_motor_speed, left_motor))
+        right_motor = max(-self.max_motor_speed, min(self.max_motor_speed, right_motor))
+
+        self.send_motor_speeds(left_motor, right_motor)
+
+        # Publish motor speeds for feedback
+        motor_msg = Float32MultiArray()
+        motor_msg.data = [float(left_motor), float(right_motor)]
+        self.motor_speeds_pub.publish(motor_msg)
+
+        if left_motor != 0 or right_motor != 0:
+            self.get_logger().debug(f"Track cmd: L={left_motor}, R={right_motor}")
 
         # Update watchdog timestamp
         self.last_cmd_vel_msg_time = time.time()

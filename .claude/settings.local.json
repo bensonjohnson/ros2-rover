@@ -19,7 +19,9 @@
       "Bash(find:*)",
       "Bash(grep:*)",
       "Bash(cat:*)",
-      "Bash(ros2 node list:*)"
+      "Bash(ros2 node list:*)",
+      "Bash(python3:*)",
+      "Bash(python3.12:*)"
     ],
     "deny": [],
     "ask": []

@@ -122,8 +122,10 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "scan_topic": "/scan",
-            "input_cmd_topic": "/cmd_vel_ai",
+            "input_cmd_topic": "/cmd_vel_teleop",  # Twist path for teleop only
             "output_cmd_topic": "/cmd_vel",
+            "input_track_topic": "/track_cmd_ai",   # Direct track input from SAC
+            "output_track_topic": "/track_cmd",      # Gated track output to motor driver
             "stop_distance": 0.30,             # Hard stop 300mm from bumper
             "slow_distance": 0.60,             # Start slowing 600mm from bumper
             "hysteresis": 0.10,                # Resume at stop + 100mm

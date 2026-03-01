@@ -43,6 +43,8 @@ class LidarSafetyMonitor(Node):
         self.declare_parameter('scan_topic', '/scan')
         self.declare_parameter('input_cmd_topic', 'cmd_vel_teleop')
         self.declare_parameter('output_cmd_topic', 'cmd_vel_raw')
+        self.declare_parameter('input_track_topic', '')   # Empty = disabled
+        self.declare_parameter('output_track_topic', '')  # Empty = disabled
 
         # Safety thresholds
         self.declare_parameter('stop_distance', 0.20)
@@ -90,6 +92,20 @@ class LidarSafetyMonitor(Node):
             Twist, self.input_cmd_topic, self.cmd_callback, 10
         )
 
+        # Track command path (direct track control, disabled by default)
+        if self.input_track_topic and self.output_track_topic:
+            self.track_cmd_sub = self.create_subscription(
+                Float32MultiArray, self.input_track_topic, self.track_cmd_callback, 10
+            )
+            self.track_cmd_pub = self.create_publisher(
+                Float32MultiArray, self.output_track_topic, 10
+            )
+            self.get_logger().info(
+                f'Track path enabled: {self.input_track_topic} -> {self.output_track_topic}')
+        else:
+            self.track_cmd_sub = None
+            self.track_cmd_pub = None
+
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, self.output_cmd_topic, 10)
         self.estop_pub = self.create_publisher(Bool, 'emergency_stop', 10)
@@ -111,6 +127,8 @@ class LidarSafetyMonitor(Node):
         self.scan_topic = str(self.get_parameter('scan_topic').value)
         self.input_cmd_topic = str(self.get_parameter('input_cmd_topic').value)
         self.output_cmd_topic = str(self.get_parameter('output_cmd_topic').value)
+        self.input_track_topic = str(self.get_parameter('input_track_topic').value)
+        self.output_track_topic = str(self.get_parameter('output_track_topic').value)
 
         self.stop_dist = float(self.get_parameter('stop_distance').value)
         self.slow_dist = float(self.get_parameter('slow_distance').value)
@@ -277,6 +295,87 @@ class LidarSafetyMonitor(Node):
     # ------------------------------------------------------------------
     # Command gating
     # ------------------------------------------------------------------
+
+    def track_cmd_callback(self, msg: Float32MultiArray) -> None:
+        """Gate direct track commands based on obstacle proximity.
+
+        Receives Float32MultiArray with data[0]=left, data[1]=right in [-1, 1].
+        Applies the same safety logic as cmd_callback but in track space,
+        preserving the track ratio where possible.
+        """
+        if len(msg.data) < 2:
+            return
+
+        left = float(msg.data[0])
+        right = float(msg.data[1])
+
+        # Synthesize Twist for arc-based corridor detection in scan_callback
+        # linear.x = average track speed * max_linear_speed_approx
+        # angular.z = differential / wheel_separation
+        wheel_sep = 0.154
+        synth_cmd = Twist()
+        synth_cmd.linear.x = (left + right) / 2.0 * 0.154
+        synth_cmd.angular.z = (right - left) / wheel_sep
+        self._latest_cmd = synth_cmd
+
+        time_since_scan = (self.get_clock().now() - self._last_scan_time).nanoseconds / 1e9
+
+        if time_since_scan > self.stale_timeout:
+            # No recent scan — stop
+            left = 0.0
+            right = 0.0
+        else:
+            front_dist = self._front_path_dist
+
+            # --- FRONT: block all forward motion per-track ---
+            if self._sector_stopped['front']:
+                left = min(left, 0.0)
+                right = min(right, 0.0)
+            elif front_dist < self.slow_dist:
+                # Slow zone: scale both tracks uniformly (preserves turn ratio)
+                if max(left, right) > 0.01:
+                    scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
+                    scale = max(0.0, min(1.0, scale))
+                    if left > 0:
+                        left *= scale
+                    if right > 0:
+                        right *= scale
+
+            # --- REAR: block backward motion ---
+            if min(left, right) < -0.01:
+                rear_dist = self._sector_dists['rear']
+                if self._sector_stopped['rear']:
+                    if rear_dist > self.resume_dist:
+                        self._sector_stopped['rear'] = False
+                    else:
+                        left = max(left, 0.0)
+                        right = max(right, 0.0)
+                else:
+                    if rear_dist < self.stop_dist:
+                        self._sector_stopped['rear'] = True
+                        left = max(left, 0.0)
+                        right = max(right, 0.0)
+
+            # --- SIDES: during forward+turn, equalize tracks to go straight ---
+            avg_forward = (left + right) / 2.0
+            is_zero_turn = abs(avg_forward) < 0.05 and abs(left - right) > 0.1
+
+            if not is_zero_turn and avg_forward > 0.01:
+                turn_amount = right - left  # positive = turning left
+                if turn_amount > 0.1:
+                    # Turning left — check left side
+                    side_dist = self._sector_dists['left']
+                    if side_dist < self.stop_dist:
+                        left = right  # Equalize to go straight
+                elif turn_amount < -0.1:
+                    # Turning right — check right side
+                    side_dist = self._sector_dists['right']
+                    if side_dist < self.stop_dist:
+                        right = left  # Equalize to go straight
+
+        out_msg = Float32MultiArray()
+        out_msg.data = [left, right]
+        self.track_cmd_pub.publish(out_msg)
 
     def cmd_callback(self, msg: Twist) -> None:
         """Gate velocity commands based on obstacle proximity.

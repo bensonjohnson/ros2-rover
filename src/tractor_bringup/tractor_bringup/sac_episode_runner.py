@@ -53,8 +53,7 @@ def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, LaserScan
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float32, Bool
-from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32, Bool, Float32MultiArray
 from std_srvs.srv import Trigger
 
 # RKNN Support
@@ -401,7 +400,7 @@ class SACEpisodeRunner(Node):
         self._collection_start_time = time.time()
 
     def _setup_publishers(self):
-        self.cmd_pub = self.create_publisher(Twist, 'cmd_vel_ai', 10)
+        self.track_cmd_pub = self.create_publisher(Float32MultiArray, 'track_cmd_ai', 10)
 
     # Callbacks
     # RGB callback removed - depth-only mode
@@ -937,7 +936,9 @@ class SACEpisodeRunner(Node):
         # 0. Wait for Initial Handshake
         if not self._initial_sync_done.is_set():
             # Publish stop command and wait
-            self.cmd_pub.publish(Twist())
+            stop_msg = Float32MultiArray()
+            stop_msg.data = [0.0, 0.0]
+            self.track_cmd_pub.publish(stop_msg)
             return
 
         if not self._model_ready:
@@ -1335,7 +1336,8 @@ class SACEpisodeRunner(Node):
                 action = np.clip(np.random.normal(0, 0.5, size=2), -1.0, 1.0) if not self._is_eval_episode else np.zeros(2)
 
         # 4. Execute Action
-        cmd = Twist()
+        left_track = 0.0
+        right_track = 0.0
 
         # SENSOR WARMUP: Count down before enabling safety-triggered resets
         # This prevents false positives from unstable sensor data during startup
@@ -1389,15 +1391,10 @@ class SACEpisodeRunner(Node):
             MIN_TRACK = 0.25
             recovery_left = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_left), recovery_left)
             recovery_right = math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_right), recovery_right)
-            
-            # Convert to Twist (must match motor driver's wheel_separation=0.154)
-            wheel_sep = 0.154
-            linear_vel_recovery = (recovery_left + recovery_right) / 2.0
-            angular_vel_recovery = (recovery_right - recovery_left) / wheel_sep
-            
-            cmd.linear.x = float(linear_vel_recovery * self._curriculum_max_speed)
-            cmd.angular.z = float(angular_vel_recovery * self.max_angular)
-            
+
+            left_track = float(recovery_left)
+            right_track = float(recovery_right)
+
             actual_action = np.array([recovery_left, recovery_right])
             collision = False
             
@@ -1417,9 +1414,6 @@ class SACEpisodeRunner(Node):
             # allows rotation and backward).
 
             # Still run normal action computation so model can learn
-            left_track = action[0]
-            right_track = action[1]
-
             def apply_soft_deadzone(val, min_val):
                 if abs(val) < 0.001: return 0.0
                 return math.copysign(min_val + (1.0 - min_val) * abs(val), val)
@@ -1428,23 +1422,15 @@ class SACEpisodeRunner(Node):
             left_track = apply_soft_deadzone(action[0], MIN_TRACK)
             right_track = apply_soft_deadzone(action[1], MIN_TRACK)
 
-            wheel_sep = 0.154
-            linear_vel = (left_track + right_track) / 2.0
-            angular_vel = (right_track - left_track) / wheel_sep
-
-            max_speed = self.max_linear if self._current_model_version <= 0 else self._curriculum_max_speed
-            cmd.linear.x = float(linear_vel * max_speed)
-            cmd.angular.z = float(angular_vel * self.max_angular)
-
-            # Clamp forward motion — only allow zero or backward
-            if cmd.linear.x > 0:
-                cmd.linear.x = 0.0
+            # Clamp forward motion — only allow zero or backward per-track
+            left_track = min(left_track, 0.0)
+            right_track = min(right_track, 0.0)
 
             actual_action = np.array([left_track, right_track])
             collision = False  # Not a collision, just blocked — let model learn
 
             self.get_logger().warn(
-                f"🛑 Monitor Block! Allowing turn/backup: lin={cmd.linear.x:.3f} ang={cmd.angular.z:.2f}",
+                f"🛑 Monitor Block! Tracks: L={left_track:.2f} R={right_track:.2f}",
                 throttle_duration_sec=1.0)
 
             if hasattr(self, '_slip_recovery_turn_dir'):
@@ -1458,9 +1444,9 @@ class SACEpisodeRunner(Node):
                 f"🛑 Depth Safety! MinDist={effective_min_dist:.3f}m "
                 f"(Depth={self._min_forward_dist:.3f}m, LiDAR={lidar_min:.3f}m)",
                 throttle_duration_sec=1.0)
-            cmd.linear.x = -0.05
-            cmd.angular.z = 0.0
-            actual_action = np.array([-0.5, -0.5])
+            left_track = -0.3
+            right_track = -0.3
+            actual_action = np.array([-0.3, -0.3])
             collision = self._sensor_warmup_complete
 
             if hasattr(self, '_slip_recovery_turn_dir'):
@@ -1489,21 +1475,8 @@ class SACEpisodeRunner(Node):
             
             left_track = apply_soft_deadzone(action[0], MIN_TRACK)
             right_track = apply_soft_deadzone(action[1], MIN_TRACK)
-            
-            # Convert track speeds to linear/angular for Twist message
-            # linear = (left + right) / 2
-            # angular = (right - left) / wheel_separation
-            # MUST match motor driver's wheel_separation for round-trip consistency
-            wheel_sep = 0.154  # meters (matches hiwonder_motor_driver param)
-            linear_vel = (left_track + right_track) / 2.0
-            angular_vel = (right_track - left_track) / wheel_sep
-            
-            # Apply velocity scaling
-            max_speed = self.max_linear if self._current_model_version <= 0 else self._curriculum_max_speed
-            cmd.linear.x = float(linear_vel * max_speed)
-            cmd.angular.z = float(angular_vel * self.max_angular)
-            
-            # Record actual track commands (not converted values)
+
+            # Record actual track commands (direct, no Twist conversion)
             actual_action = np.array([left_track, right_track])
             collision = False
 
@@ -1512,7 +1485,9 @@ class SACEpisodeRunner(Node):
             # Store actual executed action for diversity tracking
             self._prev_actions_buffer.append(actual_action.copy())
 
-        self.cmd_pub.publish(cmd)
+        track_msg = Float32MultiArray()
+        track_msg.data = [float(left_track), float(right_track)]
+        self.track_cmd_pub.publish(track_msg)
 
         # 5. Compute Reward
         # Note: current_linear and current_angular already extracted earlier for proprioception
