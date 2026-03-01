@@ -196,9 +196,23 @@ class LidarSafetyMonitor(Node):
             # Forward distance from front bumper
             x_bumper = x - self.robot_front_offset
 
-            # === FRONT: path-based — only points within robot width ===
+            # === FRONT: path-based — points within the robot's swept path ===
+            # When turning, shift the detection corridor laterally to follow
+            # the arc the robot will actually drive.  This closes the blind
+            # spot between the straight-ahead corridor and the side sectors.
             hw = self.robot_half_width
-            in_path = (np.abs(y) <= hw) & (x_bumper > 0)
+            cmd = self._latest_cmd
+            if (cmd is not None
+                    and cmd.linear.x > 0.02
+                    and abs(cmd.angular.z) > 0.1):
+                v = max(cmd.linear.x, 0.05)
+                w = cmd.angular.z  # positive = turning left
+                x_fwd = np.maximum(x_bumper, 0.0)
+                # Arc lateral offset: R*(1-cos(x/R)) ≈ w*x²/(2v)
+                y_shift = np.clip(w * x_fwd * x_fwd / (2.0 * v), -0.30, 0.30)
+                in_path = (np.abs(y - y_shift) <= hw) & (x_bumper > 0)
+            else:
+                in_path = (np.abs(y) <= hw) & (x_bumper > 0)
             if np.any(in_path):
                 self._front_path_dist = max(float(np.min(x_bumper[in_path])), 0.0)
             else:
@@ -317,6 +331,17 @@ class LidarSafetyMonitor(Node):
                     if rear_dist < self.stop_dist:
                         self._sector_stopped['rear'] = True
                         out_cmd.linear.x = 0.0
+
+            # --- FORWARD+TURN: slow/stop forward speed toward turn-side obstacles ---
+            # When curving, the rover sweeps into the turn side. Scale down
+            # forward speed proportionally to the turn-side obstacle distance.
+            if out_cmd.linear.x > 0.01 and abs(msg.angular.z) > 0.1:
+                turn_side = 'left' if msg.angular.z > 0 else 'right'
+                side_dist = self._sector_dists[turn_side]
+                if side_dist < self.slow_dist:
+                    side_scale = max(0.0, min(1.0,
+                        (side_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)))
+                    out_cmd.linear.x *= side_scale
 
             # --- SIDES: block turns toward obstacles when moving ---
             is_zero_turn = abs(msg.linear.x) < 0.05
