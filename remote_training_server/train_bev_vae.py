@@ -103,9 +103,11 @@ def train_autoencoder(args):
         except Exception as e:
             print(f"⚠️ torch.compile failed: {e}")
 
-    # We use MSELoss for reconstruction
-    criterion = nn.MSELoss()
+    # BCE is the correct loss for binary occupancy grids — penalizes confident
+    # wrong predictions harder than MSE, producing sharper reconstructions.
+    criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     
     # --- PERFORMANCE OPTIMIZATION: Automatic Mixed Precision (AMP) ---
     use_amp = device.type == 'cuda'
@@ -145,9 +147,11 @@ def train_autoencoder(args):
             if batch_idx % 100 == 0:
                 print(f"Epoch {epoch}/{args.epochs} [{batch_idx}/{len(dataloader)}] - Loss: {loss.item():.6f}")
 
+        scheduler.step()
         avg_loss = epoch_loss / len(dataloader)
         elapsed = time.time() - start_time
-        print(f"==== Epoch {epoch} Summary ==== Avg Loss: {avg_loss:.6f} | Time: {elapsed:.2f}s")
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"==== Epoch {epoch} Summary ==== Avg Loss: {avg_loss:.6f} | LR: {current_lr:.6f} | Time: {elapsed:.2f}s")
 
         # Save best model
         if avg_loss < best_loss:
