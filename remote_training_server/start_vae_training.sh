@@ -17,7 +17,7 @@ python3 train_bev_vae.py \
     --buffer_path "${BUFFER_PATH}" \
     --save_dir "${SAVE_DIR}" \
     --epochs ${EPOCHS} \
-    --batch_size 1024 \
+    --batch_size 1536 \
     --lr 0.001 \
     --noise_factor 0.1 \
     --gpu_buffer
