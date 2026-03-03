@@ -325,6 +325,8 @@ class SACEpisodeRunner(Node):
         # Unstuck reward tracking
         self._prev_min_clearance = 10.0  # Previous step's minimum clearance distance
         self._steps_in_tight_space = 0  # Counter for how long in tight space
+        self._consecutive_idle_steps = 0
+        self._intent_without_motion_count = 0
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
         
         # Stuck Detector
@@ -617,27 +619,36 @@ class SACEpisodeRunner(Node):
     def _compute_exploration_bonus(self, bev_grid):
         """
         Compute exploration bonus based on state visitation.
-        
+
         Returns:
             bonus (float): Additional reward for visiting novel states
         """
-        # Quantize BEV to 16x16 for hashing (reduces state space)
-        bev_small = cv2.resize(bev_grid[0], (16, 16))
+        phase = self._get_current_phase()
+
+        # Coarser hash in exploration (8x8) so novel states found more often
+        hash_size = 8 if phase == 'exploration' else 16
+        bev_small = cv2.resize(bev_grid[0], (hash_size, hash_size))
         state_hash = tuple(bev_small.flatten().astype(np.uint8))
-        
+
         # Count visits
         if state_hash not in self._state_visits:
             self._state_visits[state_hash] = 0
-        
+
         visit_count = self._state_visits[state_hash]
-        
-        # Bonus: +0.1 for first visit, decays with visits
-        # Using inverse count heuristic: 1/sqrt(count)
-        bonus = 0.1 / (1.0 + np.sqrt(visit_count))
-        
+
+        # Phase-scaled magnitude
+        if phase == 'exploration':
+            magnitude = 0.20
+        elif phase == 'learning':
+            magnitude = 0.12
+        else:
+            magnitude = 0.10
+
+        bonus = magnitude / (1.0 + np.sqrt(visit_count))
+
         # Increment visit count
         self._state_visits[state_hash] += 1
-        
+
         return bonus
     
     def _compute_action_diversity_bonus(self):
@@ -700,30 +711,77 @@ class SACEpisodeRunner(Node):
         # ========== PHASE-DEPENDENT REWARD SCALING ==========
         if phase == 'exploration':
             # Phase 1: Exploration - relax all penalties, encourage ANY motion
-            idle_penalty = 0.05  # Very mild penalty
             forward_bonus_mult = 1.5  # Normalized from 3.0
             spin_penalty_scale = 0.3  # Very mild spin penalty
         elif phase == 'learning':
             # Phase 2: Learning - moderate penalties, encourage forward motion
-            idle_penalty = 0.15
             forward_bonus_mult = 1.0  # Normalized from 2.0
             spin_penalty_scale = 0.6
         else:  # refinement
             # Phase 3: Refinement - full reward function
-            idle_penalty = 0.1
             forward_bonus_mult = 0.8  # Normalized from 1.5
             spin_penalty_scale = 1.0
 
+        # Compute cmd_fwd early (needed by multiple components)
+        cmd_fwd = (left_track + right_track) / 2.0
 
-        # 1. Base idle penalty - only apply when NOT moving meaningfully
-        # Threshold raised to 0.08 to catch one-track crawling (~0.05 m/s)
-        if linear_vel < 0.08:
-            reward -= idle_penalty
+        # 1. ALIVE BONUS + STAGNATION PENALTY (replaces flat idle penalty)
+        if phase == 'exploration':
+            # Always-on alive bonus: agent gets +0.08 just for existing
+            reward += 0.08
+            # Track consecutive idle steps
+            if linear_vel < 0.08:
+                self._consecutive_idle_steps += 1
+            else:
+                self._consecutive_idle_steps = 0
+            # Stagnation penalty ramps after 30 idle steps (~1 second at 30Hz)
+            if self._consecutive_idle_steps > 30:
+                ramp = min((self._consecutive_idle_steps - 30) / 60.0, 1.0)
+                reward -= 0.05 * ramp
+        elif phase == 'learning':
+            reward += 0.04  # Smaller alive bonus
+            if linear_vel < 0.08:
+                self._consecutive_idle_steps += 1
+                reward -= 0.08  # Net -0.04 when idle
+            else:
+                self._consecutive_idle_steps = 0
+        else:  # refinement - original behavior
+            if linear_vel < 0.08:
+                self._consecutive_idle_steps += 1
+                reward -= 0.1
+            else:
+                self._consecutive_idle_steps = 0
+
+        # 2a. INTENT REWARD - reward forward-commanding actions before odometry confirms
+        intent_reward = 0.0
+        if phase == 'exploration':
+            if cmd_fwd > 0.05:
+                # Track intent without motion for anti-gaming decay
+                if linear_vel < 0.03:
+                    self._intent_without_motion_count += 1
+                else:
+                    self._intent_without_motion_count = 0
+                # Decay after ~2s (60 steps) of intent without motion
+                decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
+                intent_reward = 0.12 * min(cmd_fwd, 0.5) * decay
+            else:
+                self._intent_without_motion_count = 0
+        elif phase == 'learning':
+            if cmd_fwd > 0.1:
+                if linear_vel < 0.03:
+                    self._intent_without_motion_count += 1
+                else:
+                    self._intent_without_motion_count = 0
+                decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
+                intent_reward = 0.04 * min(cmd_fwd, 0.5) * decay
+            else:
+                self._intent_without_motion_count = 0
+        # Refinement: no intent reward (coupled reward only)
+        reward += intent_reward
 
         # 2. Coupled Forward Reward (Action + Velocity)
         # Verify that INTENT (Action) matches OUTCOME (Velocity)
-        cmd_fwd = (left_track + right_track) / 2.0
-        
+
         # Normalized measured velocity (0 to 1+)
         meas_fwd = linear_vel / target_speed if target_speed > 0 else 0.0
 
@@ -741,9 +799,17 @@ class SACEpisodeRunner(Node):
 
         reward += base_fwd_reward
 
-        # 2b. Minimum speed bonus - reward reaching meaningful velocity
-        if linear_vel > 0.10:
-            reward += 0.15 * min(linear_vel / target_speed, 1.0)
+        # 2b. Minimum speed bonus - phase-aware thresholds
+        if phase == 'exploration':
+            # Low threshold: just above deadband (0.03 m/s), higher peak
+            if linear_vel > 0.03:
+                reward += 0.30 * min(linear_vel / target_speed, 1.0)
+        elif phase == 'learning':
+            if linear_vel > 0.05:
+                reward += 0.20 * min(linear_vel / target_speed, 1.0)
+        else:  # refinement - original
+            if linear_vel > 0.10:
+                reward += 0.15 * min(linear_vel / target_speed, 1.0)
 
         # 3. Backward penalty - RELAXED during slip recovery
         if linear_vel < -0.03:
@@ -774,9 +840,14 @@ class SACEpisodeRunner(Node):
         # 4b. Track Utilization Penalty - penalize one-track-only crawling
         # Covers the gap between zero-turn (cmd_fwd < 0.1) and arc (cmd_fwd > 0.3)
         max_abs_track = max(abs(left_track), abs(right_track))
+        utilization = 0.0
         if max_abs_track > 0.1:  # Only when commanding meaningful output
             utilization = min(abs(left_track), abs(right_track)) / max_abs_track
-            if utilization < 0.3:  # One track doing <30% of the other
+            # In exploration, only penalize when NOT commanding forward (accept messy-but-forward)
+            should_penalize = (utilization < 0.3)
+            if phase == 'exploration':
+                should_penalize = should_penalize and (cmd_fwd < 0.05)
+            if should_penalize:
                 reward -= 0.3 * (1.0 - utilization) * spin_penalty_scale
 
         # 4c. Forward Turn Logic (Arcing)
@@ -791,16 +862,28 @@ class SACEpisodeRunner(Node):
                  # Penalize "Curve Dragging"
                  reward -= 0.1
 
+        # 4d. Track Coordination Bonus - positive counterpart to utilization penalty
+        # Reward when both tracks contribute meaningfully
+        if utilization > 0.6 and cmd_fwd > 0.1:
+            coord_bonus = 0.12 if phase == 'exploration' else 0.08
+            reward += coord_bonus * utilization
+
         # 5. Side Clearance Reward (unchanged)
         if min_lidar_dist > 0.5:
             reward += 0.1
         elif min_lidar_dist < 0.2:
             reward -= 0.2
         
-        # 6. Smooth Control Penalty (relaxed)
+        # 6. Smooth Control Penalty (phase-scaled)
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
-            reward -= np.mean(action_diff) * 0.05
+            if phase == 'exploration':
+                smoothness_mult = 0.02
+            elif phase == 'learning':
+                smoothness_mult = 0.03
+            else:
+                smoothness_mult = 0.05
+            reward -= np.mean(action_diff) * smoothness_mult
 
         
         # ========== EXPLORATION BONUS ==========
@@ -878,11 +961,15 @@ class SACEpisodeRunner(Node):
             reward -= 0.3 * max(cmd_fwd, 0.0)
 
         # 15. ARC TURN BONUS (Agile Obstacle Avoidance)
-        # If moving fast AND turning, while near obstacles but safe -> Good!
-        # Encourages "swooping" around mapped obstacles rather than stop-turn-go
-        if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
-            # Reward maintaining speed while turning
-            # Max bonus ~ 0.3 * 0.5 * 1.0 = 0.15
+        # Phase-aware thresholds: lower in exploration so agent discovers arcing earlier
+        if phase == 'exploration':
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.05, 0.2, 0.25
+        elif phase == 'learning':
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.10, 0.3, 0.25
+        else:
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.2, 0.5, 0.3
+
+        if linear_vel > arc_vel_thresh and abs(angular_vel) > arc_ang_thresh and min_lidar_dist > arc_clear_thresh:
             reward += 0.3 * abs(linear_vel) * abs(angular_vel)
 
         # 16. WALL PROXIMITY PENALTY (Don't drive into walls)
@@ -909,6 +996,15 @@ class SACEpisodeRunner(Node):
             straight_intent = max(0.0, 1.0 - track_diff * 5.0)
             if straight_intent > 0.1 and abs(angular_vel) > 0.1:
                 reward -= 0.2 * abs(angular_vel) * straight_intent
+
+        # 18b. STRAIGHT DRIVING BONUS
+        # Rewards driving forward with low angular drift, regardless of track symmetry.
+        # An agent outputting L=0.6, R=0.45 to compensate for hardware drag bias gets
+        # the full bonus as long as measured angular velocity is low.
+        if cmd_fwd > 0.05 and linear_vel > 0.05:
+            straightness = max(0.0, 1.0 - abs(angular_vel) * 2.5)  # 1.0 at 0, 0 at 0.4 rad/s
+            if straightness > 0.3:
+                reward += 0.15 * straightness * min(linear_vel / target_speed, 1.0)
 
         # 19. SAFETY MONITOR BLOCKED PENALTY
         # Penalize being close enough that the safety monitor had to intervene.
@@ -1634,45 +1730,69 @@ class SACEpisodeRunner(Node):
         # Get phase
         phase = self._get_current_phase()
         left_track, right_track = action[0], action[1]
-        
+
         # Calculate components
-        components = {'forward': 0.0, 'idle_penalty': 0.0, 'backward': 0.0,
+        components = {'alive_bonus': 0.0, 'idle_penalty': 0.0, 'intent_reward': 0.0,
+                      'forward': 0.0, 'speed_bonus': 0.0, 'backward': 0.0,
                       'spin': 0.0, 'smoothness': 0.0, 'track_coord': 0.0,
+                      'track_coord_bonus': 0.0, 'straight_bonus': 0.0,
                       'exploration': 0.0, 'diversity': 0.0, 'unstuck': 0.0}
 
         target_speed = self._curriculum_max_speed
 
         if phase == 'exploration':
-            idle_penalty = 0.05
             forward_mult = 1.5
             spin_penalty_scale = 0.3
         elif phase == 'learning':
-            idle_penalty = 0.15
             forward_mult = 1.0
             spin_penalty_scale = 0.6
         else:
-            idle_penalty = 0.1
             forward_mult = 0.8
             spin_penalty_scale = 1.0
 
-
-        # Idle penalty only when nearly stationary
-        if linear_vel < 0.05:
-            components['idle_penalty'] = -idle_penalty
-        else:
-            components['idle_penalty'] = 0.0
-
-        # Coupled Forward Reward
         cmd_fwd = (left_track + right_track) / 2.0
         meas_fwd = linear_vel / target_speed if target_speed > 0 else 0.0
-        
+
+        # Alive bonus + idle penalty (matches _compute_reward)
+        if phase == 'exploration':
+            components['alive_bonus'] = 0.08
+            if linear_vel < 0.08 and self._consecutive_idle_steps > 30:
+                ramp = min((self._consecutive_idle_steps - 30) / 60.0, 1.0)
+                components['idle_penalty'] = -0.05 * ramp
+        elif phase == 'learning':
+            components['alive_bonus'] = 0.04
+            if linear_vel < 0.08:
+                components['idle_penalty'] = -0.08
+        else:
+            if linear_vel < 0.08:
+                components['idle_penalty'] = -0.1
+
+        # Intent reward
+        if phase == 'exploration' and cmd_fwd > 0.05:
+            decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
+            components['intent_reward'] = 0.12 * min(cmd_fwd, 0.5) * decay
+        elif phase == 'learning' and cmd_fwd > 0.1:
+            decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
+            components['intent_reward'] = 0.04 * min(cmd_fwd, 0.5) * decay
+
+        # Coupled Forward Reward
         if cmd_fwd > 0 and meas_fwd > 0:
-            components['forward'] = min(cmd_fwd, meas_fwd) * forward_mult
-        
+            max_abs = max(abs(left_track), abs(right_track))
+            track_agreement = min(abs(left_track), abs(right_track)) / (max_abs + 1e-6) if max_abs > 0.05 else 1.0
+            components['forward'] = min(cmd_fwd, meas_fwd) * forward_mult * (0.3 + 0.7 * track_agreement)
+
+        # Speed bonus (phase-aware)
+        if phase == 'exploration' and linear_vel > 0.03:
+            components['speed_bonus'] = 0.30 * min(linear_vel / target_speed, 1.0)
+        elif phase == 'learning' and linear_vel > 0.05:
+            components['speed_bonus'] = 0.20 * min(linear_vel / target_speed, 1.0)
+        elif phase == 'refinement' and linear_vel > 0.10:
+            components['speed_bonus'] = 0.15 * min(linear_vel / target_speed, 1.0)
+
         # Backward Penalty (relaxed during slip recovery)
         if linear_vel < -0.03:
             if self._slip_recovery_active:
-                components['backward'] = 0.1  # Reward backup during slip recovery
+                components['backward'] = 0.1
             else:
                 components['backward'] = -(0.15 + abs(linear_vel) * 0.8)
 
@@ -1687,7 +1807,20 @@ class SACEpisodeRunner(Node):
             if max_track > 0.6 and min_track < 0.1:
                 components['track_coord'] = -0.1 * 0.3 * spin_penalty_scale
 
+        # Track coordination bonus
+        max_abs_track = max(abs(left_track), abs(right_track))
+        utilization = 0.0
+        if max_abs_track > 0.1:
+            utilization = min(abs(left_track), abs(right_track)) / max_abs_track
+        if utilization > 0.6 and cmd_fwd > 0.1:
+            coord_bonus = 0.12 if phase == 'exploration' else 0.08
+            components['track_coord_bonus'] = coord_bonus * utilization
 
+        # Straight driving bonus
+        if cmd_fwd > 0.05 and linear_vel > 0.05:
+            straightness = max(0.0, 1.0 - abs(angular_vel) * 2.5)
+            if straightness > 0.3:
+                components['straight_bonus'] = 0.15 * straightness * min(linear_vel / target_speed, 1.0)
 
         if hasattr(self, '_latest_bev') and phase != 'refinement':
             components['exploration'] = self._compute_exploration_bonus(self._latest_bev)
@@ -1706,7 +1839,6 @@ class SACEpisodeRunner(Node):
                 components['unstuck'] += np.clip(escape_bonus, 0.0, 0.3)
 
             if min_lidar_dist < TIGHT_SPACE_THRESHOLD and self._steps_in_tight_space > 15:
-                left_track, right_track = action[0], action[1]
                 angular_action_magnitude = abs(right_track - left_track)
                 if angular_action_magnitude > 0.3:
                     components['unstuck'] += 0.1 * angular_action_magnitude
@@ -1725,12 +1857,19 @@ class SACEpisodeRunner(Node):
         if self._slip_detected:
             components['slip'] = -0.3 * max(cmd_fwd, 0.0)
 
-        # Arc Turn Bonus
-        if linear_vel > 0.2 and abs(angular_vel) > 0.5 and min_lidar_dist > 0.3:
+        # Arc Turn Bonus (phase-aware thresholds)
+        if phase == 'exploration':
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.05, 0.2, 0.25
+        elif phase == 'learning':
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.10, 0.3, 0.25
+        else:
+            arc_vel_thresh, arc_ang_thresh, arc_clear_thresh = 0.2, 0.5, 0.3
+
+        if linear_vel > arc_vel_thresh and abs(angular_vel) > arc_ang_thresh and min_lidar_dist > arc_clear_thresh:
             components['arc_turn'] = 0.3 * abs(linear_vel) * abs(angular_vel)
         else:
             components['arc_turn'] = 0.0
-            
+
         # Wall Avoidance
         if min_lidar_dist < 0.5 and linear_vel > 0.1:
             components['wall_avoid'] = -0.5 * (0.5 - min_lidar_dist) * linear_vel
@@ -1759,10 +1898,12 @@ class SACEpisodeRunner(Node):
         total = sum(components.values())
         self.get_logger().info(
             f"📊 Reward Breakdown (phase={phase}): "
-            f"Total={total:.3f} | Fwd={components['forward']:.2f} "
-            f"(idle:{components['idle_penalty']:+.2f}) | "
+            f"Total={total:.3f} | Alive={components['alive_bonus']:+.2f} "
+            f"Idle={components['idle_penalty']:+.2f} Intent={components['intent_reward']:+.2f} | "
+            f"Fwd={components['forward']:.2f} Spd={components['speed_bonus']:+.2f} "
             f"Bwd={components['backward']:.2f} Spin={components['spin']:.2f} | "
-            f"TrkCoord={components['track_coord']:.2f} Smooth={components['smoothness']:.2f} | "
+            f"TrkCoord={components['track_coord']:.2f} TrkBonus={components['track_coord_bonus']:+.2f} "
+            f"Straight={components['straight_bonus']:+.2f} Smooth={components['smoothness']:.2f} | "
             f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
             f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} SafeBlock={components['safety_block']:+.2f} HdgTrk={components['heading_track']:+.2f}"
         )
@@ -1782,19 +1923,21 @@ class SACEpisodeRunner(Node):
         # Get current and target phase
         current_phase = self._get_current_phase()
         
-        if current_phase == 'exploration' and avg_reward > -0.3:
+        if current_phase == 'exploration' and avg_reward > 0.0:
             # Phase 1 -> 2: Exploration -> Learning
+            # Threshold raised from -0.3 to 0.0 because alive bonus shifts baseline up
             self._current_model_version = max(self._current_model_version, 6)
             self.get_logger().info(
                 f"⭐ PHASE TRANSITION: exploration → learning "
-                f"(avg eval reward = {avg_reward:.3f} > -0.3)"
+                f"(avg eval reward = {avg_reward:.3f} > 0.0)"
             )
-        elif current_phase == 'learning' and avg_reward > -0.1:
+        elif current_phase == 'learning' and avg_reward > 0.05:
             # Phase 2 -> 3: Learning → Refinement
+            # Threshold raised from -0.1 to 0.05 because alive bonus shifts baseline up
             self._current_model_version = max(self._current_model_version, 16)
             self.get_logger().info(
                 f"⭐ PHASE TRANSITION: learning → refinement "
-                f"(avg eval reward = {avg_reward:.3f} > -0.1)"
+                f"(avg eval reward = {avg_reward:.3f} > 0.05)"
             )
 
     def _run_nats_loop(self):
