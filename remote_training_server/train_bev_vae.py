@@ -12,10 +12,28 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import Dataset, DataLoader
 
 # Import models
 from model_architectures import BEVAutoencoder
+
+class BEVDataset(Dataset):
+    """
+    Custom Dataset to load BEV frames dynamically.
+    Avoids OOM by keeping the buffer in uint8 and normalizing on the fly.
+    """
+    def __init__(self, data_tensor):
+        # Keep data as uint8 to save RAM
+        self.data = data_tensor
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # Extract frame and normalize to [0, 1] on the fly
+        frame = self.data[idx]
+        return (frame.float() / 255.0,)
+
 
 def train_autoencoder(args):
     device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
@@ -33,19 +51,27 @@ def train_autoencoder(args):
         print("Error: Buffer is empty!")
         return
 
-    # Extract BEV data (uint8, 0-255)
-    bev_data = data['bev'][:size]
+    # Limit samples if requested
+    if getattr(args, 'max_samples', 0) > 0 and size > args.max_samples:
+        print(f"Limiting to the most recent {args.max_samples} frames...")
+        # Get the most recent frames (end of buffer)
+        bev_data = data['bev'][size - args.max_samples:size]
+        size = args.max_samples
+    else:
+        bev_data = data['bev'][:size]
+        
     print(f"Loaded {size} BEV frames of shape {bev_data.shape}")
 
-    # Convert to float32 and normalize to [0, 1]
-    # To save RAM, we might do this in the DataLoader if size is huge, 
-    # but for typical buffers <1M it fits in CPU RAM.
-    print("Normalizing data to [0, 1]...")
-    bev_data = bev_data.float() / 255.0
-
-    # Create DataLoader
-    dataset = TensorDataset(bev_data)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True if torch.cuda.is_available() else False)
+    # Create DataLoader with custom Dataset (normalizes on the fly)
+    print("Initializing dynamic BEVDataset...")
+    dataset = BEVDataset(bev_data)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        num_workers=4, 
+        pin_memory=True if torch.cuda.is_available() else False
+    )
 
     # 2. Setup Model & Optimizer
     model = BEVAutoencoder(input_channels=2).to(device)
@@ -107,6 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs to train")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--noise_factor", type=float, default=0.1, help="Amount of noise to add for denoising objective")
+    parser.add_argument("--max_samples", type=int, default=100000, help="Maximum number of frames to load from buffer (0 for all)")
     
     args = parser.parse_args()
     train_autoencoder(args)
