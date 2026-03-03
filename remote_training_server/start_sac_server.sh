@@ -121,6 +121,47 @@ fi
 
 echo "✓ Ready to start"
 
+# --- Pre-trained BEV Encoder Selection ---
+ENCODER_PATH="${CHECKPOINT_DIR}/vae/best_bev_encoder.pt"
+PRETRAINED_FLAGS=""
+
+if [ -f "${ENCODER_PATH}" ]; then
+  echo ""
+  echo "=================================================="
+  echo "Pre-trained BEV encoder found:"
+  echo "  ${ENCODER_PATH}"
+  echo "=================================================="
+  echo ""
+  echo "  1) Use pre-trained encoder (recommended)"
+  echo "  2) Use pre-trained encoder + freeze weights"
+  echo "  3) Skip (train from scratch)"
+  echo ""
+  read -rp "Select [1/2/3] (default: 1): " ENCODER_CHOICE
+  ENCODER_CHOICE=${ENCODER_CHOICE:-1}
+
+  case "${ENCODER_CHOICE}" in
+    1)
+      PRETRAINED_FLAGS="--pretrained_encoder ${ENCODER_PATH}"
+      echo "  -> Will load pre-trained encoder (fine-tunable)"
+      ;;
+    2)
+      PRETRAINED_FLAGS="--pretrained_encoder ${ENCODER_PATH} --freeze_encoder"
+      echo "  -> Will load pre-trained encoder (frozen)"
+      ;;
+    3)
+      echo "  -> Skipping pre-trained encoder, training from scratch"
+      ;;
+    *)
+      echo "  -> Invalid choice, defaulting to option 1"
+      PRETRAINED_FLAGS="--pretrained_encoder ${ENCODER_PATH}"
+      ;;
+  esac
+else
+  echo ""
+  echo "ℹ️  No pre-trained encoder found at ${ENCODER_PATH}"
+  echo "   Run start_vae_training.sh first to pre-train, or training from scratch."
+fi
+
 # ROCm optimizations (environment variables)
 if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
   echo ""
@@ -197,6 +238,7 @@ python3 -u v620_sac_trainer.py \
   --batch_size "${BATCH_SIZE}" \
   --buffer_size "${BUFFER_SIZE}" \
   ${GPU_BUFFER_FLAG} \
+  ${PRETRAINED_FLAGS} \
   "$@" > >(tee "${LOG_FILE}") 2>&1 &
 
 TRAINER_PID=$!
