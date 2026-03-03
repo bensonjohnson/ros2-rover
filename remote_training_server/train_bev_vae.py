@@ -14,6 +14,7 @@ import threading
 import argparse
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import matplotlib
@@ -409,14 +410,18 @@ def train_autoencoder(args):
                     recon_loss = recon_criterion(logits, bev_t)
 
                     # Forward prediction path (stop gradient on target)
+                    # L2-normalize both sides so MSE ∈ [0, 4] — prevents
+                    # unbounded latent magnitudes from exploding the loss
                     with torch.no_grad():
-                        z_t1_target = model.encode(bev_t1).detach()
-                    z_t1_pred = model.forward_predict(z_t, action_t)
+                        z_t1_target = F.normalize(model.encode(bev_t1), dim=1).detach()
+                    z_t1_pred = F.normalize(model.forward_predict(z_t, action_t), dim=1)
                     fwd_loss = fwd_criterion(z_t1_pred, z_t1_target)
 
                     loss = recon_loss + args.fwd_weight * fwd_loss
 
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
 
