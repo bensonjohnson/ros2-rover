@@ -64,23 +64,56 @@ def train_autoencoder(args):
 
     # Create DataLoader with custom Dataset (normalizes on the fly)
     print("Initializing dynamic BEVDataset...")
-    dataset = BEVDataset(bev_data)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=args.batch_size, 
-        shuffle=True, 
-        num_workers=4, 
-        pin_memory=True if torch.cuda.is_available() else False
-    )
+    
+    # --- PERFORMANCE OPTIMIZATION: GPU PRELOADING ---
+    if getattr(args, 'gpu_buffer', False) and device.type == 'cuda':
+        print("🚀 Preloading entire dataset into GPU VRAM for maximum speed...")
+        # Move the uint8 dataset to GPU. 100k frames is ~3.27 GB.
+        bev_data = bev_data.to(device, non_blocking=True)
+        dataset = BEVDataset(bev_data)
+        # Since data is on GPU, num_workers must be 0 and pin_memory False
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=args.batch_size, 
+            shuffle=True, 
+            num_workers=0, 
+            pin_memory=False
+        )
+    else:
+        dataset = BEVDataset(bev_data)
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=args.batch_size, 
+            shuffle=True, 
+            num_workers=8, 
+            pin_memory=True if torch.cuda.is_available() else False,
+            persistent_workers=True
+        )
 
     # 2. Setup Model & Optimizer
     model = BEVAutoencoder(input_channels=2).to(device)
     
+    # --- PERFORMANCE OPTIMIZATION: torch.compile and TF32 ---
+    if device.type == 'cuda':
+        print("🚀 Enabling TF32 and torch.compile...")
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision('high')
+        try:
+            model = torch.compile(model)
+        except Exception as e:
+            print(f"⚠️ torch.compile failed: {e}")
+
     # We use MSELoss for reconstruction
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    
+    # --- PERFORMANCE OPTIMIZATION: Automatic Mixed Precision (AMP) ---
+    use_amp = device.type == 'cuda'
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+    if use_amp:
+         print("🚀 Enabling Automatic Mixed Precision (AMP)...")
 
-    print(f"Starting training for {args.epochs} epochs...")
+    print(f"Starting training for {args.epochs} epochs with batch size {args.batch_size}...")
     os.makedirs(args.save_dir, exist_ok=True)
     best_loss = float('inf')
 
@@ -91,18 +124,21 @@ def train_autoencoder(args):
         start_time = time.time()
 
         for batch_idx, (batch_x,) in enumerate(dataloader):
-            batch_x = batch_x.to(device)
+            # If we preloaded to GPU, it's already there
+            if batch_x.device != device:
+                 batch_x = batch_x.to(device, non_blocking=True)
             
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             
-            # Forward pass with noise for denoising AE
-            recon = model(batch_x, noise_factor=args.noise_factor)
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                # Forward pass with noise for denoising AE
+                recon = model(batch_x, noise_factor=args.noise_factor)
+                # Loss against the original CLEAN input
+                loss = criterion(recon, batch_x)
             
-            # Loss against the original CLEAN input
-            loss = criterion(recon, batch_x)
-            
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             epoch_loss += loss.item()
 
@@ -117,9 +153,12 @@ def train_autoencoder(args):
         if avg_loss < best_loss:
             best_loss = avg_loss
             
+            # Extract the raw encoder to avoid saving the torch.compile wrapper
+            raw_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+            
             # We save ONLY the encoder so it can be easily loaded into SAC models
             save_path = os.path.join(args.save_dir, "best_bev_encoder.pt")
-            torch.save(model.encoder.state_dict(), save_path)
+            torch.save(raw_model.encoder.state_dict(), save_path)
             print(f"  -> Saved new best encoder to {save_path}")
 
     print("Training complete! Best encoder saved to:", os.path.join(args.save_dir, "best_bev_encoder.pt"))
@@ -129,11 +168,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train BEV Autoencoder from Replay Buffer")
     parser.add_argument("--buffer_path", type=str, default="checkpoints_sac/replay_buffer.pt", help="Path to saved replay buffer")
     parser.add_argument("--save_dir", type=str, default="checkpoints_sac/vae", help="Directory to save encoder weights")
-    parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=1024, help="Batch size (increase for higher GPU utilization)")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs to train")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--noise_factor", type=float, default=0.1, help="Amount of noise to add for denoising objective")
     parser.add_argument("--max_samples", type=int, default=100000, help="Maximum number of frames to load from buffer (0 for all)")
+    parser.add_argument("--gpu_buffer", action="store_true", help="Preload the entire dataset into GPU VRAM for maximum speed")
     
     args = parser.parse_args()
     train_autoencoder(args)
