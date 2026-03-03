@@ -616,6 +616,68 @@ class UnifiedBEVEncoder(nn.Module):
         return self._output_dim
 
 
+class BEVDecoder(nn.Module):
+    """
+    Decoder to reconstruct 2-channel 128x128 BEV grid from 512-dim latent space.
+    """
+    def __init__(self, latent_dim: int = 512, output_channels: int = 2):
+        super().__init__()
+        # Input: (B, 512)
+        # Reshape to (B, 32, 4, 4)
+        self.fc = nn.Linear(latent_dim, 32 * 4 * 4)
+        
+        self.deconv1 = nn.ConvTranspose2d(32, 64, kernel_size=4, stride=2, padding=1) # 4->8
+        self.deconv2 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1) # 8->16
+        self.deconv3 = nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1) # 16->32
+        self.res1 = ResBlock(64)
+        self.deconv4 = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1) # 32->64
+        self.res2 = ResBlock(32)
+        self.deconv5 = nn.ConvTranspose2d(32, output_channels, kernel_size=4, stride=2, padding=1) # 64->128
+        
+        self.relu = nn.ReLU(inplace=True)
+        self.sigmoid = nn.Sigmoid() # Occupancy grids are [0, 1]
+
+    def forward(self, x):
+        x = self.relu(self.fc(x))
+        x = x.view(-1, 32, 4, 4)
+        
+        x = self.relu(self.deconv1(x))
+        x = self.relu(self.deconv2(x))
+        x = self.relu(self.deconv3(x))
+        x = self.res1(x)
+        x = self.relu(self.deconv4(x))
+        x = self.res2(x)
+        
+        # Output is probability of occupancy [0, 1]
+        x = self.sigmoid(self.deconv5(x))
+        return x
+
+
+class BEVAutoencoder(nn.Module):
+    """
+    Denoising Autoencoder for pre-training the UnifiedBEVEncoder. Uses the same 
+    encoder architecture as the SAC policy to allow straight drop-in replacement 
+    of the weights.
+    """
+    def __init__(self, input_channels: int = 2):
+        super().__init__()
+        self.encoder = UnifiedBEVEncoder(input_channels=input_channels)
+        self.decoder = BEVDecoder(latent_dim=self.encoder.output_dim, output_channels=input_channels)
+
+    def forward(self, x, noise_factor=0.0):
+        if self.training and noise_factor > 0.0:
+            # Add noise to input for denoising objective
+            noisy_x = x + noise_factor * torch.randn_like(x)
+            noisy_x = torch.clamp(noisy_x, 0., 1.)
+            latent = self.encoder(noisy_x)
+        else:
+            latent = self.encoder(x)
+            
+        recon = self.decoder(latent)
+        return recon
+
+
+
 class UnifiedBEVPolicyNetwork(nn.Module):
     """
     SAC policy network with residual BEV encoder and LSTMCell temporal memory.

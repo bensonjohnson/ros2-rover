@@ -352,6 +352,27 @@ class V620SACTrainer:
         self.target_critic_pair = copy.deepcopy(self.critic_pair)
         self.target_critic_pair.eval()
 
+        # --- Load Pre-trained BEV Encoder (VAE/AE) ---
+        if getattr(args, 'pretrained_encoder', None) and os.path.exists(args.pretrained_encoder):
+            print(f"🔄 Loading pre-trained BEV Encoder from {args.pretrained_encoder}...")
+            try:
+                encoder_state = torch.load(args.pretrained_encoder, map_location=self.device)
+                self.actor.bev_encoder.load_state_dict(encoder_state)
+                self.critic_pair.encoder.load_state_dict(encoder_state)
+                self.target_critic_pair.encoder.load_state_dict(encoder_state)
+                print("✅ Pre-trained encoder weights loaded successfully.")
+                
+                if getattr(args, 'freeze_encoder', False):
+                    print(f"❄️ Freezing pre-trained BEV Encoder weights...")
+                    for param in self.actor.bev_encoder.parameters():
+                        param.requires_grad = False
+                    for param in self.critic_pair.encoder.parameters():
+                        param.requires_grad = False
+                    for param in self.target_critic_pair.encoder.parameters():
+                        param.requires_grad = False
+            except Exception as e:
+                print(f"❌ Failed to load pre-trained encoder: {e}")
+
         # Optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.lr)
         self.critic_optimizer = optim.Adam(
@@ -1564,8 +1585,11 @@ if __name__ == '__main__':
     parser.add_argument('--bc_batch_size', type=int, default=64,
                         help='Batch size for BC pre-training')
 
-
-
+    # Pre-trained VAE/AE Encoder Overrides
+    parser.add_argument('--pretrained_encoder', type=str, default='',
+                        help='Path to pre-trained BEV encoder weights (e.g. checkpoints_sac/vae/best_bev_encoder.pt)')
+    parser.add_argument('--freeze_encoder', action='store_true',
+                        help='Freeze the encoder weights so they are not updated by SAC')
     args = parser.parse_args()
 
     trainer = V620SACTrainer(args)
