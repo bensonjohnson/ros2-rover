@@ -654,8 +654,8 @@ class BEVDecoder(nn.Module):
 
 class BEVAutoencoder(nn.Module):
     """
-    Denoising Autoencoder for pre-training the UnifiedBEVEncoder. Uses the same 
-    encoder architecture as the SAC policy to allow straight drop-in replacement 
+    Denoising Autoencoder for pre-training the UnifiedBEVEncoder. Uses the same
+    encoder architecture as the SAC policy to allow straight drop-in replacement
     of the weights.
     """
     def __init__(self, input_channels: int = 2):
@@ -679,6 +679,72 @@ class BEVAutoencoder(nn.Module):
             return logits
         else:
             # Return probabilities for visualization/inference
+            return torch.sigmoid(logits)
+
+
+class LatentTransitionModel(nn.Module):
+    """MLP that predicts next-step latent from current latent + action.
+
+    Input:  z_t (512) concatenated with action (2) = 514
+    Output: predicted z_{t+1} (512)
+
+    Discarded after pre-training — only the encoder transfers to SAC.
+    """
+    def __init__(self, latent_dim: int = 512, action_dim: int = 2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim + action_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, latent_dim),
+        )
+
+    def forward(self, z_t, action):
+        return self.net(torch.cat([z_t, action], dim=1))
+
+
+class BEVAutoencoderWithForwardPrediction(nn.Module):
+    """Denoising AE + latent forward-prediction for dynamics-aware pre-training.
+
+    Two loss paths share one encoder:
+      Reconstruction:  bev_t + noise → encoder → decoder → BCEWithLogits(logits, bev_t)
+      Forward pred:    encoder(bev_t) + action_t → transition → predict encoder(bev_t+1).detach()
+
+    The .detach() on the target prevents encoder collapse.
+    Only encoder weights transfer to SAC — decoder and transition model are discarded.
+    """
+    def __init__(self, input_channels: int = 2, action_dim: int = 2):
+        super().__init__()
+        self.encoder = UnifiedBEVEncoder(input_channels=input_channels)
+        self.decoder = BEVDecoder(latent_dim=self.encoder.output_dim, output_channels=input_channels)
+        self.transition = LatentTransitionModel(latent_dim=self.encoder.output_dim, action_dim=action_dim)
+
+    def forward_reconstruct(self, x, noise_factor=0.0):
+        """Denoising reconstruction path. Returns (logits, z_t)."""
+        if self.training and noise_factor > 0.0:
+            noisy_x = x + noise_factor * torch.randn_like(x)
+            noisy_x = torch.clamp(noisy_x, 0., 1.)
+            z_t = self.encoder(noisy_x)
+        else:
+            z_t = self.encoder(x)
+        logits = self.decoder(z_t)
+        return logits, z_t
+
+    def forward_predict(self, z_t, action):
+        """Forward prediction path. Returns predicted z_{t+1}."""
+        return self.transition(z_t, action)
+
+    def encode(self, x):
+        """Encode without noise (for computing stop-gradient targets)."""
+        return self.encoder(x)
+
+    def forward(self, x, noise_factor=0.0):
+        """Standard AE forward for compatibility (reconstruction only)."""
+        logits, _ = self.forward_reconstruct(x, noise_factor)
+        if self.training:
+            return logits
+        else:
             return torch.sigmoid(logits)
 
 

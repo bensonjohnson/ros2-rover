@@ -34,4 +34,6 @@ python3 train_bev_vae.py \
     --batch_size 256 \
     --lr 0.001 \
     --noise_factor 0.1 \
-    --gpu_buffer
+    --gpu_buffer \
+    --forward_prediction \
+    --fwd_weight 1.0

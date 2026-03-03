@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from flask import Flask, Response, jsonify, render_template_string
 
 # Import models
-from model_architectures import BEVAutoencoder
+from model_architectures import BEVAutoencoder, BEVAutoencoderWithForwardPrediction
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -54,6 +54,8 @@ DASHBOARD_HTML = """
   <div class="stat-card"><div class="stat-label">Epoch</div><div class="stat-value" id="epoch">-</div></div>
   <div class="stat-card"><div class="stat-label">Best Loss</div><div class="stat-value good" id="best_loss">-</div></div>
   <div class="stat-card"><div class="stat-label">Current Loss</div><div class="stat-value" id="current_loss">-</div></div>
+  <div class="stat-card" id="recon_card" style="display:none"><div class="stat-label">Recon Loss</div><div class="stat-value" id="recon_loss">-</div></div>
+  <div class="stat-card" id="fwd_card" style="display:none"><div class="stat-label">Fwd Loss</div><div class="stat-value" id="fwd_loss">-</div></div>
   <div class="stat-card"><div class="stat-label">Learning Rate</div><div class="stat-value" id="lr">-</div></div>
   <div class="stat-card"><div class="stat-label">Epoch Time</div><div class="stat-value" id="epoch_time">-</div></div>
   <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" id="status">-</div></div>
@@ -78,6 +80,13 @@ function update() {
     document.getElementById('lr').textContent = d.lr.toExponential(1);
     document.getElementById('epoch_time').textContent = d.epoch_time.toFixed(1) + 's';
     document.getElementById('status').textContent = d.status;
+
+    if (d.recon_loss !== undefined && d.recon_loss !== null) {
+      document.getElementById('recon_card').style.display = '';
+      document.getElementById('recon_loss').textContent = d.recon_loss.toFixed(6);
+      document.getElementById('fwd_card').style.display = '';
+      document.getElementById('fwd_loss').textContent = d.fwd_loss.toFixed(6);
+    }
 
     // Loss bars
     if (d.loss_history && d.loss_history.length > 0) {
@@ -124,7 +133,8 @@ class VAEDashboard:
         # Shared state updated by the training loop
         self.stats = {
             'epoch': 0, 'total_epochs': 0, 'best_loss': float('inf'),
-            'current_loss': 0.0, 'lr': 0.0, 'epoch_time': 0.0,
+            'current_loss': 0.0, 'recon_loss': None, 'fwd_loss': None,
+            'lr': 0.0, 'epoch_time': 0.0,
             'status': 'Initializing', 'loss_history': [],
         }
         self.latest_samples_png = None
@@ -156,10 +166,11 @@ class VAEDashboard:
             return Response('No samples yet', status=204)
         return Response(self.latest_samples_png, mimetype='image/png')
 
-    def update_stats(self, epoch, total_epochs, avg_loss, best_loss, lr, elapsed, status='Training'):
+    def update_stats(self, epoch, total_epochs, avg_loss, best_loss, lr, elapsed, status='Training', recon_loss=None, fwd_loss=None):
         self.stats.update({
             'epoch': epoch, 'total_epochs': total_epochs,
             'current_loss': avg_loss, 'best_loss': best_loss,
+            'recon_loss': recon_loss, 'fwd_loss': fwd_loss,
             'lr': lr, 'epoch_time': elapsed, 'status': status,
         })
         self.stats['loss_history'].append((epoch, avg_loss))
@@ -188,6 +199,34 @@ class BEVDataset(Dataset):
         # Extract frame and normalize to [0, 1] on the fly
         frame = self.data[idx]
         return (frame.float() / 255.0,)
+
+
+class BEVTransitionDataset(Dataset):
+    """Dataset of (bev_t, action_t, bev_t+1) tuples for forward prediction.
+
+    Pre-filters episode boundaries: indices where dones[i] == 1.0 are excluded
+    since bev[i+1] would be from a different episode.
+    """
+    def __init__(self, bev_data, actions, dones):
+        self.bev = bev_data
+        self.actions = actions
+        # Valid indices: not the last frame, and not a terminal state
+        self.valid_indices = []
+        n = len(bev_data)
+        for i in range(n - 1):
+            if dones[i] < 0.5:  # not a terminal transition
+                self.valid_indices.append(i)
+        self.valid_indices = torch.tensor(self.valid_indices, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.valid_indices)
+
+    def __getitem__(self, idx):
+        i = self.valid_indices[idx].item()
+        bev_t = self.bev[i].float() / 255.0
+        action_t = self.actions[i].float()
+        bev_t1 = self.bev[i + 1].float() / 255.0
+        return bev_t, action_t, bev_t1
 
 
 def save_samples(model, sample_batch, epoch, save_dir, device, dashboard=None):
@@ -253,44 +292,62 @@ def train_autoencoder(args):
     # Limit samples if requested
     if getattr(args, 'max_samples', 0) > 0 and size > args.max_samples:
         print(f"Limiting to the most recent {args.max_samples} frames...")
-        # Get the most recent frames (end of buffer)
-        bev_data = data['bev'][size - args.max_samples:size]
+        start_idx = size - args.max_samples
+        bev_data = data['bev'][start_idx:size]
+        if args.forward_prediction:
+            actions_data = data['actions'][start_idx:size]
+            dones_data = data['dones'][start_idx:size]
         size = args.max_samples
     else:
         bev_data = data['bev'][:size]
-        
+        if args.forward_prediction:
+            actions_data = data['actions'][:size]
+            dones_data = data['dones'][:size]
+
     print(f"Loaded {size} BEV frames of shape {bev_data.shape}")
 
     # Create DataLoader with custom Dataset (normalizes on the fly)
-    print("Initializing dynamic BEVDataset...")
-    
+    use_fwd = args.forward_prediction
+    if use_fwd:
+        print("Initializing BEVTransitionDataset for forward prediction...")
+        dataset = BEVTransitionDataset(bev_data, actions_data, dones_data)
+        print(f"Valid transitions: {len(dataset)} / {size}")
+    else:
+        print("Initializing dynamic BEVDataset...")
+        dataset = BEVDataset(bev_data)
+
     # --- PERFORMANCE OPTIMIZATION: GPU PRELOADING ---
     if getattr(args, 'gpu_buffer', False) and device.type == 'cuda':
         print("🚀 Preloading entire dataset into GPU VRAM for maximum speed...")
-        # Move the uint8 dataset to GPU. 100k frames is ~3.27 GB.
-        bev_data = bev_data.to(device, non_blocking=True)
-        dataset = BEVDataset(bev_data)
-        # Since data is on GPU, num_workers must be 0 and pin_memory False
+        if use_fwd:
+            dataset.bev = dataset.bev.to(device, non_blocking=True)
+            dataset.actions = dataset.actions.to(device, non_blocking=True)
+            dataset.valid_indices = dataset.valid_indices.to(device, non_blocking=True)
+        else:
+            bev_data = bev_data.to(device, non_blocking=True)
+            dataset = BEVDataset(bev_data)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=args.batch_size, 
-            shuffle=True, 
-            num_workers=0, 
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=0,
             pin_memory=False
         )
     else:
-        dataset = BEVDataset(bev_data)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=args.batch_size, 
-            shuffle=True, 
-            num_workers=8, 
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=8,
             pin_memory=True if torch.cuda.is_available() else False,
             persistent_workers=True
         )
 
     # 2. Setup Model & Optimizer
-    model = BEVAutoencoder(input_channels=2).to(device)
+    if use_fwd:
+        model = BEVAutoencoderWithForwardPrediction(input_channels=2).to(device)
+    else:
+        model = BEVAutoencoder(input_channels=2).to(device)
     
     # --- PERFORMANCE OPTIMIZATION: torch.compile and TF32 ---
     if device.type == 'cuda':
@@ -304,7 +361,8 @@ def train_autoencoder(args):
 
     # BCEWithLogitsLoss is AMP-safe and numerically stable — combines sigmoid + BCE
     # in one step. Correct loss for binary occupancy grids.
-    criterion = nn.BCEWithLogitsLoss()
+    recon_criterion = nn.BCEWithLogitsLoss()
+    fwd_criterion = nn.MSELoss() if use_fwd else None
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     
@@ -324,44 +382,84 @@ def train_autoencoder(args):
 
     # Grab fixed sample frames for visual comparison across epochs
     sample_indices = torch.randperm(len(dataset))[:6]
+    # Both BEVDataset and BEVTransitionDataset return bev as first element
     sample_batch = torch.stack([dataset[i][0] for i in sample_indices]).to(device)
 
     # 3. Training Loop
     for epoch in range(1, args.epochs + 1):
         model.train()
         epoch_loss = 0.0
+        epoch_recon_loss = 0.0
+        epoch_fwd_loss = 0.0
         start_time = time.time()
 
-        for batch_idx, (batch_x,) in enumerate(dataloader):
-            # If we preloaded to GPU, it's already there
-            if batch_x.device != device:
-                 batch_x = batch_x.to(device, non_blocking=True)
-            
-            optimizer.zero_grad(set_to_none=True)
-            
-            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
-                # Forward pass with noise for denoising AE
-                recon = model(batch_x, noise_factor=args.noise_factor)
-                # Loss against the original CLEAN input
-                loss = criterion(recon, batch_x)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            
-            epoch_loss += loss.item()
+        for batch_idx, batch in enumerate(dataloader):
+            if use_fwd:
+                bev_t, action_t, bev_t1 = batch
+                if bev_t.device != device:
+                    bev_t = bev_t.to(device, non_blocking=True)
+                    action_t = action_t.to(device, non_blocking=True)
+                    bev_t1 = bev_t1.to(device, non_blocking=True)
 
-            if batch_idx % 100 == 0:
-                print(f"Epoch {epoch}/{args.epochs} [{batch_idx}/{len(dataloader)}] - Loss: {loss.item():.6f}")
+                optimizer.zero_grad(set_to_none=True)
+
+                with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+                    # Reconstruction path
+                    logits, z_t = model.forward_reconstruct(bev_t, noise_factor=args.noise_factor)
+                    recon_loss = recon_criterion(logits, bev_t)
+
+                    # Forward prediction path (stop gradient on target)
+                    with torch.no_grad():
+                        z_t1_target = model.encode(bev_t1).detach()
+                    z_t1_pred = model.forward_predict(z_t, action_t)
+                    fwd_loss = fwd_criterion(z_t1_pred, z_t1_target)
+
+                    loss = recon_loss + args.fwd_weight * fwd_loss
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+
+                epoch_loss += loss.item()
+                epoch_recon_loss += recon_loss.item()
+                epoch_fwd_loss += fwd_loss.item()
+
+                if batch_idx % 100 == 0:
+                    print(f"Epoch {epoch}/{args.epochs} [{batch_idx}/{len(dataloader)}] - Loss: {loss.item():.6f} (recon: {recon_loss.item():.6f}, fwd: {fwd_loss.item():.6f})")
+            else:
+                (batch_x,) = batch
+                if batch_x.device != device:
+                    batch_x = batch_x.to(device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+
+                with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
+                    recon = model(batch_x, noise_factor=args.noise_factor)
+                    loss = recon_criterion(recon, batch_x)
+
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+
+                epoch_loss += loss.item()
+
+                if batch_idx % 100 == 0:
+                    print(f"Epoch {epoch}/{args.epochs} [{batch_idx}/{len(dataloader)}] - Loss: {loss.item():.6f}")
 
         scheduler.step()
-        avg_loss = epoch_loss / len(dataloader)
+        n_batches = len(dataloader)
+        avg_loss = epoch_loss / n_batches
         elapsed = time.time() - start_time
         current_lr = optimizer.param_groups[0]['lr']
-        print(f"==== Epoch {epoch} Summary ==== Avg Loss: {avg_loss:.6f} | LR: {current_lr:.6f} | Time: {elapsed:.2f}s")
 
-        # Update dashboard
-        dashboard.update_stats(epoch, args.epochs, avg_loss, min(best_loss, avg_loss), current_lr, elapsed)
+        if use_fwd:
+            avg_recon = epoch_recon_loss / n_batches
+            avg_fwd = epoch_fwd_loss / n_batches
+            print(f"==== Epoch {epoch} Summary ==== Loss: {avg_loss:.6f} (recon: {avg_recon:.6f}, fwd: {avg_fwd:.6f}) | LR: {current_lr:.6f} | Time: {elapsed:.2f}s")
+            dashboard.update_stats(epoch, args.epochs, avg_loss, min(best_loss, avg_loss), current_lr, elapsed, recon_loss=avg_recon, fwd_loss=avg_fwd)
+        else:
+            print(f"==== Epoch {epoch} Summary ==== Avg Loss: {avg_loss:.6f} | LR: {current_lr:.6f} | Time: {elapsed:.2f}s")
+            dashboard.update_stats(epoch, args.epochs, avg_loss, min(best_loss, avg_loss), current_lr, elapsed)
 
         # Save sample reconstructions — every epoch to dashboard, every 5 to disk
         save_to_disk = (epoch == 1 or epoch % 5 == 0)
@@ -395,6 +493,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=100000, help="Maximum number of frames to load from buffer (0 for all)")
     parser.add_argument("--gpu_buffer", action="store_true", help="Preload the entire dataset into GPU VRAM for maximum speed")
     parser.add_argument("--dashboard_port", type=int, default=5001, help="Port for the web dashboard (5001 to avoid conflict with SAC dashboard on 5000)")
-    
+    parser.add_argument("--forward_prediction", action="store_true", help="Enable latent forward-prediction loss alongside reconstruction")
+    parser.add_argument("--fwd_weight", type=float, default=1.0, help="Weight for forward prediction loss (default: 1.0)")
+
     args = parser.parse_args()
     train_autoencoder(args)
