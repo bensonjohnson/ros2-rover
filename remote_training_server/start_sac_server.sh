@@ -38,6 +38,81 @@ fi
 echo "Creating directories..."
 mkdir -p ${CHECKPOINT_DIR} ${LOG_DIR}
 
+# --- Checkpoint Pruning Menu ---
+echo ""
+echo "=================================================="
+echo "Clean up checkpoint directory?"
+echo "=================================================="
+echo ""
+echo "  1) Keep everything (default)"
+echo "  2) Delete SAC checkpoints only"
+echo "  3) Delete replay buffer only"
+echo "  4) Delete SAC checkpoints + replay buffer"
+echo "  5) Delete ALL (checkpoints + buffer + ONNX + VAE)"
+echo ""
+read -rp "Select [1-5] (default: 1): " PRUNE_CHOICE
+PRUNE_CHOICE=${PRUNE_CHOICE:-1}
+
+if [[ "${PRUNE_CHOICE}" =~ ^[2-5]$ ]]; then
+  # Count files that would be deleted
+  SAC_COUNT=$(find "${CHECKPOINT_DIR}" -maxdepth 1 -name "sac_step_*.pt" 2>/dev/null | wc -l | tr -d ' ')
+  ONNX_COUNT=$(find "${CHECKPOINT_DIR}" -maxdepth 1 -name "*.onnx" 2>/dev/null | wc -l | tr -d ' ')
+  BUFFER_EXISTS="no"
+  [ -f "${CHECKPOINT_DIR}/replay_buffer.pt" ] && BUFFER_EXISTS="yes"
+  VAE_EXISTS="no"
+  [ -d "${CHECKPOINT_DIR}/vae" ] && VAE_EXISTS="yes"
+
+  echo ""
+  echo "The following will be deleted:"
+  case "${PRUNE_CHOICE}" in
+    2)
+      echo "  - SAC checkpoints (${SAC_COUNT} files)"
+      echo "  - ONNX exports (${ONNX_COUNT} files)"
+      ;;
+    3)
+      echo "  - Replay buffer (exists: ${BUFFER_EXISTS})"
+      ;;
+    4)
+      echo "  - SAC checkpoints (${SAC_COUNT} files)"
+      echo "  - ONNX exports (${ONNX_COUNT} files)"
+      echo "  - Replay buffer (exists: ${BUFFER_EXISTS})"
+      ;;
+    5)
+      echo "  - SAC checkpoints (${SAC_COUNT} files)"
+      echo "  - ONNX exports (${ONNX_COUNT} files)"
+      echo "  - Replay buffer (exists: ${BUFFER_EXISTS})"
+      echo "  - VAE directory (exists: ${VAE_EXISTS})"
+      ;;
+  esac
+
+  read -rp "Confirm deletion? [y/N]: " CONFIRM
+  if [[ "${CONFIRM}" =~ ^[Yy]$ ]]; then
+    case "${PRUNE_CHOICE}" in
+      2)
+        rm -f "${CHECKPOINT_DIR}"/sac_step_*.pt
+        rm -f "${CHECKPOINT_DIR}"/*.onnx
+        ;;
+      3)
+        rm -f "${CHECKPOINT_DIR}"/replay_buffer.pt
+        ;;
+      4)
+        rm -f "${CHECKPOINT_DIR}"/sac_step_*.pt
+        rm -f "${CHECKPOINT_DIR}"/*.onnx
+        rm -f "${CHECKPOINT_DIR}"/replay_buffer.pt
+        ;;
+      5)
+        rm -f "${CHECKPOINT_DIR}"/sac_step_*.pt
+        rm -f "${CHECKPOINT_DIR}"/*.onnx
+        rm -f "${CHECKPOINT_DIR}"/replay_buffer.pt
+        rm -rf "${CHECKPOINT_DIR}"/vae
+        ;;
+    esac
+    echo "✓ Cleanup complete"
+  else
+    echo "  -> Skipped cleanup"
+  fi
+fi
+
 # Check Python version
 echo "Checking Python version..."
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
