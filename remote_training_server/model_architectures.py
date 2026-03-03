@@ -635,21 +635,20 @@ class BEVDecoder(nn.Module):
         self.deconv5 = nn.ConvTranspose2d(32, output_channels, kernel_size=4, stride=2, padding=1) # 64->128
         
         self.relu = nn.ReLU(inplace=True)
-        self.sigmoid = nn.Sigmoid() # Occupancy grids are [0, 1]
 
     def forward(self, x):
         x = self.relu(self.fc(x))
         x = x.view(-1, 32, 4, 4)
-        
+
         x = self.relu(self.deconv1(x))
         x = self.relu(self.deconv2(x))
         x = self.relu(self.deconv3(x))
         x = self.res1(x)
         x = self.relu(self.deconv4(x))
         x = self.res2(x)
-        
-        # Output is probability of occupancy [0, 1]
-        x = self.sigmoid(self.deconv5(x))
+
+        # Return raw logits — sigmoid applied by caller or BCEWithLogitsLoss
+        x = self.deconv5(x)
         return x
 
 
@@ -672,9 +671,15 @@ class BEVAutoencoder(nn.Module):
             latent = self.encoder(noisy_x)
         else:
             latent = self.encoder(x)
-            
-        recon = self.decoder(latent)
-        return recon
+
+        logits = self.decoder(latent)
+
+        if self.training:
+            # Return raw logits for BCEWithLogitsLoss (AMP-safe)
+            return logits
+        else:
+            # Return probabilities for visualization/inference
+            return torch.sigmoid(logits)
 
 
 

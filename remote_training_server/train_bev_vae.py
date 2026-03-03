@@ -302,9 +302,9 @@ def train_autoencoder(args):
         except Exception as e:
             print(f"⚠️ torch.compile failed: {e}")
 
-    # BCE is the correct loss for binary occupancy grids — penalizes confident
-    # wrong predictions harder than MSE, producing sharper reconstructions.
-    criterion = nn.BCELoss()
+    # BCEWithLogitsLoss is AMP-safe and numerically stable — combines sigmoid + BCE
+    # in one step. Correct loss for binary occupancy grids.
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
     
