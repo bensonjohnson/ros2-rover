@@ -130,7 +130,7 @@ def train_autoencoder(args):
             
             optimizer.zero_grad(set_to_none=True)
             
-            with torch.amp.autocast('cuda', enabled=use_amp):
+            with torch.amp.autocast('cuda', enabled=use_amp, dtype=torch.bfloat16):
                 # Forward pass with noise for denoising AE
                 recon = model(batch_x, noise_factor=args.noise_factor)
                 # Loss against the original CLEAN input
