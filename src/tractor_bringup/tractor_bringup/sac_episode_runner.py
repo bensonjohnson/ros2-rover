@@ -328,6 +328,11 @@ class SACEpisodeRunner(Node):
         self._consecutive_idle_steps = 0
         self._intent_without_motion_count = 0
         self._latest_fused_yaw = 0.0  # EKF-fused yaw from odometry
+
+        # Wall avoidance streak tracking
+        self._steps_since_wall_stop = 0
+        self._wall_stop_active = False
+        self._wall_stop_steps = 0
         
         # Stuck Detector
         self.stuck_detector = StuckDetector(stuck_threshold=0.15)
@@ -686,7 +691,7 @@ class SACEpisodeRunner(Node):
         1. Forward progress (both tracks positive and similar)
         2. Opposite track penalty (spinning in place) - RELAXED
         3. Asymmetric track penalty (one track only) - RELAXED
-        4. Side clearance bonus
+        4. Wall avoidance streak bonus + wall-stop penalty
         5. Smooth control penalty
         6. Full revolution penalty
         7. Exploration bonus (state visitation)
@@ -868,12 +873,8 @@ class SACEpisodeRunner(Node):
             coord_bonus = 0.12 if phase == 'exploration' else 0.08
             reward += coord_bonus * utilization
 
-        # 5. Side Clearance Reward (unchanged)
-        if min_lidar_dist > 0.5:
-            reward += 0.1
-        elif min_lidar_dist < 0.2:
-            reward -= 0.2
-        
+        # 5. (Removed — replaced by Wall Avoidance System in #19)
+
         # 6. Smooth Control Penalty (phase-scaled)
         if hasattr(self, '_prev_action'):
             action_diff = np.abs(action - self._prev_action)
@@ -973,11 +974,9 @@ class SACEpisodeRunner(Node):
             reward += 0.3 * abs(linear_vel) * abs(angular_vel)
 
         # 16. WALL PROXIMITY PENALTY (Don't drive into walls)
-        # If very close to wall and driving TOWARDS it -> Penalty
-        if min_lidar_dist < 0.5 and linear_vel > 0.1:
-            # Check if driving towards the closest point
-            # We don't have exact vector here, but high linear velocity when close is dangerous
-            reward -= 0.5 * (0.5 - min_lidar_dist) * linear_vel
+        # Tightened threshold from 0.5→0.4m, halved coefficient (avoidance bonus handles most clearance signaling)
+        if min_lidar_dist < 0.4 and linear_vel > 0.1:
+            reward -= 0.25 * (0.4 - min_lidar_dist) * linear_vel
 
         # 17. SLIP RECOVERY BONUS - Reward backing up during slip recovery
         # This encourages the rover to back up to free itself when slip is detected
@@ -1006,21 +1005,46 @@ class SACEpisodeRunner(Node):
             if straightness > 0.3:
                 reward += 0.15 * straightness * min(linear_vel / target_speed, 1.0)
 
-        # 19. SAFETY MONITOR BLOCKED PENALTY
-        # Penalize being close enough that the safety monitor had to intervene.
-        # The idle penalty alone (~0.1) is too mild — this teaches the model to
-        # maintain safe distances proactively rather than relying on the monitor.
-        if safety_blocked:
-            reward -= 0.3  # Significant per-step penalty for triggering the monitor
+        # ========== WALL AVOIDANCE SYSTEM ==========
+        wall_stopped = safety_blocked and linear_vel < 0.05
 
-            # Reward rotation attempts to escape (model should learn to turn away)
+        if wall_stopped:
+            self._wall_stop_active = True
+            self._wall_stop_steps += 1
+            self._steps_since_wall_stop = 0
+        else:
+            if self._wall_stop_active:
+                self._wall_stop_active = False
+                self._wall_stop_steps = 0
+            self._steps_since_wall_stop += 1
+
+        # A. Continual Avoidance Bonus (driving wall-free)
+        if not wall_stopped and linear_vel > 0.05:
+            streak_factor = min(self._steps_since_wall_stop / 150.0, 1.0)  # ramps over ~5s
+            vel_factor = min(linear_vel / target_speed, 1.0)
+            clearance_factor = np.clip((min_lidar_dist - 0.3) / 0.5, 0.0, 1.0)  # 0 at 0.3m, 1 at 0.8m+
+
+            avoidance_base = {'exploration': 0.20, 'learning': 0.25, 'refinement': 0.30}[phase]
+            reward += avoidance_base * streak_factor * vel_factor * clearance_factor
+
+        # B. Wall-Stop Penalty (stopped at wall)
+        if wall_stopped:
+            wall_stop_base = -0.5
+            ramp = min(self._wall_stop_steps / 60.0, 1.0)  # ramps over ~2s
+            penalty = wall_stop_base + (-0.3 * ramp)
+
+            if phase == 'exploration':    penalty *= 0.5   # -0.25 to -0.40
+            elif phase == 'learning':     penalty *= 0.75  # -0.375 to -0.60
+            # refinement: full                               -0.50 to -0.80
+
+            reward += penalty
+
+            # Recovery shaping: reward escape attempts
             rot_effort = abs(left_track - right_track)
             if rot_effort > 0.3:
                 reward += 0.15 * rot_effort
-
-            # Reward backward attempts to create distance
             if linear_vel < -0.02:
-                reward += 0.1
+                reward += 0.10
 
         # Always update previous clearance for next step (moved outside conditional)
         self._prev_min_clearance = min_lidar_dist
@@ -1710,6 +1734,11 @@ class SACEpisodeRunner(Node):
         self._lstm_hx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
         self._lstm_cx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
 
+        # Reset wall avoidance streak tracking
+        self._steps_since_wall_stop = 0
+        self._wall_stop_active = False
+        self._wall_stop_steps = 0
+
         request = Trigger.Request()
         future = self.reset_episode_client.call_async(request)
 
@@ -1870,9 +1899,9 @@ class SACEpisodeRunner(Node):
         else:
             components['arc_turn'] = 0.0
 
-        # Wall Avoidance
-        if min_lidar_dist < 0.5 and linear_vel > 0.1:
-            components['wall_avoid'] = -0.5 * (0.5 - min_lidar_dist) * linear_vel
+        # Wall Proximity Penalty (tightened)
+        if min_lidar_dist < 0.4 and linear_vel > 0.1:
+            components['wall_avoid'] = -0.25 * (0.4 - min_lidar_dist) * linear_vel
         else:
             components['wall_avoid'] = 0.0
 
@@ -1884,15 +1913,30 @@ class SACEpisodeRunner(Node):
             if straight_intent > 0.1 and abs(angular_vel) > 0.1:
                 components['heading_track'] = -0.2 * abs(angular_vel) * straight_intent
 
-        # Safety Monitor Blocked
-        components['safety_block'] = 0.0
-        if self._safety_override:
-            components['safety_block'] = -0.3
+        # Wall Avoidance System
+        wall_stopped = self._safety_override and linear_vel < 0.05
+        components['wall_avoidance_bonus'] = 0.0
+        components['wall_stop_penalty'] = 0.0
+
+        if not wall_stopped and linear_vel > 0.05:
+            streak_factor = min(self._steps_since_wall_stop / 150.0, 1.0)
+            vel_factor = min(linear_vel / target_speed, 1.0)
+            clearance_factor = float(np.clip((min_lidar_dist - 0.3) / 0.5, 0.0, 1.0))
+            avoidance_base = {'exploration': 0.20, 'learning': 0.25, 'refinement': 0.30}[phase]
+            components['wall_avoidance_bonus'] = avoidance_base * streak_factor * vel_factor * clearance_factor
+
+        if wall_stopped:
+            wall_stop_base = -0.5
+            ramp = min(self._wall_stop_steps / 60.0, 1.0)
+            penalty = wall_stop_base + (-0.3 * ramp)
+            if phase == 'exploration':    penalty *= 0.5
+            elif phase == 'learning':     penalty *= 0.75
+            components['wall_stop_penalty'] = penalty
             rot_effort = abs(left_track - right_track)
             if rot_effort > 0.3:
-                components['safety_block'] += 0.15 * rot_effort
+                components['wall_stop_penalty'] += 0.15 * rot_effort
             if linear_vel < -0.02:
-                components['safety_block'] += 0.1
+                components['wall_stop_penalty'] += 0.10
 
         # Log
         total = sum(components.values())
@@ -1905,7 +1949,7 @@ class SACEpisodeRunner(Node):
             f"TrkCoord={components['track_coord']:.2f} TrkBonus={components['track_coord_bonus']:+.2f} "
             f"Straight={components['straight_bonus']:+.2f} Smooth={components['smoothness']:.2f} | "
             f"Exp={components['exploration']:+.2f} Div={components['diversity']:+.2f} Unstuck={components['unstuck']:+.2f}\n"
-            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} SafeBlock={components['safety_block']:+.2f} HdgTrk={components['heading_track']:+.2f}"
+            f"   StuckState={components['stuck_state']:+.2f} Arc={components['arc_turn']:+.2f} Wall={components['wall_avoid']:+.2f} Slip={components['slip']:+.2f} WallBonus={components['wall_avoidance_bonus']:+.2f} WallPen={components['wall_stop_penalty']:+.2f} HdgTrk={components['heading_track']:+.2f}"
         )
     
     def _check_phase_transition(self):
