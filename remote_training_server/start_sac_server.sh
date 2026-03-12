@@ -1,13 +1,43 @@
 #!/bin/bash
 
-# SAC Training Server Startup Script for V620
-# Trains a continuous SAC policy using ROCm acceleration with Unified BEV architecture
+# SAC Training Server Startup Script
+# Auto-detects hardware (ROCm V620 / CUDA Grace Blackwell) and configures FP16 training
 
 set -e
 
-echo "=================================================="
-echo "SAC Training Server (V620) - Unified BEV Architecture"
-echo "=================================================="
+# Detect hardware backend
+CUDA_AVAILABLE=0
+ROCM_AVAILABLE=0
+CUDA_VERSION=""
+ROCm_VERSION=""
+
+if command -v nvidia-smi &> /dev/null; then
+  CUDA_AVAILABLE=1
+  CUDA_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)
+  GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+  echo "=================================================="
+  echo "SAC Training Server (CUDA) - Grace Blackwell / H100"
+  echo "=================================================="
+  echo ""
+  echo "CUDA GPU Detected:"
+  echo "  Driver: ${CUDA_VERSION}"
+  echo "  GPU: ${GPU_NAME}"
+elif command -v rocm-smi &> /dev/null; then
+  ROCM_AVAILABLE=1
+  ROCM_VERSION=$(rocm-smi --version 2>/dev/null | head -1)
+  GPU_NAME=$(rocm-smi --showproductname 2>/dev/null | grep -A1 "GPU" | tail -1 | tr -d ' ' || echo "Unknown")
+  echo "=================================================="
+  echo "SAC Training Server (ROCm) - V620 Unified BEV Architecture"
+  echo "=================================================="
+  echo ""
+  echo "ROCm GPU Detected:"
+  echo "  Version: ${ROCM_VERSION}"
+  echo "  GPU: ${GPU_NAME}"
+else
+  echo "=================================================="
+  echo "SAC Training Server (No GPU) - CPU Fallback"
+  echo "=================================================="
+fi
 
 # Configuration
 NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
@@ -144,10 +174,25 @@ import sys
 
 # Check CUDA (includes ROCm)
 if torch.cuda.is_available():
-    print(f'✓ CUDA/ROCm GPU detected: {torch.cuda.get_device_name(0)}')
-    print(f'  Device count: {torch.cuda.device_count()}')
-    print(f'  CUDA version: {torch.version.cuda}')
+    device_name = torch.cuda.get_device_name(0)
+    device_count = torch.cuda.device_count()
+    cuda_version = torch.version.cuda
+    
+    print(f'✓ CUDA/ROCm GPU detected: {device_name}')
+    print(f'  Device count: {device_count}')
+    print(f'  CUDA version: {cuda_version}')
     print(f'  Backend: CUDA')
+    
+    # Check for Grace Blackwell (H100/B100 series)
+    if 'H100' in device_name or 'B100' in device_name or 'Grace' in device_name:
+        print(f'  GPU Type: Grace Blackwell / H100 Series')
+        print(f'  FP16 Support: Hardware tensor cores (2x speedup)')
+    elif 'V620' in device_name or 'Navi' in device_name or 'RX' in device_name:
+        print(f'  GPU Type: AMD ROCm (V620)')
+        print(f'  FP16 Support: HIP FP16 (2x speedup)')
+    else:
+        print(f'  GPU Type: Standard CUDA GPU')
+    
     sys.exit(0)
 
 # Check MPS (Apple Silicon)
@@ -237,36 +282,67 @@ else
   echo "   Run start_vae_training.sh first to pre-train, or training from scratch."
 fi
 
-# ROCm optimizations (environment variables)
-if [ "$OS_TYPE" = "Linux" ] && command -v rocm-smi &> /dev/null; then
-  echo ""
-  echo "Applying ROCm optimizations..."
-  export HSA_FORCE_FINE_GRAIN_PCIE=1
-  export MIOPEN_FIND_ENFORCE=NONE
-  export MIOPEN_DISABLE_CACHE=0 # Enable cache to speed up startup after first run
+# Hardware-specific optimizations (FP16 enabled for both CUDA/ROCm)
+if [ "$OS_TYPE" = "Linux" ]; then
+  if command -v nvidia-smi &> /dev/null; then
+    # CUDA (Grace Blackwell / H100) optimizations
+    echo ""
+    echo "Applying CUDA optimizations (FP16 enabled)..."
+    export CUDA_MODULE_LOADING=LAZY
+    export CUDA_LAUNCH_BLOCKING=0
+    export NCCL_NVLS_ENABLE=1
+    export NCCL_NVLS_SELF=0
+    export CUDA_VISIBLE_DEVICES=0
+    
+    # FP16/TF32 tuning for Blackwell/H100 tensor cores
+    export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+    
+    # CuDNN frontend API for faster kernel selection
+    export CUDNN_FRONTEND_API=1
+    export CUDNN_FRONTEND_LOG_LEVEL=0
+    
+    # Memory optimization
+    export CUDA_MAX_WORKER_RANK=0
+    
+    echo "✓ Grace Blackwell/H100-optimized CUDA environment variables set"
+    echo "  FP16 mode: Enabled via AMP in Python trainer"
+    
+  elif command -v rocm-smi &> /dev/null; then
+    # ROCm (V620) optimizations
+    echo ""
+    echo "Applying ROCm optimizations (FP16 enabled)..."
+    export HSA_FORCE_FINE_GRAIN_PCIE=1
+    export MIOPEN_FIND_ENFORCE=NONE
+    export MIOPEN_DISABLE_CACHE=0
+    
+    # V620-specific optimizations
+    export PYTORCH_ROCM_ARCH="gfx1030"  # V620 architecture (Navi 21)
+    export MIOPEN_DEBUG_DISABLE_FIND_DB=0
+    export HSA_ENABLE_SDMA=0
+    export MIOPEN_FIND_MODE=NORMAL
+    export HSA_OVERRIDE_GFX_VERSION=10.3.0
+    
+    # Memory allocator tuning for torch.compile + training workloads
+    export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
+    
+    # torch.compile backend for ROCm
+    export TORCHINDUCTOR_FORCE_DISABLE_CACHES=0
+    
+    echo "✓ V620-optimized ROCm environment variables set"
+    echo "  FP16 mode: Enabled via AMP in Python trainer"
+  fi
+fi
 
-  # V620-specific optimizations
-  export PYTORCH_ROCM_ARCH="gfx1030"  # V620 architecture (Navi 21)
-  export MIOPEN_DEBUG_DISABLE_FIND_DB=0  # Enable find-db for faster ops
-  export HSA_ENABLE_SDMA=0  # Disable SDMA for better performance
-  export MIOPEN_FIND_MODE=NORMAL  # Use normal find mode
-  export HSA_OVERRIDE_GFX_VERSION=10.3.0  # Ensure correct GFX version
-
-  # Memory allocator tuning for torch.compile + training workloads
-  export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
-
-  # torch.compile backend for ROCm
-  export TORCHINDUCTOR_FORCE_DISABLE_CACHES=0  # Enable inductor caching
-
-  echo "✓ V620-optimized ROCm environment variables set"
-
-  # Check available VRAM
-  echo ""
-  echo "Checking GPU memory..."
+# Check available VRAM
+echo ""
+echo "Checking GPU memory..."
+if command -v nvidia-smi &> /dev/null; then
+  TOTAL_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader 2>/dev/null | grep -oE '[0-9]+' | head -1)
+  echo "  Total VRAM: ${TOTAL_VRAM} MB"
+elif command -v rocm-smi &> /dev/null; then
   if rocm-smi --showmeminfo vram 2>/dev/null | grep -q "Total"; then
     TOTAL_VRAM=$(rocm-smi --showmeminfo vram 2>/dev/null | grep "VRAM Total Memory" | awk '{print $5}')
     echo "  Total VRAM: ${TOTAL_VRAM} MB"
-    # Note: Batch size of 256 requires ~8GB
   fi
 fi
 
