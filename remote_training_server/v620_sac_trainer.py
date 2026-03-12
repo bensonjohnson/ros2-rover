@@ -297,30 +297,19 @@ class V620SACTrainer:
             torch.backends.cudnn.benchmark = True # REQUIRED for speed
             print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
 
-            # FP16/AMP Configuration for Grace Blackwell / V620
-            # - Grace Blackwell: FP16 tensor cores, ~2x speedup over FP32
-            # - V620 (ROCm): FP16 support via HIP, AMP enabled
-            print("")
-            print("FP16 Mode Configuration:")
-            
-            # Enable TF32 for faster matmul/conv on NVIDIA hardware
+            # Enable TF32 for faster matmul/conv on supported hardware
             torch.set_float32_matmul_precision('high')
             try:
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
-                print("  ✓ TF32 precision enabled (NVIDIA hardware)")
+                print("✓ TF32 precision enabled (matmul + cudnn)")
             except AttributeError:
-                print("  - TF32 not available (ROCm or older GPU)")
+                pass
 
-            # Enable Automatic Mixed Precision for FP16 training
-            # AMP uses bfloat16 on ROCm, fp16 on CUDA - both provide ~2x speedup
+            # Enable Automatic Mixed Precision for 2x speedup
             self.use_amp = True
-            # Use dynamic scaling for better numerical stability
-            self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
-            print("  ✓ FP16 mode enabled via AMP (Automatic Mixed Precision)")
-            print("    - Forward pass: FP16 (2x throughput)")
-            print("    - Gradients: FP16 (reduced memory)")
-            print("    - Optimizer: FP32 (maintains precision)")
+            self.scaler = torch.amp.GradScaler('cuda')
+            print("✓ Enabled AMP (Automatic Mixed Precision)")
         else:
             self.device = torch.device('cpu')
             self.use_amp = False
