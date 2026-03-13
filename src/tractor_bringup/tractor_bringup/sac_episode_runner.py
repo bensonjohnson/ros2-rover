@@ -279,7 +279,7 @@ class SACEpisodeRunner(Node):
         self._model_update_needed = False
 
         # LSTM hidden state (carried across timesteps, reset on episode boundary)
-        self._lstm_hidden_size = 128  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
+        self._lstm_hidden_size = 256  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN (updated from 128)
         self._lstm_hx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
         self._lstm_cx = np.zeros((1, self._lstm_hidden_size), dtype=np.float32)
         

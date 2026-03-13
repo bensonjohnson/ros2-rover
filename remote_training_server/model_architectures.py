@@ -569,6 +569,27 @@ class ResBlock(nn.Module):
         return self.relu(x + self.conv2(self.relu(self.conv1(x))))
 
 
+class ResBlockWithDownsample(nn.Module):
+    """Residual block with optional downsampling for channel expansion.
+    
+    Used in the encoder when increasing channel dimensions.
+    """
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+        
+        # Skip connection projection if channels change
+        if in_channels != out_channels:
+            self.skip_proj = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride)
+        else:
+            self.skip_proj = nn.Identity()
+
+    def forward(self, x):
+        return self.relu(self.conv2(self.relu(self.conv1(x))) + self.skip_proj(x))
+
+
 class UnifiedBEVEncoder(nn.Module):
     """
     Encoder for 2-channel 128×128 unified BEV grid with residual blocks.
@@ -577,38 +598,40 @@ class UnifiedBEVEncoder(nn.Module):
         - Channel 0: LiDAR occupancy (360° top-down)
         - Channel 1: Depth occupancy (front arc projected)
 
-    Output: (B, 512) features
+    Output: (B, 1024) features
 
     Architecture: 128 → 64 (res) → 32 (res) → 16 → 8 → 4
+    Increased channel width (64→128→64) provides more expressive spatial features.
     Residual blocks at 64×64 and 32×32 enable learning spatial relationships
     (gaps between obstacles, wall corners, corridor structure).
     """
     def __init__(self, input_channels: int = 2):
         super().__init__()
-        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1)  # 128→64
-        self.res1 = ResBlock(32)                                                          # 64×64
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)               # 64→32
-        self.res2 = ResBlock(64)                                                          # 32×32
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 32→16
-        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)               # 16→8
-        self.conv5 = nn.Conv2d(64, 32, kernel_size=3, stride=2, padding=1)               # 8→4
+        # Increased channel width for more expressive features
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1)  # 128→64
+        self.res1 = ResBlock(64)                                                         # 64×64
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)             # 64→32
+        self.res2 = ResBlock(128)                                                        # 32×32
+        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)            # 32→16
+        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)            # 16→8
+        self.conv5 = nn.Conv2d(128, 64, kernel_size=3, stride=2, padding=1)             # 8→4
 
         self.relu = nn.ReLU(inplace=True)
 
-        # Output: 32 channels × 4 × 4 = 512 features
-        self._output_dim = 32 * 4 * 4
+        # Output: 64 channels × 4 × 4 = 1024 features
+        self._output_dim = 64 * 4 * 4
 
     def forward(self, x):
         # Input: (B, 2, 128, 128)
-        x = self.relu(self.conv1(x))  # (B, 32, 64, 64)
-        x = self.res1(x)              # (B, 32, 64, 64)
-        x = self.relu(self.conv2(x))  # (B, 64, 32, 32)
-        x = self.res2(x)              # (B, 64, 32, 32)
-        x = self.relu(self.conv3(x))  # (B, 64, 16, 16)
-        x = self.relu(self.conv4(x))  # (B, 64, 8, 8)
-        x = self.relu(self.conv5(x))  # (B, 32, 4, 4)
+        x = self.relu(self.conv1(x))  # (B, 64, 64, 64)
+        x = self.res1(x)              # (B, 64, 64, 64)
+        x = self.relu(self.conv2(x))  # (B, 128, 32, 32)
+        x = self.res2(x)              # (B, 128, 32, 32)
+        x = self.relu(self.conv3(x))  # (B, 128, 16, 16)
+        x = self.relu(self.conv4(x))  # (B, 128, 8, 8)
+        x = self.relu(self.conv5(x))  # (B, 64, 4, 4)
 
-        x = x.flatten(start_dim=1)    # (B, 512)
+        x = x.flatten(start_dim=1)    # (B, 1024)
         return x
 
     @property
@@ -759,8 +782,10 @@ class UnifiedBEVPolicyNetwork(nn.Module):
     The LSTMCell provides temporal context at inference (hidden state carried
     across timesteps). During training with replay buffer, hidden state is
     zeroed per sample — the LSTM still learns useful gated transformations.
+    
+    Updated: 1024 BEV features, 256 LSTM hidden size for more expressive policy.
     """
-    LSTM_HIDDEN = 128
+    LSTM_HIDDEN = 256
 
     def __init__(self, action_dim=2, proprio_dim=6):
         super().__init__()
@@ -775,19 +800,20 @@ class UnifiedBEVPolicyNetwork(nn.Module):
         )
 
         # LSTMCell for temporal memory (single timestep, RKNN-compatible)
-        fusion_dim = self.bev_encoder.output_dim + 32  # 512 + 32 = 544
+        # Updated: 1024 BEV features + 32 proprio = 1056 → 256 LSTM hidden
+        fusion_dim = self.bev_encoder.output_dim + 32  # 1024 + 32 = 1056
         self.lstm_cell = nn.LSTMCell(fusion_dim, self.LSTM_HIDDEN)
 
-        # Policy heads from LSTM hidden state
+        # Policy heads from LSTM hidden state (updated for 256-dim)
         self.mean_head = nn.Sequential(
-            nn.Linear(self.LSTM_HIDDEN, 64),
+            nn.Linear(self.LSTM_HIDDEN, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(64, action_dim),
+            nn.Linear(128, action_dim),
         )
         self.log_std_head = nn.Sequential(
-            nn.Linear(self.LSTM_HIDDEN, 64),
+            nn.Linear(self.LSTM_HIDDEN, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(64, action_dim),
+            nn.Linear(128, action_dim),
         )
 
     def forward(self, bev_grid, proprio, hx=None, cx=None):
@@ -796,15 +822,15 @@ class UnifiedBEVPolicyNetwork(nn.Module):
         Args:
             bev_grid: (B, 2, 128, 128)
             proprio: (B, 6)
-            hx: (B, 128) LSTM hidden state, or None for zeros
-            cx: (B, 128) LSTM cell state, or None for zeros
+            hx: (B, 256) LSTM hidden state, or None for zeros
+            cx: (B, 256) LSTM cell state, or None for zeros
 
         Returns:
             mean, log_std, hx_new, cx_new
         """
         bev_feats = self.bev_encoder(bev_grid)
         proprio_feats = self.proprio_encoder(proprio)
-        fused = torch.cat([bev_feats, proprio_feats], dim=1)  # (B, 544)
+        fused = torch.cat([bev_feats, proprio_feats], dim=1)  # (B, 1056)
 
         if hx is None:
             hx = torch.zeros(bev_grid.size(0), self.LSTM_HIDDEN, device=bev_grid.device)
@@ -838,12 +864,20 @@ class UnifiedBEVQNetwork(nn.Module):
         )
 
         # Q-network: BEV features + proprio + action
-        fusion_dim = self.bev_encoder.output_dim + 32 + action_dim  # 512 + 32 + 2 = 546
+        # Updated: 1024 + 32 + 2 = 1058
+        fusion_dim = self.bev_encoder.output_dim + 32 + action_dim
 
         layers = [
-            nn.Linear(fusion_dim, 256),
+            nn.Linear(fusion_dim, 512),
             nn.ReLU(inplace=True),
         ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.extend([
+            nn.Linear(512, 256),
+            nn.ReLU(inplace=True),
+        ])
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
 
@@ -873,19 +907,28 @@ class _QHead(nn.Module):
 
     Takes pre-computed BEV features and outputs a Q-value scalar.
     Dropout lives here so DroQ re-runs only this lightweight MLP.
+    
+    Updated: 1024 BEV features, deeper Q-head for better function approximation.
     """
-    def __init__(self, proprio_dim=6, action_dim=2, bev_feat_dim=512, dropout=0.0):
+    def __init__(self, proprio_dim=6, action_dim=2, bev_feat_dim=1024, dropout=0.0):
         super().__init__()
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 32),
             nn.ReLU(inplace=True),
         )
 
+        # Updated: 1024 + 32 + 2 = 1058
         fusion_dim = bev_feat_dim + 32 + action_dim
         layers = [
-            nn.Linear(fusion_dim, 256),
+            nn.Linear(fusion_dim, 512),
             nn.ReLU(inplace=True),
         ]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(p=dropout))
+        layers.extend([
+            nn.Linear(512, 256),
+            nn.ReLU(inplace=True),
+        ])
         if dropout > 0.0:
             layers.append(nn.Dropout(p=dropout))
         layers.extend([
@@ -912,11 +955,13 @@ class SharedBEVCriticPair(nn.Module):
 
     DroQ dropout lives in the Q-head MLPs only — encoder features are reused
     across DroQ samples without re-computation.
+    
+    Updated: 1024 BEV features for more expressive critics.
     """
     def __init__(self, action_dim=2, proprio_dim=6, dropout=0.0):
         super().__init__()
         self.encoder = UnifiedBEVEncoder(input_channels=2)
-        bev_feat_dim = self.encoder.output_dim
+        bev_feat_dim = self.encoder.output_dim  # 1024
         self.q1_head = _QHead(proprio_dim, action_dim, bev_feat_dim, dropout)
         self.q2_head = _QHead(proprio_dim, action_dim, bev_feat_dim, dropout)
 
