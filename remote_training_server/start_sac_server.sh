@@ -44,8 +44,8 @@ NATS_SERVER=${1:-"nats://nats.gokickrocks.org:4222"}
 CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
 BATCH_SIZE=${4:-256}  # Standard SAC batch size; more gradient steps/sec > larger batches for off-policy RL
-BUFFER_SIZE=${5:-750000}  # 750k samples (~24GB VRAM) - Optimized for 32GB GPU with model overhead
-GPU_BUFFER=false  # Keep buffer on CPU; GPU buffer needs >40GB VRAM (model + backward pass + hipBLAS temps)
+BUFFER_SIZE=${5:-500000}  # 500k samples (~16GB VRAM) - Leaves ~14GB for model + training on 30GB V620
+GPU_BUFFER=true  # Store buffer on GPU for faster sampling
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
@@ -315,21 +315,20 @@ if [ "$OS_TYPE" = "Linux" ]; then
     export MIOPEN_FIND_ENFORCE=NONE
     export MIOPEN_DISABLE_CACHE=0
     
-    # V620-specific optimizations
+    # V620-specific optimizations (ROCm 6.2)
     export PYTORCH_ROCM_ARCH="gfx1030"  # V620 architecture (Navi 21)
     export MIOPEN_DEBUG_DISABLE_FIND_DB=0
-    export HSA_ENABLE_SDMA=1             # SDMA enabled — disabling caused alloc issues on ROCm 7.x
-    export MIOPEN_FIND_MODE=FAST         # FAST avoids exhaustive workspace allocation that causes OOM
+    export HSA_ENABLE_SDMA=0             # Disable SDMA for stable memory copies on gfx1030
+    export MIOPEN_FIND_MODE=NORMAL       # Full benchmark for best kernel selection
     export HSA_OVERRIDE_GFX_VERSION=10.3.0
 
-    # Memory allocator tuning for ROCm - prevent OOM from fragmentation
-    # expandable_segments:True - allows memory reuse across different tensor sizes
-    # max_split_size_mb:512 - cap individual allocations to reduce fragmentation
-    export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+    # Memory allocator tuning for ROCm 6.2
+    # expandable_segments supported on ROCm 6.2 for gfx1030
+    export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
 
-    echo "✓ V620-optimized ROCm environment variables set"
-    echo "  FP16 mode: Enabled via AMP in Python trainer"
-    echo "  MIOpen find mode: FAST (avoids OOM from workspace benchmarks)"
+    echo "✓ V620-optimized ROCm 6.2 environment variables set"
+    echo "  AMP FP16: Enabled via Python trainer"
+    echo "  MIOpen benchmark: NORMAL (full kernel search)"
   fi
 fi
 
