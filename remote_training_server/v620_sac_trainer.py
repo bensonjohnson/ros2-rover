@@ -464,14 +464,18 @@ class V620SACTrainer:
 
         # torch.compile for kernel fusion and reduced launch overhead (ROCm/CUDA)
         # Must be applied AFTER checkpoint loading (compiled modules prefix keys with _orig_mod.)
-        if self.device.type == 'cuda':
+        # NOTE: Disabled for ROCm with large buffers to prevent HIPBLAS_STATUS_ALLOC_FAILED
+        # The compile step requires extra VRAM for temporary buffers that may not be available
+        if self.device.type == 'cuda' and not args.disable_compile:
             try:
-                self.actor = torch.compile(self.actor)
-                self.critic_pair = torch.compile(self.critic_pair)
-                self.target_critic_pair = torch.compile(self.target_critic_pair)
-                print("✓ torch.compile enabled (default mode)")
+                # Use 'inductor' backend with reduced memory overhead
+                self.actor = torch.compile(self.actor, mode='reduce-overhead')
+                self.critic_pair = torch.compile(self.critic_pair, mode='reduce-overhead')
+                self.target_critic_pair = torch.compile(self.target_critic_pair, mode='reduce-overhead')
+                print("✓ torch.compile enabled (reduce-overhead mode)")
             except Exception as e:
                 print(f"⚠ torch.compile failed, continuing without: {e}")
+                print("  Consider adding --disable_compile flag for large buffers")
 
         # Load replay buffer if exists
         buffer_path = os.path.join(args.checkpoint_dir, "replay_buffer.pt")
@@ -1610,6 +1614,8 @@ if __name__ == '__main__':
                         help='Path to pre-trained BEV encoder weights (e.g. checkpoints_sac/vae/best_bev_encoder.pt)')
     parser.add_argument('--freeze_encoder', action='store_true',
                         help='Freeze the encoder weights so they are not updated by SAC')
+    parser.add_argument('--disable-compile', action='store_true',
+                        help='Disable torch.compile to prevent OOM with large buffers on ROCm')
     args = parser.parse_args()
 
     trainer = V620SACTrainer(args)
