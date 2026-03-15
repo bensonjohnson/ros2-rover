@@ -477,6 +477,9 @@ class V620SACTrainer:
         buffer_path = os.path.join(args.checkpoint_dir, "replay_buffer.pt")
         self.buffer.load(buffer_path)
 
+        # Track last buffer save size for periodic saves (every 25k items)
+        self.last_buffer_save = self.buffer.size
+
         # Set up signal handler for graceful shutdown
         self._shutdown_requested = False
         signal.signal(signal.SIGINT, self._save_on_shutdown)
@@ -985,6 +988,12 @@ class V620SACTrainer:
                 # Log current learning rates
                 self.writer.add_scalar('LR/Actor', self.actor_optimizer.param_groups[0]['lr'], self.total_steps)
                 self.writer.add_scalar('LR/Critic', self.critic_optimizer.param_groups[0]['lr'], self.total_steps)
+
+            # Save replay buffer every 25k new items
+            if self.buffer.size - self.last_buffer_save >= 25000:
+                buffer_path = os.path.join(self.args.checkpoint_dir, "replay_buffer.pt")
+                self.buffer.save(buffer_path)
+                self.last_buffer_save = self.buffer.size
 
 
     def _validate_tensor(self, tensor, name):
