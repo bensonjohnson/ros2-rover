@@ -323,18 +323,21 @@ class V620SACTrainer:
                 print("  - TF32 not available (ROCm or older GPU)")
 
             # Enable Automatic Mixed Precision for FP16 training
-            self.use_amp = True
             if self._is_rocm:
-                # Lower init_scale on ROCm RDNA 2 — high scales cause frequent
-                # overflows → scale adjustments → extra temporary allocations
-                self.scaler = torch.amp.GradScaler('cuda', init_scale=1024.0, growth_factor=1.5)
-                print("  ✓ AMP GradScaler (ROCm-tuned: init_scale=1024)")
+                # RDNA 2 (gfx1030) has limited FP16 matrix support — hipBLAS
+                # GEMM kernels for FP16 may not exist, causing
+                # HIPBLAS_STATUS_ALLOC_FAILED. Disable AMP on ROCm RDNA 2.
+                self.use_amp = False
+                self.scaler = None
+                print("  AMP disabled on ROCm RDNA 2 (missing FP16 hipBLAS kernels)")
+                print("  Training in FP32 — stable on V620/gfx1030")
             else:
+                self.use_amp = True
                 self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
-            print("  ✓ FP16 mode enabled via AMP (Automatic Mixed Precision)")
-            print("    - Forward pass: FP16 (2x throughput)")
-            print("    - Gradients: FP16 (reduced memory)")
-            print("    - Optimizer: FP32 (maintains precision)")
+                print("  ✓ FP16 mode enabled via AMP (Automatic Mixed Precision)")
+                print("    - Forward pass: FP16 (2x throughput)")
+                print("    - Gradients: FP16 (reduced memory)")
+                print("    - Optimizer: FP32 (maintains precision)")
         else:
             self.device = torch.device('cpu')
             self.use_amp = False
