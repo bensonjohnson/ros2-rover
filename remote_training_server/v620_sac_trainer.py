@@ -294,15 +294,25 @@ class V620SACTrainer:
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
             print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-            torch.backends.cudnn.benchmark = True # REQUIRED for speed
-            print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
+
+            # Detect ROCm vs CUDA
+            self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+
+            if self._is_rocm:
+                # ROCm/MIOpen: disable benchmark to prevent exhaustive kernel search
+                # that fragments VRAM with large temporary workspace allocations
+                torch.backends.cudnn.benchmark = False
+                print("  MIOpen benchmark: disabled (ROCm — prevents VRAM fragmentation)")
+            else:
+                torch.backends.cudnn.benchmark = True
+                print("✓ Enabled cuDNN benchmark (Startup may take ~2min)")
 
             # FP16/AMP Configuration for Grace Blackwell / V620
             # - Grace Blackwell: FP16 tensor cores, ~2x speedup over FP32
             # - V620 (ROCm): FP16 support via HIP, AMP enabled
             print("")
             print("FP16 Mode Configuration:")
-            
+
             # Enable TF32 for faster matmul/conv on NVIDIA hardware
             torch.set_float32_matmul_precision('high')
             try:
@@ -313,10 +323,14 @@ class V620SACTrainer:
                 print("  - TF32 not available (ROCm or older GPU)")
 
             # Enable Automatic Mixed Precision for FP16 training
-            # AMP uses bfloat16 on ROCm, fp16 on CUDA - both provide ~2x speedup
             self.use_amp = True
-            # Use dynamic scaling for better numerical stability
-            self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
+            if self._is_rocm:
+                # Lower init_scale on ROCm RDNA 2 — high scales cause frequent
+                # overflows → scale adjustments → extra temporary allocations
+                self.scaler = torch.amp.GradScaler('cuda', init_scale=1024.0, growth_factor=1.5)
+                print("  ✓ AMP GradScaler (ROCm-tuned: init_scale=1024)")
+            else:
+                self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
             print("  ✓ FP16 mode enabled via AMP (Automatic Mixed Precision)")
             print("    - Forward pass: FP16 (2x throughput)")
             print("    - Gradients: FP16 (reduced memory)")
@@ -921,6 +935,11 @@ class V620SACTrainer:
                 print("==================================================")
                 print("   SAC TRAINING DASHBOARD (CONTINUOUS MODE)     ")
                 print("==================================================")
+                if torch.cuda.is_available():
+                    alloc = torch.cuda.memory_allocated(0) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                    total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    print(f"  GPU VRAM: {alloc:.1f}GB allocated, {reserved:.1f}GB reserved, {total:.1f}GB total")
                 pbar = tqdm(initial=self.total_steps, desc="🎯 SAC Training", unit="step", dynamic_ncols=True)
 
             # CONTINUOUS TRAINING: No bursts, no pauses
@@ -954,10 +973,14 @@ class V620SACTrainer:
 
             except (ValueError, torch.AcceleratorError, RuntimeError) as e:
                 tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
-                tqdm.write(f"   Skipping this batch and continuing...")
-                # Clear GPU memory to recover from OOM / hipBLAS failures
                 if torch.cuda.is_available():
+                    alloc = torch.cuda.memory_allocated(0) / (1024**3)
+                    reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                    tqdm.write(f"   VRAM at failure: {alloc:.2f}GB allocated, {reserved:.2f}GB reserved")
                     torch.cuda.empty_cache()
+                    alloc2 = torch.cuda.memory_allocated(0) / (1024**3)
+                    tqdm.write(f"   VRAM after cache clear: {alloc2:.2f}GB allocated")
+                tqdm.write(f"   Skipping this batch and continuing...")
                 # Don't increment total_steps, but continue training
                 pbar.update(1)
                 continue

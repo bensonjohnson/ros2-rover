@@ -318,27 +318,18 @@ if [ "$OS_TYPE" = "Linux" ]; then
     # V620-specific optimizations
     export PYTORCH_ROCM_ARCH="gfx1030"  # V620 architecture (Navi 21)
     export MIOPEN_DEBUG_DISABLE_FIND_DB=0
-    export HSA_ENABLE_SDMA=0
-    export MIOPEN_FIND_MODE=NORMAL
+    export HSA_ENABLE_SDMA=1             # SDMA enabled — disabling caused alloc issues on ROCm 7.x
+    export MIOPEN_FIND_MODE=FAST         # FAST avoids exhaustive workspace allocation that causes OOM
     export HSA_OVERRIDE_GFX_VERSION=10.3.0
-    
+
     # Memory allocator tuning for ROCm - prevent OOM from fragmentation
     # expandable_segments:True - allows memory reuse across different tensor sizes
-    export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True"
-    
-    # torch.compile backend for ROCm - reduce memory pressure
-    # Disable caching allocator to prevent fragmentation
-    export TORCHINDUCTOR_FORCE_DISABLE_CACHES=1
-    # Limit inductor memory usage
-    export TORCHINDUCTOR_CACHE_DIR="/tmp/torch_inductor_cache"
-    
-    # Prevent memory fragmentation during hipblas operations
-    export HSA_SIGNAL_POOL_SIZE=1048576
-    
+    # max_split_size_mb:512 - cap individual allocations to reduce fragmentation
+    export PYTORCH_HIP_ALLOC_CONF="expandable_segments:True,max_split_size_mb:512"
+
     echo "✓ V620-optimized ROCm environment variables set"
     echo "  FP16 mode: Enabled via AMP in Python trainer"
-    echo "  Memory allocator: expandable segments + round-robin"
-    echo "  Inductor cache: disabled (prevent fragmentation)"
+    echo "  MIOpen find mode: FAST (avoids OOM from workspace benchmarks)"
   fi
 fi
 
