@@ -1055,6 +1055,10 @@ class V620SACTrainer:
             last_q2 = q2
             last_q_target = q_target
 
+            # Free critic backward graph before actor forward to reduce peak VRAM
+            del critic_loss
+            torch.cuda.empty_cache()
+
             # 2. Update Actor (every K steps)
             if grad_step % self.args.actor_update_freq == 0:
                 actor_loss, log_prob, min_q_pi = self._update_actor(batch)

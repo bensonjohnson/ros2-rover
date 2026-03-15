@@ -45,7 +45,7 @@ CHECKPOINT_DIR=${2:-./checkpoints_sac}
 LOG_DIR=${3:-./logs_sac}
 BATCH_SIZE=${4:-256}  # Standard SAC batch size; more gradient steps/sec > larger batches for off-policy RL
 BUFFER_SIZE=${5:-750000}  # 750k samples (~24GB VRAM) - Optimized for 32GB GPU with model overhead
-GPU_BUFFER=true  # Store buffer on GPU to maximize VRAM utilization (32GB GPU can handle ~950k samples)
+GPU_BUFFER=false  # Keep buffer on CPU; GPU buffer needs >40GB VRAM (model + backward pass + hipBLAS temps)
 
 echo "Configuration:"
 echo "  NATS Server: ${NATS_SERVER}"
