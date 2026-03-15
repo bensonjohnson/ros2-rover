@@ -643,8 +643,8 @@ class V620SACTrainer:
     def _export_actor_onnx(self, onnx_path: str):
         """Export actor to ONNX with LSTMCell hidden state inputs/outputs.
 
-        Inputs: bev (1,2,128,128), proprio (1,6), hx (1,128), cx (1,128)
-        Outputs: action (1,2), hx_out (1,128), cx_out (1,128)
+        Inputs: bev (1,2,128,128), proprio (1,6), hx (1,256), cx (1,256)
+        Outputs: action (1,2), hx_out (1,256), cx_out (1,256)
         """
         class ActorWrapper(nn.Module):
             def __init__(self, actor):

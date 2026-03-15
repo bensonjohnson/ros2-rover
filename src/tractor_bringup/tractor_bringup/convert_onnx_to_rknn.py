@@ -115,7 +115,7 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 proprio_batch = proprio[None, ...]
 
                 # LSTM hidden states: zeros for calibration (episode start)
-                LSTM_HIDDEN = 128
+                LSTM_HIDDEN = 256
                 hx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
                 cx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
 
@@ -195,7 +195,7 @@ def convert_onnx_to_rknn(
         # asymmetric_quantized-8 = INT8 quantization (requires calibration dataset)
         # fp16 = Floating Point 16 (default if no quantization)
 
-        LSTM_HIDDEN = 128  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
+        LSTM_HIDDEN = 256  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
 
         config_args = {
             # Disable RKNN normalization - we normalize in preprocessing
