@@ -955,6 +955,9 @@ class V620SACTrainer:
             except (ValueError, torch.AcceleratorError, RuntimeError) as e:
                 tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
                 tqdm.write(f"   Skipping this batch and continuing...")
+                # Clear GPU memory to recover from OOM / hipBLAS failures
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 # Don't increment total_steps, but continue training
                 pbar.update(1)
                 continue
@@ -1054,24 +1057,25 @@ class V620SACTrainer:
             # 1. Update Critics (every step)
             critic_loss, q1, q2, q_target = self._update_critic_droq(batch)
             total_critic_loss += critic_loss.item()
-            last_q1 = q1
-            last_q2 = q2
-            last_q_target = q_target
-
-            # Free critic backward graph before actor forward to reduce peak VRAM
-            del critic_loss
-            torch.cuda.empty_cache()
+            # Detach metric tensors to free the critic computation graph
+            last_q1 = q1.detach()
+            last_q2 = q2.detach()
+            last_q_target = q_target.detach()
+            del critic_loss, q1, q2, q_target
 
             # 2. Update Actor (every K steps)
             if grad_step % self.args.actor_update_freq == 0:
                 actor_loss, log_prob, min_q_pi = self._update_actor(batch)
                 total_actor_loss += actor_loss.item()
-                last_log_prob = log_prob
-                last_min_q_pi = min_q_pi
+                # Detach metric tensors to free the actor computation graph
+                last_log_prob = log_prob.detach()
+                last_min_q_pi = min_q_pi.detach()
+                del actor_loss, log_prob, min_q_pi
 
                 # 3. Update Alpha (with actor)
-                alpha_loss = self._update_alpha(log_prob)
+                alpha_loss = self._update_alpha(last_log_prob)
                 total_alpha_loss += alpha_loss.item()
+                del alpha_loss
 
             # 4. Soft Update Targets (every step)
             self._soft_update_targets()
