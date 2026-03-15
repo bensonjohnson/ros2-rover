@@ -293,10 +293,27 @@ class V620SACTrainer:
         # Device setup
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
-            print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+            gpu_name = torch.cuda.get_device_name(0)
+            total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"✓ Using GPU: {gpu_name} ({total_mem:.1f}GB)")
+            print(f"  PyTorch: {torch.__version__}")
+            print(f"  HIP/CUDA: {getattr(torch.version, 'hip', None) or torch.version.cuda}")
 
             # Detect ROCm vs CUDA
             self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+
+            # GPU sanity test — verify basic operations work
+            try:
+                _t = torch.randn(256, 512, device='cuda')
+                _r = torch.mm(_t, _t.t())
+                torch.cuda.synchronize()
+                del _t, _r
+                torch.cuda.empty_cache()
+                print("✓ GPU sanity test passed (matmul OK)")
+            except Exception as e:
+                print(f"❌ GPU SANITY TEST FAILED: {e}")
+                print("  ROCm/HIP is broken — check driver and PyTorch compatibility")
+                import sys; sys.exit(1)
 
             if self._is_rocm:
                 # ROCm/MIOpen: disable benchmark to prevent exhaustive kernel search
@@ -955,6 +972,12 @@ class V620SACTrainer:
 
             pbar.set_description("🎯 Training")
 
+            # Log VRAM every 50 steps to track growth
+            if torch.cuda.is_available() and self.total_steps % 50 == 0:
+                alloc = torch.cuda.memory_allocated(0) / (1024**3)
+                reserved = torch.cuda.memory_reserved(0) / (1024**3)
+                tqdm.write(f"📊 Step {self.total_steps}: VRAM {alloc:.2f}GB alloc / {reserved:.2f}GB reserved")
+
             try:
                 # Single training step (samples directly from buffer)
                 metrics = self.train_step()
@@ -975,14 +998,24 @@ class V620SACTrainer:
                 pbar.update(1)
 
             except (ValueError, torch.AcceleratorError, RuntimeError) as e:
-                tqdm.write(f"⚠️ Training step failed: {type(e).__name__}: {e}")
+                if not hasattr(self, '_first_failure_step'):
+                    self._first_failure_step = self.total_steps
+                    self._consecutive_failures = 0
+                    tqdm.write(f"❌ FIRST FAILURE at step {self.total_steps}: {type(e).__name__}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    self._consecutive_failures += 1
+                    tqdm.write(f"⚠️ Training step failed (#{self._consecutive_failures} consecutive): {type(e).__name__}")
+
                 if torch.cuda.is_available():
                     alloc = torch.cuda.memory_allocated(0) / (1024**3)
                     reserved = torch.cuda.memory_reserved(0) / (1024**3)
-                    tqdm.write(f"   VRAM at failure: {alloc:.2f}GB allocated, {reserved:.2f}GB reserved")
+                    tqdm.write(f"   VRAM: {alloc:.2f}GB alloc, {reserved:.2f}GB reserved")
+                    # Attempt HIP context recovery
+                    torch.cuda.synchronize()
                     torch.cuda.empty_cache()
-                    alloc2 = torch.cuda.memory_allocated(0) / (1024**3)
-                    tqdm.write(f"   VRAM after cache clear: {alloc2:.2f}GB allocated")
+
                 tqdm.write(f"   Skipping this batch and continuing...")
                 # Don't increment total_steps, but continue training
                 pbar.update(1)
