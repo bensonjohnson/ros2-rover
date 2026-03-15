@@ -466,7 +466,8 @@ class V620SACTrainer:
         # Must be applied AFTER checkpoint loading (compiled modules prefix keys with _orig_mod.)
         # NOTE: Disabled for ROCm with large buffers to prevent HIPBLAS_STATUS_ALLOC_FAILED
         # The compile step requires extra VRAM for temporary buffers that may not be available
-        if self.device.type == 'cuda' and not args.disable_compile:
+        is_rocm = self.device.type == 'cuda' and hasattr(torch.version, 'hip') and torch.version.hip is not None
+        if self.device.type == 'cuda' and not args.disable_compile and not is_rocm:
             try:
                 # Use 'inductor' backend with reduced memory overhead
                 self.actor = torch.compile(self.actor, mode='reduce-overhead')
@@ -476,6 +477,8 @@ class V620SACTrainer:
             except Exception as e:
                 print(f"⚠ torch.compile failed, continuing without: {e}")
                 print("  Consider adding --disable_compile flag for large buffers")
+        elif is_rocm:
+            print("ℹ torch.compile disabled on ROCm (inductor + CUDA graphs cause OOM on <40GB VRAM)")
 
         # Load replay buffer if exists
         buffer_path = os.path.join(args.checkpoint_dir, "replay_buffer.pt")
