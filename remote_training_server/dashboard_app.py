@@ -47,13 +47,33 @@ class TrainingDashboard:
     def _run_server(self):
         self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False)
 
+    def _sanitize_value(self, value):
+        """Sanitize a value for JSON serialization, replacing NaN/Inf with 0.0."""
+        import math
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return 0.0
+        return value
+
+    def _sanitize_dict(self, data):
+        """Recursively sanitize a dictionary for JSON serialization."""
+        sanitized = {}
+        for key, value in data.items():
+            if isinstance(value, dict):
+                sanitized[key] = self._sanitize_dict(value)
+            elif isinstance(value, list):
+                sanitized[key] = [self._sanitize_value(v) for v in value]
+            else:
+                sanitized[key] = self._sanitize_value(value)
+        return sanitized
+
     def get_stats(self):
         """Return current training statistics as JSON."""
         try:
             # Get latest metrics
             latest_metrics = {}
             if self.trainer.metrics_history:
-                latest_metrics = dict(self.trainer.metrics_history[-1])
+                latest_metrics = self._sanitize_dict(dict(self.trainer.metrics_history[-1]))
 
             # Get checkpoint info
             checkpoint_files = list(self.trainer.args.checkpoint_dir.glob('sac_step_*.pt')) if hasattr(self.trainer.args.checkpoint_dir, 'glob') else []
@@ -134,18 +154,20 @@ class TrainingDashboard:
         try:
             history = []
             for metrics in self.trainer.metrics_history:
+                # Sanitize each metrics dict to replace NaN/Inf with 0.0
+                sanitized = self._sanitize_dict(dict(metrics))
                 history.append({
-                    'step': metrics.get('step', 0),
-                    'timestamp': metrics.get('timestamp', 0),
-                    'actor_loss': metrics.get('actor_loss', 0.0),
-                    'critic_loss': metrics.get('critic_loss', 0.0),
-                    'alpha': metrics.get('alpha', 0.0),
-                    'policy_entropy': metrics.get('policy_entropy', 0.0),
-                    'q1_mean': metrics.get('q1_mean', 0.0),
-                    'q2_mean': metrics.get('q2_mean', 0.0),
-                    'q_target_mean': metrics.get('q_target_mean', 0.0),
-                    'reward_mean': metrics.get('reward_mean', 0.0),
-                    'reward_std': metrics.get('reward_std', 0.0),
+                    'step': sanitized.get('step', 0),
+                    'timestamp': sanitized.get('timestamp', 0),
+                    'actor_loss': sanitized.get('actor_loss', 0.0),
+                    'critic_loss': sanitized.get('critic_loss', 0.0),
+                    'alpha': sanitized.get('alpha', 0.0),
+                    'policy_entropy': sanitized.get('policy_entropy', 0.0),
+                    'q1_mean': sanitized.get('q1_mean', 0.0),
+                    'q2_mean': sanitized.get('q2_mean', 0.0),
+                    'q_target_mean': sanitized.get('q_target_mean', 0.0),
+                    'reward_mean': sanitized.get('reward_mean', 0.0),
+                    'reward_std': sanitized.get('reward_std', 0.0),
                 })
             return jsonify(history)
         except Exception as e:
