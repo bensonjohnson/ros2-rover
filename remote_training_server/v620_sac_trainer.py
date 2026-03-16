@@ -1009,7 +1009,7 @@ class V620SACTrainer:
 
                 pbar.update(1)
 
-            except (ValueError, torch.AcceleratorError, RuntimeError) as e:
+            except (ValueError, RuntimeError) as e:
                 if not hasattr(self, '_first_failure_step'):
                     self._first_failure_step = self.total_steps
                     self._consecutive_failures = 0
@@ -1326,14 +1326,28 @@ class V620SACTrainer:
 
         alpha = self.log_alpha.exp().item()
 
+        # Validate inputs before forward pass
+        if torch.isnan(state_bev).any() or torch.isinf(state_bev).any():
+            tqdm.write("⚠️ Actor input: BEV contains NaN/Inf - cleaning")
+            state_bev = torch.nan_to_num(state_bev, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        if torch.isnan(state_proprio).any() or torch.isinf(state_proprio).any():
+            tqdm.write("⚠️ Actor input: Proprio contains NaN/Inf - cleaning")
+            state_proprio = torch.nan_to_num(state_proprio, nan=0.0, posinf=1.0, neginf=-1.0)
+
         # Use AMP for actor forward pass
         with torch.amp.autocast('cuda', enabled=self.use_amp):
             # Re-compute features for actor (gradient flows through encoder)
             # Zero hidden state — replay buffer samples are independent
             mean, log_std, _, _ = self.actor(state_bev, state_proprio)
 
+            # Clamp log_std for numerical stability
             log_std = torch.clamp(log_std, -20, 2)
             std = log_std.exp() + 1e-6
+
+            # Clean mean values to prevent NaN in distribution
+            mean = torch.nan_to_num(mean, nan=0.0, posinf=5.0, neginf=-5.0)
+            std = torch.nan_to_num(std, nan=1.0, posinf=100.0, neginf=1e-6)
 
             dist = torch.distributions.Normal(mean, std)
             action_sample = dist.rsample()
@@ -1342,12 +1356,23 @@ class V620SACTrainer:
             log_prob = dist.log_prob(action_sample).sum(dim=-1, keepdim=True)
             log_prob -= (2 * (np.log(2) - action_sample - F.softplus(-2 * action_sample))).sum(dim=1, keepdim=True)
 
+            # Clean log_prob to prevent NaN propagation
+            log_prob = torch.nan_to_num(log_prob, nan=0.0, posinf=0.0, neginf=-1e6)
+
             # Use critic to evaluate action (NO dropout, deterministic)
             self.critic_pair.eval()
             q1_pi, q2_pi = self.critic_pair(state_bev, state_proprio, current_action)
             min_q_pi = torch.min(q1_pi, q2_pi)
 
+            # Clean Q-values
+            min_q_pi = torch.nan_to_num(min_q_pi, nan=0.0, posinf=1e6, neginf=-1e6)
+
             actor_loss = ((alpha * log_prob) - min_q_pi).mean()
+
+        # Check for NaN loss before backprop
+        if torch.isnan(actor_loss) or torch.isinf(actor_loss):
+            tqdm.write("⚠️ Actor loss is NaN/Inf - skipping update")
+            return actor_loss.detach() * 0, log_prob.detach(), min_q_pi.detach()
 
         # Backprop with AMP scaling
         self.actor_optimizer.zero_grad(set_to_none=True)
