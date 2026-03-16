@@ -27,7 +27,6 @@ class TrainingDashboard:
         self.app.add_url_rule('/api/stats', 'get_stats', self.get_stats)
         self.app.add_url_rule('/api/metrics_history', 'get_metrics_history', self.get_metrics_history)
         self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
-        self.app.add_url_rule('/api/system_resources', 'get_system_resources', self.get_system_resources)
         self.app.add_url_rule('/api/bev', 'get_bev', self.get_bev)
         self.app.add_url_rule('/api/rgbd', 'get_rgbd', self.get_rgbd)
         # Keep legacy endpoints for backward compatibility
@@ -76,13 +75,12 @@ class TrainingDashboard:
                 latest_metrics = self._sanitize_dict(dict(self.trainer.metrics_history[-1]))
 
             # Get checkpoint info
-            checkpoint_files = list(self.trainer.args.checkpoint_dir.glob('sac_step_*.pt')) if hasattr(self.trainer.args.checkpoint_dir, 'glob') else []
+            from pathlib import Path
+            checkpoint_dir = Path(self.trainer.args.checkpoint_dir)
+            checkpoint_files = list(checkpoint_dir.glob('sac_step_*.pt'))
             last_checkpoint_time = None
             last_checkpoint_size = 0
             if checkpoint_files:
-                from pathlib import Path
-                checkpoint_dir = Path(self.trainer.args.checkpoint_dir)
-                checkpoint_files = list(checkpoint_dir.glob('sac_step_*.pt'))
                 if checkpoint_files:
                     latest_checkpoint = max(checkpoint_files, key=lambda p: p.stat().st_mtime)
                     last_checkpoint_time = latest_checkpoint.stat().st_mtime
@@ -307,13 +305,44 @@ class TrainingDashboard:
                 # Trainer has its own method
                 phase_metrics = self.trainer.get_phase_metrics()
                 phase_metrics['total_steps'] = self.trainer.total_steps
+            else:
+                # Fallback: Estimate phase based on total_steps
+                total_steps = self.trainer.total_steps
+                if total_steps < 1000:
+                    phase_metrics['phase'] = 'exploration'
+                    phase_metrics['phase_index'] = 0
+                elif total_steps < 5000:
+                    phase_metrics['phase'] = 'learning'
+                    phase_metrics['phase_index'] = 1
+                else:
+                    phase_metrics['phase'] = 'refinement'
+                    phase_metrics['phase_index'] = 2
+                
+                phase_metrics['avg_eval_reward'] = 0.0
+                phase_metrics['collision_rate'] = 0.0
+                phase_metrics['avg_episode_length'] = 0
+                phase_metrics['reward_std'] = 0.0
+                phase_metrics['sample_count'] = 0
+                phase_metrics['total_transitions'] = 0
+                phase_metrics['total_steps'] = total_steps
             
             return jsonify(phase_metrics)
         except Exception as e:
             print(f"Error in get_phase_metrics: {e}")
             import traceback
             traceback.print_exc()
-            return jsonify({'error': str(e), 'phase': 'unknown', 'phase_index': -1}), 500
+            # Return default phase metrics instead of error
+            return jsonify({
+                'phase': 'exploration',
+                'phase_index': 0,
+                'avg_eval_reward': 0.0,
+                'collision_rate': 0.0,
+                'avg_episode_length': 0,
+                'reward_std': 0.0,
+                'sample_count': 0,
+                'total_transitions': 0,
+                'total_steps': self.trainer.total_steps
+            })
 
     def index(self):
         """Render the main dashboard page."""

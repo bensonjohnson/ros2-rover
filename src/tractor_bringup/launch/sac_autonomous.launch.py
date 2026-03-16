@@ -31,13 +31,6 @@ def generate_launch_description():
         description='Maximum linear speed (m/s)'
     )
 
-    collision_dist_arg = DeclareLaunchArgument(
-        'collision_distance',
-        default_value='0.12',
-        description='Collision detection distance (m)'
-    )
-
-
     invert_vel_arg = DeclareLaunchArgument(
         'invert_linear_vel',
         default_value='true',
@@ -171,7 +164,6 @@ def generate_launch_description():
         nats_server_arg,
         algorithm_arg,
         max_speed_arg,
-        collision_dist_arg,
         invert_vel_arg,
 
         

@@ -2052,7 +2052,7 @@ class SACEpisodeRunner(Node):
 
         # Try to get latest model metadata
         try:
-            msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.metadata")
+            msg = await self.js.get_last_msg("ROVER_MODELS", "models.sac.metadata")
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
             self.pbar.write(f"✅ Server has model v{server_version}")
@@ -2114,7 +2114,7 @@ class SACEpisodeRunner(Node):
             self.pbar.write("📥 Downloading model from NATS...")
 
             # Get latest model from stream
-            msg = await self.js.get_last_msg("ROVER_MODELS", f"models.{self.algorithm}.update")
+            msg = await self.js.get_last_msg("ROVER_MODELS", "models.sac.update")
             # self.pbar.write(f"📦 Received model message: {len(msg.data)} bytes")
             
             model_data = deserialize_model_update(msg.data)
