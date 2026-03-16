@@ -1,0 +1,90 @@
+# Phase Manager Configuration
+# Configurable thresholds and parameters for SAC training curriculum
+
+# Phase definitions
+phases:
+  - name: exploration
+    index: 0
+    description: "Initial exploration phase with relaxed penalties"
+  - name: learning
+    index: 1
+    description: "Learning phase with moderate penalties"
+  - name: refinement
+    index: 2
+    description: "Refinement phase with full penalties"
+
+# Transition thresholds
+thresholds:
+  # Exploration -> Learning transition criteria
+  exploration_to_learning:
+    avg_reward: 0.15           # Minimum average eval reward
+    collision_rate: 0.35       # Maximum collision rate
+    avg_length: 45             # Minimum average episode length (steps)
+    window_size: 10            # Minimum eval episodes required
+
+  # Learning -> Refinement transition criteria
+  learning_to_refinement:
+    avg_reward: 0.25           # Minimum average eval reward
+    collision_rate: 0.20       # Maximum collision rate
+    avg_length: 90             # Minimum average episode length
+    reward_std: 0.20           # Maximum reward standard deviation (stability)
+    window_size: 10            # Minimum eval episodes required
+
+  # Regression thresholds (downgrade if performance drops)
+  refinement_to_learning:
+    avg_reward: 0.15           # If reward drops below this
+    collision_rate: 0.35       # Or collision rate exceeds this
+
+  learning_to_exploration:
+    avg_reward: 0.05           # If reward drops below this
+    collision_rate: 0.50       # Or collision rate exceeds this
+
+# Phase-specific reward configurations
+phase_configs:
+  exploration:
+    alive_bonus: 0.08
+    alive_penalty: 0.05
+    forward_bonus_mult: 1.5
+    spin_penalty_scale: 0.3
+    intent_reward_scale: 0.12
+    smoothness_mult: 0.02
+    exploration_bonus_magnitude: 0.20
+    diversity_bonus_scale: 0.05
+    wall_avoidance_base: 0.20
+    noise_scale: 0.15
+    eval_frequency: 5
+
+  learning:
+    alive_bonus: 0.04
+    alive_penalty: 0.08
+    forward_bonus_mult: 1.0
+    spin_penalty_scale: 0.6
+    intent_reward_scale: 0.04
+    smoothness_mult: 0.03
+    exploration_bonus_magnitude: 0.12
+    diversity_bonus_scale: 0.05
+    wall_avoidance_base: 0.25
+    noise_scale: 0.10
+    eval_frequency: 5
+
+  refinement:
+    alive_bonus: 0.0
+    alive_penalty: 0.10
+    forward_bonus_mult: 0.8
+    spin_penalty_scale: 1.0
+    intent_reward_scale: 0.0
+    smoothness_mult: 0.05
+    exploration_bonus_magnitude: 0.10
+    diversity_bonus_scale: 0.05
+    wall_avoidance_base: 0.30
+    noise_scale: 0.0  # Deterministic
+    eval_frequency: 5
+
+# Dashboard display settings
+dashboard:
+  update_interval_ms: 2000
+  chart_history_size: 200
+  phase_colors:
+    exploration: "#d29922"  # Orange
+    learning: "#58a6ff"     # Blue
+    refinement: "#3fb950"   # Green

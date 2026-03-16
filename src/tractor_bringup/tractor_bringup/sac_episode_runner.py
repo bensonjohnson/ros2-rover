@@ -36,6 +36,7 @@ from tractor_bringup.serialization_utils import (
 )
 
 from tractor_bringup.occupancy_processor import DepthToOccupancy, ScanToOccupancy, LocalMapper, MultiChannelOccupancy, UnifiedBEVProcessor, RGBDProcessor
+from tractor_bringup.phase_manager import PhaseManager
 
 # Proprioception normalization constants (must match convert_onnx_to_rknn.py)
 # proprio = [lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading]
@@ -349,6 +350,10 @@ class SACEpisodeRunner(Node):
         self.SLIP_VEL_THRESHOLD = 0.03           # Moving <3 cm/s = no motion
         self.SLIP_BACKUP_LIMIT = 0.15            # ~6 inches max backup
 
+        # Phase Manager for curriculum learning
+        self.phase_manager = PhaseManager(initial_phase='exploration')
+        self._current_episode_length = 0
+
         # NATS Setup (will be initialized in background thread)
         self.nc = None
         self.js = None
@@ -613,13 +618,27 @@ class SACEpisodeRunner(Node):
         return min_dist_all, mean_side_dist, target
 
     def _get_current_phase(self):
-        """Get current training phase based on performance metrics."""
-        if self._current_model_version <= 5:
-            return 'exploration'
-        elif self._current_model_version <= 15:
-            return 'learning'
-        else:
-            return 'refinement'
+        """Get current training phase from PhaseManager."""
+        return self.phase_manager.phase
+    
+    def get_phase_metrics(self):
+        """Get current phase metrics for dashboard and TensorBoard.
+        
+        Returns:
+            Dictionary with phase metrics
+        """
+        metrics = self.phase_manager.get_metrics()
+        
+        return {
+            'phase': self.phase_manager.phase,
+            'phase_index': self.phase_manager.phase_index,
+            'avg_eval_reward': metrics['avg_reward'],
+            'collision_rate': metrics['collision_rate'],
+            'avg_episode_length': metrics['avg_length'],
+            'reward_std': metrics['reward_std'],
+            'sample_count': metrics['sample_count'],
+            'total_transitions': self.phase_manager._total_transitions,
+        }
     
     def _compute_exploration_bonus(self, bev_grid):
         """
@@ -1953,36 +1972,25 @@ class SACEpisodeRunner(Node):
         )
     
     def _check_phase_transition(self):
-        """Check if eval performance warrants phase transition."""
-        if len(self._eval_reward_window) < 5:
-            return
+        """Check and apply phase transition using PhaseManager."""
+        # Check for phase transition using PhaseManager
+        new_phase = self.phase_manager.check_transition(current_step=self.total_steps)
         
-        # Only check for transitions after model v6 (exploration phase done)
-        if self._current_model_version < 6:
-            return
-        
-        # Calculate recent average
-        avg_reward = np.mean(list(self._eval_reward_window)[-5:])
-        
-        # Get current and target phase
-        current_phase = self._get_current_phase()
-        
-        if current_phase == 'exploration' and avg_reward > 0.0:
-            # Phase 1 -> 2: Exploration -> Learning
-            # Threshold raised from -0.3 to 0.0 because alive bonus shifts baseline up
-            self._current_model_version = max(self._current_model_version, 6)
+        if new_phase:
+            # Apply transition
+            self.phase_manager.apply_transition(new_phase, self.total_steps)
+            
+            # Log transition
             self.get_logger().info(
-                f"⭐ PHASE TRANSITION: exploration → learning "
-                f"(avg eval reward = {avg_reward:.3f} > 0.0)"
+                f"⭐ PHASE TRANSITION: {self.phase_manager._phase_history[-1]['from']} "
+                f"→ {new_phase}"
             )
-        elif current_phase == 'learning' and avg_reward > 0.05:
-            # Phase 2 -> 3: Learning → Refinement
-            # Threshold raised from -0.1 to 0.05 because alive bonus shifts baseline up
-            self._current_model_version = max(self._current_model_version, 16)
-            self.get_logger().info(
-                f"⭐ PHASE TRANSITION: learning → refinement "
-                f"(avg eval reward = {avg_reward:.3f} > 0.05)"
-            )
+            
+            # Update model version based on new phase for backward compatibility
+            if new_phase == 'learning':
+                self._current_model_version = max(self._current_model_version, 6)
+            elif new_phase == 'refinement':
+                self._current_model_version = max(self._current_model_version, 16)
 
     def _run_nats_loop(self):
         """Entry point for NATS background thread."""

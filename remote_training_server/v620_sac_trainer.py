@@ -53,6 +53,14 @@ from serialization_utils import (
 # Import dashboard
 from dashboard_app import TrainingDashboard
 
+# Import Phase Manager for curriculum learning
+try:
+    from tractor_bringup.phase_manager import PhaseManager
+    HAS_PHASE_MANAGER = True
+except ImportError:
+    HAS_PHASE_MANAGER = False
+    print("⚠ PhaseManager not available - phase-based curriculum disabled")
+
 class ReplayBuffer:
     """Experience Replay Buffer for SAC."""
 
@@ -463,6 +471,14 @@ class V620SACTrainer:
         self.current_eval_reward = 0.0
         self.best_eval_reward = -float('inf')
         self.last_eval_step = 0
+
+        # Phase Manager for curriculum learning
+        if HAS_PHASE_MANAGER:
+            self.phase_manager = PhaseManager(initial_phase='exploration')
+            print("✅ PhaseManager initialized for curriculum learning")
+        else:
+            self.phase_manager = None
+            print("⚠ PhaseManager not available")
 
         # NATS connection (will be initialized in async setup)
         self.nc = None
@@ -980,6 +996,16 @@ class V620SACTrainer:
                     for k, v in metrics.items():
                         if k not in ['step', 'timestamp']:  # Don't log these
                             self.writer.add_scalar(f'train/{k}', v, self.total_steps)
+                
+                # Log phase metrics to TensorBoard
+                if self.phase_manager:
+                    phase_metrics = self.phase_manager.get_metrics()
+                    self.writer.add_scalar('Phase/Current_Index', self.phase_manager.phase_index, self.total_steps)
+                    self.writer.add_scalar('Phase/Avg_Reward', phase_metrics['avg_reward'], self.total_steps)
+                    self.writer.add_scalar('Phase/Collision_Rate', phase_metrics['collision_rate'], self.total_steps)
+                    self.writer.add_scalar('Phase/Avg_Length', phase_metrics['avg_length'], self.total_steps)
+                    self.writer.add_scalar('Phase/Reward_Std', phase_metrics['reward_std'], self.total_steps)
+                    self.writer.add_scalar('Phase/Sample_Count', phase_metrics['sample_count'], self.total_steps)
 
                 pbar.update(1)
 
@@ -1486,6 +1512,17 @@ class V620SACTrainer:
                                     # Log immediate eval result
                                     self.writer.add_scalar('Reward/Eval_Episode', self.current_eval_reward, self.total_steps)
                                     
+                                    # Record eval episode for PhaseManager
+                                    if self.phase_manager:
+                                        # Estimate episode length (approximate based on reward magnitude)
+                                        # This is a rough estimate since we don't have exact step count
+                                        estimated_length = max(30, int(abs(self.current_eval_reward) * 10))
+                                        self.phase_manager.record_eval_episode(
+                                            reward=self.current_eval_reward,
+                                            collided=False,  # Eval episodes don't collide
+                                            length=estimated_length
+                                        )
+                                    
                                     # Check for new best model
                                     if self.current_eval_reward > self.best_eval_reward:
                                         self.best_eval_reward = self.current_eval_reward
@@ -1499,6 +1536,16 @@ class V620SACTrainer:
                                     self.episode_rewards.append(self.current_episode_reward)
                                     self.episode_count += 1
                                     print(f"📊 Training Episode {self.episode_count}: Reward = {self.current_episode_reward:.2f}")
+                                    
+                                    # Record training episode for PhaseManager
+                                    if self.phase_manager:
+                                        estimated_length = max(30, int(abs(self.current_episode_reward) * 10))
+                                        self.phase_manager.record_training_episode(
+                                            reward=self.current_episode_reward,
+                                            collided=True,  # Training episodes end in collision
+                                            length=estimated_length
+                                        )
+                                    
                                     self.current_episode_reward = 0.0
 
                         # Add ONLY training data to replay buffer (filter out eval data)

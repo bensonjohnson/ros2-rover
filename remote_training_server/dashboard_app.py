@@ -34,6 +34,9 @@ class TrainingDashboard:
         self.app.add_url_rule('/api/laser', 'get_laser', self.get_bev)
         self.app.add_url_rule('/api/depth', 'get_depth', self.get_bev)
         self.app.add_url_rule('/api/grid', 'get_grid', self.get_bev)
+        
+        # Phase metrics API
+        self.app.add_url_rule('/api/phase_metrics', 'get_phase_metrics', self.get_phase_metrics)
 
     def start(self):
         """Start the dashboard in a background thread."""
@@ -243,6 +246,52 @@ class TrainingDashboard:
     def get_rgbd(self):
         """Return the latest BEV image as a PNG (backward compatibility)."""
         return self.get_bev()
+
+    def get_phase_metrics(self):
+        """Return phase management metrics for the dashboard."""
+        try:
+            # Import PhaseManager to access threshold constants
+            try:
+                from tractor_bringup.phase_manager import PhaseManager
+                HAS_PHASE_MANAGER = True
+            except ImportError:
+                HAS_PHASE_MANAGER = False
+            
+            phase_metrics = {}
+            
+            # Try to get phase metrics from trainer
+            if hasattr(self.trainer, 'phase_manager') and self.trainer.phase_manager:
+                pm = self.trainer.phase_manager
+                metrics = pm.get_metrics()
+                phase_metrics = {
+                    'phase': pm.phase,
+                    'phase_index': pm.phase_index,
+                    'avg_eval_reward': metrics['avg_reward'],
+                    'collision_rate': metrics['collision_rate'],
+                    'avg_episode_length': metrics['avg_length'],
+                    'reward_std': metrics['reward_std'],
+                    'sample_count': metrics['sample_count'],
+                    'total_transitions': pm._total_transitions,
+                    'total_steps': self.trainer.total_steps,
+                }
+                
+                # Add thresholds if PhaseManager is available
+                if HAS_PHASE_MANAGER:
+                    phase_metrics['thresholds'] = {
+                        'exploration_to_learning': PhaseManager.EXPLORATION_TO_LEARNING,
+                        'learning_to_refinement': PhaseManager.LEARNING_TO_REFINEMENT,
+                    }
+            elif hasattr(self.trainer, 'get_phase_metrics'):
+                # Trainer has its own method
+                phase_metrics = self.trainer.get_phase_metrics()
+                phase_metrics['total_steps'] = self.trainer.total_steps
+            
+            return jsonify(phase_metrics)
+        except Exception as e:
+            print(f"Error in get_phase_metrics: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': str(e), 'phase': 'unknown', 'phase_index': -1}), 500
 
     def index(self):
         """Render the main dashboard page."""
@@ -721,6 +770,43 @@ class TrainingDashboard:
                 <canvas id="reward-chart"></canvas>
             </div>
         </div>
+
+        <!-- Training Phase -->
+        <div class="card">
+            <div class="card-title"><span class="icon">🎯</span> Training Phase</div>
+            <div class="stat-row">
+                <span class="stat-label">Current Phase</span>
+                <span id="current-phase" class="stat-value" style="color: #d29922;">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Phase Transitions</span>
+                <span id="phase-transitions" class="stat-value">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Avg Eval Reward</span>
+                <span id="avg-eval-reward" class="stat-value">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Collision Rate</span>
+                <span id="collision-rate" class="stat-value">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Avg Episode Length</span>
+                <span id="avg-episode-length" class="stat-value">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Reward Stability</span>
+                <span id="reward-stability" class="stat-value">...</span>
+            </div>
+        </div>
+
+        <!-- Phase Performance Chart -->
+        <div class="card wide-card">
+            <div class="card-title"><span class="icon">📊</span> Phase Performance</div>
+            <div class="chart-container">
+                <canvas id="phase-chart"></canvas>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -872,6 +958,81 @@ class TrainingDashboard:
                     ]
                 }
             });
+
+            // Phase Performance Chart
+            phaseChart = new Chart(document.getElementById('phase-chart'), {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Avg Eval Reward',
+                            data: [],
+                            borderColor: '#58a6ff',
+                            backgroundColor: 'rgba(88, 166, 255, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Collision Rate',
+                            data: [],
+                            borderColor: '#f85149',
+                            backgroundColor: 'rgba(248, 81, 73, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y1',
+                        },
+                        {
+                            label: 'Reward Stability (Std)',
+                            data: [],
+                            borderColor: '#d29922',
+                            backgroundColor: 'rgba(210, 153, 34, 0.1)',
+                            tension: 0.4,
+                            yAxisID: 'y2',
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: { display: true, text: 'Training Steps' },
+                            grid: { color: '#30363d' }
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            title: { display: true, text: 'Reward' },
+                            grid: { color: '#30363d' }
+                        },
+                        y1: {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'Collision Rate' },
+                            grid: { drawOnChartArea: false },
+                            min: 0,
+                            max: 1
+                        },
+                        y2: {
+                            type: 'linear',
+                            position: 'right',
+                            title: { display: true, text: 'Std Dev' },
+                            grid: { drawOnChartArea: false },
+                        }
+                    }
+                }
+            });
         }
 
         function updateCharts(history) {
@@ -904,6 +1065,60 @@ class TrainingDashboard:
 
             rewardChart.data.datasets[0].data = reward;
             rewardChart.update();
+        }
+
+        // Phase chart variable
+        let phaseChart;
+
+        function updatePhaseMetrics(history) {
+            if (history.length === 0) return;
+            
+            const steps = history.map(h => h.step);
+            const avgReward = history.map(h => ({ x: h.step, y: h.avg_eval_reward || 0 }));
+            const collisionRate = history.map(h => ({ x: h.step, y: h.collision_rate || 0 }));
+            const rewardStd = history.map(h => ({ x: h.step, y: h.reward_std || 0 }));
+            
+            phaseChart.data.datasets[0].data = avgReward;
+            phaseChart.data.datasets[1].data = collisionRate;
+            phaseChart.data.datasets[2].data = rewardStd;
+            phaseChart.update();
+        }
+
+        function updateCharts(history) {
+            if (history.length === 0) return;
+
+            // Prepare data
+            const steps = history.map(h => h.step);
+            const actorLoss = history.map(h => ({ x: h.step, y: h.actor_loss }));
+            const criticLoss = history.map(h => ({ x: h.step, y: h.critic_loss }));
+            const q1 = history.map(h => ({ x: h.step, y: h.q1_mean }));
+            const q2 = history.map(h => ({ x: h.step, y: h.q2_mean }));
+            const qTarget = history.map(h => ({ x: h.step, y: h.q_target_mean }));
+            const entropy = history.map(h => ({ x: h.step, y: h.policy_entropy }));
+            const alpha = history.map(h => ({ x: h.step, y: h.alpha }));
+            const reward = history.map(h => ({ x: h.step, y: h.reward_mean }));
+
+            // Update charts
+            lossChart.data.datasets[0].data = actorLoss;
+            lossChart.data.datasets[1].data = criticLoss;
+            lossChart.update();
+
+            qvalueChart.data.datasets[0].data = q1;
+            qvalueChart.data.datasets[1].data = q2;
+            qvalueChart.data.datasets[2].data = qTarget;
+            qvalueChart.update();
+
+            entropyChart.data.datasets[0].data = entropy;
+            entropyChart.data.datasets[1].data = alpha;
+            entropyChart.update();
+
+            rewardChart.data.datasets[0].data = reward;
+            rewardChart.update();
+            
+            // Check if history contains phase data
+            if (history[0] && 'avg_eval_reward' in history[0]) {
+                updatePhaseMetrics(history);
+            }
         }
 
         function formatTime(timestamp) {
@@ -1011,16 +1226,66 @@ class TrainingDashboard:
             }
         }
 
+        // Phase metrics history
+        let phaseMetricsHistory = [];
+
+        async function updatePhaseMetricsDisplay() {
+            try {
+                const response = await fetch('/api/phase_metrics');
+                const data = await response.json();
+                
+                // Update phase display
+                const phaseNames = ['exploration', 'learning', 'refinement'];
+                const phaseName = data.phase || (data.phase_index !== undefined ? phaseNames[data.phase_index] : 'unknown');
+                const phaseElement = document.getElementById('current-phase');
+                phaseElement.textContent = phaseName.toUpperCase();
+                
+                // Color-code phase
+                const phaseColors = {
+                    'EXPLORATION': '#d29922',  // Orange
+                    'LEARNING': '#58a6ff',     // Blue
+                    'REFINEMENT': '#3fb950'    // Green
+                };
+                phaseElement.style.color = phaseColors[phaseName.toUpperCase()] || '#e6edf3';
+                
+                document.getElementById('phase-transitions').textContent = data.total_transitions || 0;
+                document.getElementById('avg-eval-reward').textContent = (data.avg_eval_reward !== undefined ? data.avg_eval_reward.toFixed(3) : '...');
+                document.getElementById('collision-rate').textContent = ((data.collision_rate || 0) * 100).toFixed(1) + '%';
+                document.getElementById('avg-episode-length').textContent = data.avg_episode_length || 0;
+                document.getElementById('reward-stability').textContent = (data.reward_std || 0).toFixed(3);
+                
+                // Add to history for chart
+                phaseMetricsHistory.push({
+                    step: data.total_steps || 0,
+                    avg_eval_reward: data.avg_eval_reward || 0,
+                    collision_rate: data.collision_rate || 0,
+                    reward_std: data.reward_std || 0
+                });
+                
+                // Keep last 200 points
+                if (phaseMetricsHistory.length > 200) {
+                    phaseMetricsHistory = phaseMetricsHistory.slice(-200);
+                }
+                
+                updatePhaseMetrics(phaseMetricsHistory);
+                
+            } catch (err) {
+                console.error('Error fetching phase metrics:', err);
+            }
+        }
+
         // Initialize
         initCharts();
         updateStats();
         updateResources();
         updateMetricsHistory();
+        updatePhaseMetricsDisplay();
 
         // Update intervals
         setInterval(updateStats, 1000);  // Stats every 1s
         setInterval(updateResources, 2000);  // Resources every 2s
         setInterval(updateMetricsHistory, 2000);  // Charts every 2s
+        setInterval(updatePhaseMetricsDisplay, 2000);  // Phase metrics every 2s
 
         // Update images every 500ms
         setInterval(() => {
