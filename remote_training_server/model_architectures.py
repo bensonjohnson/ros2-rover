@@ -984,3 +984,127 @@ class SharedBEVCriticPair(nn.Module):
         """Q2 from pre-computed BEV features."""
         return self.q2_head(bev_feats, proprio, action)
 
+
+# =============================================================================
+# PPO with Unified BEV Architecture (for local rover training)
+# =============================================================================
+
+class UnifiedBEVPPOPolicy(nn.Module):
+    """
+    PPO policy network with residual BEV encoder (stateless, no LSTM).
+
+    Input: BEV grid (2, 128, 128), Proprio (6)
+    Output: action mean, log_std, value
+
+    Designed for PPO training on the rover with:
+    - Unified BEV encoder (LiDAR + Depth fusion)
+    - Stateless policy (no hidden state needed for PPO)
+    - Compatible with ONNX/RKNN export for NPU inference
+    """
+    def __init__(self, action_dim: int = 2, proprio_dim: int = 6):
+        super().__init__()
+
+        # BEV encoder: 2-channel 128x128 → 1024 features
+        self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
+
+        # Proprioception encoder
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, 32),
+            nn.ReLU(inplace=True),
+        )
+
+        # Fusion: 1024 (BEV) + 32 (proprio) = 1056
+        fusion_dim = self.bev_encoder.output_dim + 32
+
+        # Policy network (outputs action mean)
+        self.policy_net = nn.Sequential(
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, action_dim),
+        )
+
+        # Learnable log_std for action variance
+        self.log_std = nn.Parameter(torch.zeros(action_dim))
+
+        # Value network (for PPO)
+        self.value_net = nn.Sequential(
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 1),
+        )
+
+        # Initialize final layers to output small values
+        nn.init.orthogonal_(self.policy_net[-1].weight, gain=0.1)
+        nn.init.constant_(self.policy_net[-1].bias, 0.0)
+        nn.init.orthogonal_(self.value_net[-1].weight, gain=0.01)
+        nn.init.constant_(self.value_net[-1].bias, 0.0)
+
+    def forward(self, bev_grid: torch.Tensor, proprio: torch.Tensor):
+        """Forward pass for PPO policy.
+
+        Args:
+            bev_grid: (B, 2, 128, 128) unified BEV grid
+            proprio: (B, 6) proprioception
+
+        Returns:
+            action_mean: (B, action_dim)
+            log_std: (action_dim,) - broadcastable
+            value: (B,) - state value estimate
+        """
+        bev_feats = self.bev_encoder(bev_grid)
+        proprio_feats = self.proprio_encoder(proprio)
+        fused = torch.cat([bev_feats, proprio_feats], dim=1)  # (B, 1056)
+
+        action_mean = self.policy_net(fused)
+        value = self.value_net(fused).squeeze(-1)
+
+        return action_mean, self.log_std, value
+
+    def get_action_dist(self, bev_grid: torch.Tensor, proprio: torch.Tensor):
+        """Get action distribution for sampling.
+
+        Args:
+            bev_grid: (B, 2, 128, 128)
+            proprio: (B, 6)
+
+        Returns:
+            dist: Normal distribution with mean and std
+        """
+        action_mean, log_std, _ = self.forward(bev_grid, proprio)
+        std = log_std.exp().clamp(min=1e-6, max=2.0)
+        return torch.distributions.Normal(action_mean, std)
+
+    def act(self, bev_grid: torch.Tensor, proprio: torch.Tensor, deterministic: bool = False):
+        """Sample actions from the policy.
+
+        Args:
+            bev_grid: (B, 2, 128, 128)
+            proprio: (B, 6)
+            deterministic: If True, return mean action (no noise)
+
+        Returns:
+            actions: (B, action_dim)
+            log_probs: (B,) log probability of actions
+            values: (B,) state values
+        """
+        action_mean, log_std, value = self.forward(bev_grid, proprio)
+        std = log_std.exp().clamp(min=1e-6, max=2.0)
+        dist = torch.distributions.Normal(action_mean, std)
+
+        if deterministic:
+            actions = torch.tanh(action_mean)
+            log_probs = dist.log_prob(actions).sum(dim=-1)
+        else:
+            actions_sample = dist.rsample()
+            actions = torch.tanh(actions_sample)
+            # Log prob correction for tanh squashing
+            log_probs = dist.log_prob(actions_sample).sum(dim=-1)
+            log_probs -= (2 * (np.log(2) - actions_sample - F.softplus(-2 * actions_sample))).sum(dim=-1)
+
+        return actions, log_probs, value
