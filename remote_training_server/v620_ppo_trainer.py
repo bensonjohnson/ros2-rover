@@ -266,11 +266,11 @@ class V620PPOTrainer:
         print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
 
         # Convert to tensors on GPU
-        bev = torch.from_numpy(rollout['bev']).float().to(self.device)
-        proprio = torch.from_numpy(rollout['proprio']).float().to(self.device)
-        actions = torch.from_numpy(rollout['actions']).float().to(self.device)
-        rewards = torch.from_numpy(rollout['rewards']).float().to(self.device)
-        dones = torch.from_numpy(rollout['dones']).float().to(self.device)
+        bev = torch.from_numpy(rollout['bev'].copy()).float().to(self.device)
+        proprio = torch.from_numpy(rollout['proprio'].copy()).float().to(self.device)
+        actions = torch.from_numpy(rollout['actions'].copy()).float().to(self.device)
+        rewards = torch.from_numpy(rollout['rewards'].copy()).float().to(self.device)
+        dones = torch.from_numpy(rollout['dones'].copy()).float().to(self.device)
 
         # Track episodes from rollout
         for i in range(n):
@@ -671,7 +671,7 @@ def main():
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
     parser.add_argument('--update_epochs', type=int, default=10)
-    parser.add_argument('--mini_batch_size', type=int, default=512)
+    parser.add_argument('--mini_batch_size', type=int, default=2048)
     parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
 

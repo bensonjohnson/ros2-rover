@@ -30,6 +30,12 @@ except ImportError:
 
 import numpy as np
 
+try:
+    import onnx
+    HAS_ONNX = True
+except ImportError:
+    HAS_ONNX = False
+
 
 # Proprioception normalization constants
 # proprio = [lidar_min, prev_lin, prev_ang, cur_lin, cur_ang, gap_heading]
@@ -56,12 +62,13 @@ def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
     return normalized.astype(np.float32)
 
 
-def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
+def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_lstm: bool = True):
     """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
 
     Args:
         calibration_dir: Directory containing calibration_XXXX.npz files
         max_samples: Maximum number of samples to use
+        has_lstm: Whether model has LSTM inputs (hx, cx)
 
     Returns:
         Path to the generated dataset.txt file
@@ -114,23 +121,23 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100):
                 bev_batch = bev[None, ...]
                 proprio_batch = proprio[None, ...]
 
-                # LSTM hidden states: zeros for calibration (episode start)
-                LSTM_HIDDEN = 256
-                hx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
-                cx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
-
                 bev_path = os.path.abspath(os.path.join(dataset_dir, f"bev_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
-                hx_path = os.path.abspath(os.path.join(dataset_dir, f"hx_{i}.npy"))
-                cx_path = os.path.abspath(os.path.join(dataset_dir, f"cx_{i}.npy"))
 
                 np.save(bev_path, bev_batch.astype(np.float32))
                 np.save(proprio_path, proprio_batch.astype(np.float32))
-                np.save(hx_path, hx_batch)
-                np.save(cx_path, cx_batch)
 
-                # Write to dataset.txt (space separated)
-                f.write(f"{bev_path} {proprio_path} {hx_path} {cx_path}\n")
+                if has_lstm:
+                    LSTM_HIDDEN = 256
+                    hx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
+                    cx_batch = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
+                    hx_path = os.path.abspath(os.path.join(dataset_dir, f"hx_{i}.npy"))
+                    cx_path = os.path.abspath(os.path.join(dataset_dir, f"cx_{i}.npy"))
+                    np.save(hx_path, hx_batch)
+                    np.save(cx_path, cx_batch)
+                    f.write(f"{bev_path} {proprio_path} {hx_path} {cx_path}\n")
+                else:
+                    f.write(f"{bev_path} {proprio_path}\n")
 
                 valid_samples += 1
 
@@ -189,28 +196,40 @@ def convert_onnx_to_rknn(
         # Initialize RKNN (full toolkit, not RKNNLite)
         rknn = RKNN(verbose=True)
 
-        # Configure RKNN
-        print("Configuring RKNN...")
-        # RK3588 supports: 'asymmetric_quantized-8', 'asymmetric_quantized-16', 'fp16'
-        # asymmetric_quantized-8 = INT8 quantization (requires calibration dataset)
-        # fp16 = Floating Point 16 (default if no quantization)
+        # Auto-detect model inputs from ONNX
+        print("Detecting model inputs from ONNX...")
+        input_names = []
+        input_sizes = []
+        mean_values = []
+        std_values = []
+        has_lstm = False
+
+        if HAS_ONNX:
+            model = onnx.load(onnx_path)
+            for inp in model.graph.input:
+                name = inp.name
+                shape = [d.dim_value for d in inp.type.tensor_type.shape.dim]
+                # Replace dynamic dims (0) with 1 for batch
+                shape = [1 if d == 0 else d for d in shape]
+                input_names.append(name)
+                input_sizes.append(shape)
+                # Channels/dims for mean/std (second dim for 4D, first dim for 2D)
+                n_channels = shape[1] if len(shape) == 4 else shape[-1]
+                mean_values.append([0] * n_channels)
+                std_values.append([1] * n_channels)
+                print(f"  {name}: {shape}")
+            has_lstm = any(n in ('hx', 'cx') for n in input_names)
+        else:
+            # Fallback: try loading without explicit inputs first
+            print("  onnx package not available, trying auto-detect via RKNN...")
 
         LSTM_HIDDEN = 256  # Must match UnifiedBEVPolicyNetwork.LSTM_HIDDEN
 
+        # Configure RKNN
+        print("Configuring RKNN...")
         config_args = {
-            # Disable RKNN normalization - we normalize in preprocessing
-            'mean_values': [
-                [0, 0],           # BEV (2 channels)
-                [0] * 6,          # Proprio (6-dim)
-                [0] * LSTM_HIDDEN,  # hx (LSTM hidden state)
-                [0] * LSTM_HIDDEN,  # cx (LSTM cell state)
-            ],
-            'std_values': [
-                [1, 1],           # BEV
-                [1] * 6,          # Proprio
-                [1] * LSTM_HIDDEN,  # hx
-                [1] * LSTM_HIDDEN,  # cx
-            ],
+            'mean_values': mean_values if mean_values else [[0, 0], [0] * 6],
+            'std_values': std_values if std_values else [[1, 1], [1] * 6],
             'target_platform': target_platform,
             'optimization_level': 3
         }
@@ -220,22 +239,21 @@ def convert_onnx_to_rknn(
 
         ret = rknn.config(**config_args)
         if ret != 0:
-            print(f"❌ Failed to configure RKNN: {ret}")
+            print(f"Failed to configure RKNN: {ret}")
             return False
 
         # Load ONNX
-        print("Loading ONNX model (with LSTM hidden state)...")
-        # Specify fixed input shapes (batch=1) since RKNN doesn't support dynamic shapes
-        ret = rknn.load_onnx(
-            model=onnx_path,
-            inputs=['bev', 'proprio', 'hx', 'cx'],
-            input_size_list=[
-                [1, 2, 128, 128],   # Unified BEV grid (2 channels: LiDAR + Depth)
-                [1, 6],             # Proprio (6-dim)
-                [1, LSTM_HIDDEN],   # LSTM hidden state
-                [1, LSTM_HIDDEN],   # LSTM cell state
-            ]
-        )
+        if has_lstm:
+            print("Loading ONNX model (with LSTM hidden state)...")
+        else:
+            print("Loading ONNX model (stateless)...")
+
+        load_kwargs = {'model': onnx_path}
+        if input_names:
+            load_kwargs['inputs'] = input_names
+            load_kwargs['input_size_list'] = input_sizes
+
+        ret = rknn.load_onnx(**load_kwargs)
         if ret != 0:
             print(f"❌ Failed to load ONNX: {ret}")
             return False
@@ -244,7 +262,7 @@ def convert_onnx_to_rknn(
         if quantize and calibration_dir:
             print("Building RKNN model with INT8 quantization...")
             print("  Loading calibration dataset...")
-            dataset = _load_calibration_dataset(calibration_dir)
+            dataset = _load_calibration_dataset(calibration_dir, has_lstm=has_lstm)
             print("  Running quantization (this may take a few minutes)...")
             ret = rknn.build(do_quantization=True, dataset=dataset)
         else:
@@ -274,26 +292,31 @@ def convert_onnx_to_rknn(
                 all_tests_passed = True
                 simulator_errors = 0
                 
+                # Build test inputs helper
+                def _make_test_inputs():
+                    test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
+                    test_proprio_raw = np.array([
+                        np.random.uniform(0.0, 4.0),
+                        np.random.uniform(-1.0, 1.0),
+                        np.random.uniform(-1.0, 1.0),
+                        np.random.uniform(-0.2, 0.2),
+                        np.random.uniform(-1.0, 1.0),
+                        np.random.uniform(-1.0, 1.0),
+                    ], dtype=np.float32)
+                    test_proprio = normalize_proprio(test_proprio_raw)[None, ...]
+                    inputs = [test_bev, test_proprio]
+                    if has_lstm:
+                        inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                        inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                    return inputs
+
                 # Test 1: NaN/Inf Check
                 print("\n📊 Test 1: NaN/Inf Detection...")
                 nan_count = 0
                 inf_count = 0
-                test_hx = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
-                test_cx = np.zeros((1, LSTM_HIDDEN), dtype=np.float32)
                 for i in range(50):
-                    test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
-                    test_proprio_raw = np.array([
-                        np.random.uniform(0.0, 4.0),    # lidar_min
-                        np.random.uniform(-1.0, 1.0),   # prev_lin
-                        np.random.uniform(-1.0, 1.0),   # prev_ang
-                        np.random.uniform(-0.2, 0.2),   # cur_lin
-                        np.random.uniform(-1.0, 1.0),   # cur_ang
-                        np.random.uniform(-1.0, 1.0),   # gap_heading
-                    ], dtype=np.float32)
-                    test_proprio = normalize_proprio(test_proprio_raw)[None, ...]
-
                     try:
-                        outputs = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
+                        outputs = rknn.inference(inputs=_make_test_inputs())
                         if outputs and outputs[0] is not None:
                             if np.isnan(outputs[0]).any():
                                 nan_count += 1
@@ -318,13 +341,8 @@ def convert_onnx_to_rknn(
                     print("\n📊 Test 2: Output Range Validation...")
                     outputs_list = []
                     for _ in range(20):
-                        test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
-                        test_proprio = normalize_proprio(np.array([
-                            np.random.uniform(0.5, 3.0),
-                            0.0, 0.0, 0.1, 0.0, 0.0
-                        ], dtype=np.float32))[None, ...]
                         try:
-                            outputs = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
+                            outputs = rknn.inference(inputs=_make_test_inputs())
                             if outputs:
                                 outputs_list.append(outputs[0])
                         except:
@@ -344,13 +362,12 @@ def convert_onnx_to_rknn(
                 if simulator_errors < 40:
                     print("\n📊 Test 3: Output Determinism...")
                     np.random.seed(42)
-                    test_bev = np.random.rand(1, 2, 128, 128).astype(np.float32)
-                    test_proprio = normalize_proprio(np.array([2.0, 0.0, 0.0, 0.1, 0.0, 0.0], dtype=np.float32))[None, ...]
+                    fixed_inputs = _make_test_inputs()
 
                     outputs = []
                     for _ in range(10):
                         try:
-                            out = rknn.inference(inputs=[test_bev, test_proprio, test_hx, test_cx])
+                            out = rknn.inference(inputs=fixed_inputs)
                             if out:
                                 outputs.append(out[0])
                         except:
@@ -377,7 +394,11 @@ def convert_onnx_to_rknn(
                                 data = np.load(cf)
                                 bev = data['bev'][None, ...].astype(np.float32)
                                 proprio = normalize_proprio(data['proprio'])[None, ...]
-                                out = rknn.inference(inputs=[bev, proprio, test_hx, test_cx])
+                                calib_inputs = [bev, proprio]
+                                if has_lstm:
+                                    calib_inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                                    calib_inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                                out = rknn.inference(inputs=calib_inputs)
                                 if out:
                                     calib_success += 1
                                     if np.isnan(out[0]).any():
