@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""V620 ROCm PPO Training Server for Remote Rover Training.
+"""V620 PPO Training Server for Remote Rover Training.
 
-This server receives RGB-D observations from the rover via ZeroMQ,
-trains a PPO policy using PyTorch with ROCm acceleration,
-and exports trained models in multiple formats (PyTorch, ONNX, RKNN).
+Receives complete PPO rollouts from the rover via NATS JetStream,
+runs PPO training on GPU, and sends updated ONNX models back.
 
-Features:
-- Asynchronous training (trains while receiving data)
-- Experience Replay Buffer (off-policy correction)
-- Curriculum Learning (adaptive difficulty)
-- Dense Reward Shaping (smoothness, oscillation penalties)
-- Multi-client support
+Flow:
+1. Rover collects rollout (2048 steps) using RKNN NPU inference
+2. Rover ships rollout to this server via NATS
+3. Server recomputes log_probs + values from its PyTorch model
+4. Server runs PPO update (10 epochs, FP16 AMP on GPU)
+5. Server exports ONNX and publishes model update back via NATS
+6. Rover downloads ONNX, converts to RKNN, loads on NPU
+7. Rover resumes driving with updated policy
+
+On-policy correctness is preserved because:
+- The rover stops after each rollout
+- The server recomputes log_probs from the CURRENT PyTorch weights
+- PPO ratio is always PyTorch-vs-PyTorch (no RKNN quantization in ratio)
 """
 
 import os
@@ -19,886 +25,659 @@ import time
 import json
 import argparse
 import threading
-import queue
+import asyncio
+import signal
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 from pathlib import Path
-from typing import Tuple, Optional, Dict, List
 from collections import deque
 
 import numpy as np
-import cv2
-import zmq
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+
+import nats
+from nats.js.api import StreamConfig
 
 # Import model architectures
-from model_architectures import RGBDEncoder, PolicyHead, ValueHead
+from model_architectures import UnifiedBEVPPOPolicy
 
-class PPOBuffer:
-    """Experience buffer for PPO training."""
-    
-    def __init__(self, capacity: int, rgb_shape: Tuple, depth_shape: Tuple, proprio_dim: int, device: torch.device):
-        self.capacity = capacity
-        self.device = device
-        self.ptr = 0
-        self.size = 0
-        
-        # Pre-allocate tensors on CPU (move to GPU in batches during training)
-        self.rgb = torch.zeros((capacity, *rgb_shape), dtype=torch.uint8)
-        self.depth = torch.zeros((capacity, *depth_shape), dtype=torch.float32)  # Changed from float16 for stability
-        self.proprio = torch.zeros((capacity, proprio_dim), dtype=torch.float32)
-        self.actions = torch.zeros((capacity, 2), dtype=torch.float32)
-        self.rewards = torch.zeros((capacity,), dtype=torch.float32)
-        self.dones = torch.zeros((capacity,), dtype=torch.bool)
-        self.log_probs = torch.zeros((capacity,), dtype=torch.float32)
-        self.values = torch.zeros((capacity,), dtype=torch.float32)
-        
-    def add_batch(self, batch_data: Dict):
-        """Add a batch of transitions from rover."""
-        batch_size = len(batch_data['rewards'])
-        
-        # Handle wrap-around
-        if self.ptr + batch_size > self.capacity:
-            # Split into two parts
-            first_part = self.capacity - self.ptr
-            second_part = batch_size - first_part
-            
-            # Add first part
-            self._add_slice(batch_data, 0, first_part, self.ptr)
-            # Add second part
-            self._add_slice(batch_data, first_part, batch_size, 0)
-            
-            self.ptr = second_part
-            self.size = self.capacity
-        else:
-            # Add all at once
-            self._add_slice(batch_data, 0, batch_size, self.ptr)
-            self.ptr += batch_size
-            self.size = min(self.size + batch_size, self.capacity)
-            
-    def _add_slice(self, data, start_idx, end_idx, buffer_idx):
-        """Helper to add a slice of data to buffer."""
-        length = end_idx - start_idx
-        
-        # Debug shapes
-        # print(f"DEBUG: _add_slice: start={start_idx}, end={end_idx}, len={length}, buffer_idx={buffer_idx}")
-        # print(f"DEBUG: Source shape: {data['rewards'].shape}")
-        
-        try:
-            # Convert numpy arrays to tensors (use as_tensor to handle both arrays and lists)
-            self.rgb[buffer_idx:buffer_idx+length] = torch.as_tensor(data['rgb'][start_idx:end_idx])
-            self.depth[buffer_idx:buffer_idx+length] = torch.as_tensor(data['depth'][start_idx:end_idx])
-            self.proprio[buffer_idx:buffer_idx+length] = torch.as_tensor(data['proprio'][start_idx:end_idx])
-            self.actions[buffer_idx:buffer_idx+length] = torch.as_tensor(data['actions'][start_idx:end_idx])
-            self.rewards[buffer_idx:buffer_idx+length] = torch.as_tensor(data['rewards'][start_idx:end_idx])
-            self.dones[buffer_idx:buffer_idx+length] = torch.as_tensor(data['dones'][start_idx:end_idx])
-            self.log_probs[buffer_idx:buffer_idx+length] = torch.as_tensor(data['log_probs'][start_idx:end_idx])
-            self.values[buffer_idx:buffer_idx+length] = torch.as_tensor(data['values'][start_idx:end_idx])
-        except Exception as e:
-            print(f"❌ Error in _add_slice: {e}")
-            print(f"   Indices: start={start_idx}, end={end_idx}, len={length}, buffer_idx={buffer_idx}")
-            print(f"   Source shape: {np.shape(data['rewards'])}")
-            print(f"   Slice shape: {np.shape(data['rewards'][start_idx:end_idx])}")
-            raise e
+# Import serialization utilities
+from serialization_utils import (
+    serialize_batch, deserialize_batch,
+    serialize_model_update, deserialize_model_update,
+    serialize_metadata, deserialize_metadata,
+    serialize_status, deserialize_status
+)
 
-    def get_batch(self, indices):
-        """Get batch by indices."""
-        # RGB needs to be permuted from (B, H, W, C) to (B, C, H, W) for PyTorch Conv2d
-        rgb_batch = self.rgb[indices].to(self.device).float() / 255.0
-        rgb_batch = rgb_batch.permute(0, 3, 1, 2)
-        
-        return {
-            'rgb': rgb_batch,
-            'depth': self.depth[indices].to(self.device).float().unsqueeze(1),
-            'proprio': self.proprio[indices].to(self.device),
-            'actions': self.actions[indices].to(self.device),
-            'rewards': self.rewards[indices].to(self.device),
-            'dones': self.dones[indices].to(self.device),
-            'log_probs': self.log_probs[indices].to(self.device),
-            'values': self.values[indices].to(self.device),
-        }
+# Import dashboard
+try:
+    from dashboard_app import TrainingDashboard
+    HAS_DASHBOARD = True
+except ImportError:
+    HAS_DASHBOARD = False
 
-    def compute_gae(self, value_head, encoder, gamma=0.99, lam=0.95):
-        """Compute Generalized Advantage Estimation (GAE)."""
-        # 1. Compute values for all states in buffer
-        self.values = torch.zeros(self.size, device=self.device)
-        
-        # Process in batches to avoid OOM
-        batch_size = 512
-        with torch.no_grad():
-            for i in range(0, self.size, batch_size):
-                end = min(i + batch_size, self.size)
-                
-                # Prepare batch
-                rgb = self.rgb[i:end].to(self.device).float() / 255.0
-                rgb = rgb.permute(0, 3, 1, 2)
-                depth = self.depth[i:end].to(self.device).float().unsqueeze(1)
-                proprio = self.proprio[i:end].to(self.device)
-                
-                # Forward pass
-                features = encoder(rgb, depth)
-                vals = value_head(features, proprio)
-                self.values[i:end] = vals.squeeze()
+# Import Phase Manager
+try:
+    from tractor_bringup.phase_manager import PhaseManager
+    HAS_PHASE_MANAGER = True
+except ImportError:
+    HAS_PHASE_MANAGER = False
+    print("PhaseManager not available - phase-based curriculum disabled")
 
-        # 2. Compute GAE
-        # Move rewards and dones to GPU once to avoid transfer overhead in loop
-        rewards_gpu = self.rewards[:self.size].to(self.device)
-        dones_gpu = self.dones[:self.size].to(self.device).float()
-        
-        advantages = torch.zeros(self.size, device=self.device)
-        last_gae_lam = 0
-        
-        # Iterate backwards
-        for t in reversed(range(self.size)):
-            if t == self.size - 1:
-                next_non_terminal = 1.0 - dones_gpu[t]
-                next_value = 0.0 
-            else:
-                next_non_terminal = 1.0 - dones_gpu[t]
-                next_value = self.values[t+1]
-                
-            delta = rewards_gpu[t] + gamma * next_value * next_non_terminal - self.values[t]
-            last_gae_lam = delta + gamma * lam * next_non_terminal * last_gae_lam
-            advantages[t] = last_gae_lam
-            
-        # Compute returns
-        returns = advantages + self.values
-        
-        return advantages, returns
-
-    def clear(self):
-        """Clear buffer after update (PPO is on-policy)."""
-        self.ptr = 0
-        self.size = 0
 
 class V620PPOTrainer:
-    """PPO Trainer optimized for V620 ROCm."""
-    
+    """PPO Trainer optimized for V620 ROCm / CUDA GPU."""
+
     def __init__(self, args):
         self.args = args
-        
+
         # Device setup
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
-            print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
-            # Enable TF32 for Ampere/RDNA3
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", message=".*TF32.*")
-                try:
-                    torch.set_float32_matmul_precision('high')
-                except AttributeError:
-                    # Fallback for older PyTorch versions
-                    torch.backends.cuda.matmul.allow_tf32 = True
-                
-                try:
-                    torch.backends.cudnn.allow_tf32 = True
-                except AttributeError:
-                    pass
+            gpu_name = torch.cuda.get_device_name(0)
+            total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"Using GPU: {gpu_name} ({total_mem:.1f}GB)")
+
+            self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+
+            # GPU sanity test
+            try:
+                _t = torch.randn(256, 512, device='cuda')
+                _r = torch.mm(_t, _t.t())
+                torch.cuda.synchronize()
+                del _t, _r
+                torch.cuda.empty_cache()
+                print("GPU sanity test passed")
+            except Exception as e:
+                print(f"GPU SANITY TEST FAILED: {e}")
+                sys.exit(1)
+
+            torch.backends.cudnn.benchmark = True
+
+            # AMP
+            self.use_amp = True
+            if self._is_rocm:
+                self.scaler = torch.amp.GradScaler('cuda', init_scale=1024.0, growth_factor=1.5)
+                print("AMP enabled (FP16) - ROCm")
+            else:
+                self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
+                print("AMP enabled (FP16) - CUDA")
         else:
             self.device = torch.device('cpu')
-            print("⚠ Using CPU (slow)")
-            
-        # DIAGNOSTIC: Check MIOpen/cuDNN status
-        if torch.cuda.is_available():
-            print(f"🔍 MIOpen/cuDNN Enabled: {torch.backends.cudnn.enabled}")
-            print(f"   Version: {torch.backends.cudnn.version()}")
-            print(f"   Benchmark: {torch.backends.cudnn.benchmark}")
-            print(f"   Deterministic: {torch.backends.cudnn.deterministic}")
-            
-        # Model setup
-        self.rgb_shape = (3, 240, 424)  # C, H, W
-        self.depth_shape = (240, 424)   # H, W
-        self.proprio_dim = 10  # PPO: [ax, ay, az, gx, gy, gz, mx, my, mz, min_dist]
-        
-        self.encoder = RGBDEncoder().to(self.device)
-        # Disable LSTM for stateless PPO (fixes MIOpen backward error and ONNX export)
-        self.policy_head = PolicyHead(self.encoder.output_dim, self.proprio_dim, use_lstm=False).to(self.device)
-        self.value_head = ValueHead(self.encoder.output_dim, self.proprio_dim).to(self.device)
-        
-        # Trainable log_std for continuous action space
-        self.log_std = nn.Parameter(torch.zeros(2, device=self.device))
-        
-        # Optimizer
-        self.optimizer = optim.Adam([
-            {'params': self.encoder.parameters(), 'lr': args.lr},
-            {'params': self.policy_head.parameters(), 'lr': args.lr},
-            {'params': self.value_head.parameters(), 'lr': args.lr},
-            {'params': self.log_std, 'lr': args.lr}
-        ])
+            self.use_amp = False
+            self.scaler = None
+            print("Using CPU (slower)")
 
-        # DISABLED: Mixed Precision causes NaN on ROCm (FP16 instability)
-        # self.scaler = torch.amp.GradScaler('cuda')
-        
-        # Replay Buffer
-        self.buffer = PPOBuffer(
-            capacity=args.buffer_size,
-            rgb_shape=(240, 424, 3), # Stored as HWC uint8
-            depth_shape=(240, 424),
-            proprio_dim=self.proprio_dim,
-            device=self.device
+        # Model
+        self.proprio_dim = 6
+        self.action_dim = 2
+
+        self.policy = UnifiedBEVPPOPolicy(
+            action_dim=self.action_dim,
+            proprio_dim=self.proprio_dim
+        ).to(self.device)
+
+        # Optimizer
+        self.optimizer = optim.Adam(
+            self.policy.parameters(),
+            lr=args.lr,
+            eps=1e-5
         )
-        
-        # Training state
+
+        # PPO hyperparameters
+        self.clip_eps = args.clip_eps
+        self.gamma = args.gamma
+        self.gae_lambda = args.gae_lambda
+        self.update_epochs = args.update_epochs
+        self.mini_batch_size = args.mini_batch_size
+        self.value_coef = 0.5
+        self.entropy_coef = 0.01
+        self.max_grad_norm = 0.5
+
+        # State
         self.total_steps = 0
         self.update_count = 0
+        self.model_version = 0
         self.best_reward = -float('inf')
-        self.model_version = 0  # Start at 0 to trigger rover warmup sequence
-        self.model_version = 0  # Start at 0 to trigger rover warmup sequence
-        self.is_training = False
-        self.training_requested = False  # Flag for manual training trigger
 
-        # KL warm-up: start with higher target_kl for first few updates (cold start)
-        self.kl_warmup_updates = 10  # Warm up for first 10 updates
-        self.kl_warmup_start = 2.0   # Start VERY permissive for cold start (allows KL up to 2.0)
-        self.kl_warmup_end = args.target_kl  # End at configured target
-
-        # Entropy decay schedule for exploration
-        self.entropy_warmup_updates = 100  # First 100 updates
-        self.entropy_start = 0.05  # High exploration initially
-        self.entropy_end = args.entropy_coef  # Decay to configured value (0.01)
-        
-        # ZMQ Setup
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.REP)
-        self.socket.bind(f"tcp://*:{args.port}")
-        
         # TensorBoard
+        os.makedirs(args.log_dir, exist_ok=True)
         self.writer = SummaryWriter(args.log_dir)
-        
+
         # Checkpoint dir
         os.makedirs(args.checkpoint_dir, exist_ok=True)
-        
-        # Curriculum state
-        self.curriculum_level = 0
-        self.collision_dist = 0.5  # Start safe
-        self.max_speed = 0.1       # Start slow
-        
-        # Connection tracking
-        self.last_data_time = time.time()
-        
-        # Training Thread
-        self.training_lock = threading.Lock()
-        self.training_thread = threading.Thread(target=self._training_loop, daemon=True)
-        self.training_thread.start()
-        
-        # Auto-resume from latest checkpoint if available
-        print(f"🔍 Searching for checkpoints in: {os.path.abspath(args.checkpoint_dir)}")
-        latest_ckpt = self.find_latest_checkpoint()
-        
-        if latest_ckpt:
-            print(f"📄 Found checkpoint: {latest_ckpt}")
-            
-        if latest_ckpt and not args.force_restart:
-            self.load_checkpoint(latest_ckpt)
+
+        # Episode tracking
+        self.episode_rewards = deque(maxlen=100)
+        self.episode_count = 0
+
+        # Phase Manager
+        if HAS_PHASE_MANAGER:
+            self.phase_manager = PhaseManager(initial_phase='exploration')
+            print("PhaseManager initialized")
         else:
-            if args.force_restart:
-                print("⚠ Force restart requested. Ignoring existing checkpoints.")
-            elif latest_ckpt:
-                 print("ℹ Ignoring checkpoint (force restart not set, but logic fell through? Should not happen)")
-            else:
-                print("ℹ No checkpoint found. Starting fresh.")
-            
-            print(f"🆕 Starting at Model Version: {self.model_version}")
+            self.phase_manager = None
 
-            # Apply heuristic initialization if requested (only if starting fresh)
-            if args.seed_behavior:
-                print(f"🌱 Seeding training with '{args.seed_behavior}' behavior...")
-                self.apply_heuristic_bias(self.policy_head, args.seed_behavior)
+        # NATS
+        self.nc = None
+        self.js = None
+        self.nats_server = args.nats_server
+        self.lock = threading.Lock()
 
-        # Export initial model so rover can start immediately
-        print("💾 Exporting initial model...")
-        self.export_onnx(increment_version=False) # Don't increment, keep at 0 (or restored version)
+        # Load checkpoint if exists
+        self._load_latest_checkpoint()
 
-    def find_latest_checkpoint(self):
-        """Find the latest checkpoint file."""
+        # Export initial model
+        self._export_onnx(increment_version=False)
+
+        param_count = sum(p.numel() for p in self.policy.parameters())
+        print(f"PPO Trainer initialized: {param_count:,} params")
+        print(f"  LR: {args.lr}, Clip: {args.clip_eps}, Epochs: {args.update_epochs}")
+        print(f"  Mini-batch: {args.mini_batch_size}, Gamma: {args.gamma}")
+
+    # ========== Checkpoint Management ==========
+
+    def _load_latest_checkpoint(self):
         checkpoints = list(Path(self.args.checkpoint_dir).glob('ppo_step_*.pt'))
-        if not checkpoints:
-            return None
-        # Sort by step number
-        def get_step_num(path):
-            try:
-                return int(path.stem.split('_')[-1])
-            except:
-                return 0
-        return max(checkpoints, key=get_step_num)
+        latest_path = Path(self.args.checkpoint_dir) / 'latest.pt'
 
-    def load_checkpoint(self, filepath):
-        """Load checkpoint and restore state."""
-        print(f"🔄 Resuming from checkpoint: {filepath}")
-        checkpoint = torch.load(filepath, map_location=self.device)
-        
-        self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
-        self.policy_head.load_state_dict(checkpoint['policy_head_state_dict'])
-        self.value_head.load_state_dict(checkpoint['value_head_state_dict'])
-        self.log_std.data = checkpoint['log_std']
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        self.total_steps = checkpoint['total_steps']
-        self.update_count = checkpoint['update_count']
-        self.model_version = self.update_count # Sync model version
-        
-        print(f"  ✓ Restored state: {self.total_steps} steps, {self.update_count} updates")
-
-    def apply_heuristic_bias(self, policy_head, behavior_type: str):
-        """Inject heuristic bias into the policy head."""
-        # Start with small random weights to break symmetry
-        with torch.no_grad():
-            for param in policy_head.parameters():
-                param.data *= 0.1
-
-        # Inject bias into policy head output layer
-        # policy_head.policy is a Sequential, last layer (-1) outputs [linear_vel, angular_vel]
-        final_layer = policy_head.policy[-1]  # Last Linear layer
-
-        with torch.no_grad():
-            if behavior_type == 'cautious':
-                # Bias: slow forward, moderate turning
-                final_layer.bias[0] = 0.3  # linear: slow but increased
-                final_layer.bias[1] = 0.0  # angular: neutral
-            elif behavior_type == 'forward':
-                # Bias: VERY fast forward, minimal turning
-                final_layer.bias[0] = 0.75  # linear: very fast!
-                final_layer.bias[1] = 0.0  # angular: neutral
-            elif behavior_type == 'explorer':
-                # Bias: moderate-high forward, slight turning tendency
-                final_layer.bias[0] = 0.5  # linear: moderate-high
-                final_layer.bias[1] = 0.1  # angular: slight turn
-            
-            print(f"  ✓ Applied bias: linear={final_layer.bias[0]:.2f}, angular={final_layer.bias[1]:.2f}")
-
-    def get_target_kl(self):
-        """Get current target KL with warm-up schedule."""
-        if self.update_count < self.kl_warmup_updates:
-            # Linear interpolation from warmup_start to warmup_end
-            alpha = self.update_count / self.kl_warmup_updates
-            return self.kl_warmup_start * (1 - alpha) + self.kl_warmup_end * alpha
+        if latest_path.exists():
+            ckpt = torch.load(latest_path, map_location=self.device, weights_only=False)
+        elif checkpoints:
+            latest = max(checkpoints, key=lambda p: int(p.stem.split('_')[-1]))
+            ckpt = torch.load(latest, map_location=self.device, weights_only=False)
         else:
-            return self.kl_warmup_end
+            print("No checkpoint found. Starting fresh.")
+            return
 
-    def get_entropy_coef(self):
-        """Get current entropy coefficient with linear decay schedule."""
-        if self.update_count < self.entropy_warmup_updates:
-            # Linear decay from high exploration to final value
-            alpha = self.update_count / self.entropy_warmup_updates
-            return self.entropy_start * (1 - alpha) + self.entropy_end * alpha
-        return self.entropy_end
+        self.policy.load_state_dict(ckpt['policy_state_dict'])
+        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        self.total_steps = ckpt.get('total_steps', 0)
+        self.update_count = ckpt.get('update_count', 0)
+        self.model_version = ckpt.get('model_version', self.update_count)
+        self.episode_count = ckpt.get('episode_count', 0)
+        print(f"Restored: {self.total_steps} steps, v{self.model_version}")
 
-    def update_curriculum(self):
-        """Update difficulty based on performance."""
-        # Simple curriculum: every 100k steps, make it harder
-        level = self.total_steps // 100000
-        
-        if level > self.curriculum_level:
-            self.curriculum_level = level
-            
-            # Decrease collision distance (get closer to objects)
-            self.collision_dist = max(0.12, 0.5 - (level * 0.05))
-            
-            # Increase max speed
-            self.max_speed = min(0.18, 0.1 + (level * 0.02))
-            
-            print(f"🎓 Curriculum Level Up! Level {level}")
-            print(f"   Collision Dist: {self.collision_dist:.2f}m")
-            print(f"   Max Speed: {self.max_speed:.2f}m/s")
-
-    def _training_loop(self):
-        """Background training loop."""
-        print("🧵 Training thread started")
-        while True:
-            # Wait for trigger (manual or buffer full safety cap)
-            if self.training_requested or self.buffer.size >= self.args.buffer_size:
-                print(f"🔔 Training triggered! (Requested: {self.training_requested}, Buffer: {self.buffer.size})")
-                self.training_requested = False  # Reset flag
-                self.is_training = True
-                # Run training step
-                with self.training_lock:
-                    metrics = self.train_step()
-
-                if metrics:
-                    self.update_count += 1
-
-                    # Log metrics
-                    if self.update_count % 10 == 0:
-                        current_target_kl = self.get_target_kl()
-                        current_entropy_coef = self.get_entropy_coef()
-                        warmup_str = f" [KL target: {current_target_kl:.4f}]" if self.update_count < self.kl_warmup_updates else ""
-                        print(f"Step {self.total_steps} | Loss: P={metrics['policy_loss']:.3f} V={metrics['value_loss']:.3f} | KL={metrics['approx_kl']:.4f} Clip={metrics['clip_fraction']:.2f}{warmup_str}")
-                        for k, v in metrics.items():
-                            self.writer.add_scalar(f'train/{k}', v, self.total_steps)
-                        self.writer.add_scalar(f'train/target_kl', current_target_kl, self.total_steps)
-                        self.writer.add_scalar(f'train/entropy_coef', current_entropy_coef, self.total_steps)
-
-                    # Save checkpoint every batch (as requested)
-                    self.save_checkpoint(f"ppo_step_{self.total_steps}.pt")
-
-                    # Always export ONNX for immediate rover update
-                    self.export_onnx()
-
-                    # Clear buffer after update (PPO is on-policy)
-                    self.buffer.clear()
-                else:
-                    # Training failed due to NaN - clear buffer but don't save model
-                    print("⚠️  Skipping checkpoint save due to failed training update")
-                    self.buffer.clear()  # Still clear buffer to avoid reusing bad data
-                
-                self.is_training = False
-            
-            time.sleep(0.1)
-
-    def train_step(self):
-        """Perform PPO update with mini-batches and early stopping."""
-        metrics = {'policy_loss': [], 'value_loss': [], 'entropy': [], 'approx_kl': [], 'clip_fraction': []}
-
-        # Flag to track if NaN occurred during training
-        nan_detected = False
-
-        # Optimization: Move entire active buffer to GPU once
-        print("  ⚡ Moving buffer to GPU...")
-
-        # DIAGNOSTIC: Check buffer data for NaN/extreme values BEFORE GPU transfer
-        with torch.no_grad():
-            # Check rewards for sanity
-            rewards_cpu = self.buffer.rewards[:self.buffer.size]
-            if torch.isnan(rewards_cpu).any() or torch.isinf(rewards_cpu).any():
-                print(f"❌ DIAGNOSTIC: NaN/Inf detected in REWARDS in buffer!")
-                print(f"   Rewards range: [{rewards_cpu.min():.2f}, {rewards_cpu.max():.2f}]")
-                nan_detected = True
-                return None
-
-            reward_mean = rewards_cpu.mean().item()
-            reward_std = rewards_cpu.std().item()
-            reward_min = rewards_cpu.min().item()
-            reward_max = rewards_cpu.max().item()
-            print(f"  📊 Rewards: mean={reward_mean:.2f}, std={reward_std:.2f}, range=[{reward_min:.2f}, {reward_max:.2f}]")
-
-            # Check if rewards are extreme
-            if abs(reward_mean) > 1000 or reward_std > 1000:
-                print(f"⚠️  WARNING: Extreme reward values detected! This may cause training instability.")
-
-            # Check log_probs
-            log_probs_cpu = self.buffer.log_probs[:self.buffer.size]
-            if torch.isnan(log_probs_cpu).any() or torch.isinf(log_probs_cpu).any():
-                print(f"❌ DIAGNOSTIC: NaN/Inf detected in LOG_PROBS in buffer!")
-                nan_detected = True
-                return None
-
-            # Slice valid data
-            valid_slice = slice(0, self.buffer.size)
-            
-            # RGB: (N, H, W, C) -> (N, C, H, W) normalized
-            gpu_rgb = self.buffer.rgb[valid_slice].to(self.device).float() / 255.0
-            gpu_rgb = gpu_rgb.permute(0, 3, 1, 2)
-            
-            # Depth: (N, H, W) -> (N, 1, H, W)
-            gpu_depth = self.buffer.depth[valid_slice].to(self.device).float().unsqueeze(1)
-            
-            gpu_proprio = self.buffer.proprio[valid_slice].to(self.device)
-            gpu_actions = self.buffer.actions[valid_slice].to(self.device)
-            gpu_log_probs = self.buffer.log_probs[valid_slice].to(self.device)
-            
-            # Compute GAE and Returns
-            print("  🧮 Computing GAE...")
-            gpu_advantages, gpu_returns = self.buffer.compute_gae(
-                self.value_head, self.encoder, gamma=0.99, lam=0.95
-            )
-            
-            # Normalize advantages
-            gpu_advantages = (gpu_advantages - gpu_advantages.mean()) / (gpu_advantages.std() + 1e-8)
-
-        
-        # Use tqdm for progress bar
-        pbar = tqdm(range(self.args.update_epochs), desc="Training", leave=False, file=sys.stdout)
-
-        early_stop = False
-        for epoch in pbar:
-            # Shuffle data for each epoch
-            indices = torch.randperm(self.buffer.size, device=self.device)
-            
-            # Iterate in mini-batches
-            for start_idx in range(0, self.buffer.size, self.args.mini_batch_size):
-                try:
-                    batch_indices = indices[start_idx : start_idx + self.args.mini_batch_size]
-                    
-                    # Slice from GPU tensors
-                    batch = {
-                        'rgb': gpu_rgb[batch_indices],
-                        'depth': gpu_depth[batch_indices],
-                        'proprio': gpu_proprio[batch_indices],
-                        'actions': gpu_actions[batch_indices],
-                        'returns': gpu_returns[batch_indices],
-                        'advantages': gpu_advantages[batch_indices],
-                        'log_probs': gpu_log_probs[batch_indices]
-                    }
-                    
-                    # Forward pass (FP32 for stability on ROCm)
-                    features = self.encoder(batch['rgb'], batch['depth'])
-                    action_mean, _ = self.policy_head(features, batch['proprio'], hidden_state=None) # No LSTM training for now
-                    values = self.value_head(features, batch['proprio'])
-
-                    # DIAGNOSTIC: Log first batch statistics
-                    if start_idx == 0 and epoch == 0:
-                        print(f"  🔍 Forward pass diagnostics:")
-                        print(f"     action_mean: mean={action_mean.mean().item():.4f}, std={action_mean.std().item():.4f}, range=[{action_mean.min().item():.4f}, {action_mean.max().item():.4f}]")
-                        print(f"     values: mean={values.mean().item():.4f}, std={values.std().item():.4f}, range=[{values.min().item():.4f}, {values.max().item():.4f}]")
-                        print(f"     log_std: {self.log_std.data}")
-
-                    # Action distribution
-                    std = self.log_std.exp().clamp(min=1e-6, max=2.0)  # Clamp std to prevent NaN
-
-                    # Check for NaN in forward pass outputs
-                    if torch.isnan(action_mean).any() or torch.isnan(values).any():
-                        print(f"⚠️  NaN detected in forward pass! Aborting training update.")
-                        nan_detected = True
-                        break
-
-                    dist = torch.distributions.Normal(action_mean, std)
-
-                    # Compute log probs
-                    current_log_probs = dist.log_prob(batch['actions']).sum(dim=-1)
-                    entropy = dist.entropy().sum(dim=-1).mean()
-
-                    # Ratios
-                    ratios = torch.exp(current_log_probs - batch['log_probs'])
-
-                    # Approximate KL divergence for early stopping
-                    with torch.no_grad():
-                        log_ratio = current_log_probs - batch['log_probs']
-                        approx_kl = ((ratios - 1) - log_ratio).mean()
-
-                        # Clip fraction (percentage of samples being clipped)
-                        clip_fraction = ((ratios - 1.0).abs() > self.args.clip_eps).float().mean()
-
-                    # Advantages (already computed via GAE)
-                    advantages = batch['advantages']
-
-                    # Policy Loss
-                    surr1 = ratios * advantages
-                    surr2 = torch.clamp(ratios, 1 - self.args.clip_eps, 1 + self.args.clip_eps) * advantages
-                    policy_loss = -torch.min(surr1, surr2).mean()
-
-                    # Value Loss (MSE against GAE returns)
-                    values_pred = values.squeeze()
-                    value_loss = 0.5 * (values_pred - batch['returns']).pow(2).mean()
-
-                    # Detach and rescale if loss is too high (soft prevention)
-                    # This allows the model to learn from high errors without exploding gradients
-                    if value_loss.item() > 100.0:
-                        value_loss = value_loss * 0.01  # Stronger scaling (100x reduction)
-
-                    # Safety check: Warn but don't abort unless truly exploded
-                    if value_loss.item() > 100000.0:
-                        print(f"⚠️  Value loss EXTREME ({value_loss.item():.1f})! Aborting training update.")
-                        nan_detected = True
-                        break
-                    elif value_loss.item() > 1000.0:
-                         # Just warn
-                         if epoch == 0 and start_idx == 0:
-                             print(f"⚠️  High value loss ({value_loss.item():.1f}) - this is normal at start.")
-
-                    # Total Loss (with dynamic entropy coefficient)
-                    current_entropy_coef = self.get_entropy_coef()
-                    loss = policy_loss + self.args.value_coef * value_loss - current_entropy_coef * entropy
-
-                    # Check for NaN in loss
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        print(f"⚠️  NaN/Inf detected in loss! Aborting training update.")
-                        nan_detected = True
-                        break
-
-                    # Standard backprop (no mixed precision)
-                    self.optimizer.zero_grad()
-                    loss.backward()
-
-                    # Check for NaN in gradients
-                    has_nan_grad = False
-                    for name, param in self.encoder.named_parameters():
-                        if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                            has_nan_grad = True
-                            break
-                    if not has_nan_grad:
-                        for name, param in self.policy_head.named_parameters():
-                            if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                                has_nan_grad = True
-                                break
-
-                    if has_nan_grad:
-                        print(f"⚠️  NaN detected in gradients! Aborting training update.")
-                        nan_detected = True
-                        break
-
-                    # Gradient clipping (including log_std)
-                    nn.utils.clip_grad_norm_(self.encoder.parameters(), 1.0)
-                    nn.utils.clip_grad_norm_(self.policy_head.parameters(), 1.0)
-                    nn.utils.clip_grad_norm_(self.value_head.parameters(), 1.0)
-                    nn.utils.clip_grad_norm_([self.log_std], 0.5)
-
-                    self.optimizer.step()
-
-                    metrics['policy_loss'].append(policy_loss.item())
-                    metrics['value_loss'].append(value_loss.item())
-                    metrics['entropy'].append(entropy.item())
-                    metrics['approx_kl'].append(approx_kl.item())
-                    metrics['clip_fraction'].append(clip_fraction.item())
-                    
-                except Exception as e:
-                    print(f"\n❌ Error in training step: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    nan_detected = True
-                    break
-
-            # If NaN detected, abort entire training update
-            if nan_detected:
-                print(f"❌ NaN detected during training! Skipping this update entirely.")
-                break
-
-            # Update progress bar description (avg of current epoch)
-            if metrics['policy_loss']:
-                avg_kl = np.mean(metrics['approx_kl'][-10:]) if metrics['approx_kl'] else 0.0
-                pbar.set_postfix({
-                    'ploss': f"{np.mean(metrics['policy_loss'][-10:]):.3f}",
-                    'vloss': f"{np.mean(metrics['value_loss'][-10:]):.3f}",
-                    'kl': f"{avg_kl:.4f}"
-                })
-
-                # Early stopping: check if KL divergence exceeds target (with warm-up)
-                current_target_kl = self.get_target_kl()
-                if avg_kl > current_target_kl:
-                    warmup_status = f" [warm-up {self.update_count}/{self.kl_warmup_updates}]" if self.update_count < self.kl_warmup_updates else ""
-                    print(f"\n⚠️  Early stopping at epoch {epoch + 1}/{self.args.update_epochs}: KL divergence ({avg_kl:.4f}) exceeded target ({current_target_kl:.4f}){warmup_status}")
-                    early_stop = True
-                    break
-
-        # If NaN was detected, return None to signal failure
-        if nan_detected:
-            return None
-
-        # Only return metrics if we have valid data
-        if not metrics['policy_loss']:
-            print("⚠️  No valid training data collected!")
-            return None
-
-        return {k: np.mean(v) for k, v in metrics.items()}
-
-    def save_checkpoint(self, filename):
-        """Save model checkpoint."""
-        path = os.path.join(self.args.checkpoint_dir, filename)
-        torch.save({
-            'encoder_state_dict': self.encoder.state_dict(),
-            'policy_head_state_dict': self.policy_head.state_dict(),
-            'value_head_state_dict': self.value_head.state_dict(),
-            'log_std': self.log_std,
+    def _save_checkpoint(self):
+        state = {
+            'policy_state_dict': self.policy.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'total_steps': self.total_steps,
-            'update_count': self.update_count
-        }, path)
-        print(f"💾 Saved checkpoint: {path}")
+            'update_count': self.update_count,
+            'model_version': self.model_version,
+            'episode_count': self.episode_count,
+        }
+        ckpt_path = os.path.join(self.args.checkpoint_dir, f'ppo_step_{self.total_steps}.pt')
+        latest_path = os.path.join(self.args.checkpoint_dir, 'latest.pt')
+        torch.save(state, ckpt_path)
+        torch.save(state, latest_path)
+        print(f"Checkpoint saved: {ckpt_path}")
 
-        # Also export ONNX whenever we save a checkpoint
-        self.export_onnx()
-
-    def export_onnx(self, increment_version=True):
-        """Export current policy to ONNX for Rover."""
+    def _export_onnx(self, increment_version=True):
+        """Export policy to ONNX format."""
         try:
-            # First check if model has NaN weights before export
-            has_nan = False
-            for name, param in self.encoder.named_parameters():
-                if torch.isnan(param).any() or torch.isinf(param).any():
-                    print(f"❌ NaN/Inf detected in encoder.{name}!")
-                    has_nan = True
-            for name, param in self.policy_head.named_parameters():
-                if torch.isnan(param).any() or torch.isinf(param).any():
-                    print(f"❌ NaN/Inf detected in policy_head.{name}!")
-                    has_nan = True
-
-            if has_nan:
-                print("❌ Cannot export ONNX - model has NaN weights!")
-                return
-
             onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+            self.policy.eval()
+            dummy_bev = torch.zeros(1, 2, 128, 128, device=self.device)
+            dummy_proprio = torch.zeros(1, self.proprio_dim, device=self.device)
 
-            # Create dummy inputs matching RKNN expectation
-            dummy_rgb = torch.randn(1, 3, 240, 424, device=self.device)
-            dummy_depth = torch.randn(1, 1, 240, 424, device=self.device)
-            dummy_proprio = torch.randn(1, self.proprio_dim, device=self.device)
-
-            # Wrap model to handle forward pass signature
-            class ActorWrapper(nn.Module):
-                def __init__(self, encoder, policy):
-                    super().__init__()
-                    self.encoder = encoder
-                    self.policy = policy
-
-                def forward(self, rgb, depth, proprio):
-                    features = self.encoder(rgb, depth)
-                    # Pass None for hidden state to bypass LSTM
-                    action, _ = self.policy(features, proprio, None)
-                    return action
-
-            actor = ActorWrapper(self.encoder, self.policy_head)
-            actor.eval()
-
-            # Test the model before export
-            with torch.no_grad():
-                test_output = actor(dummy_rgb, dummy_depth, dummy_proprio)
-                if torch.isnan(test_output).any() or torch.isinf(test_output).any():
-                    print(f"❌ Model produces NaN/Inf outputs! Cannot export.")
-                    print(f"   Output: {test_output}")
-                    return
-            
-            # Check parameter count
-            param_count = sum(p.numel() for p in actor.parameters())
-            print(f"📊 Model has {param_count} parameters")
-            
             torch.onnx.export(
-                actor,
-                (dummy_rgb, dummy_depth, dummy_proprio),
+                self.policy,
+                (dummy_bev, dummy_proprio),
                 onnx_path,
-                opset_version=11,  # Legacy exporter works best with opset 11
-                input_names=['rgb', 'depth', 'proprio'],
-                output_names=['action'],
-                export_params=True,
-                do_constant_folding=True,
-                keep_initializers_as_inputs=False,
-                verbose=True,
-                dynamo=False  # Force legacy exporter
+                input_names=['bev', 'proprio'],
+                output_names=['action_mean', 'log_std', 'value'],
+                opset_version=12,
+                dynamic_axes={'bev': {0: 'batch'}, 'proprio': {0: 'batch'}}
             )
-            
-            # Verify export size
-            file_size = os.path.getsize(onnx_path)
-            print(f"📦 Exported ONNX: {onnx_path} ({file_size} bytes)")
-            if file_size < 100000: # < 100KB means weights are missing
-                print("⚠️  WARNING: Exported ONNX model is suspiciously small! Weights might be missing.")
-                # DIAGNOSTIC: Check if we can save state_dict
-                torch.save(actor.state_dict(), onnx_path + ".pt")
-                print(f"  Saved state_dict to {onnx_path}.pt for comparison ({os.path.getsize(onnx_path + '.pt')} bytes)")
-            
-            if increment_version:
-                self.model_version += 1  # Signal that a new model is ready
-            
-        except Exception as e:
-            print(f"❌ ONNX Export failed: {e}")
+            self.policy.train()
 
-    def run(self):
-        """Main training loop."""
-        print(f"🚀 PPO Training Server started on port {self.args.port}")
-        print(f"   Buffer Size: {self.args.buffer_size}")
-        print(f"   Rollout Steps: {self.args.rollout_steps}")
-        print(f"   Mini-Batch Size: {self.args.mini_batch_size}")
-        
+            if increment_version:
+                self.model_version += 1
+
+            file_size = os.path.getsize(onnx_path)
+            print(f"Exported ONNX: {onnx_path} ({file_size} bytes)")
+            return onnx_path
+        except Exception as e:
+            print(f"ONNX export failed: {e}")
+            self.policy.train()
+            return None
+
+    # ========== PPO Training ==========
+
+    def train_on_rollout(self, rollout: dict):
+        """Run PPO training on a received rollout.
+
+        Args:
+            rollout: dict with keys: bev, proprio, actions, rewards, dones
+                     bev: (N, 2, 128, 128) float32 [0,1]
+                     proprio: (N, 6) float32
+                     actions: (N, 2) float32
+                     rewards: (N,) float32
+                     dones: (N,) bool
+        """
+        t0 = time.time()
+        n = len(rollout['rewards'])
+        self.total_steps += n
+        print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
+
+        # Convert to tensors on GPU
+        bev = torch.from_numpy(rollout['bev']).float().to(self.device)
+        proprio = torch.from_numpy(rollout['proprio']).float().to(self.device)
+        actions = torch.from_numpy(rollout['actions']).float().to(self.device)
+        rewards = torch.from_numpy(rollout['rewards']).float().to(self.device)
+        dones = torch.from_numpy(rollout['dones']).float().to(self.device)
+
+        # Track episodes from rollout
+        for i in range(n):
+            if rollout['dones'][i]:
+                self.episode_count += 1
+
+        # 1. Recompute log_probs and values from CURRENT PyTorch model
+        print("  Recomputing log_probs from PyTorch model...")
+        old_log_probs = torch.zeros(n, device=self.device)
+        values = torch.zeros(n, device=self.device)
+
+        self.policy.eval()
+        with torch.no_grad():
+            for start in range(0, n, self.mini_batch_size):
+                end = min(start + self.mini_batch_size, n)
+                bev_b = bev[start:end]
+                pro_b = proprio[start:end]
+                act_b = actions[start:end]
+
+                if self.use_amp:
+                    with torch.amp.autocast('cuda'):
+                        action_mean, log_std, val = self.policy(bev_b, pro_b)
+                else:
+                    action_mean, log_std, val = self.policy(bev_b, pro_b)
+
+                # Cast back to float32 for log_prob computation
+                action_mean = action_mean.float()
+                log_std = log_std.float()
+                val = val.float()
+
+                std = log_std.exp().clamp(min=1e-6, max=2.0)
+                dist = torch.distributions.Normal(action_mean, std)
+
+                acts_clamped = act_b.clamp(-0.999, 0.999)
+                raw_acts = torch.atanh(acts_clamped)
+                lp = dist.log_prob(raw_acts).sum(dim=-1)
+                lp -= (2 * (np.log(2) - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
+
+                old_log_probs[start:end] = lp
+                values[start:end] = val
+
+        self.policy.train()
+
+        # 2. Compute GAE
+        print("  Computing GAE...")
+        advantages = torch.zeros(n, device=self.device)
+        last_gae = 0.0
+        # Bootstrap value for last step
+        with torch.no_grad():
+            last_bev = bev[-1:].to(self.device)
+            last_pro = proprio[-1:].to(self.device)
+            if self.use_amp:
+                with torch.amp.autocast('cuda'):
+                    _, _, last_value = self.policy(last_bev, last_pro)
+            else:
+                _, _, last_value = self.policy(last_bev, last_pro)
+            last_value = last_value.float().item()
+
+        for t in reversed(range(n)):
+            if t == n - 1:
+                next_value = last_value
+            else:
+                next_value = values[t + 1]
+            delta = rewards[t] + self.gamma * next_value * (1.0 - dones[t]) - values[t]
+            last_gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t]) * last_gae
+            advantages[t] = last_gae
+
+        returns = advantages + values
+
+        # Normalize advantages
+        adv_mean = advantages.mean()
+        adv_std = advantages.std() + 1e-8
+        advantages = (advantages - adv_mean) / adv_std
+
+        # 3. PPO epochs
+        print(f"  Training: {self.update_epochs} epochs, mini-batch {self.mini_batch_size}")
+        total_policy_loss = 0.0
+        total_value_loss = 0.0
+        total_entropy = 0.0
+        n_updates = 0
+
+        for epoch in range(self.update_epochs):
+            indices = torch.randperm(n, device=self.device)
+            for start in range(0, n, self.mini_batch_size):
+                end = min(start + self.mini_batch_size, n)
+                idx = indices[start:end]
+
+                bev_b = bev[idx]
+                pro_b = proprio[idx]
+                act_b = actions[idx]
+                ret_b = returns[idx]
+                adv_b = advantages[idx]
+                old_lp_b = old_log_probs[idx]
+
+                if self.use_amp:
+                    with torch.amp.autocast('cuda'):
+                        action_mean, log_std, val = self.policy(bev_b, pro_b)
+                        action_mean = action_mean.float()
+                        log_std = log_std.float()
+                        val = val.float()
+                else:
+                    action_mean, log_std, val = self.policy(bev_b, pro_b)
+
+                std = log_std.exp().clamp(min=1e-6, max=2.0)
+                dist = torch.distributions.Normal(action_mean, std)
+
+                acts_clamped = act_b.clamp(-0.999, 0.999)
+                raw_actions = torch.atanh(acts_clamped)
+                new_log_probs = dist.log_prob(raw_actions).sum(dim=-1)
+                new_log_probs -= (2 * (np.log(2) - raw_actions - F.softplus(-2 * raw_actions))).sum(dim=-1)
+
+                # PPO clipped objective
+                ratio = (new_log_probs - old_lp_b).exp()
+                surr1 = ratio * adv_b
+                surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_b
+                policy_loss = -torch.min(surr1, surr2).mean()
+
+                # Value loss
+                value_loss = self.value_coef * (val - ret_b).pow(2).mean()
+
+                # Entropy bonus
+                entropy = dist.entropy().sum(dim=-1).mean()
+
+                loss = policy_loss + value_loss - self.entropy_coef * entropy
+
+                self.optimizer.zero_grad()
+
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                    self.optimizer.step()
+
+                total_policy_loss += policy_loss.item()
+                total_value_loss += value_loss.item()
+                total_entropy += entropy.item()
+                n_updates += 1
+
+        dt = time.time() - t0
+        self.update_count += 1
+
+        avg_pl = total_policy_loss / max(n_updates, 1)
+        avg_vl = total_value_loss / max(n_updates, 1)
+        avg_ent = total_entropy / max(n_updates, 1)
+
+        print(f"  Done in {dt:.1f}s | PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | Ent: {avg_ent:.4f}")
+
+        # TensorBoard
+        self.writer.add_scalar('loss/policy', avg_pl, self.update_count)
+        self.writer.add_scalar('loss/value', avg_vl, self.update_count)
+        self.writer.add_scalar('loss/entropy', avg_ent, self.update_count)
+        self.writer.add_scalar('training/total_steps', self.total_steps, self.update_count)
+        self.writer.add_scalar('training/model_version', self.model_version, self.update_count)
+        self.writer.add_scalar('training/train_time_s', dt, self.update_count)
+
+        # Save checkpoint
+        if self.update_count % self.args.checkpoint_interval == 0:
+            self._save_checkpoint()
+
+        # Export ONNX
+        onnx_path = self._export_onnx()
+
+        return {
+            'policy_loss': avg_pl,
+            'value_loss': avg_vl,
+            'entropy': avg_ent,
+            'train_time': dt,
+            'model_version': self.model_version,
+            'onnx_path': onnx_path,
+        }
+
+    # ========== NATS Communication ==========
+
+    async def setup_nats(self):
+        """Connect to NATS and set up streams."""
+        print(f"Connecting to NATS at {self.nats_server}...")
+
+        async def on_disconnected():
+            print("NATS disconnected")
+
+        async def on_reconnected():
+            print("NATS reconnected")
+
+        self.nc = await nats.connect(
+            servers=[self.nats_server],
+            name="v620-ppo-trainer",
+            max_reconnect_attempts=-1,
+            reconnect_time_wait=2,
+            ping_interval=20,
+            max_outstanding_pings=3,
+            disconnected_cb=on_disconnected,
+            reconnected_cb=on_reconnected,
+        )
+
+        self.js = self.nc.jetstream()
+        print("Connected to NATS")
+
+        await self._ensure_streams()
+
+    async def _ensure_streams(self):
+        """Create NATS JetStream streams if they don't exist."""
+        # PPO Rollout stream
+        try:
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_PPO_ROLLOUTS",
+                subjects=["rover.ppo.rollout"],
+                retention="limits",
+                max_msgs=100,
+                max_bytes=10 * 1024 * 1024 * 1024,  # 10 GB
+                max_age=604800,  # 7 days
+                max_msg_size=200 * 1024 * 1024,  # 200 MB
+                storage="file",
+                discard="old",
+            ))
+            print("ROVER_PPO_ROLLOUTS stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"Stream setup: {e}")
+
+        # PPO Model stream
+        try:
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_PPO_MODELS",
+                subjects=["models.ppo.update", "models.ppo.metadata"],
+                retention="limits",
+                max_msgs=100,
+                max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
+                max_age=2592000,  # 30 days
+                max_msg_size=50 * 1024 * 1024,  # 50 MB
+                storage="file",
+                discard="old",
+            ))
+            print("ROVER_PPO_MODELS stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"Stream setup: {e}")
+
+        # PPO Control stream
+        try:
+            await self.js.add_stream(StreamConfig(
+                name="ROVER_PPO_CONTROL",
+                subjects=["server.ppo.status"],
+                retention="limits",
+                max_msgs=10000,
+                max_bytes=100 * 1024 * 1024,
+                max_age=86400,  # 24 hours
+                max_msg_size=1 * 1024 * 1024,
+                storage="file",
+                discard="old",
+            ))
+            print("ROVER_PPO_CONTROL stream ready")
+        except Exception as e:
+            if "stream name already in use" not in str(e).lower():
+                print(f"Stream setup: {e}")
+
+    async def consume_rollouts(self):
+        """Consume PPO rollouts from rover and train."""
+        print("Starting rollout consumer...")
+
+        psub = await self.js.pull_subscribe(
+            subject="rover.ppo.rollout",
+            durable="ppo_trainer"
+        )
+
         while True:
             try:
-                # Wait for request
-                message = self.socket.recv_pyobj()
-                
-                response = {'type': 'ack'}
-                
-                if message['type'] == 'data_batch':
-                    # Log connection status
-                    current_time = time.time()
-                    dt = current_time - self.last_data_time
-                    self.last_data_time = current_time
-                    batch_len = len(message['data']['rewards'])
+                msgs = await psub.fetch(batch=1, timeout=1.0)
+                for msg in msgs:
+                    try:
+                        print(f"Received rollout: {len(msg.data)} bytes")
+                        rollout = deserialize_batch(msg.data)
 
-                    # Try to acquire lock without blocking
-                    if self.training_lock.acquire(blocking=False):
-                        try:
-                            print(f"📥 Received batch: {batch_len} steps (Rover active, {dt:.1f}s since last)")
-                            # Add data to buffer (thread-safe)
-                            self.buffer.add_batch(message['data'])
-                            
-                            self.total_steps += batch_len
-                            
-                            # Update curriculum
-                            self.update_curriculum()
-                            
-                            # Send back curriculum info and latest model version
-                            response['curriculum'] = {
-                                'collision_dist': self.collision_dist,
-                                'max_speed': self.max_speed
-                            }
-                            response['model_version'] = self.model_version
-                            
-                            # Tell rover to wait if we are about to train
-                            # Tell rover to wait if we are about to train
-                            if self.is_training or self.training_requested:
-                                response['wait_for_training'] = True
-                        finally:
-                            self.training_lock.release()
-                    else:
-                        # Lock is busy -> Training in progress
-                        print(f"🔒 Training in progress, discarding batch of {batch_len} steps")
-                        response['wait_for_training'] = True
-                        # Still send curriculum/model info just in case
-                        response['curriculum'] = {
-                            'collision_dist': self.collision_dist,
-                            'max_speed': self.max_speed
-                        }
-                        response['model_version'] = self.model_version
-                    
-                elif message['type'] == 'check_status':
-                    # Rover polling for training completion
-                    response['status'] = 'training' if self.is_training else 'ready'
-                    response['model_version'] = self.model_version
+                        n_steps = len(rollout['rewards'])
+                        print(f"Rollout: {n_steps} steps")
 
-                elif message['type'] == 'get_model':
-                    # Send latest ONNX model
-                    onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
-                    if os.path.exists(onnx_path):
-                        print(f"📤 Rover requested model update")
-                        with open(onnx_path, 'rb') as f:
-                            model_bytes = f.read()
-                        response['model_bytes'] = model_bytes
-                        response['model_version'] = self.model_version
-                        print(f"📤 Sent ONNX model v{self.model_version} ({len(model_bytes)} bytes)")
+                        # Train PPO
+                        train_result = self.train_on_rollout(rollout)
 
-                    else:
-                        # Silent fail if not ready yet (to avoid log spam)
-                        # print("⚠ No ONNX model found yet")
-                        response['error'] = 'No model available'
+                        # Publish updated model
+                        if train_result['onnx_path'] and os.path.exists(train_result['onnx_path']):
+                            await self._publish_model(train_result)
 
-                elif message['type'] == 'start_training':
-                    # Rover explicitly requesting training start
-                    print("🔔 Rover requested training start!")
-                    self.training_requested = True
-                    response['status'] = 'training_queued'
-                    response['wait_for_training'] = True
-                
-                self.socket.send_pyobj(response)
-                
+                        # Acknowledge
+                        await msg.ack()
+                        print(f"Rollout processed, model v{self.model_version} published")
+
+                    except Exception as e:
+                        print(f"Error processing rollout: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        await msg.ack()
+
+            except nats.errors.TimeoutError:
+                await asyncio.sleep(0.1)
+                continue
             except Exception as e:
-                print(f"❌ Error: {e}")
-                # Send error response if possible, else continue
-                try:
-                    self.socket.send_pyobj({'type': 'error', 'msg': str(e)})
-                except:
-                    pass
+                print(f"Consumer error: {e}")
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(1.0)
 
-import io
+    async def _publish_model(self, train_result):
+        """Publish updated ONNX model to NATS for rover to download."""
+        try:
+            onnx_path = train_result['onnx_path']
+            with open(onnx_path, 'rb') as f:
+                onnx_bytes = f.read()
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=5556)
-    parser.add_argument('--buffer_size', type=int, default=25000)
-    parser.add_argument('--rollout_steps', type=int, default=2048, help="Steps to collect before training")
-    parser.add_argument('--mini_batch_size', type=int, default=512, help="Mini-batch size for PPO update")
-    parser.add_argument('--lr', type=float, default=3e-5)  # Lowered to 3e-5 for stability
-    parser.add_argument('--update_epochs', type=int, default=5)
-    parser.add_argument('--clip_eps', type=float, default=0.2)
-    parser.add_argument('--value_coef', type=float, default=0.5)
-    parser.add_argument('--entropy_coef', type=float, default=0.01)
-    parser.add_argument('--target_kl', type=float, default=0.015, help="Target KL divergence for early stopping")
+            # Publish model update
+            model_msg = serialize_model_update(onnx_bytes, self.model_version)
+            await self.js.publish(
+                subject="models.ppo.update",
+                payload=model_msg,
+                timeout=30.0
+            )
+
+            # Publish metadata with training stats
+            import msgpack
+            metadata = {
+                "latest_version": self.model_version,
+                "timestamp": time.time(),
+                "train_stats": {
+                    'policy_loss': train_result['policy_loss'],
+                    'value_loss': train_result['value_loss'],
+                    'entropy': train_result['entropy'],
+                    'train_time': train_result['train_time'],
+                },
+            }
+            await self.js.publish(
+                subject="models.ppo.metadata",
+                payload=msgpack.packb(metadata),
+                timeout=10.0
+            )
+
+            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes)")
+
+        except Exception as e:
+            print(f"Model publish failed: {e}")
+
+    async def publish_status(self):
+        """Periodically publish training status."""
+        while True:
+            try:
+                status_msg = serialize_status(
+                    status='ready',
+                    model_version=self.model_version,
+                    total_steps=self.total_steps,
+                    update_count=self.update_count,
+                )
+                await self.js.publish(
+                    subject="server.ppo.status",
+                    payload=status_msg,
+                    timeout=5.0
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(5.0)
+
+    async def run(self):
+        """Main async loop."""
+        await self.setup_nats()
+
+        # Start background tasks
+        asyncio.create_task(self.publish_status())
+
+        # Main loop: consume rollouts and train
+        await self.consume_rollouts()
+
+    def start(self):
+        """Entry point."""
+        # Signal handler
+        def _shutdown(signum, frame):
+            print("\nShutdown signal received!")
+            self._save_checkpoint()
+            self.writer.close()
+            print("Shutdown complete")
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, _shutdown)
+        signal.signal(signal.SIGTERM, _shutdown)
+
+        # Run async loop
+        asyncio.run(self.run())
+
+
+def main():
+    parser = argparse.ArgumentParser(description='V620 PPO Training Server')
+    parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_ppo')
     parser.add_argument('--log_dir', type=str, default='./logs_ppo')
-    
-    parser.add_argument('--seed-behavior', type=str, default=None, choices=['forward', 'cautious', 'explorer'],
-                        help='Seed training with heuristic behavior (forward, cautious, explorer)')
-    parser.add_argument('--force-restart', action='store_true', help='Force fresh start (ignore existing checkpoints)')
-    
+    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--clip_eps', type=float, default=0.2)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--gae_lambda', type=float, default=0.95)
+    parser.add_argument('--update_epochs', type=int, default=10)
+    parser.add_argument('--mini_batch_size', type=int, default=512)
+    parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
-    
+
     trainer = V620PPOTrainer(args)
-    trainer.run()
+    trainer.start()
+
+
+if __name__ == '__main__':
+    main()
