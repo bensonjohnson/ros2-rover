@@ -308,14 +308,26 @@ class DashboardStats:
             # Reward time series (last 300 steps ~ 10s at 30Hz)
             'reward_history': [],
             'velocity_history': [],
+            # Throughput
+            'steps_per_sec': 0.0,
         }
         self._start_time = time.time()
+        self._step_times = deque(maxlen=100)  # Timestamps of last 100 steps
 
     def update(self, **kwargs):
         with self._lock:
             for k, v in kwargs.items():
                 if k in self._data:
                     self._data[k] = v
+
+    def record_step(self):
+        now = time.time()
+        with self._lock:
+            self._step_times.append(now)
+            if len(self._step_times) >= 2:
+                dt = self._step_times[-1] - self._step_times[0]
+                if dt > 0:
+                    self._data['steps_per_sec'] = (len(self._step_times) - 1) / dt
 
     def append_reward(self, reward, velocity):
         with self._lock:
@@ -380,6 +392,7 @@ h1{text-align:center;font-size:1.4em;margin-bottom:10px;color:#7eb8ff}
     <div id="status-text" class="stat" style="font-size:1.4em">Collecting</div>
     <div class="stat-sm">Phase: <span id="phase" class="badge badge-blue">exploration</span></div>
     <div class="stat-row"><span class="label">Uptime</span><span class="val" id="uptime">0s</span></div>
+    <div class="stat-row"><span class="label">Throughput</span><span class="val" id="tps">0.0 steps/s</span></div>
   </div>
   <div class="card">
     <h3>Training Progress</h3>
@@ -463,6 +476,7 @@ async function poll(){
 
     document.getElementById('phase').textContent=d.phase;
     document.getElementById('uptime').textContent=fmtTime(d.uptime_s);
+    document.getElementById('tps').textContent=fmt(d.steps_per_sec,1)+' steps/s';
     document.getElementById('model-ver').textContent='v'+d.model_version;
     document.getElementById('total-steps').textContent=d.total_steps.toLocaleString();
     document.getElementById('updates').textContent=d.update_count;
@@ -1421,6 +1435,7 @@ class PPOLocalRunner(Node):
             episode_reward_history=list(self._episode_reward_history),
         )
         self.dashboard_stats.append_reward(float(reward), float(current_linear))
+        self.dashboard_stats.record_step()
 
         # Log periodically
         if self._total_steps % 300 == 0:
