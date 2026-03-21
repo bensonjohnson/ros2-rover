@@ -1291,10 +1291,10 @@ class PPORemoteRunner(Node):
         # Episode boundary
         if episode_done:
             self._trigger_episode_reset()
-            self.phase_manager.record_episode(
+            self.phase_manager.record_training_episode(
                 reward=self._current_episode_reward,
-                length=self._current_episode_length,
-                collision=(done_reason == 'blocked')
+                collided=(done_reason == 'blocked'),
+                length=self._current_episode_length
             )
             self._episode_reward_history.append(self._current_episode_reward)
             self._episode_count += 1
