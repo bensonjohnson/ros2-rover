@@ -556,6 +556,7 @@ class PPORemoteRunner(Node):
         self._current_episode_reward = 0.0
         self._episode_reward_history = deque(maxlen=50)
         self._state_visits = {}
+        self.MAX_EPISODE_STEPS = 512  # Episode step limit
 
         # Stuck/slip detection
         self.stuck_detector = StuckDetector(stuck_threshold=0.15)
@@ -770,7 +771,7 @@ class PPORemoteRunner(Node):
         return np.clip(bonus, 0.0, 0.15)
 
     def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist,
-                        side_clearance, collision, is_stuck, is_slipping=False,
+                        side_clearance, episode_done, is_stuck, is_slipping=False,
                         slip_recovery_active=False, safety_blocked=False):
         VELOCITY_DEADBAND = 0.03
         if abs(linear_vel) < VELOCITY_DEADBAND:
@@ -1210,20 +1211,8 @@ class PPORemoteRunner(Node):
             action_np = np.array([np.random.uniform(-0.5, 1.0), np.random.uniform(-0.5, 1.0)])
 
         # 3. Execute action
-        left_track = 0.0
-        right_track = 0.0
         is_stuck = self._is_stuck
         monitor_blocking = self._safety_override
-
-        effective_min_dist = self._min_forward_dist
-        if self._min_forward_dist < 0.05 and lidar_min > 0.2:
-            effective_min_dist = lidar_min
-
-        if is_stuck and effective_min_dist < 0.12:
-            depth_safety = effective_min_dist < 0.05
-        else:
-            depth_safety = not monitor_blocking and effective_min_dist < 0.12
-        safety_triggered = monitor_blocking or depth_safety
 
         def apply_soft_deadzone(val, min_val):
             if abs(val) < 0.001:
@@ -1232,7 +1221,7 @@ class PPORemoteRunner(Node):
 
         MIN_TRACK = 0.25
 
-        if self._slip_detected and self._slip_recovery_active and not safety_triggered:
+        if self._slip_detected and self._slip_recovery_active and not monitor_blocking:
             if not hasattr(self, '_slip_recovery_turn_dir'):
                 self._slip_recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
             recovery_left = -0.4 + self._slip_recovery_turn_dir * 0.15
@@ -1240,24 +1229,38 @@ class PPORemoteRunner(Node):
             left_track = float(math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_left), recovery_left))
             right_track = float(math.copysign(MIN_TRACK + (1.0 - MIN_TRACK) * abs(recovery_right), recovery_right))
             actual_action = np.array([left_track, right_track])
-            collision = False
         elif monitor_blocking:
+            # Safety monitor blocking — only allow reverse
             left_track = min(apply_soft_deadzone(action_np[0], MIN_TRACK), 0.0)
             right_track = min(apply_soft_deadzone(action_np[1], MIN_TRACK), 0.0)
             actual_action = np.array([left_track, right_track])
-            collision = False
-        elif depth_safety:
-            left_track = -0.3
-            right_track = -0.3
-            actual_action = np.array([-0.3, -0.3])
-            collision = self._sensor_warmup_complete
         else:
             left_track = apply_soft_deadzone(action_np[0], MIN_TRACK)
             right_track = apply_soft_deadzone(action_np[1], MIN_TRACK)
             actual_action = np.array([left_track, right_track])
-            collision = False
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
+
+        # Episode done conditions:
+        # 1. Safety monitor blocked (drove too close to obstacle)
+        # 2. Stuck (no motion despite commands)
+        # 3. Step limit reached
+        # 4. Excessive spinning (full revolution without progress)
+        episode_done = False
+        done_reason = None
+        if monitor_blocking:
+            episode_done = True
+            done_reason = 'blocked'
+        elif is_stuck:
+            episode_done = True
+            done_reason = 'stuck'
+        elif self._current_episode_length >= self.MAX_EPISODE_STEPS:
+            episode_done = True
+            done_reason = 'step_limit'
+        elif self._revolution_penalty_triggered:
+            episode_done = True
+            done_reason = 'spinning'
+            self._revolution_penalty_triggered = False
 
         # Track action diversity
         self._prev_actions_buffer.append(actual_action.copy())
@@ -1270,7 +1273,7 @@ class PPORemoteRunner(Node):
         # 4. Reward
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
-            lidar_min, lidar_sides, collision, is_stuck,
+            lidar_min, lidar_sides, episode_done, is_stuck,
             is_slipping=self._slip_detected,
             slip_recovery_active=self._slip_recovery_active,
             safety_blocked=monitor_blocking
@@ -1280,21 +1283,26 @@ class PPORemoteRunner(Node):
             return
 
         # 5. Store transition (no log_prob or value - server recomputes)
-        self.buffer.add(bev_grid, proprio, actual_action, reward, collision)
+        self.buffer.add(bev_grid, proprio, actual_action, reward, episode_done)
         self._total_steps += 1
         self._current_episode_reward += reward
         self._current_episode_length += 1
 
-        # Episode boundary on collision
-        if collision:
+        # Episode boundary
+        if episode_done:
             self._trigger_episode_reset()
             self.phase_manager.record_episode(
                 reward=self._current_episode_reward,
                 length=self._current_episode_length,
-                collision=True
+                collision=(done_reason == 'blocked')
             )
             self._episode_reward_history.append(self._current_episode_reward)
             self._episode_count += 1
+            if self._total_steps % 300 != 0:  # Don't double-log
+                self.get_logger().info(
+                    f'Episode done ({done_reason}) | len={self._current_episode_length} | '
+                    f'rew={self._current_episode_reward:.2f} | ep#{self._episode_count}'
+                )
             self._current_episode_reward = 0.0
             self._current_episode_length = 0
 
