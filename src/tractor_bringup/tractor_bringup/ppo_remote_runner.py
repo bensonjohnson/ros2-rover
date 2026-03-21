@@ -601,6 +601,7 @@ class PPORemoteRunner(Node):
         self.nc = None
         self.js = None
         self._nats_connected = False
+        self._nats_loop = None  # Reference to NATS thread's event loop
         self._stop_event = threading.Event()
         self._nats_thread = threading.Thread(target=self._run_nats_loop, daemon=True)
         self._nats_thread.start()
@@ -1382,19 +1383,22 @@ class PPORemoteRunner(Node):
             'algorithm': 'ppo',
         }
 
-        # Serialize and ship in background thread
+        # Serialize in background thread, publish on NATS loop
         def _send():
             try:
                 msg_bytes = serialize_batch(rollout)
                 msg_size_mb = len(msg_bytes) / (1024 * 1024)
                 self.get_logger().info(f'Rollout serialized: {msg_size_mb:.1f} MB')
 
-                # Use asyncio to publish
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(self._publish_rollout(msg_bytes))
-                loop.close()
-
-                self.get_logger().info('Rollout shipped successfully')
+                # Schedule publish on the NATS event loop (where self.js lives)
+                if self._nats_loop is not None and self._nats_loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._publish_rollout(msg_bytes), self._nats_loop
+                    )
+                    future.result(timeout=30.0)  # Block until published
+                    self.get_logger().info('Rollout shipped successfully')
+                else:
+                    self.get_logger().error('NATS event loop not running, cannot publish')
             except Exception as e:
                 self.get_logger().error(f'Rollout shipping failed: {e}')
             finally:
@@ -1424,6 +1428,7 @@ class PPORemoteRunner(Node):
     async def _nats_main(self):
         """Main NATS async event loop."""
         try:
+            self._nats_loop = asyncio.get_running_loop()
             await self._connect_nats()
 
             # Subscribe to PPO model updates
@@ -1540,40 +1545,16 @@ class PPORemoteRunner(Node):
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Convert to RKNN
+            # Convert to RKNN (run in executor to avoid blocking NATS loop)
             if HAS_RKNN:
                 self.get_logger().info('Converting to RKNN...')
                 self.dashboard_stats.update(rknn_converting=True)
                 rknn_path = str(onnx_path).replace('.onnx', '.rknn')
 
-                convert_script = "./convert_onnx_to_rknn.sh"
-                if not os.path.exists(convert_script):
-                    convert_script = "/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"
-
-                if os.path.exists(convert_script):
-                    result = subprocess.run(
-                        [convert_script, str(onnx_path), str(self._calibration_dir)],
-                        capture_output=True, text=True, timeout=300
-                    )
-
-                    if os.path.exists(rknn_path):
-                        new_runtime = RKNNLite()
-                        ret = new_runtime.load_rknn(rknn_path)
-                        if ret == 0:
-                            ret = new_runtime.init_runtime()
-                            if ret == 0:
-                                self._rknn_runtime = new_runtime
-                                self._model_version = model_version
-                                self._update_count = model_version
-                                self.get_logger().info(f'RKNN model v{model_version} loaded on NPU')
-                            else:
-                                self.get_logger().error(f'RKNN runtime init failed: {ret}')
-                        else:
-                            self.get_logger().error(f'RKNN load failed: {ret}')
-                    else:
-                        self.get_logger().error(f'RKNN conversion failed: {result.stderr[:200]}')
-                else:
-                    self.get_logger().warn('convert_onnx_to_rknn.sh not found')
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None, self._convert_and_load_rknn, str(onnx_path), rknn_path, model_version
+                )
 
                 self.dashboard_stats.update(rknn_converting=False)
             else:
@@ -1604,6 +1585,40 @@ class PPORemoteRunner(Node):
             if self._load_rknn_model(str(rknn_path)):
                 self._model_version = 1
                 return
+
+    def _convert_and_load_rknn(self, onnx_path: str, rknn_path: str, model_version: int):
+        """Synchronous RKNN conversion + load (runs in thread executor)."""
+        try:
+            convert_script = "./convert_onnx_to_rknn.sh"
+            if not os.path.exists(convert_script):
+                convert_script = "/home/benson/Documents/ros2-rover/convert_onnx_to_rknn.sh"
+
+            if os.path.exists(convert_script):
+                result = subprocess.run(
+                    [convert_script, onnx_path, str(self._calibration_dir)],
+                    capture_output=True, text=True, timeout=300
+                )
+
+                if os.path.exists(rknn_path):
+                    new_runtime = RKNNLite()
+                    ret = new_runtime.load_rknn(rknn_path)
+                    if ret == 0:
+                        ret = new_runtime.init_runtime()
+                        if ret == 0:
+                            self._rknn_runtime = new_runtime
+                            self._model_version = model_version
+                            self._update_count = model_version
+                            self.get_logger().info(f'RKNN model v{model_version} loaded on NPU')
+                        else:
+                            self.get_logger().error(f'RKNN runtime init failed: {ret}')
+                    else:
+                        self.get_logger().error(f'RKNN load failed: {ret}')
+                else:
+                    self.get_logger().error(f'RKNN conversion failed: {result.stderr[:200]}')
+            else:
+                self.get_logger().warn('convert_onnx_to_rknn.sh not found')
+        except Exception as e:
+            self.get_logger().error(f'RKNN conversion error: {e}')
 
     def _load_rknn_model(self, rknn_path: str) -> bool:
         if not HAS_RKNN:

@@ -83,6 +83,7 @@ class V620PPOTrainer:
             print(f"Using GPU: {gpu_name} ({total_mem:.1f}GB)")
 
             self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
+            self._is_blackwell = any(k in gpu_name for k in ('B200', 'B100', 'GB10', 'GB200', 'Blackwell'))
 
             # GPU sanity test
             try:
@@ -98,17 +99,35 @@ class V620PPOTrainer:
 
             torch.backends.cudnn.benchmark = True
 
-            # AMP
+            # AMP — backend-specific dtype and scaler
             self.use_amp = True
             if self._is_rocm:
+                # ROCm V620: FP16 via HIP, conservative scaler for RDNA 2
+                self.amp_dtype = torch.float16
                 self.scaler = torch.amp.GradScaler('cuda', init_scale=1024.0, growth_factor=1.5)
                 print("AMP enabled (FP16) - ROCm")
+            elif self._is_blackwell:
+                # Blackwell (DGX Spark): native BF16, no scaler needed
+                # BF16 has same exponent range as FP32 → no overflow → no GradScaler
+                # TF32 matmuls reduce bandwidth pressure on unified memory
+                self.amp_dtype = torch.bfloat16
+                self.scaler = None
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
+                print(f"AMP enabled (BF16) - Blackwell ({gpu_name})")
+                print("  TF32 matmuls enabled (reduces memory bandwidth)")
             else:
+                # Generic CUDA (H100, A100, etc): FP16 with scaler
+                self.amp_dtype = torch.float16
                 self.scaler = torch.amp.GradScaler('cuda', init_scale=65536.0, growth_factor=2.0)
+                # H100/A100 also benefit from TF32
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
                 print("AMP enabled (FP16) - CUDA")
         else:
             self.device = torch.device('cpu')
             self.use_amp = False
+            self.amp_dtype = torch.float32
             self.scaler = None
             print("Using CPU (slower)")
 
@@ -291,7 +310,7 @@ class V620PPOTrainer:
                 act_b = actions[start:end]
 
                 if self.use_amp:
-                    with torch.amp.autocast('cuda'):
+                    with torch.amp.autocast('cuda', dtype=self.amp_dtype):
                         action_mean, log_std, val = self.policy(bev_b, pro_b)
                 else:
                     action_mean, log_std, val = self.policy(bev_b, pro_b)
@@ -323,7 +342,7 @@ class V620PPOTrainer:
             last_bev = bev[-1:].to(self.device)
             last_pro = proprio[-1:].to(self.device)
             if self.use_amp:
-                with torch.amp.autocast('cuda'):
+                with torch.amp.autocast('cuda', dtype=self.amp_dtype):
                     _, _, last_value = self.policy(last_bev, last_pro)
             else:
                 _, _, last_value = self.policy(last_bev, last_pro)
@@ -366,7 +385,7 @@ class V620PPOTrainer:
                 old_lp_b = old_log_probs[idx]
 
                 if self.use_amp:
-                    with torch.amp.autocast('cuda'):
+                    with torch.amp.autocast('cuda', dtype=self.amp_dtype):
                         action_mean, log_std, val = self.policy(bev_b, pro_b)
                         action_mean = action_mean.float()
                         log_std = log_std.float()
@@ -398,13 +417,15 @@ class V620PPOTrainer:
 
                 self.optimizer.zero_grad()
 
-                if self.use_amp:
+                if self.use_amp and self.scaler is not None:
+                    # FP16 path (ROCm / generic CUDA) — needs GradScaler
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
                     nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
+                    # BF16 (Blackwell) or CPU — no scaler needed
                     loss.backward()
                     nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                     self.optimizer.step()

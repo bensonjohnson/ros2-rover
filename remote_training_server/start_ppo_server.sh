@@ -142,11 +142,21 @@ fi
 OS_TYPE=$(uname -s)
 if [ "$OS_TYPE" = "Linux" ]; then
   if command -v nvidia-smi &> /dev/null; then
-    echo "Applying CUDA optimizations..."
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    echo "Applying CUDA optimizations for ${GPU_NAME}..."
     export CUDA_MODULE_LOADING=LAZY
     export CUDA_LAUNCH_BLOCKING=0
     export CUDA_VISIBLE_DEVICES=0
     export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+
+    # Blackwell / DGX Spark: BF16 + TF32, unified memory
+    if echo "${GPU_NAME}" | grep -qiE "B200|B100|GB10|GB200|Blackwell"; then
+      echo "  Blackwell detected - BF16 + TF32 (no GradScaler)"
+      export CUDNN_FRONTEND_API=1
+      export CUDNN_FRONTEND_LOG_LEVEL=0
+      # Unified memory: pin less, let the driver handle placement
+      export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,pinned_use_cuda_host_register:False"
+    fi
   elif command -v rocm-smi &> /dev/null; then
     echo "Applying ROCm optimizations..."
     export HSA_FORCE_FINE_GRAIN_PCIE=1
