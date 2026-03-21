@@ -29,10 +29,18 @@ from rclpy.qos import qos_profile_sensor_data
 import cv2
 from cv_bridge import CvBridge
 
+import subprocess
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+
+# RKNN Support
+try:
+    from rknnlite.api import RKNNLite
+    HAS_RKNN = True
+except ImportError:
+    HAS_RKNN = False
 
 # ROS2 Messages
 from sensor_msgs.msg import Image, Imu, JointState, LaserScan
@@ -286,6 +294,8 @@ class DashboardStats:
             'phase': 'exploration',
             'training_active': False,
             'warmup_active': False,
+            'inference_backend': 'cpu',
+            'rknn_converting': False,
             'uptime_s': 0,
             # Live sensor/control
             'linear_vel': 0.0,
@@ -393,6 +403,7 @@ h1{text-align:center;font-size:1.4em;margin-bottom:10px;color:#7eb8ff}
     <div class="stat-sm">Phase: <span id="phase" class="badge badge-blue">exploration</span></div>
     <div class="stat-row"><span class="label">Uptime</span><span class="val" id="uptime">0s</span></div>
     <div class="stat-row"><span class="label">Throughput</span><span class="val" id="tps">0.0 steps/s</span></div>
+    <div class="stat-row"><span class="label">Backend</span><span class="val" id="backend">cpu</span></div>
   </div>
   <div class="card">
     <h3>Training Progress</h3>
@@ -477,6 +488,9 @@ async function poll(){
     document.getElementById('phase').textContent=d.phase;
     document.getElementById('uptime').textContent=fmtTime(d.uptime_s);
     document.getElementById('tps').textContent=fmt(d.steps_per_sec,1)+' steps/s';
+    const be=document.getElementById('backend');
+    be.textContent=d.rknn_converting?'Converting RKNN...':d.inference_backend.toUpperCase();
+    be.style.color=d.inference_backend==='npu'?'#4ade80':d.rknn_converting?'#facc15':'#888';
     document.getElementById('model-ver').textContent='v'+d.model_version;
     document.getElementById('total-steps').textContent=d.total_steps.toLocaleString();
     document.getElementById('updates').textContent=d.update_count;
@@ -718,6 +732,17 @@ class PPOLocalRunner(Node):
         self._training_in_progress = False
         self._model_ready = True
         self._warmup_active = False
+
+        # RKNN inference state
+        self._rknn_runtime = None
+        self._rknn_available = HAS_RKNN
+        self._calibration_dir = Path("./calibration_data")
+        self._calibration_dir.mkdir(exist_ok=True)
+        if self._rknn_available:
+            self.get_logger().info('RKNNLite available - will use NPU for inference')
+            self._try_load_rknn()
+        else:
+            self.get_logger().info('RKNNLite not available - using PyTorch CPU')
 
         # BEV processor
         self.occupancy_processor = UnifiedBEVProcessor(grid_size=128, max_range=4.0)
@@ -1251,9 +1276,6 @@ class PPOLocalRunner(Node):
         proprio = normalize_proprio(proprio_raw)
 
         # 2. Inference
-        bev_tensor = torch.from_numpy(bev_grid[None, ...]).float().to(self.device)
-        proprio_tensor = torch.from_numpy(proprio[None, ...]).to(self.device)
-
         # Random warmup for first model version
         if self._model_version == 0 and self._total_steps < self.rollout_steps:
             if not self._warmup_active:
@@ -1301,17 +1323,42 @@ class PPOLocalRunner(Node):
             else:
                 scale = 1.0
             action_np = np.clip(action_np * scale, -1.0, 1.0)
-
-            # Get value estimate for buffer
-            with torch.no_grad():
-                _, _, value = self.policy(bev_tensor, proprio_tensor)
-            value_np = value.item()
-            log_prob_np = 0.0  # Random actions, no meaningful log_prob
-        else:
+            value_np = 0.0
+            log_prob_np = 0.0
+        elif self._rknn_runtime is not None:
+            # NPU inference (fast path)
             if self._warmup_active:
                 self._warmup_active = False
-                self.get_logger().info('Warmup complete, switching to learned policy')
+                self.get_logger().info('Warmup complete, switching to RKNN policy')
 
+            bev_input = bev_grid[None, ...].astype(np.float32)  # (1, 2, 128, 128)
+            proprio_input = proprio[None, ...]  # (1, 6)
+            outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio_input])
+            action_mean = outputs[0][0]  # (2,)
+
+            # Check for NaN
+            if np.isnan(action_mean).any() or np.isinf(action_mean).any():
+                self.get_logger().error('RKNN output NaN/Inf, using zeros')
+                action_mean = np.zeros(2)
+
+            # Sample with exploration noise, tanh squash
+            log_std = outputs[1][0] if len(outputs) > 1 else np.zeros(2)
+            std = np.exp(np.clip(log_std, -14, 0.7))  # clamp like PyTorch version
+            noise = np.random.normal(0, 1, size=2) * std
+            action_np = np.tanh(action_mean + noise).astype(np.float32)
+
+            # Value estimate from RKNN if available, else 0
+            value_np = float(outputs[2][0]) if len(outputs) > 2 else 0.0
+            # log_prob will be recomputed from PyTorch at training time
+            log_prob_np = 0.0
+        else:
+            # PyTorch CPU fallback
+            if self._warmup_active:
+                self._warmup_active = False
+                self.get_logger().info('Warmup complete, switching to PyTorch policy')
+
+            bev_tensor = torch.from_numpy(bev_grid[None, ...]).float().to(self.device)
+            proprio_tensor = torch.from_numpy(proprio[None, ...]).to(self.device)
             with torch.no_grad():
                 action_t, log_prob_t, value_t = self.policy.act(bev_tensor, proprio_tensor)
             action_np = action_t[0].cpu().numpy()
@@ -1413,6 +1460,7 @@ class PPOLocalRunner(Node):
 
         # Dashboard stats
         avg_ep_rew = float(np.mean(list(self._episode_reward_history))) if self._episode_reward_history else 0.0
+        backend = 'npu' if self._rknn_runtime else 'cpu'
         self.dashboard_stats.update(
             total_steps=self._total_steps,
             model_version=self._model_version,
@@ -1422,6 +1470,7 @@ class PPOLocalRunner(Node):
             phase=self._get_current_phase(),
             training_active=self._training_in_progress,
             warmup_active=self._warmup_active,
+            inference_backend=backend,
             linear_vel=float(current_linear),
             angular_vel=float(current_angular),
             left_track=float(left_track),
@@ -1479,6 +1528,34 @@ class PPOLocalRunner(Node):
             last_value = 0.0
 
         # Compute GAE
+        self.buffer.prepare_update(last_value, self.gamma, self.gae_lambda)
+
+        # Recompute old_log_probs and values from PyTorch model
+        # This ensures PPO ratio is PyTorch-vs-PyTorch even when
+        # data was collected via RKNN (which has quantization error)
+        self.get_logger().info('Recomputing log_probs from PyTorch...')
+        with torch.no_grad():
+            n = self.buffer.size
+            for start in range(0, n, self.mini_batch_size):
+                end = min(start + self.mini_batch_size, n)
+                idx = slice(start, end)
+                bev_b = torch.from_numpy(self.buffer.bev[idx].astype(np.float32) / 255.0).to(self.device)
+                pro_b = torch.from_numpy(self.buffer.proprio[idx]).to(self.device)
+                act_b = torch.from_numpy(self.buffer.actions[idx]).to(self.device)
+
+                action_mean, log_std, values = self.policy(bev_b, pro_b)
+                std = log_std.exp().clamp(min=1e-6, max=2.0)
+                dist = torch.distributions.Normal(action_mean, std)
+
+                acts_clamped = act_b.clamp(-0.999, 0.999)
+                raw_acts = torch.atanh(acts_clamped)
+                lp = dist.log_prob(raw_acts).sum(dim=-1)
+                lp -= (2 * (np.log(2) - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
+
+                self.buffer.log_probs[start:end] = lp.cpu().numpy()
+                self.buffer.values[start:end] = values.cpu().numpy()
+
+        # Recompute GAE with corrected values
         self.buffer.prepare_update(last_value, self.gamma, self.gae_lambda)
 
         # PPO epochs
@@ -1550,9 +1627,19 @@ class PPOLocalRunner(Node):
             if self._episode_reward_history:
                 self._writer.add_scalar('reward/avg_episode', np.mean(list(self._episode_reward_history)), self._update_count)
 
-        # Save checkpoint
+        # Export ONNX every update (needed for RKNN conversion)
+        try:
+            self._export_onnx()
+        except Exception as e:
+            self.get_logger().warn(f'ONNX export failed: {e}')
+
+        # Save full checkpoint periodically
         if self._update_count % self.checkpoint_interval == 0:
             self._save_checkpoint()
+
+        # Convert to RKNN in background (non-blocking)
+        if self._rknn_available and (self.checkpoint_dir / 'latest_actor.onnx').exists():
+            self._convert_and_load_rknn()
 
         # Clear buffer and resume
         self.buffer.clear()
@@ -1575,12 +1662,6 @@ class PPOLocalRunner(Node):
         torch.save(state, latest_path)
         self.get_logger().info(f'Checkpoint saved: {ckpt_path}')
 
-        # Export ONNX
-        try:
-            self._export_onnx()
-        except Exception as e:
-            self.get_logger().warn(f'ONNX export failed: {e}')
-
     def _export_onnx(self):
         onnx_path = self.checkpoint_dir / 'latest_actor.onnx'
         self.policy.eval()
@@ -1596,6 +1677,76 @@ class PPOLocalRunner(Node):
         )
         self.policy.train()
         self.get_logger().info(f'ONNX exported: {onnx_path}')
+
+    # ========== RKNN Management ==========
+
+    def _try_load_rknn(self):
+        """Try to load existing RKNN model from checkpoint dir."""
+        rknn_path = self.checkpoint_dir / 'latest_actor.rknn'
+        if rknn_path.exists():
+            self._load_rknn_model(str(rknn_path))
+
+    def _load_rknn_model(self, rknn_path: str) -> bool:
+        """Load an RKNN model for NPU inference."""
+        if not HAS_RKNN:
+            return False
+        try:
+            new_runtime = RKNNLite()
+            ret = new_runtime.load_rknn(rknn_path)
+            if ret != 0:
+                self.get_logger().error(f'Failed to load RKNN: {ret}')
+                return False
+            ret = new_runtime.init_runtime()
+            if ret != 0:
+                self.get_logger().error(f'Failed to init RKNN runtime: {ret}')
+                return False
+            self._rknn_runtime = new_runtime
+            self.get_logger().info(f'RKNN model loaded from {rknn_path}')
+            return True
+        except Exception as e:
+            self.get_logger().error(f'RKNN load error: {e}')
+            return False
+
+    def _convert_and_load_rknn(self):
+        """Convert latest ONNX to RKNN and load it. Runs in background thread."""
+        if not HAS_RKNN:
+            return
+
+        onnx_path = self.checkpoint_dir / 'latest_actor.onnx'
+        if not onnx_path.exists():
+            self.get_logger().warn('No ONNX model to convert')
+            return
+
+        self.dashboard_stats.update(rknn_converting=True)
+        self.get_logger().info('Converting ONNX to RKNN...')
+
+        def _convert():
+            try:
+                convert_script = Path('./convert_onnx_to_rknn.sh')
+                if convert_script.exists():
+                    result = subprocess.run(
+                        [str(convert_script), str(onnx_path), str(self._calibration_dir)],
+                        capture_output=True, text=True, timeout=300
+                    )
+                    rknn_path = str(onnx_path).replace('.onnx', '.rknn')
+                    if os.path.exists(rknn_path):
+                        if self._load_rknn_model(rknn_path):
+                            self.get_logger().info(f'RKNN v{self._model_version} loaded on NPU')
+                        else:
+                            self.get_logger().warn('RKNN conversion succeeded but load failed')
+                    else:
+                        self.get_logger().error(f'RKNN conversion failed: {result.stderr[:200]}')
+                else:
+                    self.get_logger().warn('convert_onnx_to_rknn.sh not found, skipping RKNN conversion')
+            except subprocess.TimeoutExpired:
+                self.get_logger().error('RKNN conversion timed out (300s)')
+            except Exception as e:
+                self.get_logger().error(f'RKNN conversion error: {e}')
+            finally:
+                self.dashboard_stats.update(rknn_converting=False)
+
+        thread = threading.Thread(target=_convert, daemon=True)
+        thread.start()
 
     def _load_latest_checkpoint(self):
         latest_path = self.checkpoint_dir / 'latest.pt'
