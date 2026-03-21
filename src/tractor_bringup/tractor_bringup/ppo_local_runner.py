@@ -12,9 +12,11 @@ Architecture:
 """
 
 import os
+import json
 import math
 import time
 import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Tuple
 from collections import deque
@@ -267,6 +269,298 @@ class StuckDetector:
 
 
 # ============================================================================
+# Dashboard HTTP Server
+# ============================================================================
+
+class DashboardStats:
+    """Thread-safe stats container for the web dashboard."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {
+            'total_steps': 0,
+            'model_version': 0,
+            'update_count': 0,
+            'buffer_fill': 0,
+            'buffer_capacity': 0,
+            'phase': 'exploration',
+            'training_active': False,
+            'warmup_active': False,
+            'uptime_s': 0,
+            # Live sensor/control
+            'linear_vel': 0.0,
+            'angular_vel': 0.0,
+            'left_track': 0.0,
+            'right_track': 0.0,
+            'min_lidar_dist': 10.0,
+            'reward': 0.0,
+            'safety_blocked': False,
+            'is_stuck': False,
+            # Episode stats
+            'episode_count': 0,
+            'episode_reward_avg': 0.0,
+            'episode_reward_history': [],
+            # Training loss history
+            'policy_loss_history': [],
+            'value_loss_history': [],
+            'entropy_history': [],
+            'training_time_history': [],
+            # Reward time series (last 300 steps ~ 10s at 30Hz)
+            'reward_history': [],
+            'velocity_history': [],
+        }
+        self._start_time = time.time()
+
+    def update(self, **kwargs):
+        with self._lock:
+            for k, v in kwargs.items():
+                if k in self._data:
+                    self._data[k] = v
+
+    def append_reward(self, reward, velocity):
+        with self._lock:
+            self._data['reward_history'].append(reward)
+            self._data['velocity_history'].append(velocity)
+            if len(self._data['reward_history']) > 600:
+                self._data['reward_history'] = self._data['reward_history'][-600:]
+                self._data['velocity_history'] = self._data['velocity_history'][-600:]
+
+    def append_training(self, policy_loss, value_loss, entropy, train_time):
+        with self._lock:
+            self._data['policy_loss_history'].append(policy_loss)
+            self._data['value_loss_history'].append(value_loss)
+            self._data['entropy_history'].append(entropy)
+            self._data['training_time_history'].append(train_time)
+            for key in ['policy_loss_history', 'value_loss_history', 'entropy_history', 'training_time_history']:
+                if len(self._data[key]) > 200:
+                    self._data[key] = self._data[key][-200:]
+
+    def get_json(self):
+        with self._lock:
+            self._data['uptime_s'] = time.time() - self._start_time
+            return json.dumps(self._data)
+
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPO Rover Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e0e0e0;padding:12px}
+h1{text-align:center;font-size:1.4em;margin-bottom:10px;color:#7eb8ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-bottom:10px}
+.card{background:#1a1d27;border-radius:8px;padding:14px;border:1px solid #2a2d3a}
+.card h3{font-size:0.85em;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.stat{font-size:2em;font-weight:700;color:#7eb8ff}
+.stat-sm{font-size:1.1em;color:#aaa;margin-top:4px}
+.stat-row{display:flex;justify-content:space-between;margin:4px 0}
+.stat-row .label{color:#888}.stat-row .val{color:#e0e0e0;font-weight:600}
+.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:0.8em;font-weight:700}
+.badge-green{background:#1a3a2a;color:#4ade80}
+.badge-yellow{background:#3a3a1a;color:#facc15}
+.badge-red{background:#3a1a1a;color:#f87171}
+.badge-blue{background:#1a2a3a;color:#60a5fa}
+.chart-container{position:relative;height:180px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+@media(max-width:700px){.row2{grid-template-columns:1fr}}
+#status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.alive{background:#4ade80}.training{background:#facc15}.disconnected{background:#f87171}
+</style>
+</head>
+<body>
+<h1><span id="status-dot" class="alive"></span>PPO Rover Dashboard</h1>
+
+<div class="grid">
+  <div class="card">
+    <h3>Status</h3>
+    <div id="status-text" class="stat" style="font-size:1.4em">Collecting</div>
+    <div class="stat-sm">Phase: <span id="phase" class="badge badge-blue">exploration</span></div>
+    <div class="stat-row"><span class="label">Uptime</span><span class="val" id="uptime">0s</span></div>
+  </div>
+  <div class="card">
+    <h3>Training Progress</h3>
+    <div class="stat" id="model-ver">v0</div>
+    <div class="stat-row"><span class="label">Total Steps</span><span class="val" id="total-steps">0</span></div>
+    <div class="stat-row"><span class="label">Updates</span><span class="val" id="updates">0</span></div>
+    <div class="stat-row"><span class="label">Buffer</span><span class="val" id="buffer">0/0</span></div>
+  </div>
+  <div class="card">
+    <h3>Live Control</h3>
+    <div class="stat-row"><span class="label">Velocity</span><span class="val" id="vel">0.00 m/s</span></div>
+    <div class="stat-row"><span class="label">Tracks (L/R)</span><span class="val" id="tracks">0.00 / 0.00</span></div>
+    <div class="stat-row"><span class="label">LiDAR Min</span><span class="val" id="lidar">0.00 m</span></div>
+    <div class="stat-row"><span class="label">Reward</span><span class="val" id="reward">0.00</span></div>
+    <div class="stat-row"><span class="label">Safety</span><span class="val" id="safety">OK</span></div>
+  </div>
+  <div class="card">
+    <h3>Episodes</h3>
+    <div class="stat" id="ep-count">0</div>
+    <div class="stat-row"><span class="label">Avg Reward</span><span class="val" id="ep-avg">0.00</span></div>
+  </div>
+</div>
+
+<div class="row2">
+  <div class="card"><h3>Reward & Velocity (Live)</h3><div class="chart-container"><canvas id="chart-live"></canvas></div></div>
+  <div class="card"><h3>Episode Rewards</h3><div class="chart-container"><canvas id="chart-ep"></canvas></div></div>
+</div>
+<div class="row2">
+  <div class="card"><h3>Policy / Value Loss</h3><div class="chart-container"><canvas id="chart-loss"></canvas></div></div>
+  <div class="card"><h3>Entropy</h3><div class="chart-container"><canvas id="chart-ent"></canvas></div></div>
+</div>
+
+<script>
+const POLL_MS = 1000;
+const chartOpts = (yLabel) => ({
+  responsive:true, maintainAspectRatio:false,
+  animation:{duration:0},
+  scales:{x:{display:false},y:{title:{display:true,text:yLabel,color:'#888'},ticks:{color:'#888'},grid:{color:'#2a2d3a'}},
+    ...(yLabel==='Loss'?{y1:{position:'right',title:{display:true,text:'Value Loss',color:'#888'},ticks:{color:'#888'},grid:{drawOnChartArea:false}}}:{})
+  },
+  plugins:{legend:{labels:{color:'#ccc',boxWidth:12,padding:8}}}
+});
+
+const liveChart = new Chart(document.getElementById('chart-live'),{type:'line',data:{labels:[],datasets:[
+  {label:'Reward',data:[],borderColor:'#60a5fa',borderWidth:1.5,pointRadius:0,tension:0.3},
+  {label:'Velocity',data:[],borderColor:'#4ade80',borderWidth:1.5,pointRadius:0,tension:0.3,yAxisID:'y'}
+]},options:chartOpts('Value')});
+
+const epChart = new Chart(document.getElementById('chart-ep'),{type:'line',data:{labels:[],datasets:[
+  {label:'Episode Reward',data:[],borderColor:'#facc15',borderWidth:2,pointRadius:2,tension:0.3,fill:true,backgroundColor:'rgba(250,204,21,0.1)'}
+]},options:chartOpts('Reward')});
+
+const lossChart = new Chart(document.getElementById('chart-loss'),{type:'line',data:{labels:[],datasets:[
+  {label:'Policy Loss',data:[],borderColor:'#f87171',borderWidth:2,pointRadius:2,tension:0.3},
+  {label:'Value Loss',data:[],borderColor:'#fb923c',borderWidth:2,pointRadius:2,tension:0.3,yAxisID:'y1'}
+]},options:chartOpts('Loss')});
+
+const entChart = new Chart(document.getElementById('chart-ent'),{type:'line',data:{labels:[],datasets:[
+  {label:'Entropy',data:[],borderColor:'#a78bfa',borderWidth:2,pointRadius:2,tension:0.3,fill:true,backgroundColor:'rgba(167,139,250,0.1)'}
+]},options:chartOpts('Entropy')});
+
+function fmt(n,d=2){return Number(n).toFixed(d)}
+function fmtTime(s){
+  s=Math.floor(s);
+  if(s<60)return s+'s';
+  if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';
+  return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/api/stats');
+    const d=await r.json();
+
+    // Status
+    const dot=document.getElementById('status-dot');
+    const stxt=document.getElementById('status-text');
+    if(d.training_active){dot.className='training';stxt.textContent='Training...';}
+    else if(d.warmup_active){dot.className='alive';stxt.textContent='Warmup (Random)';}
+    else{dot.className='alive';stxt.textContent='Collecting';}
+
+    document.getElementById('phase').textContent=d.phase;
+    document.getElementById('uptime').textContent=fmtTime(d.uptime_s);
+    document.getElementById('model-ver').textContent='v'+d.model_version;
+    document.getElementById('total-steps').textContent=d.total_steps.toLocaleString();
+    document.getElementById('updates').textContent=d.update_count;
+    document.getElementById('buffer').textContent=d.buffer_fill+'/'+d.buffer_capacity;
+
+    document.getElementById('vel').textContent=fmt(d.linear_vel)+' m/s';
+    document.getElementById('tracks').textContent=fmt(d.left_track)+' / '+fmt(d.right_track);
+    document.getElementById('lidar').textContent=fmt(d.min_lidar_dist)+' m';
+    document.getElementById('reward').textContent=fmt(d.reward,3);
+
+    const safeEl=document.getElementById('safety');
+    if(d.safety_blocked){safeEl.textContent='BLOCKED';safeEl.style.color='#f87171';}
+    else if(d.is_stuck){safeEl.textContent='STUCK';safeEl.style.color='#facc15';}
+    else{safeEl.textContent='OK';safeEl.style.color='#4ade80';}
+
+    document.getElementById('ep-count').textContent=d.episode_count;
+    document.getElementById('ep-avg').textContent=fmt(d.episode_reward_avg,3);
+
+    // Live chart
+    const liveLabels=d.reward_history.map((_,i)=>i);
+    liveChart.data.labels=liveLabels;
+    liveChart.data.datasets[0].data=d.reward_history;
+    liveChart.data.datasets[1].data=d.velocity_history;
+    liveChart.update();
+
+    // Episode chart
+    if(d.episode_reward_history.length>0){
+      epChart.data.labels=d.episode_reward_history.map((_,i)=>i+1);
+      epChart.data.datasets[0].data=d.episode_reward_history;
+      epChart.update();
+    }
+
+    // Loss chart
+    if(d.policy_loss_history.length>0){
+      const ll=d.policy_loss_history.map((_,i)=>i+1);
+      lossChart.data.labels=ll;
+      lossChart.data.datasets[0].data=d.policy_loss_history;
+      lossChart.data.datasets[1].data=d.value_loss_history;
+      lossChart.update();
+    }
+
+    // Entropy chart
+    if(d.entropy_history.length>0){
+      entChart.data.labels=d.entropy_history.map((_,i)=>i+1);
+      entChart.data.datasets[0].data=d.entropy_history;
+      entChart.update();
+    }
+  }catch(e){
+    document.getElementById('status-dot').className='disconnected';
+    document.getElementById('status-text').textContent='Disconnected';
+  }
+}
+setInterval(poll,POLL_MS);
+poll();
+</script>
+</body>
+</html>"""
+
+
+def _make_dashboard_handler(stats: DashboardStats):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/api/stats':
+                body = stats.get_json().encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.write(body)
+            else:
+                body = DASHBOARD_HTML.encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.end_headers()
+                self.write(body)
+
+        def write(self, data):
+            try:
+                self.wfile.write(data)
+            except BrokenPipeError:
+                pass
+
+        def log_message(self, format, *args):
+            pass  # Suppress request logs
+
+    return Handler
+
+
+def start_dashboard_server(stats: DashboardStats, port: int = 8080):
+    handler = _make_dashboard_handler(stats)
+    server = HTTPServer(('0.0.0.0', port), handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
+# ============================================================================
 # Main ROS2 Node
 # ============================================================================
 
@@ -291,6 +585,7 @@ class PPOLocalRunner(Node):
         self.declare_parameter('log_dir', './logs_ppo')
         self.declare_parameter('checkpoint_interval', 5)
         self.declare_parameter('invert_linear_vel', False)
+        self.declare_parameter('dashboard_port', 8080)
 
         self.max_linear = float(self.get_parameter('max_linear_speed').value)
         self.max_angular = float(self.get_parameter('max_angular_speed').value)
@@ -306,6 +601,7 @@ class PPOLocalRunner(Node):
         self.log_dir = Path(str(self.get_parameter('log_dir').value))
         self.checkpoint_interval = int(self.get_parameter('checkpoint_interval').value)
         self.invert_linear_vel = bool(self.get_parameter('invert_linear_vel').value)
+        self.dashboard_port = int(self.get_parameter('dashboard_port').value)
 
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -412,6 +708,11 @@ class PPOLocalRunner(Node):
         # BEV processor
         self.occupancy_processor = UnifiedBEVProcessor(grid_size=128, max_range=4.0)
 
+        # Dashboard
+        self.dashboard_stats = DashboardStats()
+        self._dashboard_server = start_dashboard_server(self.dashboard_stats, self.dashboard_port)
+        self._episode_count = 0
+
         # ROS2 setup
         self.bridge = CvBridge()
         self._setup_subscribers()
@@ -426,7 +727,8 @@ class PPOLocalRunner(Node):
         param_count = sum(p.numel() for p in self.policy.parameters())
         self.get_logger().info(
             f'PPO Local Runner initialized: {param_count:,} params, '
-            f'rollout={self.rollout_steps}, lr={self.lr}'
+            f'rollout={self.rollout_steps}, lr={self.lr}, '
+            f'dashboard=http://0.0.0.0:{self.dashboard_port}'
         )
 
     # ========== ROS2 Setup ==========
@@ -1087,12 +1389,38 @@ class PPOLocalRunner(Node):
                 collision=True
             )
             self._episode_reward_history.append(self._current_episode_reward)
+            self._episode_count += 1
             self._current_episode_reward = 0.0
             self._current_episode_length = 0
 
         # Update state
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
+
+        # Dashboard stats
+        avg_ep_rew = float(np.mean(list(self._episode_reward_history))) if self._episode_reward_history else 0.0
+        self.dashboard_stats.update(
+            total_steps=self._total_steps,
+            model_version=self._model_version,
+            update_count=self._update_count,
+            buffer_fill=self.buffer.size,
+            buffer_capacity=self.rollout_steps,
+            phase=self._get_current_phase(),
+            training_active=self._training_in_progress,
+            warmup_active=self._warmup_active,
+            linear_vel=float(current_linear),
+            angular_vel=float(current_angular),
+            left_track=float(left_track),
+            right_track=float(right_track),
+            min_lidar_dist=float(lidar_min),
+            reward=float(reward),
+            safety_blocked=bool(monitor_blocking),
+            is_stuck=bool(is_stuck),
+            episode_count=self._episode_count,
+            episode_reward_avg=avg_ep_rew,
+            episode_reward_history=list(self._episode_reward_history),
+        )
+        self.dashboard_stats.append_reward(float(reward), float(current_linear))
 
         # Log periodically
         if self._total_steps % 300 == 0:
@@ -1194,6 +1522,9 @@ class PPOLocalRunner(Node):
             f'v{self._model_version}'
         )
 
+        # Dashboard training stats
+        self.dashboard_stats.append_training(avg_pl, avg_vl, avg_ent, dt)
+
         # TensorBoard logging
         if self._writer:
             self._writer.add_scalar('loss/policy', avg_pl, self._update_count)
@@ -1292,6 +1623,8 @@ class PPOLocalRunner(Node):
             self._save_checkpoint()
         if self._writer:
             self._writer.close()
+        if self._dashboard_server:
+            self._dashboard_server.shutdown()
         super().destroy_node()
 
 
