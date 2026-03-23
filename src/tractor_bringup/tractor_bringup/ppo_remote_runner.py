@@ -561,7 +561,7 @@ class PPORemoteRunner(Node):
         self.EPISODE_COOLDOWN_STEPS = 30  # ~1 second at 30Hz to recover
 
         # Stuck/slip detection
-        self.stuck_detector = StuckDetector(stuck_threshold=0.15)
+        self.stuck_detector = StuckDetector(stuck_threshold=0.05)
         self._is_stuck = False
         self._consecutive_idle_steps = 0
         self._intent_without_motion_count = 0
