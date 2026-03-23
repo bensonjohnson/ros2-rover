@@ -49,6 +49,7 @@ from model_architectures import UnifiedBEVPPOPolicy
 from serialization_utils import (
     serialize_batch, deserialize_batch,
     serialize_model_update, deserialize_model_update,
+    serialize_model_chunks, deserialize_model_chunk,
     serialize_metadata, deserialize_metadata,
     serialize_status, deserialize_status
 )
@@ -559,7 +560,7 @@ class V620PPOTrainer:
         try:
             await self.js.add_stream(StreamConfig(
                 name="ROVER_PPO_MODELS",
-                subjects=["models.ppo.update", "models.ppo.metadata"],
+                subjects=["models.ppo.update", "models.ppo.update.chunk", "models.ppo.metadata"],
                 retention="limits",
                 max_msgs=100,
                 max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
@@ -638,25 +639,29 @@ class V620PPOTrainer:
                 await asyncio.sleep(1.0)
 
     async def _publish_model(self, train_result):
-        """Publish updated ONNX model to NATS for rover to download."""
+        """Publish updated ONNX model to NATS in chunks for rover to download."""
         try:
             onnx_path = train_result['onnx_path']
             with open(onnx_path, 'rb') as f:
                 onnx_bytes = f.read()
 
-            # Publish model update
-            model_msg = serialize_model_update(onnx_bytes, self.model_version)
-            await self.js.publish(
-                subject="models.ppo.update",
-                payload=model_msg,
-                timeout=30.0
-            )
+            # Publish model as chunks (4MB each to stay under NATS max_payload)
+            chunks = serialize_model_chunks(onnx_bytes, self.model_version)
+            for i, chunk in enumerate(chunks):
+                await self.js.publish(
+                    subject="models.ppo.update.chunk",
+                    payload=chunk,
+                    timeout=30.0
+                )
+            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes, {len(chunks)} chunks)")
 
-            # Publish metadata with training stats
+            # Publish metadata with training stats + chunk info
             import msgpack
             metadata = {
                 "latest_version": self.model_version,
                 "timestamp": time.time(),
+                "total_chunks": len(chunks),
+                "onnx_size": len(onnx_bytes),
                 "train_stats": {
                     'policy_loss': train_result['policy_loss'],
                     'value_loss': train_result['value_loss'],
@@ -669,8 +674,6 @@ class V620PPOTrainer:
                 payload=msgpack.packb(metadata),
                 timeout=10.0
             )
-
-            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes)")
 
         except Exception as e:
             print(f"Model publish failed: {e}")

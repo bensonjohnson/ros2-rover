@@ -45,6 +45,7 @@ import nats
 from tractor_bringup.serialization_utils import (
     serialize_batch, deserialize_batch,
     serialize_model_update, deserialize_model_update,
+    serialize_model_chunks, deserialize_model_chunk,
     serialize_metadata, deserialize_metadata,
     serialize_status, deserialize_status
 )
@@ -1533,15 +1534,55 @@ class PPORemoteRunner(Node):
             pass
 
     async def _download_model(self):
-        """Download and convert the latest model from server."""
+        """Download and convert the latest model from server (chunked transfer)."""
         try:
             self.get_logger().info('Downloading PPO model from NATS...')
 
-            msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.update")
-            model_data = deserialize_model_update(msg.data)
+            # Get metadata to know how many chunks to expect
+            meta_msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.metadata")
+            metadata = deserialize_metadata(meta_msg.data)
+            total_chunks = metadata.get("total_chunks", 0)
+            model_version = metadata.get("latest_version", 0)
 
-            onnx_bytes = model_data["onnx_bytes"]
-            model_version = model_data["version"]
+            if total_chunks == 0:
+                # Legacy single-message model (small models)
+                msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.update")
+                model_data = deserialize_model_update(msg.data)
+                onnx_bytes = model_data["onnx_bytes"]
+                model_version = model_data["version"]
+            else:
+                # Chunked model — pull all chunks via subscription
+                self.get_logger().info(f'Downloading {total_chunks} chunks for model v{model_version}...')
+                psub = await self.js.pull_subscribe(
+                    subject="models.ppo.update.chunk",
+                    durable="ppo_model_chunks"
+                )
+
+                chunk_map = {}
+                attempts = 0
+                max_attempts = total_chunks * 3  # Allow retries
+                while len(chunk_map) < total_chunks and attempts < max_attempts:
+                    try:
+                        msgs = await psub.fetch(batch=min(total_chunks - len(chunk_map), 10), timeout=5.0)
+                        for m in msgs:
+                            chunk = deserialize_model_chunk(m.data)
+                            # Only accept chunks for the version we want
+                            if chunk["version"] == model_version:
+                                chunk_map[chunk["chunk_idx"]] = chunk["data"]
+                            await m.ack()
+                    except Exception:
+                        pass
+                    attempts += 1
+
+                if len(chunk_map) < total_chunks:
+                    self.get_logger().error(
+                        f'Missing chunks: got {len(chunk_map)}/{total_chunks}')
+                    return
+
+                # Reassemble in order
+                onnx_bytes = b''.join(chunk_map[i] for i in range(total_chunks))
+                self.get_logger().info(
+                    f'Reassembled model v{model_version}: {len(onnx_bytes)} bytes from {total_chunks} chunks')
 
             self.get_logger().info(f'Received model v{model_version}, ONNX: {len(onnx_bytes)} bytes')
 
