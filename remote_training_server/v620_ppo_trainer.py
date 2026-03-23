@@ -420,8 +420,8 @@ class V620PPOTrainer:
         self.policy.eval()
         RECOMPUTE_CHUNK = 256
         all_action_mean = []
-        all_log_std = []
         all_values = []
+        log_std = None
         with torch.no_grad():
             for i in range(0, n, RECOMPUTE_CHUNK):
                 b = bev[i:i+RECOMPUTE_CHUNK]
@@ -432,11 +432,11 @@ class V620PPOTrainer:
                 else:
                     am, ls, v = self.policy(b, p)
                 all_action_mean.append(am.float())
-                all_log_std.append(ls.float())
                 all_values.append(v.float())
+                if log_std is None:
+                    log_std = ls.float()  # shared parameter, same for all chunks
 
             action_mean = torch.cat(all_action_mean, dim=0)
-            log_std = torch.cat(all_log_std, dim=0)
             values = torch.cat(all_values, dim=0)
 
             std = log_std.exp().clamp(min=1e-6, max=2.0)
