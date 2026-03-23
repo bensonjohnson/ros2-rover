@@ -1247,25 +1247,17 @@ class PPORemoteRunner(Node):
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
 
-        # Episode done conditions (with cooldown to prevent rapid-fire resets)
-        # Note: monitor_blocking no longer instantly ends the episode.
-        # The safety monitor already constrains to reverse-only (line 1234-1238),
-        # giving the agent a chance to learn to back up and recover.
-        # Only terminate if blocked for too long without escaping.
-        BLOCKED_GRACE_STEPS = 450  # ~15 seconds at 30Hz to back out
+        # Soft episode boundaries — marks done=True in buffer for GAE computation
+        # but does NOT stop or reset the rover. The agent drives continuously for
+        # the full rollout. This lets it learn to recover from all situations.
         episode_done = False
         done_reason = None
-        if self._episode_cooldown > 0:
-            self._episode_cooldown -= 1
-        elif monitor_blocking and self._wall_stop_steps >= BLOCKED_GRACE_STEPS:
+        if monitor_blocking and self._wall_stop_steps >= 450:
             episode_done = True
             done_reason = 'blocked'
         elif is_stuck:
             episode_done = True
             done_reason = 'stuck'
-        elif self._current_episode_length >= self.MAX_EPISODE_STEPS:
-            episode_done = True
-            done_reason = 'step_limit'
         elif self._revolution_penalty_triggered:
             episode_done = True
             done_reason = 'spinning'
@@ -1297,10 +1289,8 @@ class PPORemoteRunner(Node):
         self._current_episode_reward += reward
         self._current_episode_length += 1
 
-        # Episode boundary
+        # Soft episode boundary — log and track stats but keep driving
         if episode_done:
-            self._episode_cooldown = self.EPISODE_COOLDOWN_STEPS
-            self._trigger_episode_reset()
             self.phase_manager.record_training_episode(
                 reward=self._current_episode_reward,
                 collided=(done_reason == 'blocked'),
@@ -1308,11 +1298,10 @@ class PPORemoteRunner(Node):
             )
             self._episode_reward_history.append(self._current_episode_reward)
             self._episode_count += 1
-            if self._total_steps % 300 != 0:  # Don't double-log
-                self.get_logger().info(
-                    f'Episode done ({done_reason}) | len={self._current_episode_length} | '
-                    f'rew={self._current_episode_reward:.2f} | ep#{self._episode_count}'
-                )
+            self.get_logger().info(
+                f'Soft episode boundary ({done_reason}) | len={self._current_episode_length} | '
+                f'rew={self._current_episode_reward:.2f} | ep#{self._episode_count}'
+            )
             self._current_episode_reward = 0.0
             self._current_episode_length = 0
 
