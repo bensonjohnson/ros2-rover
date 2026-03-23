@@ -621,16 +621,17 @@ class PPORemoteRunner(Node):
         self._push_sock.connect(push_addr)
         self.get_logger().info(f'ZMQ PUSH connected to {push_addr}')
 
-        self._zmq_thread = threading.Thread(target=self._run_zmq_loop, daemon=True)
-        self._zmq_thread.start()
-
         # BEV processor
         self.occupancy_processor = UnifiedBEVProcessor(grid_size=128, max_range=4.0)
 
-        # Dashboard
+        # Dashboard (must be initialized before ZMQ thread which references it)
         self.dashboard_stats = DashboardStats()
         self._dashboard_server = start_dashboard_server(self.dashboard_stats, self.dashboard_port)
         self._episode_count = 0
+
+        # Start ZMQ SUB thread (after dashboard_stats is ready)
+        self._zmq_thread = threading.Thread(target=self._run_zmq_loop, daemon=True)
+        self._zmq_thread.start()
 
         # ROS2 setup
         self.bridge = CvBridge()
