@@ -74,6 +74,289 @@ except ImportError:
     HAS_PHASE_MANAGER = False
     print("PhaseManager not available - phase-based curriculum disabled")
 
+# ============================================================================
+# Dashboard HTTP Server (for monitoring PPO training)
+# ============================================================================
+
+import threading
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class DashboardStats:
+    """Thread-safe stats container for the PPO training dashboard."""
+    
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {
+            'total_steps': 0,
+            'model_version': 0,
+            'update_count': 0,
+            'phase': 'exploration',
+            'training_active': False,
+            'uptime_s': 0,
+            # Training metrics (latest)
+            'policy_loss': 0.0,
+            'value_loss': 0.0,
+            'entropy': 0.0,
+            'train_time': 0.0,
+            # Episode stats
+            'episode_count': 0,
+            'episode_reward_avg': 0.0,
+            'episode_reward_history': [],
+            # Training loss history
+            'policy_loss_history': [],
+            'value_loss_history': [],
+            'entropy_history': [],
+            'training_time_history': [],
+            # Throughput
+            'steps_per_sec': 0.0,
+            'updates_per_sec': 0.0,
+        }
+        self._start_time = time.time()
+        self._step_times = []
+        self._update_times = []
+    
+    def update(self, **kwargs):
+        with self._lock:
+            for k, v in kwargs.items():
+                if k in self._data:
+                    self._data[k] = v
+    
+    def record_step(self):
+        now = time.time()
+        with self._lock:
+            self._step_times.append(now)
+            if len(self._step_times) >= 2:
+                dt = self._step_times[-1] - self._step_times[0]
+                if dt > 0:
+                    self._data['steps_per_sec'] = (len(self._step_times) - 1) / dt
+    
+    def record_update(self):
+        now = time.time()
+        with self._lock:
+            self._update_times.append(now)
+            if len(self._update_times) >= 2:
+                dt = self._update_times[-1] - self._update_times[0]
+                if dt > 0:
+                    self._data['updates_per_sec'] = len(self._update_times) / dt
+    
+    def append_training(self, policy_loss, value_loss, entropy, train_time):
+        with self._lock:
+            self._data['policy_loss_history'].append(policy_loss)
+            self._data['value_loss_history'].append(value_loss)
+            self._data['entropy_history'].append(entropy)
+            self._data['training_time_history'].append(train_time)
+            # Keep last 200 points
+            for key in ['policy_loss_history', 'value_loss_history', 'entropy_history', 'training_time_history']:
+                if len(self._data[key]) > 200:
+                    self._data[key] = self._data[key][-200:]
+    
+    def append_episode(self, reward):
+        with self._lock:
+            self._data['episode_reward_history'].append(reward)
+            if len(self._data['episode_reward_history']) > 100:
+                self._data['episode_reward_history'] = self._data['episode_reward_history'][-100:]
+            if self._data['episode_reward_history']:
+                self._data['episode_reward_avg'] = sum(self._data['episode_reward_history']) / len(self._data['episode_reward_history'])
+    
+    def get_json(self):
+        with self._lock:
+            self._data['uptime_s'] = time.time() - self._start_time
+            return json.dumps(self._data)
+
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PPO Training Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f1117;color:#e0e0e0;padding:12px}
+h1{text-align:center;font-size:1.4em;margin-bottom:10px;color:#7eb8ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-bottom:10px}
+.card{background:#1a1d27;border-radius:8px;padding:14px;border:1px solid #2a2d3a}
+.card h3{font-size:0.85em;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.stat{font-size:2em;font-weight:700;color:#7eb8ff}
+.stat-sm{font-size:1.1em;color:#aaa;margin-top:4px}
+.stat-row{display:flex;justify-content:space-between;margin:4px 0}
+.stat-row .label{color:#888}.stat-row .val{color:#e0e0e0;font-weight:600}
+.badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:0.8em;font-weight:700}
+.badge-green{background:#1a3a2a;color:#4ade80}
+.badge-yellow{background:#3a3a1a;color:#facc15}
+.badge-red{background:#3a1a1a;color:#f87171}
+.badge-blue{background:#1a2a3a;color:#60a5fa}
+.chart-container{position:relative;height:180px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+@media(max-width:700px){.row2{grid-template-columns:1fr}}
+#status-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.alive{background:#4ade80}.training{background:#facc15}.disconnected{background:#f87171}
+</style>
+</head>
+<body>
+<h1><span id="status-dot" class="alive"></span>PPO Training Dashboard</h1>
+
+<div class="grid">
+  <div class="card">
+    <h3>Status</h3>
+    <div id="status-text" class="stat" style="font-size:1.4em">Idle</div>
+    <div class="stat-sm">Phase: <span id="phase" class="badge badge-blue">exploration</span></div>
+    <div class="stat-row"><span class="label">Uptime</span><span class="val" id="uptime">0s</span></div>
+    <div class="stat-row"><span class="label">Throughput</span><span class="val" id="tps">0.0 steps/s</span></div>
+  </div>
+  <div class="card">
+    <h3>Training Progress</h3>
+    <div class="stat" id="model-ver">v0</div>
+    <div class="stat-row"><span class="label">Total Steps</span><span class="val" id="total-steps">0</span></div>
+    <div class="stat-row"><span class="label">Updates</span><span class="val" id="updates">0</span></div>
+    <div class="stat-row"><span class="label">Updates/sec</span><span class="val" id="ups">0.0</span></div>
+  </div>
+  <div class="card">
+    <h3>Episodes</h3>
+    <div class="stat" id="ep-count">0</div>
+    <div class="stat-row"><span class="label">Avg Reward</span><span class="val" id="ep-avg">0.00</span></div>
+  </div>
+</div>
+
+<div class="row2">
+  <div class="card"><h3>Policy / Value Loss</h3><div class="chart-container"><canvas id="chart-loss"></canvas></div></div>
+  <div class="card"><h3>Entropy</h3><div class="chart-container"><canvas id="chart-ent"></canvas></div></div>
+</div>
+<div class="row2">
+  <div class="card"><h3>Training Time</h3><div class="chart-container"><canvas id="chart-time"></canvas></div></div>
+  <div class="card"><h3>Episode Rewards</h3><div class="chart-container"><canvas id="chart-ep"></canvas></div></div>
+</div>
+
+<script>
+const POLL_MS = 1000;
+const chartOpts = (yLabel) => ({
+  responsive:true, maintainAspectRatio:false,
+  animation:{duration:0},
+  scales:{x:{display:false},y:{title:{display:true,text:yLabel,color:'#888'},ticks:{color:'#888'},grid:{color:'#2a2d3a'}}},
+  plugins:{legend:{labels:{color:'#ccc',boxWidth:12,padding:8}}}
+});
+
+const lossChart = new Chart(document.getElementById('chart-loss'),{type:'line',data:{labels:[],datasets:[
+  {label:'Policy Loss',data:[],borderColor:'#f87171',borderWidth:2,pointRadius:2,tension:0.3},
+  {label:'Value Loss',data:[],borderColor:'#fb923c',borderWidth:2,pointRadius:2,tension:0.3}
+]},options:chartOpts('Loss')});
+
+const entChart = new Chart(document.getElementById('chart-ent'),{type:'line',data:{labels:[],datasets:[
+  {label:'Entropy',data:[],borderColor:'#a78bfa',borderWidth:2,pointRadius:2,tension:0.3,fill:true,backgroundColor:'rgba(167,139,250,0.1)'}
+]},options:chartOpts('Entropy')});
+
+const timeChart = new Chart(document.getElementById('chart-time'),{type:'line',data:{labels:[],datasets:[
+  {label:'Train Time (s)',data:[],borderColor:'#60a5fa',borderWidth:2,pointRadius:2,tension:0.3}
+]},options:chartOpts('Seconds')});
+
+const epChart = new Chart(document.getElementById('chart-ep'),{type:'line',data:{labels:[],datasets:[
+  {label:'Episode Reward',data:[],borderColor:'#facc15',borderWidth:2,pointRadius:2,tension:0.3,fill:true,backgroundColor:'rgba(250,204,21,0.1)'}
+]},options:chartOpts('Reward')});
+
+function fmt(n,d=2){return Number(n).toFixed(d)}
+function fmtTime(s){
+  s=Math.floor(s);
+  if(s<60)return s+'s';
+  if(s<3600)return Math.floor(s/60)+'m '+s%60+'s';
+  return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/api/stats');
+    const d=await r.json();
+
+    const dot=document.getElementById('status-dot');
+    const stxt=document.getElementById('status-text');
+    if(d.training_active){dot.className='training';stxt.textContent='Training...';}
+    else{dot.className='alive';stxt.textContent='Idle';}
+
+    document.getElementById('phase').textContent=d.phase;
+    document.getElementById('uptime').textContent=fmtTime(d.uptime_s);
+    document.getElementById('tps').textContent=fmt(d.steps_per_sec,1)+' steps/s';
+
+    document.getElementById('model-ver').textContent='v'+d.model_version;
+    document.getElementById('total-steps').textContent=d.total_steps.toLocaleString();
+    document.getElementById('updates').textContent=d.update_count;
+    document.getElementById('ups').textContent=fmt(d.updates_per_sec,1);
+
+    document.getElementById('ep-count').textContent=d.episode_count;
+    document.getElementById('ep-avg').textContent=fmt(d.episode_reward_avg,3);
+
+    if(d.policy_loss_history.length>0){
+      const ll=d.policy_loss_history.map((_,i)=>i+1);
+      lossChart.data.labels=ll;
+      lossChart.data.datasets[0].data=d.policy_loss_history;
+      lossChart.data.datasets[1].data=d.value_loss_history;
+      lossChart.update();
+    }
+
+    if(d.entropy_history.length>0){
+      entChart.data.labels=d.entropy_history.map((_,i)=>i+1);
+      entChart.data.datasets[0].data=d.entropy_history;
+      entChart.update();
+    }
+
+    if(d.training_time_history.length>0){
+      timeChart.data.labels=d.training_time_history.map((_,i)=>i+1);
+      timeChart.data.datasets[0].data=d.training_time_history;
+      timeChart.update();
+    }
+
+    if(d.episode_reward_history.length>0){
+      epChart.data.labels=d.episode_reward_history.map((_,i)=>i+1);
+      epChart.data.datasets[0].data=d.episode_reward_history;
+      epChart.update();
+    }
+  }catch(e){
+    document.getElementById('status-dot').className='disconnected';
+    document.getElementById('status-text').textContent='Disconnected';
+  }
+}
+setInterval(poll,POLL_MS);
+poll();
+</script>
+</body>
+</html>"""
+
+
+def _make_dashboard_handler(stats: DashboardStats):
+    """Create HTTP request handler for dashboard."""
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/api/stats':
+                body = stats.get_json().encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                body = DASHBOARD_HTML.encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.end_headers()
+                self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            # Suppress HTTP logging
+            pass
+
+    return Handler
+
+
+def start_dashboard_server(stats: DashboardStats, port: int = 8080):
+    """Start dashboard HTTP server in background thread."""
+    handler = _make_dashboard_handler(stats)
+    server = HTTPServer(('0.0.0.0', port), handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"Dashboard running at http://0.0.0.0:{port}")
+    return server
+
 
 @torch.jit.script
 def compute_gae(rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor,
@@ -224,6 +507,10 @@ class V620PPOTrainer:
         self.zmq_pub_port = args.zmq_pub_port
         self.lock = threading.Lock()
         self._server_start_time = time.time()
+
+        # Dashboard
+        self.dashboard_stats = DashboardStats()
+        self._dashboard_server = start_dashboard_server(self.dashboard_stats, port=8080)
 
         # Load checkpoint if exists
         self._load_latest_checkpoint()
@@ -438,7 +725,22 @@ class V620PPOTrainer:
             rgb = None
 
         # Track episodes from rollout (count on GPU, single sync)
-        self.episode_count += int(dones.sum().item())
+        episode_count_delta = int(dones.sum().item())
+        self.episode_count += episode_count_delta
+        
+        # Calculate episode rewards for dashboard (approximate from rollout)
+        # Count completed episodes and their cumulative rewards
+        if episode_count_delta > 0:
+            # Find episode boundaries in the rollout
+            episode_rewards = []
+            current_reward = 0.0
+            for i, (r, d) in enumerate(zip(rollout['rewards'], rollout['dones'])):
+                current_reward += r
+                if d:
+                    episode_rewards.append(current_reward)
+                    current_reward = 0.0
+            for rew in episode_rewards:
+                self.dashboard_stats.append_episode(rew)
 
         # 1. Recompute log_probs and values — single forward pass
         print("  Recomputing log_probs from PyTorch model...")
@@ -599,6 +901,22 @@ class V620PPOTrainer:
 
         epochs_used = epoch + 1
         print(f"  Done in {dt:.1f}s | {epochs_used}/{self.update_epochs} epochs | PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | Ent: {avg_ent:.4f}")
+
+        # Update dashboard stats
+        self.dashboard_stats.update(
+            total_steps=self.total_steps,
+            model_version=self.model_version,
+            update_count=self.update_count,
+            training_active=False,
+            episode_count=self.episode_count
+        )
+        self.dashboard_stats.record_update()
+        self.dashboard_stats.append_training(
+            policy_loss=avg_pl,
+            value_loss=avg_vl,
+            entropy=avg_ent,
+            train_time=dt
+        )
 
         # TensorBoard
         self.writer.add_scalar('loss/policy', avg_pl, self.update_count)

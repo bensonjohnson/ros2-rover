@@ -200,6 +200,12 @@ TRAINER_PID=$!
 echo "PPO server PID: ${TRAINER_PID}"
 echo "Log file: ${LOG_FILE}"
 echo ""
+echo "=================================================="
+echo "Monitoring:"
+echo "  Dashboard: http://$(hostname -I | awk '{print $1}'):8080"
+echo "  TensorBoard: http://localhost:6007"
+echo "=================================================="
+echo ""
 
 cleanup() {
   echo ""
