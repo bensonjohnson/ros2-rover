@@ -104,13 +104,6 @@ class V620PPOTrainer:
             total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             print(f"Using GPU: {gpu_name} ({total_mem:.1f}GB)")
 
-            # On unified memory (GB10/DGX Spark), limit PyTorch's allocation
-            # so it coexists with other GPU processes (e.g. vLLM)
-            if any(k in gpu_name for k in ('GB10', 'GB200', 'Grace')):
-                ppo_mem_gb = min(8.0, total_mem * 0.06)  # ~8GB ceiling for PPO
-                torch.cuda.set_per_process_memory_fraction(ppo_mem_gb / total_mem)
-                print(f"  Memory limit: {ppo_mem_gb:.1f}GB (of {total_mem:.1f}GB unified)")
-
             self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
             self._is_blackwell = any(k in gpu_name for k in ('B200', 'B100', 'GB10', 'GB200', 'Blackwell'))
 
@@ -404,12 +397,20 @@ class V620PPOTrainer:
         print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
 
         # Convert to tensors on GPU (.copy() needed — deserialization yields read-only arrays)
-        # No pin_memory() — GB10/Grace Blackwell uses unified memory (CPU/GPU shared)
-        bev = torch.from_numpy(rollout['bev'].copy()).float().to(self.device)
-        proprio = torch.from_numpy(rollout['proprio'].copy()).float().to(self.device)
-        actions = torch.from_numpy(rollout['actions'].copy()).float().to(self.device)
-        rewards = torch.from_numpy(rollout['rewards'].copy()).float().to(self.device)
-        dones = torch.from_numpy(rollout['dones'].copy()).float().to(self.device)
+        # pin_memory() registers CPU pages with CUDA for fast DMA transfer
+        if self.device.type == 'cuda':
+            bev = torch.from_numpy(rollout['bev'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+            proprio = torch.from_numpy(rollout['proprio'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+            actions = torch.from_numpy(rollout['actions'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+            rewards = torch.from_numpy(rollout['rewards'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+            dones = torch.from_numpy(rollout['dones'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+            torch.cuda.synchronize()  # ensure transfers complete before training
+        else:
+            bev = torch.from_numpy(rollout['bev'].copy()).float()
+            proprio = torch.from_numpy(rollout['proprio'].copy()).float()
+            actions = torch.from_numpy(rollout['actions'].copy()).float()
+            rewards = torch.from_numpy(rollout['rewards'].copy()).float()
+            dones = torch.from_numpy(rollout['dones'].copy()).float()
 
         # Track episodes from rollout (count on GPU, single sync)
         self.episode_count += int(dones.sum().item())
