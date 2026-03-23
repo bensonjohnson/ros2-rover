@@ -598,28 +598,27 @@ class UnifiedBEVEncoder(nn.Module):
         - Channel 0: LiDAR occupancy (360° top-down)
         - Channel 1: Depth occupancy (front arc projected)
 
-    Output: (B, 1024) features
+    Output: (B, 2048) features
 
-    Architecture: 128 → 64 (res) → 32 (res) → 16 → 8 → 4
-    Increased channel width (64→128→64) provides more expressive spatial features.
-    Residual blocks at 64×64 and 32×32 enable learning spatial relationships
-    (gaps between obstacles, wall corners, corridor structure).
+    Architecture: 128 → 64 (res) → 32 (res) → 16 (res) → 8 → 4
+    Three residual blocks at 64×64, 32×32, and 16×16 for deep spatial reasoning.
+    Channels: 64→128→192→192→128 for expressive feature learning.
     """
     def __init__(self, input_channels: int = 2):
         super().__init__()
-        # Increased channel width for more expressive features
         self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1)  # 128→64
-        self.res1 = ResBlock(64)                                                         # 64×64
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)             # 64→32
-        self.res2 = ResBlock(128)                                                        # 32×32
-        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)            # 32→16
-        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)            # 16→8
-        self.conv5 = nn.Conv2d(128, 64, kernel_size=3, stride=2, padding=1)             # 8→4
+        self.res1 = ResBlock(64)                                                          # 64×64
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)              # 64→32
+        self.res2 = ResBlock(128)                                                         # 32×32
+        self.conv3 = nn.Conv2d(128, 192, kernel_size=3, stride=2, padding=1)             # 32→16
+        self.res3 = ResBlock(192)                                                         # 16×16
+        self.conv4 = nn.Conv2d(192, 192, kernel_size=3, stride=2, padding=1)             # 16→8
+        self.conv5 = nn.Conv2d(192, 128, kernel_size=3, stride=2, padding=1)             # 8→4
 
         self.relu = nn.ReLU(inplace=True)
 
-        # Output: 64 channels × 4 × 4 = 1024 features
-        self._output_dim = 64 * 4 * 4
+        # Output: 128 channels × 4 × 4 = 2048 features
+        self._output_dim = 128 * 4 * 4
 
     def forward(self, x):
         # Input: (B, 2, 128, 128)
@@ -627,11 +626,12 @@ class UnifiedBEVEncoder(nn.Module):
         x = self.res1(x)              # (B, 64, 64, 64)
         x = self.relu(self.conv2(x))  # (B, 128, 32, 32)
         x = self.res2(x)              # (B, 128, 32, 32)
-        x = self.relu(self.conv3(x))  # (B, 128, 16, 16)
-        x = self.relu(self.conv4(x))  # (B, 128, 8, 8)
-        x = self.relu(self.conv5(x))  # (B, 64, 4, 4)
+        x = self.relu(self.conv3(x))  # (B, 192, 16, 16)
+        x = self.res3(x)              # (B, 192, 16, 16)
+        x = self.relu(self.conv4(x))  # (B, 192, 8, 8)
+        x = self.relu(self.conv5(x))  # (B, 128, 4, 4)
 
-        x = x.flatten(start_dim=1)    # (B, 1024)
+        x = x.flatten(start_dim=1)    # (B, 2048)
         return x
 
     @property
@@ -991,40 +991,41 @@ class SharedBEVCriticPair(nn.Module):
 
 class UnifiedBEVPPOPolicy(nn.Module):
     """
-    PPO policy network with residual BEV encoder (stateless, no LSTM).
+    PPO policy network with deep residual BEV encoder (stateless, no LSTM).
 
     Input: BEV grid (2, 128, 128), Proprio (6)
     Output: action mean, log_std, value
 
-    Designed for PPO training on the rover with:
-    - Unified BEV encoder (LiDAR + Depth fusion)
+    ~3M params. Designed for PPO training on the rover with:
+    - Deep BEV encoder with 3 residual blocks (2048-dim features)
+    - Wide policy/value heads (512→256)
     - Stateless policy (no hidden state needed for PPO)
-    - Compatible with ONNX/RKNN export for NPU inference
+    - Compatible with ONNX/RKNN export for NPU inference (FP16 on RK3588)
     """
     def __init__(self, action_dim: int = 2, proprio_dim: int = 6):
         super().__init__()
 
-        # BEV encoder: 2-channel 128x128 → 1024 features
+        # BEV encoder: 2-channel 128x128 → 2048 features
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
 
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 32),
+            nn.Linear(proprio_dim, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(32, 32),
+            nn.Linear(64, 64),
             nn.ReLU(inplace=True),
         )
 
-        # Fusion: 1024 (BEV) + 32 (proprio) = 1056
-        fusion_dim = self.bev_encoder.output_dim + 32
+        # Fusion: 2048 (BEV) + 64 (proprio) = 2112
+        fusion_dim = self.bev_encoder.output_dim + 64
 
         # Policy network (outputs action mean)
         self.policy_net = nn.Sequential(
-            nn.Linear(fusion_dim, 256),
+            nn.Linear(fusion_dim, 512),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(128, action_dim),
+            nn.Linear(256, action_dim),
         )
 
         # Learnable log_std for action variance
@@ -1032,11 +1033,11 @@ class UnifiedBEVPPOPolicy(nn.Module):
 
         # Value network (for PPO)
         self.value_net = nn.Sequential(
-            nn.Linear(fusion_dim, 256),
+            nn.Linear(fusion_dim, 512),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 128),
+            nn.Linear(512, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 1),
+            nn.Linear(256, 1),
         )
 
         # Initialize final layers to output small values
