@@ -1462,11 +1462,17 @@ class PPORemoteRunner(Node):
             model_msg = msgpack.unpackb(data)
             model_version = model_msg["version"]
             onnx_bytes = model_msg["onnx_bytes"]
+            rknn_bytes = model_msg.get("rknn_bytes")
 
             if model_version <= self._model_version:
                 return
 
-            self.get_logger().info(f'Received model v{model_version}, ONNX: {len(onnx_bytes)} bytes')
+            if rknn_bytes:
+                self.get_logger().info(
+                    f'Received model v{model_version} (ONNX: {len(onnx_bytes)}B, RKNN: {len(rknn_bytes)}B)'
+                )
+            else:
+                self.get_logger().info(f'Received model v{model_version}, ONNX: {len(onnx_bytes)} bytes')
 
             # Update training stats from server if included
             train_stats = model_msg.get("train_stats", {})
@@ -1478,16 +1484,30 @@ class PPORemoteRunner(Node):
                     train_stats.get('train_time', 0),
                 )
 
-            # Save ONNX
-            onnx_path = self._temp_dir / "latest_model.onnx"
-            with open(onnx_path, 'wb') as f:
-                f.write(onnx_bytes)
-                f.flush()
-                os.fsync(f.fileno())
+            # If server sent pre-converted RKNN, use it directly (fast path)
+            if rknn_bytes and HAS_RKNN:
+                rknn_path = self._temp_dir / "latest_model.rknn"
+                with open(rknn_path, 'wb') as f:
+                    f.write(rknn_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
 
-            # Convert to RKNN
-            if HAS_RKNN:
-                self.get_logger().info('Converting to RKNN...')
+                self.get_logger().info('Loading server-converted RKNN...')
+                if self._load_rknn_model(str(rknn_path)):
+                    self._model_version = model_version
+                    self._update_count = model_version
+                    self.get_logger().info(f'RKNN model v{model_version} loaded on NPU (server-converted)')
+                else:
+                    self.get_logger().error('Failed to load server-converted RKNN')
+            elif HAS_RKNN:
+                # Fallback: convert on-device
+                onnx_path = self._temp_dir / "latest_model.onnx"
+                with open(onnx_path, 'wb') as f:
+                    f.write(onnx_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                self.get_logger().info('No RKNN from server, converting on-device...')
                 self.dashboard_stats.update(rknn_converting=True)
                 rknn_path = str(onnx_path).replace('.onnx', '.rknn')
 
@@ -1495,7 +1515,6 @@ class PPORemoteRunner(Node):
                 await loop.run_in_executor(
                     None, self._convert_and_load_rknn, str(onnx_path), rknn_path, model_version
                 )
-
                 self.dashboard_stats.update(rknn_converting=False)
             else:
                 self._model_version = model_version

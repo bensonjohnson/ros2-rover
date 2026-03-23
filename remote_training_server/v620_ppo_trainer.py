@@ -42,6 +42,13 @@ from torch.utils.tensorboard import SummaryWriter
 import zmq
 import zmq.asyncio
 
+# RKNN toolkit for server-side conversion (optional)
+try:
+    from rknn.api import RKNN
+    HAS_RKNN_TOOLKIT = True
+except ImportError:
+    HAS_RKNN_TOOLKIT = False
+
 # Import model architectures
 from model_architectures import UnifiedBEVPPOPolicy
 
@@ -307,6 +314,69 @@ class V620PPOTrainer:
             self.policy.train()
             return None
 
+    def _convert_onnx_to_rknn(self, onnx_path: str) -> str:
+        """Convert ONNX to RKNN on the server (FP16, no quantization)."""
+        if not HAS_RKNN_TOOLKIT:
+            return None
+
+        rknn_path = onnx_path.replace('.onnx', '.rknn')
+        try:
+            rknn = RKNN(verbose=False)
+
+            # Auto-detect inputs from ONNX
+            import onnx as onnx_lib
+            model = onnx_lib.load(onnx_path)
+            input_names = []
+            input_sizes = []
+            mean_values = []
+            std_values = []
+            for inp in model.graph.input:
+                name = inp.name
+                shape = [d.dim_value for d in inp.type.tensor_type.shape.dim]
+                shape = [1 if d == 0 else d for d in shape]
+                input_names.append(name)
+                input_sizes.append(shape)
+                n_channels = shape[1] if len(shape) == 4 else shape[-1]
+                mean_values.append([0] * n_channels)
+                std_values.append([1] * n_channels)
+
+            ret = rknn.config(
+                mean_values=mean_values,
+                std_values=std_values,
+                target_platform='rk3588',
+                optimization_level=3,
+            )
+            if ret != 0:
+                print(f"RKNN config failed: {ret}")
+                return None
+
+            ret = rknn.load_onnx(
+                model=onnx_path,
+                inputs=input_names,
+                input_size_list=input_sizes,
+            )
+            if ret != 0:
+                print(f"RKNN load_onnx failed: {ret}")
+                return None
+
+            ret = rknn.build(do_quantization=False)
+            if ret != 0:
+                print(f"RKNN build failed: {ret}")
+                return None
+
+            ret = rknn.export_rknn(rknn_path)
+            if ret != 0:
+                print(f"RKNN export failed: {ret}")
+                return None
+
+            rknn_size = os.path.getsize(rknn_path)
+            print(f"RKNN converted: {rknn_path} ({rknn_size} bytes)")
+            return rknn_path
+
+        except Exception as e:
+            print(f"RKNN conversion failed: {e}")
+            return None
+
     # ========== PPO Training ==========
 
     def train_on_rollout(self, rollout: dict):
@@ -566,14 +636,21 @@ class V620PPOTrainer:
                 await asyncio.sleep(1.0)
 
     async def _publish_model(self, train_result):
-        """Publish updated ONNX model to rover via ZMQ PUB."""
+        """Publish model to rover via ZMQ XPUB. Includes RKNN if toolkit available."""
         try:
             onnx_path = train_result['onnx_path']
             with open(onnx_path, 'rb') as f:
                 onnx_bytes = f.read()
 
+            # Convert to RKNN on server if toolkit available
+            rknn_bytes = None
+            rknn_path = self._convert_onnx_to_rknn(onnx_path)
+            if rknn_path and os.path.exists(rknn_path):
+                with open(rknn_path, 'rb') as f:
+                    rknn_bytes = f.read()
+
             import msgpack
-            model_msg = msgpack.packb({
+            msg = {
                 "version": self.model_version,
                 "onnx_bytes": onnx_bytes,
                 "timestamp": time.time(),
@@ -583,9 +660,17 @@ class V620PPOTrainer:
                     'entropy': train_result['entropy'],
                     'train_time': train_result['train_time'],
                 },
-            })
+            }
+            if rknn_bytes:
+                msg["rknn_bytes"] = rknn_bytes
+
+            model_msg = msgpack.packb(msg)
             await self.pub_sock.send_multipart([b"model", model_msg])
-            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes)")
+
+            if rknn_bytes:
+                print(f"Published model v{self.model_version} (ONNX: {len(onnx_bytes)}B, RKNN: {len(rknn_bytes)}B)")
+            else:
+                print(f"Published model v{self.model_version} (ONNX: {len(onnx_bytes)}B, no RKNN)")
 
         except Exception as e:
             print(f"Model publish failed: {e}")
