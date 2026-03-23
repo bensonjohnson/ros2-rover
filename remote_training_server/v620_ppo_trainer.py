@@ -172,6 +172,7 @@ class V620PPOTrainer:
         self.value_coef = 0.5
         self.entropy_coef = 0.01
         self.max_grad_norm = 0.5
+        self.target_kl = args.target_kl
 
         # State
         self.total_steps = 0
@@ -211,7 +212,7 @@ class V620PPOTrainer:
 
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"PPO Trainer initialized: {param_count:,} params")
-        print(f"  LR: {args.lr}, Clip: {args.clip_eps}, Epochs: {args.update_epochs}")
+        print(f"  LR: {args.lr}, Clip: {args.clip_eps}, Epochs: {args.update_epochs} (KL stop: {args.target_kl})")
         print(f"  Mini-batch: {args.mini_batch_size}, Gamma: {args.gamma}")
 
     # ========== Checkpoint Management ==========
@@ -366,7 +367,10 @@ class V620PPOTrainer:
         total_entropy = torch.tensor(0.0, device=self.device)
         n_updates = 0
 
+        early_stopped = False
         for epoch in range(self.update_epochs):
+            epoch_kl = torch.tensor(0.0, device=self.device)
+            epoch_count = 0
             indices = torch.randperm(n, device=self.device)
             for start in range(0, n, self.mini_batch_size):
                 end = min(start + self.mini_batch_size, n)
@@ -400,8 +404,13 @@ class V620PPOTrainer:
                 # Tanh squash correction
                 new_log_probs -= (2 * (_LOG2 - raw_actions - F.softplus(-2 * raw_actions))).sum(dim=-1)
 
+                # Approx KL for early stopping: mean((ratio - 1) - log(ratio))
+                log_ratio = new_log_probs - old_lp_b
+                epoch_kl += (log_ratio.exp() - 1.0 - log_ratio).mean().detach()
+                epoch_count += 1
+
                 # PPO clipped objective
-                ratio = (new_log_probs - old_lp_b).exp()
+                ratio = log_ratio.exp()
                 surr1 = ratio * adv_b
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_b
                 policy_loss = -torch.min(surr1, surr2).mean()
@@ -434,6 +443,13 @@ class V620PPOTrainer:
                 total_entropy += entropy.detach()
                 n_updates += 1
 
+            # KL early stopping check (single sync per epoch, not per mini-batch)
+            approx_kl = (epoch_kl / max(epoch_count, 1)).item()
+            if approx_kl > self.target_kl:
+                print(f"  Early stop at epoch {epoch + 1}/{self.update_epochs} (KL={approx_kl:.4f} > {self.target_kl})")
+                early_stopped = True
+                break
+
         dt = time.time() - t0
         self.update_count += 1
 
@@ -442,7 +458,8 @@ class V620PPOTrainer:
         avg_vl = (total_value_loss / max(n_updates, 1)).item()
         avg_ent = (total_entropy / max(n_updates, 1)).item()
 
-        print(f"  Done in {dt:.1f}s | PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | Ent: {avg_ent:.4f}")
+        epochs_used = epoch + 1
+        print(f"  Done in {dt:.1f}s | {epochs_used}/{self.update_epochs} epochs | PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | Ent: {avg_ent:.4f}")
 
         # TensorBoard
         self.writer.add_scalar('loss/policy', avg_pl, self.update_count)
@@ -451,6 +468,8 @@ class V620PPOTrainer:
         self.writer.add_scalar('training/total_steps', self.total_steps, self.update_count)
         self.writer.add_scalar('training/model_version', self.model_version, self.update_count)
         self.writer.add_scalar('training/train_time_s', dt, self.update_count)
+        self.writer.add_scalar('training/epochs_used', epochs_used, self.update_count)
+        self.writer.add_scalar('training/approx_kl', approx_kl, self.update_count)
 
         # Save checkpoint
         if self.update_count % self.args.checkpoint_interval == 0:
@@ -691,8 +710,9 @@ def main():
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
-    parser.add_argument('--update_epochs', type=int, default=10)
+    parser.add_argument('--update_epochs', type=int, default=20)
     parser.add_argument('--mini_batch_size', type=int, default=256)
+    parser.add_argument('--target_kl', type=float, default=0.03)
     parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
 
