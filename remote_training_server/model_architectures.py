@@ -598,40 +598,40 @@ class UnifiedBEVEncoder(nn.Module):
         - Channel 0: LiDAR occupancy (360° top-down)
         - Channel 1: Depth occupancy (front arc projected)
 
-    Output: (B, 2048) features
+    Output: (B, 4096) features
 
     Architecture: 128 → 64 (res) → 32 (res) → 16 (res) → 8 → 4
     Three residual blocks at 64×64, 32×32, and 16×16 for deep spatial reasoning.
-    Channels: 64→128→192→192→128 for expressive feature learning.
+    Channels: 128→256→384→384→256. Sized to utilize RK3588 NPU headroom (~8-10M total params).
     """
     def __init__(self, input_channels: int = 2):
         super().__init__()
-        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=3, stride=2, padding=1)  # 128→64
-        self.res1 = ResBlock(64)                                                          # 64×64
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)              # 64→32
-        self.res2 = ResBlock(128)                                                         # 32×32
-        self.conv3 = nn.Conv2d(128, 192, kernel_size=3, stride=2, padding=1)             # 32→16
-        self.res3 = ResBlock(192)                                                         # 16×16
-        self.conv4 = nn.Conv2d(192, 192, kernel_size=3, stride=2, padding=1)             # 16→8
-        self.conv5 = nn.Conv2d(192, 128, kernel_size=3, stride=2, padding=1)             # 8→4
+        self.conv1 = nn.Conv2d(input_channels, 128, kernel_size=3, stride=2, padding=1)  # 128→64
+        self.res1 = ResBlock(128)                                                          # 64×64
+        self.conv2 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)              # 64→32
+        self.res2 = ResBlock(256)                                                          # 32×32
+        self.conv3 = nn.Conv2d(256, 384, kernel_size=3, stride=2, padding=1)              # 32→16
+        self.res3 = ResBlock(384)                                                          # 16×16
+        self.conv4 = nn.Conv2d(384, 384, kernel_size=3, stride=2, padding=1)              # 16→8
+        self.conv5 = nn.Conv2d(384, 256, kernel_size=3, stride=2, padding=1)              # 8→4
 
         self.relu = nn.ReLU(inplace=True)
 
-        # Output: 128 channels × 4 × 4 = 2048 features
-        self._output_dim = 128 * 4 * 4
+        # Output: 256 channels × 4 × 4 = 4096 features
+        self._output_dim = 256 * 4 * 4
 
     def forward(self, x):
         # Input: (B, 2, 128, 128)
-        x = self.relu(self.conv1(x))  # (B, 64, 64, 64)
-        x = self.res1(x)              # (B, 64, 64, 64)
-        x = self.relu(self.conv2(x))  # (B, 128, 32, 32)
-        x = self.res2(x)              # (B, 128, 32, 32)
-        x = self.relu(self.conv3(x))  # (B, 192, 16, 16)
-        x = self.res3(x)              # (B, 192, 16, 16)
-        x = self.relu(self.conv4(x))  # (B, 192, 8, 8)
-        x = self.relu(self.conv5(x))  # (B, 128, 4, 4)
+        x = self.relu(self.conv1(x))  # (B, 128, 64, 64)
+        x = self.res1(x)              # (B, 128, 64, 64)
+        x = self.relu(self.conv2(x))  # (B, 256, 32, 32)
+        x = self.res2(x)              # (B, 256, 32, 32)
+        x = self.relu(self.conv3(x))  # (B, 384, 16, 16)
+        x = self.res3(x)              # (B, 384, 16, 16)
+        x = self.relu(self.conv4(x))  # (B, 384, 8, 8)
+        x = self.relu(self.conv5(x))  # (B, 256, 4, 4)
 
-        x = x.flatten(start_dim=1)    # (B, 2048)
+        x = x.flatten(start_dim=1)    # (B, 4096)
         return x
 
     @property
@@ -996,28 +996,29 @@ class UnifiedBEVPPOPolicy(nn.Module):
     Input: BEV grid (2, 128, 128), Proprio (6)
     Output: action mean, log_std, value
 
-    ~3M params. Designed for PPO training on the rover with:
-    - Deep BEV encoder with 3 residual blocks (2048-dim features)
+    ~10M params. Designed for PPO training on the rover with:
+    - Deep BEV encoder with 3 residual blocks (4096-dim features)
     - Wide policy/value heads (512→256)
     - Stateless policy (no hidden state needed for PPO)
     - Compatible with ONNX/RKNN export for NPU inference (FP16 on RK3588)
+    - Sized to utilize RK3588 NPU headroom (3 cores, ~4% utilization at previous size)
     """
     def __init__(self, action_dim: int = 2, proprio_dim: int = 6):
         super().__init__()
 
-        # BEV encoder: 2-channel 128x128 → 2048 features
+        # BEV encoder: 2-channel 128x128 → 4096 features
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
 
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 64),
+            nn.Linear(proprio_dim, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 64),
+            nn.Linear(128, 128),
             nn.ReLU(inplace=True),
         )
 
-        # Fusion: 2048 (BEV) + 64 (proprio) = 2112
-        fusion_dim = self.bev_encoder.output_dim + 64
+        # Fusion: 4096 (BEV) + 128 (proprio) = 4224
+        fusion_dim = self.bev_encoder.output_dim + 128
 
         # Policy network (outputs action mean)
         self.policy_net = nn.Sequential(
