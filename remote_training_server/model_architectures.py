@@ -989,15 +989,51 @@ class SharedBEVCriticPair(nn.Module):
 # PPO with Unified BEV Architecture (for local rover training)
 # =============================================================================
 
+class RGBEncoder(nn.Module):
+    """
+    Lightweight encoder for 84×84 RGB camera images.
+
+    Input: (B, 3, 84, 84) — ImageNet-normalized RGB
+    Output: (B, 512) features
+
+    4-layer CNN with AdaptiveAvgPool2d, ~250K params.
+    Designed as a supplement to the BEV path for texture/color cues.
+    """
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=5, stride=4, padding=2),   # 84→21
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 21→11
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 11→6
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),# 6→3
+            nn.ReLU(inplace=True),
+        )
+        self.pool = nn.AdaptiveAvgPool2d(2)  # → (B, 128, 2, 2)
+        self._output_dim = 128 * 2 * 2  # 512
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.pool(x)
+        return x.flatten(start_dim=1)
+
+    @property
+    def output_dim(self):
+        return self._output_dim
+
+
 class UnifiedBEVPPOPolicy(nn.Module):
     """
-    PPO policy network with deep residual BEV encoder (stateless, no LSTM).
+    PPO policy network with deep residual BEV encoder + RGB stream (stateless, no LSTM).
 
-    Input: BEV grid (2, 128, 128), Proprio (6)
+    Input: BEV grid (2, 128, 128), Proprio (6), RGB (3, 84, 84) [optional]
     Output: action mean, log_std, value
 
     ~10M params. Designed for PPO training on the rover with:
     - Deep BEV encoder with 3 residual blocks (4096-dim features)
+    - Lightweight RGB encoder (512-dim features)
     - Wide policy/value heads (512→256)
     - Stateless policy (no hidden state needed for PPO)
     - Compatible with ONNX/RKNN export for NPU inference (FP16 on RK3588)
@@ -1009,6 +1045,9 @@ class UnifiedBEVPPOPolicy(nn.Module):
         # BEV encoder: 2-channel 128x128 → 4096 features
         self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
 
+        # RGB encoder: 3-channel 84x84 → 512 features
+        self.rgb_encoder = RGBEncoder()
+
         # Proprioception encoder
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 128),
@@ -1017,8 +1056,8 @@ class UnifiedBEVPPOPolicy(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # Fusion: 4096 (BEV) + 128 (proprio) = 4224
-        fusion_dim = self.bev_encoder.output_dim + 128
+        # Fusion: 4096 (BEV) + 512 (RGB) + 128 (proprio) = 4736
+        fusion_dim = self.bev_encoder.output_dim + self.rgb_encoder.output_dim + 128
 
         # Policy network (outputs action mean)
         self.policy_net = nn.Sequential(
@@ -1047,12 +1086,13 @@ class UnifiedBEVPPOPolicy(nn.Module):
         nn.init.orthogonal_(self.value_net[-1].weight, gain=0.01)
         nn.init.constant_(self.value_net[-1].bias, 0.0)
 
-    def forward(self, bev_grid: torch.Tensor, proprio: torch.Tensor):
+    def forward(self, bev_grid: torch.Tensor, proprio: torch.Tensor, rgb: torch.Tensor = None):
         """Forward pass for PPO policy.
 
         Args:
             bev_grid: (B, 2, 128, 128) unified BEV grid
             proprio: (B, 6) proprioception
+            rgb: (B, 3, 84, 84) ImageNet-normalized RGB, or None (zeros used)
 
         Returns:
             action_mean: (B, action_dim)
@@ -1061,33 +1101,40 @@ class UnifiedBEVPPOPolicy(nn.Module):
         """
         bev_feats = self.bev_encoder(bev_grid)
         proprio_feats = self.proprio_encoder(proprio)
-        fused = torch.cat([bev_feats, proprio_feats], dim=1)  # (B, 1056)
+
+        if rgb is None:
+            rgb = torch.zeros(bev_grid.shape[0], 3, 84, 84, device=bev_grid.device)
+        rgb_feats = self.rgb_encoder(rgb)
+
+        fused = torch.cat([bev_feats, rgb_feats, proprio_feats], dim=1)  # (B, 4736)
 
         action_mean = self.policy_net(fused)
         value = self.value_net(fused).squeeze(-1)
 
         return action_mean, self.log_std, value
 
-    def get_action_dist(self, bev_grid: torch.Tensor, proprio: torch.Tensor):
+    def get_action_dist(self, bev_grid: torch.Tensor, proprio: torch.Tensor, rgb: torch.Tensor = None):
         """Get action distribution for sampling.
 
         Args:
             bev_grid: (B, 2, 128, 128)
             proprio: (B, 6)
+            rgb: (B, 3, 84, 84) or None
 
         Returns:
             dist: Normal distribution with mean and std
         """
-        action_mean, log_std, _ = self.forward(bev_grid, proprio)
+        action_mean, log_std, _ = self.forward(bev_grid, proprio, rgb)
         std = log_std.exp().clamp(min=1e-6, max=2.0)
         return torch.distributions.Normal(action_mean, std)
 
-    def act(self, bev_grid: torch.Tensor, proprio: torch.Tensor, deterministic: bool = False):
+    def act(self, bev_grid: torch.Tensor, proprio: torch.Tensor, rgb: torch.Tensor = None, deterministic: bool = False):
         """Sample actions from the policy.
 
         Args:
             bev_grid: (B, 2, 128, 128)
             proprio: (B, 6)
+            rgb: (B, 3, 84, 84) or None
             deterministic: If True, return mean action (no noise)
 
         Returns:
@@ -1095,7 +1142,7 @@ class UnifiedBEVPPOPolicy(nn.Module):
             log_probs: (B,) log probability of actions
             values: (B,) state values
         """
-        action_mean, log_std, value = self.forward(bev_grid, proprio)
+        action_mean, log_std, value = self.forward(bev_grid, proprio, rgb)
         std = log_std.exp().clamp(min=1e-6, max=2.0)
         dist = torch.distributions.Normal(action_mean, std)
 

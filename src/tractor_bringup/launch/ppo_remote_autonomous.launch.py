@@ -50,9 +50,10 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "false",
             "align_depth.enable": "false",
-            "enable_color": "false",
+            "enable_color": "true",
+            "rgb_camera.color_profile": "424x240x30",
             "enable_depth": "true",
-            "enable_sync": "false",
+            "enable_sync": "true",
             "device_type": "435i",
             "depth_module.depth_profile": "848x100x100",
             "enable_gyro": "false",

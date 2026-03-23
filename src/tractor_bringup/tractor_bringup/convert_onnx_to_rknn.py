@@ -117,15 +117,29 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_
                 # CRITICAL: Normalize proprio for quantization
                 proprio = normalize_proprio(proprio)
 
+                # Load and normalize RGB if present
+                rgb_mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+                rgb_std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+                has_rgb = 'rgb' in data
+                if has_rgb:
+                    rgb = data['rgb']  # (3, 84, 84) uint8
+                    rgb_float = rgb.astype(np.float32) / 255.0
+                    rgb_normalized = (rgb_float - rgb_mean) / rgb_std
+                else:
+                    rgb_normalized = np.zeros((3, 84, 84), dtype=np.float32)
+
                 # Add batch dimension
                 bev_batch = bev[None, ...]
                 proprio_batch = proprio[None, ...]
+                rgb_batch = rgb_normalized[None, ...]
 
                 bev_path = os.path.abspath(os.path.join(dataset_dir, f"bev_{i}.npy"))
                 proprio_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_{i}.npy"))
+                rgb_path = os.path.abspath(os.path.join(dataset_dir, f"rgb_{i}.npy"))
 
                 np.save(bev_path, bev_batch.astype(np.float32))
                 np.save(proprio_path, proprio_batch.astype(np.float32))
+                np.save(rgb_path, rgb_batch.astype(np.float32))
 
                 if has_lstm:
                     LSTM_HIDDEN = 256
@@ -135,9 +149,9 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_
                     cx_path = os.path.abspath(os.path.join(dataset_dir, f"cx_{i}.npy"))
                     np.save(hx_path, hx_batch)
                     np.save(cx_path, cx_batch)
-                    f.write(f"{bev_path} {proprio_path} {hx_path} {cx_path}\n")
+                    f.write(f"{bev_path} {proprio_path} {rgb_path} {hx_path} {cx_path}\n")
                 else:
-                    f.write(f"{bev_path} {proprio_path}\n")
+                    f.write(f"{bev_path} {proprio_path} {rgb_path}\n")
 
                 valid_samples += 1
 
@@ -304,7 +318,8 @@ def convert_onnx_to_rknn(
                         np.random.uniform(-1.0, 1.0),
                     ], dtype=np.float32)
                     test_proprio = normalize_proprio(test_proprio_raw)[None, ...]
-                    inputs = [test_bev, test_proprio]
+                    test_rgb = np.random.rand(1, 3, 84, 84).astype(np.float32)
+                    inputs = [test_bev, test_proprio, test_rgb]
                     if has_lstm:
                         inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
                         inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))

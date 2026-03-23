@@ -69,6 +69,10 @@ from tractor_bringup.phase_manager import PhaseManager
 PROPRIO_MEAN = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 PROPRIO_STD = np.array([2.0, 1.0, 1.0, 0.2, 1.0, 1.0], dtype=np.float32)
 
+# ImageNet normalization for RGB encoder
+RGB_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+RGB_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
 
 def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
     normalized = (proprio - PROPRIO_MEAN) / PROPRIO_STD
@@ -88,14 +92,19 @@ class RolloutBuffer:
         self.size = 0
         # uint8 BEV for memory efficiency (0-1 -> 0-255)
         self.bev = np.zeros((capacity, 2, 128, 128), dtype=np.uint8)
+        self.rgb = np.zeros((capacity, 3, 84, 84), dtype=np.uint8)
         self.proprio = np.zeros((capacity, proprio_dim), dtype=np.float32)
         self.actions = np.zeros((capacity, 2), dtype=np.float32)
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.dones = np.zeros((capacity,), dtype=np.bool_)
 
-    def add(self, bev, proprio, action, reward, done):
+    def add(self, bev, proprio, action, reward, done, rgb=None):
         i = self.ptr
         self.bev[i] = (bev * 255.0).astype(np.uint8)
+        if rgb is not None:
+            self.rgb[i] = rgb  # already CHW uint8
+        else:
+            self.rgb[i] = 0
         self.proprio[i] = proprio
         self.actions[i] = action
         self.rewards[i] = reward
@@ -108,6 +117,7 @@ class RolloutBuffer:
         n = self.size
         return {
             'bev': self.bev[:n].astype(np.float32) / 255.0,
+            'rgb': self.rgb[:n].astype(np.float32) / 255.0,
             'proprio': self.proprio[:n].copy(),
             'actions': self.actions[:n].copy(),
             'rewards': self.rewards[:n].copy(),
@@ -529,6 +539,7 @@ class PPORemoteRunner(Node):
             self.get_logger().info('RKNNLite not available - random exploration only until server sends model')
 
         # Sensor state
+        self._latest_rgb = None
         self._latest_depth_raw = None
         self._latest_scan = None
         self._latest_bev = None
@@ -658,6 +669,8 @@ class PPORemoteRunner(Node):
     def _setup_subscribers(self):
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw',
                                  self._depth_cb, qos_profile_sensor_data)
+        self.create_subscription(Image, '/camera/camera/color/image_raw',
+                                 self._rgb_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odometry/filtered', self._odom_cb, 10)
         self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
@@ -673,6 +686,12 @@ class PPORemoteRunner(Node):
 
     def _depth_cb(self, msg):
         self._latest_depth_raw = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
+
+    def _rgb_cb(self, msg):
+        rgb_raw = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        # Resize to 84x84 and convert BGR→RGB, store as uint8
+        rgb_resized = cv2.resize(rgb_raw, (84, 84), interpolation=cv2.INTER_AREA)
+        self._latest_rgb = cv2.cvtColor(rgb_resized, cv2.COLOR_BGR2RGB)
 
     def _scan_cb(self, msg):
         self._latest_scan = msg
@@ -1164,6 +1183,15 @@ class PPORemoteRunner(Node):
         ], dtype=np.float32)
         proprio = normalize_proprio(proprio_raw)
 
+        # Prepare RGB for inference (ImageNet-normalized CHW float32) and buffer (CHW uint8)
+        if self._latest_rgb is not None:
+            rgb_chw_uint8 = np.transpose(self._latest_rgb, (2, 0, 1))  # HWC→CHW uint8
+            rgb_float = rgb_chw_uint8.astype(np.float32) / 255.0
+            rgb_input = ((rgb_float - RGB_MEAN.reshape(3, 1, 1)) / RGB_STD.reshape(3, 1, 1))[None, ...]
+        else:
+            rgb_chw_uint8 = np.zeros((3, 84, 84), dtype=np.uint8)
+            rgb_input = np.zeros((1, 3, 84, 84), dtype=np.float32)
+
         # 2. Inference
         # Wait for initial model from server before collecting any data
         # PPO is on-policy: rollouts must come from the server's policy
@@ -1184,7 +1212,7 @@ class PPORemoteRunner(Node):
 
             bev_input = bev_grid[None, ...].astype(np.float32)
             proprio_input = proprio[None, ...]
-            outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio_input])
+            outputs = self._rknn_runtime.inference(inputs=[bev_input, proprio_input, rgb_input])
             action_mean = outputs[0][0]
 
             if np.isnan(action_mean).any() or np.isinf(action_mean).any():
@@ -1267,7 +1295,7 @@ class PPORemoteRunner(Node):
             return
 
         # 5. Store transition (no log_prob or value - server recomputes)
-        self.buffer.add(bev_grid, proprio, actual_action, reward, episode_done)
+        self.buffer.add(bev_grid, proprio, actual_action, reward, episode_done, rgb=rgb_chw_uint8)
         self._total_steps += 1
         self._current_episode_reward += reward
         self._current_episode_length += 1
@@ -1338,7 +1366,7 @@ class PPORemoteRunner(Node):
                 timestamp = int(time.time() * 1000)
                 np.savez_compressed(
                     self._calibration_dir / f"calib_{timestamp}.npz",
-                    bev=bev_grid, proprio=proprio
+                    bev=bev_grid, proprio=proprio, rgb=rgb_chw_uint8
                 )
 
         # 6. Ship rollout when buffer is full

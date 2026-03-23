@@ -51,6 +51,14 @@ def serialize_batch(batch: dict) -> bytes:
         "metadata": batch.get("metadata", {}),
     }
 
+    # RGB stream (optional, compressed like BEV)
+    if "rgb" in batch:
+        compressed["rgb"] = {
+            "data": compressor.compress(batch["rgb"].tobytes()),
+            "shape": batch["rgb"].shape,
+            "dtype": str(batch["rgb"].dtype),
+        }
+
     return msgpack.packb(compressed)
 
 
@@ -67,7 +75,7 @@ def deserialize_batch(data: bytes) -> dict:
     decompressor = zstd.ZstdDecompressor()
     compressed = msgpack.unpackb(data)
 
-    return {
+    result = {
         "bev": np.frombuffer(
             decompressor.decompress(compressed["bev"]["data"]),
             dtype=np.dtype(compressed["bev"]["dtype"])
@@ -79,6 +87,15 @@ def deserialize_batch(data: bytes) -> dict:
         "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
         "metadata": compressed.get("metadata", {}),
     }
+
+    # RGB stream (backward compatible)
+    if compressed.get("rgb") is not None:
+        result["rgb"] = np.frombuffer(
+            decompressor.decompress(compressed["rgb"]["data"]),
+            dtype=np.dtype(compressed["rgb"]["dtype"])
+        ).reshape(compressed["rgb"]["shape"])
+
+    return result
 
 
 def serialize_model_update(onnx_bytes: bytes, version: int) -> bytes:

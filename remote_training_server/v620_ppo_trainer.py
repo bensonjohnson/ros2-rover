@@ -171,6 +171,7 @@ class V620PPOTrainer:
         value_params = list(self.policy.value_net.parameters())
         shared_params = (
             list(self.policy.bev_encoder.parameters()) +
+            list(self.policy.rgb_encoder.parameters()) +
             list(self.policy.proprio_encoder.parameters())
         )
         self.optimizer = optim.Adam([
@@ -250,8 +251,12 @@ class V620PPOTrainer:
             print("No checkpoint found. Starting fresh.")
             return
 
-        self.policy.load_state_dict(ckpt['policy_state_dict'])
-        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        self.policy.load_state_dict(ckpt['policy_state_dict'], strict=False)
+        try:
+            self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        except (ValueError, KeyError):
+            print("Optimizer state incompatible (architecture change), re-initializing optimizer.")
+            pass
         self.total_steps = ckpt.get('total_steps', 0)
         self.update_count = ckpt.get('update_count', 0)
         self.model_version = ckpt.get('model_version', self.update_count)
@@ -280,15 +285,20 @@ class V620PPOTrainer:
             self.policy.eval()
             dummy_bev = torch.zeros(1, 2, 128, 128, device=self.device)
             dummy_proprio = torch.zeros(1, self.proprio_dim, device=self.device)
+            dummy_rgb = torch.zeros(1, 3, 84, 84, device=self.device)
 
             torch.onnx.export(
                 self.policy,
-                (dummy_bev, dummy_proprio),
+                (dummy_bev, dummy_proprio, dummy_rgb),
                 onnx_path,
-                input_names=['bev', 'proprio'],
+                input_names=['bev', 'proprio', 'rgb'],
                 output_names=['action_mean', 'log_std', 'value'],
                 opset_version=18,
-                dynamic_axes={'bev': {0: 'batch'}, 'proprio': {0: 'batch'}}
+                dynamic_axes={
+                    'bev': {0: 'batch'},
+                    'proprio': {0: 'batch'},
+                    'rgb': {0: 'batch'},
+                }
             )
 
             # Ensure all weights are embedded inline (not in external .data file)
@@ -412,6 +422,21 @@ class V620PPOTrainer:
             rewards = torch.from_numpy(rollout['rewards'].copy()).float()
             dones = torch.from_numpy(rollout['dones'].copy()).float()
 
+        # RGB stream (optional — backward compatible with rollouts that lack RGB)
+        # ImageNet normalization constants
+        RGB_MEAN = torch.tensor([0.485, 0.456, 0.406], device=self.device).view(1, 3, 1, 1)
+        RGB_STD = torch.tensor([0.229, 0.224, 0.225], device=self.device).view(1, 3, 1, 1)
+        if 'rgb' in rollout:
+            if self.device.type == 'cuda':
+                rgb = torch.from_numpy(rollout['rgb'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+                torch.cuda.synchronize()
+            else:
+                rgb = torch.from_numpy(rollout['rgb'].copy()).float()
+            # Apply ImageNet normalization on GPU (input is [0,1] float)
+            rgb = (rgb - RGB_MEAN) / RGB_STD
+        else:
+            rgb = None
+
         # Track episodes from rollout (count on GPU, single sync)
         self.episode_count += int(dones.sum().item())
 
@@ -421,9 +446,9 @@ class V620PPOTrainer:
         with torch.no_grad():
             if self.use_amp:
                 with torch.amp.autocast('cuda', dtype=self.amp_dtype):
-                    action_mean, log_std, values = self.policy(bev, proprio)
+                    action_mean, log_std, values = self.policy(bev, proprio, rgb)
             else:
-                action_mean, log_std, values = self.policy(bev, proprio)
+                action_mean, log_std, values = self.policy(bev, proprio, rgb)
 
             action_mean = action_mean.float()
             log_std = log_std.float()
@@ -446,11 +471,12 @@ class V620PPOTrainer:
         with torch.no_grad():
             last_bev = bev[-1:]
             last_pro = proprio[-1:]
+            last_rgb = rgb[-1:] if rgb is not None else None
             if self.use_amp:
                 with torch.amp.autocast('cuda', dtype=self.amp_dtype):
-                    _, _, last_value = self.policy(last_bev, last_pro)
+                    _, _, last_value = self.policy(last_bev, last_pro, last_rgb)
             else:
-                _, _, last_value = self.policy(last_bev, last_pro)
+                _, _, last_value = self.policy(last_bev, last_pro, last_rgb)
             last_value = last_value.float().squeeze()
 
             advantages = compute_gae(rewards, values, dones, last_value,
@@ -491,15 +517,16 @@ class V620PPOTrainer:
                 adv_b = advantages[idx]
                 old_lp_b = old_log_probs[idx]
                 old_val_b = values[idx]
+                rgb_b = rgb[idx] if rgb is not None else None
 
                 if self.use_amp:
                     with torch.amp.autocast('cuda', dtype=self.amp_dtype):
-                        action_mean, log_std, val = self.policy(bev_b, pro_b)
+                        action_mean, log_std, val = self.policy(bev_b, pro_b, rgb_b)
                         action_mean = action_mean.float()
                         log_std = log_std.float()
                         val = val.float()
                 else:
-                    action_mean, log_std, val = self.policy(bev_b, pro_b)
+                    action_mean, log_std, val = self.policy(bev_b, pro_b, rgb_b)
 
                 std = log_std.exp().clamp(min=1e-6, max=2.0)
                 var = std * std
