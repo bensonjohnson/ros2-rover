@@ -282,14 +282,15 @@ class V620PPOTrainer:
         t0 = time.time()
         n = len(rollout['rewards'])
         self.total_steps += n
+        _LOG2 = np.log(2.0)  # cached constant for tanh-squashed log_prob
         print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
 
-        # Convert to tensors on GPU
-        bev = torch.from_numpy(rollout['bev'].copy()).float().to(self.device)
-        proprio = torch.from_numpy(rollout['proprio'].copy()).float().to(self.device)
-        actions = torch.from_numpy(rollout['actions'].copy()).float().to(self.device)
-        rewards = torch.from_numpy(rollout['rewards'].copy()).float().to(self.device)
-        dones = torch.from_numpy(rollout['dones'].copy()).float().to(self.device)
+        # Convert to tensors on GPU (pin → non_blocking transfer)
+        bev = torch.from_numpy(rollout['bev']).float().pin_memory().to(self.device, non_blocking=True)
+        proprio = torch.from_numpy(rollout['proprio']).float().pin_memory().to(self.device, non_blocking=True)
+        actions = torch.from_numpy(rollout['actions']).float().pin_memory().to(self.device, non_blocking=True)
+        rewards = torch.from_numpy(rollout['rewards']).float().pin_memory().to(self.device, non_blocking=True)
+        dones = torch.from_numpy(rollout['dones']).float().pin_memory().to(self.device, non_blocking=True)
 
         # Track episodes from rollout
         for i in range(n):
@@ -326,37 +327,41 @@ class V620PPOTrainer:
                 acts_clamped = act_b.clamp(-0.999, 0.999)
                 raw_acts = torch.atanh(acts_clamped)
                 lp = dist.log_prob(raw_acts).sum(dim=-1)
-                lp -= (2 * (np.log(2) - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
+                lp -= (2 * (_LOG2 - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
 
                 old_log_probs[start:end] = lp
                 values[start:end] = val
 
         self.policy.train()
 
-        # 2. Compute GAE
+        # 2. Compute GAE (on CPU to avoid per-element GPU sync)
         print("  Computing GAE...")
-        advantages = torch.zeros(n, device=self.device)
-        last_gae = 0.0
-        # Bootstrap value for last step
         with torch.no_grad():
-            last_bev = bev[-1:].to(self.device)
-            last_pro = proprio[-1:].to(self.device)
+            last_bev = bev[-1:]
+            last_pro = proprio[-1:]
             if self.use_amp:
                 with torch.amp.autocast('cuda', dtype=self.amp_dtype):
                     _, _, last_value = self.policy(last_bev, last_pro)
             else:
                 _, _, last_value = self.policy(last_bev, last_pro)
-            last_value = last_value.float().item()
+            last_value = last_value.float()
 
+        # Move to CPU for fast sequential GAE scan
+        rewards_cpu = rewards.cpu().numpy()
+        dones_cpu = dones.cpu().numpy()
+        values_cpu = values.cpu().numpy()
+        last_val = last_value.item()
+
+        advantages_cpu = np.zeros(n, dtype=np.float32)
+        last_gae = 0.0
         for t in reversed(range(n)):
-            if t == n - 1:
-                next_value = last_value
-            else:
-                next_value = values[t + 1]
-            delta = rewards[t] + self.gamma * next_value * (1.0 - dones[t]) - values[t]
-            last_gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t]) * last_gae
-            advantages[t] = last_gae
+            next_val = last_val if t == n - 1 else values_cpu[t + 1]
+            not_done = 1.0 - dones_cpu[t]
+            delta = rewards_cpu[t] + self.gamma * next_val * not_done - values_cpu[t]
+            last_gae = delta + self.gamma * self.gae_lambda * not_done * last_gae
+            advantages_cpu[t] = last_gae
 
+        advantages = torch.from_numpy(advantages_cpu).to(self.device, non_blocking=True)
         returns = advantages + values
 
         # Normalize advantages
@@ -399,7 +404,7 @@ class V620PPOTrainer:
                 acts_clamped = act_b.clamp(-0.999, 0.999)
                 raw_actions = torch.atanh(acts_clamped)
                 new_log_probs = dist.log_prob(raw_actions).sum(dim=-1)
-                new_log_probs -= (2 * (np.log(2) - raw_actions - F.softplus(-2 * raw_actions))).sum(dim=-1)
+                new_log_probs -= (2 * (_LOG2 - raw_actions - F.softplus(-2 * raw_actions))).sum(dim=-1)
 
                 # PPO clipped objective
                 ratio = (new_log_probs - old_lp_b).exp()
@@ -415,7 +420,7 @@ class V620PPOTrainer:
 
                 loss = policy_loss + value_loss - self.entropy_coef * entropy
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
 
                 if self.use_amp and self.scaler is not None:
                     # FP16 path (ROCm / generic CUDA) — needs GradScaler
@@ -692,7 +697,7 @@ def main():
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
     parser.add_argument('--update_epochs', type=int, default=10)
-    parser.add_argument('--mini_batch_size', type=int, default=2048)
+    parser.add_argument('--mini_batch_size', type=int, default=256)
     parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
 

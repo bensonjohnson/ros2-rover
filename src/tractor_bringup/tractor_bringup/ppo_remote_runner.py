@@ -557,6 +557,8 @@ class PPORemoteRunner(Node):
         self._episode_reward_history = deque(maxlen=50)
         self._state_visits = {}
         self.MAX_EPISODE_STEPS = 512  # Episode step limit
+        self._episode_cooldown = 0  # Steps to wait before allowing next episode end
+        self.EPISODE_COOLDOWN_STEPS = 30  # ~1 second at 30Hz to recover
 
         # Stuck/slip detection
         self.stuck_detector = StuckDetector(stuck_threshold=0.15)
@@ -1241,14 +1243,12 @@ class PPORemoteRunner(Node):
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
 
-        # Episode done conditions:
-        # 1. Safety monitor blocked (drove too close to obstacle)
-        # 2. Stuck (no motion despite commands)
-        # 3. Step limit reached
-        # 4. Excessive spinning (full revolution without progress)
+        # Episode done conditions (with cooldown to prevent rapid-fire resets)
         episode_done = False
         done_reason = None
-        if monitor_blocking:
+        if self._episode_cooldown > 0:
+            self._episode_cooldown -= 1
+        elif monitor_blocking:
             episode_done = True
             done_reason = 'blocked'
         elif is_stuck:
@@ -1290,6 +1290,7 @@ class PPORemoteRunner(Node):
 
         # Episode boundary
         if episode_done:
+            self._episode_cooldown = self.EPISODE_COOLDOWN_STEPS
             self._trigger_episode_reset()
             self.phase_manager.record_training_episode(
                 reward=self._current_episode_reward,
