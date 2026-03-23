@@ -1005,7 +1005,7 @@ class PPORemoteRunner(Node):
 
         if wall_stopped:
             # Mild initial penalty that ramps up — gives agent time to learn to back out
-            ramp = min(self._wall_stop_steps / 90.0, 1.0)
+            ramp = min(self._wall_stop_steps / 450.0, 1.0)
             penalty = -0.2 - 0.5 * ramp
             if phase == 'exploration':
                 penalty *= 0.5
@@ -1252,7 +1252,7 @@ class PPORemoteRunner(Node):
         # The safety monitor already constrains to reverse-only (line 1234-1238),
         # giving the agent a chance to learn to back up and recover.
         # Only terminate if blocked for too long without escaping.
-        BLOCKED_GRACE_STEPS = 90  # ~3 seconds at 30Hz to back out
+        BLOCKED_GRACE_STEPS = 450  # ~15 seconds at 30Hz to back out
         episode_done = False
         done_reason = None
         if self._episode_cooldown > 0:
