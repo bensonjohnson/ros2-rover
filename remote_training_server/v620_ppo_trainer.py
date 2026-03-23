@@ -283,6 +283,17 @@ class V620PPOTrainer:
                 opset_version=18,
                 dynamic_axes={'bev': {0: 'batch'}, 'proprio': {0: 'batch'}}
             )
+
+            # Ensure all weights are embedded inline (not in external .data file)
+            # PyTorch's dynamo exporter sometimes creates external data files,
+            # but we need a single self-contained .onnx for ZMQ transfer
+            import onnx
+            data_file = onnx_path + ".data"
+            if os.path.exists(data_file):
+                model = onnx.load(onnx_path, load_external_data=True)
+                onnx.save(model, onnx_path, save_as_external_data=False)
+                os.remove(data_file)
+
             self.policy.train()
 
             if increment_version:
