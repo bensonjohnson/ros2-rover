@@ -156,12 +156,22 @@ class V620PPOTrainer:
             proprio_dim=self.proprio_dim
         ).to(self.device)
 
-        # Optimizer
-        self.optimizer = optim.Adam(
-            self.policy.parameters(),
-            lr=args.lr,
-            eps=1e-5
+        # Optimizer — separate param groups so value head can learn faster
+        # while policy stays stable during early value calibration
+        policy_params = (
+            list(self.policy.policy_net.parameters()) +
+            [self.policy.log_std]
         )
+        value_params = list(self.policy.value_net.parameters())
+        shared_params = (
+            list(self.policy.bev_encoder.parameters()) +
+            list(self.policy.proprio_encoder.parameters())
+        )
+        self.optimizer = optim.Adam([
+            {'params': shared_params, 'lr': args.lr},
+            {'params': policy_params, 'lr': args.lr},
+            {'params': value_params, 'lr': args.lr * 3},  # Value head learns 3x faster
+        ], eps=1e-5)
 
         # PPO hyperparameters
         self.clip_eps = args.clip_eps
@@ -172,7 +182,7 @@ class V620PPOTrainer:
         self.value_coef = 0.5
         self.vf_clip = 10.0  # Clip value loss to prevent huge gradients
         self.entropy_coef = 0.01
-        self.max_grad_norm = 0.5
+        self.max_grad_norm = 0.3
         self.target_kl = args.target_kl
 
         # State
@@ -354,6 +364,11 @@ class V620PPOTrainer:
             advantages = compute_gae(rewards, values, dones, last_value,
                                      self.gamma, self.gae_lambda)
         returns = advantages + values
+
+        # Normalize returns (keeps value targets in reasonable range)
+        ret_mean = returns.mean()
+        ret_std = returns.std() + 1e-8
+        returns = (returns - ret_mean) / ret_std
 
         # Normalize advantages
         adv_mean = advantages.mean()
@@ -729,7 +744,7 @@ def main():
     parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_ppo')
     parser.add_argument('--log_dir', type=str, default='./logs_ppo')
-    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
