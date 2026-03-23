@@ -215,6 +215,7 @@ class V620PPOTrainer:
         self.js = None
         self.nats_server = args.nats_server
         self.lock = threading.Lock()
+        self._server_start_time = time.time()
 
         # Load checkpoint if exists
         self._load_latest_checkpoint()
@@ -608,6 +609,14 @@ class V620PPOTrainer:
                     try:
                         print(f"Received rollout: {len(msg.data)} bytes")
                         rollout = deserialize_batch(msg.data)
+
+                        # Skip stale rollouts from before this server started
+                        rollout_ts = rollout.get('metadata', {}).get('timestamp', 0)
+                        if rollout_ts and rollout_ts < self._server_start_time:
+                            age = self._server_start_time - rollout_ts
+                            print(f"Skipping stale rollout (sent {age:.0f}s before server start)")
+                            await msg.ack()
+                            continue
 
                         n_steps = len(rollout['rewards'])
                         print(f"Rollout: {n_steps} steps")

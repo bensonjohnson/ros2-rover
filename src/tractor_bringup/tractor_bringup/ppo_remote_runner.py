@@ -1390,6 +1390,7 @@ class PPORemoteRunner(Node):
             'model_version': self._model_version,
             'total_steps': self._total_steps,
             'algorithm': 'ppo',
+            'timestamp': time.time(),
         }
 
         # Serialize in background thread, publish on NATS loop
