@@ -170,6 +170,7 @@ class V620PPOTrainer:
         self.update_epochs = args.update_epochs
         self.mini_batch_size = args.mini_batch_size
         self.value_coef = 0.5
+        self.vf_clip = 10.0  # Clip value loss to prevent huge gradients
         self.entropy_coef = 0.01
         self.max_grad_norm = 0.5
         self.target_kl = args.target_kl
@@ -302,12 +303,12 @@ class V620PPOTrainer:
         _LOG2 = np.log(2.0)  # cached constant for tanh-squashed log_prob
         print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
 
-        # Convert to tensors on GPU (pin → non_blocking transfer)
-        bev = torch.from_numpy(rollout['bev']).float().pin_memory().to(self.device, non_blocking=True)
-        proprio = torch.from_numpy(rollout['proprio']).float().pin_memory().to(self.device, non_blocking=True)
-        actions = torch.from_numpy(rollout['actions']).float().pin_memory().to(self.device, non_blocking=True)
-        rewards = torch.from_numpy(rollout['rewards']).float().pin_memory().to(self.device, non_blocking=True)
-        dones = torch.from_numpy(rollout['dones']).float().pin_memory().to(self.device, non_blocking=True)
+        # Convert to tensors on GPU (.copy() needed — deserialization yields read-only arrays)
+        bev = torch.from_numpy(rollout['bev'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+        proprio = torch.from_numpy(rollout['proprio'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+        actions = torch.from_numpy(rollout['actions'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+        rewards = torch.from_numpy(rollout['rewards'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+        dones = torch.from_numpy(rollout['dones'].copy()).float().pin_memory().to(self.device, non_blocking=True)
 
         # Track episodes from rollout (count on GPU, single sync)
         self.episode_count += int(dones.sum().item())
@@ -382,6 +383,7 @@ class V620PPOTrainer:
                 ret_b = returns[idx]
                 adv_b = advantages[idx]
                 old_lp_b = old_log_probs[idx]
+                old_val_b = values[idx]
 
                 if self.use_amp:
                     with torch.amp.autocast('cuda', dtype=self.amp_dtype):
@@ -415,8 +417,11 @@ class V620PPOTrainer:
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_b
                 policy_loss = -torch.min(surr1, surr2).mean()
 
-                # Value loss
-                value_loss = self.value_coef * (val - ret_b).pow(2).mean()
+                # Clipped value loss (prevents value network from destabilizing policy)
+                val_clipped = old_val_b + (val - old_val_b).clamp(-self.vf_clip, self.vf_clip)
+                vl_unclipped = (val - ret_b).pow(2)
+                vl_clipped = (val_clipped - ret_b).pow(2)
+                value_loss = self.value_coef * torch.max(vl_unclipped, vl_clipped).mean()
 
                 # Inline Normal entropy: 0.5 * log(2*pi*e*var) = 0.5 + 0.5*log(2*pi) + log(std)
                 entropy = (0.5 + 0.9189385332046727 + std.log()).sum(dim=-1).mean()
@@ -712,7 +717,7 @@ def main():
     parser.add_argument('--gae_lambda', type=float, default=0.95)
     parser.add_argument('--update_epochs', type=int, default=20)
     parser.add_argument('--mini_batch_size', type=int, default=256)
-    parser.add_argument('--target_kl', type=float, default=0.03)
+    parser.add_argument('--target_kl', type=float, default=0.04)
     parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
 
