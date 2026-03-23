@@ -512,6 +512,7 @@ class PPORemoteRunner(Node):
         self._model_version = 0
         self._update_count = 0
         self._total_steps = 0
+        self._boot_time = time.time()  # Reject NATS messages older than this
 
         # RKNN inference state
         self._rknn_runtime = None
@@ -1487,13 +1488,18 @@ class PPORemoteRunner(Node):
         self.js = self.nc.jetstream()
         self.get_logger().info('Connected to NATS')
 
-        # Check for existing model
+        # Check for existing model (ignore stale messages from before this boot)
         try:
             msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.metadata")
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
-            self.get_logger().info(f'Server has PPO model v{server_version}')
-            if server_version > self._model_version:
+            msg_timestamp = metadata.get("timestamp", 0)
+            if msg_timestamp < self._boot_time:
+                self.get_logger().info(
+                    f'Ignoring stale model v{server_version} '
+                    f'(published {self._boot_time - msg_timestamp:.0f}s before boot)')
+            elif server_version > self._model_version:
+                self.get_logger().info(f'Server has PPO model v{server_version}')
                 asyncio.create_task(self._download_model())
         except Exception as e:
             self.get_logger().info(f'No PPO model metadata yet: {e}')
@@ -1503,6 +1509,11 @@ class PPORemoteRunner(Node):
         try:
             metadata = deserialize_metadata(msg.data)
             server_version = metadata.get("latest_version", 0)
+            msg_timestamp = metadata.get("timestamp", 0)
+
+            # Ignore stale messages from before this boot
+            if msg_timestamp < self._boot_time:
+                return
 
             if server_version > self._model_version:
                 self.get_logger().info(f'New PPO model v{server_version} available')
