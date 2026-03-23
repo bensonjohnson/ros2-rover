@@ -40,6 +40,7 @@ import cv2
 from cv_bridge import CvBridge
 
 import zmq
+import zmq.asyncio
 import msgpack
 
 from tractor_bringup.serialization_utils import (
