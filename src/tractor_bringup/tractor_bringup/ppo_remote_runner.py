@@ -1572,7 +1572,9 @@ class PPORemoteRunner(Node):
                     else:
                         self.get_logger().error(f'RKNN load failed: {ret}')
                 else:
-                    self.get_logger().error(f'RKNN conversion failed: {result.stderr[:200]}')
+                    self.get_logger().error(f'RKNN conversion failed (no .rknn produced)')
+                    self.get_logger().error(f'STDOUT: {result.stdout[-500:]}')
+                    self.get_logger().error(f'STDERR: {result.stderr[-500:]}')
             else:
                 self.get_logger().warn('convert_onnx_to_rknn.sh not found')
         except Exception as e:
