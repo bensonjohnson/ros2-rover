@@ -606,11 +606,21 @@ class PPORemoteRunner(Node):
 
         # ZMQ state
         self._zmq_ctx = None
-        self._push_sock = None
         self._sub_sock = None
         self._zmq_connected = False
         self._zmq_loop = None
         self._stop_event = threading.Event()
+
+        # Synchronous PUSH socket (used from _send thread — must not be async)
+        self._push_ctx = zmq.Context()
+        self._push_sock = self._push_ctx.socket(zmq.PUSH)
+        self._push_sock.setsockopt(zmq.RECONNECT_IVL, 1000)
+        self._push_sock.setsockopt(zmq.LINGER, 5000)
+        self._push_sock.setsockopt(zmq.SNDHWM, 2)
+        push_addr = f"tcp://{self.server_addr}:{self.server_pull_port}"
+        self._push_sock.connect(push_addr)
+        self.get_logger().info(f'ZMQ PUSH connected to {push_addr}')
+
         self._zmq_thread = threading.Thread(target=self._run_zmq_loop, daemon=True)
         self._zmq_thread.start()
 
@@ -1397,16 +1407,13 @@ class PPORemoteRunner(Node):
         }
 
         # Serialize and send in background thread
+        # _push_sock is a plain zmq.Socket (not async) — safe to call from any thread
         def _send():
             try:
                 msg_bytes = serialize_batch(rollout)
                 msg_size_mb = len(msg_bytes) / (1024 * 1024)
                 self.get_logger().info(f'Rollout serialized: {msg_size_mb:.1f} MB')
-                # _push_sock is an async socket — must send via the ZMQ event loop
-                future = asyncio.run_coroutine_threadsafe(
-                    self._push_sock.send(msg_bytes), self._zmq_loop
-                )
-                future.result(timeout=30)  # block until sent or timeout
+                self._push_sock.send(msg_bytes)
                 self.get_logger().info('Rollout shipped successfully')
             except Exception as e:
                 self.get_logger().error(f'Rollout shipping failed: {e}')
@@ -1424,18 +1431,10 @@ class PPORemoteRunner(Node):
         asyncio.run(self._zmq_main())
 
     async def _zmq_main(self):
-        """Main ZMQ event loop — connects sockets and listens for model/status."""
+        """Main ZMQ event loop — connects SUB socket and listens for model/status."""
         try:
             self._zmq_loop = asyncio.get_running_loop()
             self._zmq_ctx = zmq.asyncio.Context()
-
-            # PUSH socket for sending rollouts to server
-            self._push_sock = self._zmq_ctx.socket(zmq.PUSH)
-            self._push_sock.setsockopt(zmq.RECONNECT_IVL, 1000)
-            self._push_sock.setsockopt(zmq.LINGER, 5000)
-            push_addr = f"tcp://{self.server_addr}:{self.server_pull_port}"
-            self._push_sock.connect(push_addr)
-            self.get_logger().info(f'ZMQ PUSH connected to {push_addr}')
 
             # SUB socket for receiving models + status from server
             self._sub_sock = self._zmq_ctx.socket(zmq.SUB)
@@ -1632,6 +1631,10 @@ class PPORemoteRunner(Node):
         self._stop_event.set()
         if self._zmq_thread.is_alive():
             self._zmq_thread.join(timeout=2.0)
+        if self._push_sock:
+            self._push_sock.close(linger=5000)
+        if self._push_ctx:
+            self._push_ctx.term()
         if self._dashboard_server:
             self._dashboard_server.shutdown()
         super().destroy_node()
