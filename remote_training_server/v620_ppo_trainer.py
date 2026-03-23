@@ -280,7 +280,7 @@ class V620PPOTrainer:
                 onnx_path,
                 input_names=['bev', 'proprio'],
                 output_names=['action_mean', 'log_std', 'value'],
-                opset_version=12,
+                opset_version=18,
                 dynamic_axes={'bev': {0: 'batch'}, 'proprio': {0: 'batch'}}
             )
             self.policy.train()
@@ -558,21 +558,26 @@ class V620PPOTrainer:
                 print(f"Stream setup: {e}")
 
         # PPO Model stream
+        models_config = StreamConfig(
+            name="ROVER_PPO_MODELS",
+            subjects=["models.ppo.update", "models.ppo.update.chunk", "models.ppo.metadata"],
+            retention="limits",
+            max_msgs=100,
+            max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
+            max_age=2592000,  # 30 days
+            max_msg_size=50 * 1024 * 1024,  # 50 MB
+            storage="file",
+            discard="old",
+        )
         try:
-            await self.js.add_stream(StreamConfig(
-                name="ROVER_PPO_MODELS",
-                subjects=["models.ppo.update", "models.ppo.update.chunk", "models.ppo.metadata"],
-                retention="limits",
-                max_msgs=100,
-                max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
-                max_age=2592000,  # 30 days
-                max_msg_size=50 * 1024 * 1024,  # 50 MB
-                storage="file",
-                discard="old",
-            ))
+            await self.js.add_stream(models_config)
             print("ROVER_PPO_MODELS stream ready")
         except Exception as e:
-            if "stream name already in use" not in str(e).lower():
+            if "stream name already in use" in str(e).lower():
+                # Stream exists with old config — update subjects
+                await self.js.update_stream(models_config)
+                print("ROVER_PPO_MODELS stream updated")
+            else:
                 print(f"Stream setup: {e}")
 
         # PPO Control stream
