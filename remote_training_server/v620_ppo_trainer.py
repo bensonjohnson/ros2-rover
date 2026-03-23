@@ -69,6 +69,22 @@ except ImportError:
     print("PhaseManager not available - phase-based curriculum disabled")
 
 
+@torch.jit.script
+def compute_gae(rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor,
+                last_value: torch.Tensor, gamma: float, gae_lambda: float) -> torch.Tensor:
+    """Compute GAE advantages with a compiled loop on GPU (no Python overhead)."""
+    n = rewards.shape[0]
+    advantages = torch.zeros_like(rewards)
+    last_gae = torch.tensor(0.0, device=rewards.device, dtype=rewards.dtype)
+    for t in range(n - 1, -1, -1):
+        next_val = last_value if t == n - 1 else values[t + 1]
+        not_done = 1.0 - dones[t]
+        delta = rewards[t] + gamma * next_val * not_done - values[t]
+        last_gae = delta + gamma * gae_lambda * not_done * last_gae
+        advantages[t] = last_gae
+    return advantages
+
+
 class V620PPOTrainer:
     """PPO Trainer optimized for V620 ROCm / CUDA GPU."""
 
@@ -292,49 +308,36 @@ class V620PPOTrainer:
         rewards = torch.from_numpy(rollout['rewards']).float().pin_memory().to(self.device, non_blocking=True)
         dones = torch.from_numpy(rollout['dones']).float().pin_memory().to(self.device, non_blocking=True)
 
-        # Track episodes from rollout
-        for i in range(n):
-            if rollout['dones'][i]:
-                self.episode_count += 1
+        # Track episodes from rollout (count on GPU, single sync)
+        self.episode_count += int(dones.sum().item())
 
-        # 1. Recompute log_probs and values from CURRENT PyTorch model
+        # 1. Recompute log_probs and values — single forward pass (fits in VRAM)
         print("  Recomputing log_probs from PyTorch model...")
-        old_log_probs = torch.zeros(n, device=self.device)
-        values = torch.zeros(n, device=self.device)
-
         self.policy.eval()
         with torch.no_grad():
-            for start in range(0, n, self.mini_batch_size):
-                end = min(start + self.mini_batch_size, n)
-                bev_b = bev[start:end]
-                pro_b = proprio[start:end]
-                act_b = actions[start:end]
+            if self.use_amp:
+                with torch.amp.autocast('cuda', dtype=self.amp_dtype):
+                    action_mean, log_std, values = self.policy(bev, proprio)
+            else:
+                action_mean, log_std, values = self.policy(bev, proprio)
 
-                if self.use_amp:
-                    with torch.amp.autocast('cuda', dtype=self.amp_dtype):
-                        action_mean, log_std, val = self.policy(bev_b, pro_b)
-                else:
-                    action_mean, log_std, val = self.policy(bev_b, pro_b)
+            action_mean = action_mean.float()
+            log_std = log_std.float()
+            values = values.float()
 
-                # Cast back to float32 for log_prob computation
-                action_mean = action_mean.float()
-                log_std = log_std.float()
-                val = val.float()
-
-                std = log_std.exp().clamp(min=1e-6, max=2.0)
-                dist = torch.distributions.Normal(action_mean, std)
-
-                acts_clamped = act_b.clamp(-0.999, 0.999)
-                raw_acts = torch.atanh(acts_clamped)
-                lp = dist.log_prob(raw_acts).sum(dim=-1)
-                lp -= (2 * (_LOG2 - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
-
-                old_log_probs[start:end] = lp
-                values[start:end] = val
+            std = log_std.exp().clamp(min=1e-6, max=2.0)
+            acts_clamped = actions.clamp(-0.999, 0.999)
+            raw_acts = torch.atanh(acts_clamped)
+            # Inline Normal log_prob: -0.5*((x-mu)/std)^2 - log(std) - 0.5*log(2*pi)
+            var = std * std
+            old_log_probs = (-0.5 * ((raw_acts - action_mean) ** 2) / var
+                             - std.log() - 0.9189385332046727).sum(dim=-1)
+            # Tanh squash correction
+            old_log_probs -= (2 * (_LOG2 - raw_acts - F.softplus(-2 * raw_acts))).sum(dim=-1)
 
         self.policy.train()
 
-        # 2. Compute GAE (on CPU to avoid per-element GPU sync)
+        # 2. Compute GAE (JIT-compiled loop on GPU — no CPU transfer needed)
         print("  Computing GAE...")
         with torch.no_grad():
             last_bev = bev[-1:]
@@ -344,24 +347,10 @@ class V620PPOTrainer:
                     _, _, last_value = self.policy(last_bev, last_pro)
             else:
                 _, _, last_value = self.policy(last_bev, last_pro)
-            last_value = last_value.float()
+            last_value = last_value.float().squeeze()
 
-        # Move to CPU for fast sequential GAE scan
-        rewards_cpu = rewards.cpu().numpy()
-        dones_cpu = dones.cpu().numpy()
-        values_cpu = values.cpu().numpy()
-        last_val = last_value.item()
-
-        advantages_cpu = np.zeros(n, dtype=np.float32)
-        last_gae = 0.0
-        for t in reversed(range(n)):
-            next_val = last_val if t == n - 1 else values_cpu[t + 1]
-            not_done = 1.0 - dones_cpu[t]
-            delta = rewards_cpu[t] + self.gamma * next_val * not_done - values_cpu[t]
-            last_gae = delta + self.gamma * self.gae_lambda * not_done * last_gae
-            advantages_cpu[t] = last_gae
-
-        advantages = torch.from_numpy(advantages_cpu).to(self.device, non_blocking=True)
+            advantages = compute_gae(rewards, values, dones, last_value,
+                                     self.gamma, self.gae_lambda)
         returns = advantages + values
 
         # Normalize advantages
@@ -371,9 +360,10 @@ class V620PPOTrainer:
 
         # 3. PPO epochs
         print(f"  Training: {self.update_epochs} epochs, mini-batch {self.mini_batch_size}")
-        total_policy_loss = 0.0
-        total_value_loss = 0.0
-        total_entropy = 0.0
+        # Accumulate on GPU — single sync at end instead of per-minibatch .item()
+        total_policy_loss = torch.tensor(0.0, device=self.device)
+        total_value_loss = torch.tensor(0.0, device=self.device)
+        total_entropy = torch.tensor(0.0, device=self.device)
         n_updates = 0
 
         for epoch in range(self.update_epochs):
@@ -399,11 +389,15 @@ class V620PPOTrainer:
                     action_mean, log_std, val = self.policy(bev_b, pro_b)
 
                 std = log_std.exp().clamp(min=1e-6, max=2.0)
-                dist = torch.distributions.Normal(action_mean, std)
+                var = std * std
 
                 acts_clamped = act_b.clamp(-0.999, 0.999)
                 raw_actions = torch.atanh(acts_clamped)
-                new_log_probs = dist.log_prob(raw_actions).sum(dim=-1)
+
+                # Inline Normal log_prob (avoids torch.distributions Python overhead)
+                new_log_probs = (-0.5 * ((raw_actions - action_mean) ** 2) / var
+                                 - std.log() - 0.9189385332046727).sum(dim=-1)
+                # Tanh squash correction
                 new_log_probs -= (2 * (_LOG2 - raw_actions - F.softplus(-2 * raw_actions))).sum(dim=-1)
 
                 # PPO clipped objective
@@ -415,8 +409,8 @@ class V620PPOTrainer:
                 # Value loss
                 value_loss = self.value_coef * (val - ret_b).pow(2).mean()
 
-                # Entropy bonus
-                entropy = dist.entropy().sum(dim=-1).mean()
+                # Inline Normal entropy: 0.5 * log(2*pi*e*var) = 0.5 + 0.5*log(2*pi) + log(std)
+                entropy = (0.5 + 0.9189385332046727 + std.log()).sum(dim=-1).mean()
 
                 loss = policy_loss + value_loss - self.entropy_coef * entropy
 
@@ -435,17 +429,18 @@ class V620PPOTrainer:
                     nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                     self.optimizer.step()
 
-                total_policy_loss += policy_loss.item()
-                total_value_loss += value_loss.item()
-                total_entropy += entropy.item()
+                total_policy_loss += policy_loss.detach()
+                total_value_loss += value_loss.detach()
+                total_entropy += entropy.detach()
                 n_updates += 1
 
         dt = time.time() - t0
         self.update_count += 1
 
-        avg_pl = total_policy_loss / max(n_updates, 1)
-        avg_vl = total_value_loss / max(n_updates, 1)
-        avg_ent = total_entropy / max(n_updates, 1)
+        # Single GPU→CPU sync for all three metrics
+        avg_pl = (total_policy_loss / max(n_updates, 1)).item()
+        avg_vl = (total_value_loss / max(n_updates, 1)).item()
+        avg_ent = (total_entropy / max(n_updates, 1)).item()
 
         print(f"  Done in {dt:.1f}s | PL: {avg_pl:.4f} | VL: {avg_vl:.4f} | Ent: {avg_ent:.4f}")
 
