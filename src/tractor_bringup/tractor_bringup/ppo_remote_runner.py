@@ -863,10 +863,13 @@ class PPORemoteRunner(Node):
             if linear_vel > 0.10:
                 reward += 0.15 * min(linear_vel / target_speed, 1.0)
 
-        # 3. Backward penalty
+        # 3. Backward penalty / recovery reward
         if linear_vel < -0.03:
             if slip_recovery_active:
                 reward += 0.1
+            elif safety_blocked or min_lidar_dist < 0.25:
+                # Reward reversing when blocked or very close to obstacle
+                reward += 0.2 * abs(linear_vel)
             else:
                 reward -= 0.15 + abs(linear_vel) * 0.8
 
@@ -1001,19 +1004,20 @@ class PPORemoteRunner(Node):
             reward += avoidance_base * streak_factor * vel_factor * clearance_factor
 
         if wall_stopped:
-            wall_stop_base = -0.5
-            ramp = min(self._wall_stop_steps / 60.0, 1.0)
-            penalty = wall_stop_base + (-0.3 * ramp)
+            # Mild initial penalty that ramps up — gives agent time to learn to back out
+            ramp = min(self._wall_stop_steps / 90.0, 1.0)
+            penalty = -0.2 - 0.5 * ramp
             if phase == 'exploration':
                 penalty *= 0.5
             elif phase == 'learning':
                 penalty *= 0.75
             reward += penalty
+            # Reward active recovery attempts while blocked
             rot_effort = abs(left_track - right_track)
             if rot_effort > 0.3:
-                reward += 0.15 * rot_effort
+                reward += 0.2 * rot_effort
             if linear_vel < -0.02:
-                reward += 0.10
+                reward += 0.25 * abs(linear_vel)
 
         self._prev_min_clearance = min_lidar_dist
         return np.clip(reward, -1.0, 1.0)
@@ -1244,11 +1248,16 @@ class PPORemoteRunner(Node):
                 delattr(self, '_slip_recovery_turn_dir')
 
         # Episode done conditions (with cooldown to prevent rapid-fire resets)
+        # Note: monitor_blocking no longer instantly ends the episode.
+        # The safety monitor already constrains to reverse-only (line 1234-1238),
+        # giving the agent a chance to learn to back up and recover.
+        # Only terminate if blocked for too long without escaping.
+        BLOCKED_GRACE_STEPS = 90  # ~3 seconds at 30Hz to back out
         episode_done = False
         done_reason = None
         if self._episode_cooldown > 0:
             self._episode_cooldown -= 1
-        elif monitor_blocking:
+        elif monitor_blocking and self._wall_stop_steps >= BLOCKED_GRACE_STEPS:
             episode_done = True
             done_reason = 'blocked'
         elif is_stuck:
