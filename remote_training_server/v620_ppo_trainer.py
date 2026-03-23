@@ -104,6 +104,13 @@ class V620PPOTrainer:
             total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             print(f"Using GPU: {gpu_name} ({total_mem:.1f}GB)")
 
+            # On unified memory (GB10/DGX Spark), limit PyTorch's allocation
+            # so it coexists with other GPU processes (e.g. vLLM)
+            if any(k in gpu_name for k in ('GB10', 'GB200', 'Grace')):
+                ppo_mem_gb = min(8.0, total_mem * 0.06)  # ~8GB ceiling for PPO
+                torch.cuda.set_per_process_memory_fraction(ppo_mem_gb / total_mem)
+                print(f"  Memory limit: {ppo_mem_gb:.1f}GB (of {total_mem:.1f}GB unified)")
+
             self._is_rocm = hasattr(torch.version, 'hip') and torch.version.hip is not None
             self._is_blackwell = any(k in gpu_name for k in ('B200', 'B100', 'GB10', 'GB200', 'Blackwell'))
 
@@ -227,8 +234,8 @@ class V620PPOTrainer:
         # Load checkpoint if exists
         self._load_latest_checkpoint()
 
-        # Export initial model (v1 so rover always picks it up on fresh start)
-        self._export_onnx(increment_version=True)
+        # Re-export ONNX from loaded weights (don't bump version on restart)
+        self._export_onnx(increment_version=(self.model_version == 0))
 
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"PPO Trainer initialized: {param_count:,} params")
