@@ -601,6 +601,8 @@ class PPORemoteRunner(Node):
 
         # Training/upload state
         self._uploading_rollout = False
+        self._awaiting_model = False
+        self._shipped_model_version = 0
         self._model_ready = True
         self._warmup_active = False
 
@@ -1041,8 +1043,8 @@ class PPORemoteRunner(Node):
     # ========== Control Loop ==========
 
     def _control_loop(self):
-        # Stop robot during rollout upload
-        if self._uploading_rollout:
+        # Stop robot during rollout upload or while waiting for updated model
+        if self._uploading_rollout or self._awaiting_model:
             stop_msg = Float32MultiArray()
             stop_msg.data = [0.0, 0.0]
             self.track_cmd_pub.publish(stop_msg)
@@ -1163,52 +1165,17 @@ class PPORemoteRunner(Node):
         proprio = normalize_proprio(proprio_raw)
 
         # 2. Inference
-        # Random warmup until first model arrives from server
+        # Wait for initial model from server before collecting any data
+        # PPO is on-policy: rollouts must come from the server's policy
         if self._model_version == 0:
             if not self._warmup_active:
                 self._warmup_active = True
-                self.get_logger().info('Random exploration warmup (waiting for server model)...')
-
-            rand_mode = np.random.rand()
-            if rand_mode < 0.30:
-                fast = np.random.uniform(0.5, 1.0)
-                slow = max(fast * np.random.uniform(0.5, 0.9), 0.3)
-                if np.random.rand() < 0.5:
-                    action_np = np.array([fast, slow])
-                else:
-                    action_np = np.array([slow, fast])
-            elif rand_mode < 0.55:
-                base = np.random.uniform(0.6, 1.0)
-                offset = np.random.uniform(0.15, 0.35)
-                slow = max(base - offset, 0.3)
-                if np.random.rand() < 0.5:
-                    action_np = np.array([base, slow])
-                else:
-                    action_np = np.array([slow, base])
-            elif rand_mode < 0.70:
-                speed = np.random.uniform(0.5, 1.0)
-                action_np = np.array([speed, speed])
-            elif rand_mode < 0.80:
-                spin = np.random.uniform(0.4, 0.6)
-                if np.random.rand() < 0.5:
-                    action_np = np.array([spin, -spin])
-                else:
-                    action_np = np.array([-spin, spin])
-            elif rand_mode < 0.90:
-                backup = np.random.uniform(0.3, 0.6)
-                action_np = np.array([-backup, -backup])
-            else:
-                action_np = np.array([np.random.uniform(-1, 1), np.random.uniform(-1, 1)])
-
-            # Safety speed scaling
-            clearance = lidar_min if lidar_min > 0.05 else self._min_forward_dist
-            if clearance < 0.2:
-                scale = 0.3
-            elif clearance < 0.5:
-                scale = 0.3 + 0.7 * (clearance - 0.2) / 0.3
-            else:
-                scale = 1.0
-            action_np = np.clip(action_np * scale, -1.0, 1.0)
+                self.get_logger().info('Waiting for initial model from server before starting...')
+            # Stop robot and skip this tick — don't collect off-policy data
+            stop_msg = Float32MultiArray()
+            stop_msg.data = [0.0, 0.0]
+            self.track_cmd_pub.publish(stop_msg)
+            return
         elif self._rknn_runtime is not None:
             # NPU inference (fast path)
             if self._warmup_active:
@@ -1335,7 +1302,7 @@ class PPORemoteRunner(Node):
             buffer_fill=self.buffer.size,
             buffer_capacity=self.rollout_steps,
             phase=self._get_current_phase(),
-            training_active=self._uploading_rollout,
+            training_active=self._uploading_rollout or self._awaiting_model,
             warmup_active=self._warmup_active,
             inference_backend=backend,
             zmq_connected=self._zmq_connected,
@@ -1388,7 +1355,12 @@ class PPORemoteRunner(Node):
             return
 
         self._uploading_rollout = True
-        self.get_logger().info(f'Shipping rollout ({self.buffer.size} steps) to server...')
+        self._awaiting_model = True
+        self._shipped_model_version = self._model_version
+        self.get_logger().info(
+            f'Shipping rollout ({self.buffer.size} steps, policy v{self._model_version}) to server. '
+            f'Rover will stop until updated model is received.'
+        )
 
         # Stop robot
         stop_msg = Float32MultiArray()
@@ -1450,19 +1422,28 @@ class PPORemoteRunner(Node):
             self.dashboard_stats.update(zmq_connected=True)
 
             # Listen for messages from server
+            poll_count = 0
             while not self._stop_event.is_set():
                 try:
-                    if await self._sub_sock.poll(timeout=100):
+                    if await self._sub_sock.poll(timeout=1000):
                         frames = await self._sub_sock.recv_multipart()
+                        self.get_logger().info(f'ZMQ SUB received {len(frames)} frames, topic={frames[0] if frames else "?"}')
                         if len(frames) >= 2:
                             topic = frames[0]
                             data = frames[1]
                             if topic == b"model":
+                                self.get_logger().info(f'Processing model message ({len(data)} bytes)')
                                 await self._handle_model_message(data)
                             elif topic == b"status":
                                 self._handle_status_message(data)
+                    else:
+                        poll_count += 1
+                        if poll_count % 30 == 0:
+                            self.get_logger().warn(f'ZMQ SUB: no messages received in {poll_count}s (server publishing?)')
                 except Exception as e:
                     self.get_logger().error(f'ZMQ recv error: {e}')
+                    import traceback
+                    traceback.print_exc()
                     await asyncio.sleep(1.0)
 
         except Exception as e:
@@ -1520,6 +1501,13 @@ class PPORemoteRunner(Node):
                 self._model_version = model_version
                 self._update_count = model_version
                 self.get_logger().info(f'Model v{model_version} received (no RKNN, exploration only)')
+
+            # Resume collection now that we have the updated policy
+            if self._awaiting_model and model_version > self._shipped_model_version:
+                self._awaiting_model = False
+                self.get_logger().info(
+                    f'New policy v{model_version} loaded, resuming rollout collection'
+                )
 
         except Exception as e:
             self.get_logger().error(f'Model handling failed: {e}')
