@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""PPO Remote Runner - Collects rollouts on rover, trains on V620 server.
+"""PPO Remote Runner - Collects rollouts on rover, trains on remote GPU server.
 
 Combines the sensor pipeline + RKNN inference from ppo_local_runner with
-NATS-based rollout shipping from sac_episode_runner. The rover collects
-a full PPO rollout (2048 steps), ships it to the V620 server for GPU training,
-and receives updated weights + RKNN model back.
+ZeroMQ-based rollout shipping. The rover collects a full PPO rollout
+(2048 steps), ships it to the GPU server for training, and receives
+updated ONNX models back.
 
 On-policy correctness: The rover stops after each rollout. The server
 recomputes log_probs from its PyTorch model, trains PPO, then sends
@@ -15,7 +15,7 @@ Architecture:
 - 6-dim proprioception
 - RKNN NPU inference (30Hz), PyTorch CPU fallback
 - Direct track control: [left_speed, right_speed] in [-1, 1]
-- NATS JetStream for rollout shipping + model updates
+- ZeroMQ PUSH/PULL for rollouts, PUB/SUB for model updates
 """
 
 import os
@@ -39,14 +39,11 @@ from rclpy.qos import qos_profile_sensor_data
 import cv2
 from cv_bridge import CvBridge
 
-import nats
+import zmq
+import msgpack
 
-# Serialization for NATS
 from tractor_bringup.serialization_utils import (
     serialize_batch, deserialize_batch,
-    serialize_model_update, deserialize_model_update,
-    serialize_model_chunks, deserialize_model_chunk,
-    serialize_metadata, deserialize_metadata,
     serialize_status, deserialize_status
 )
 
@@ -182,7 +179,7 @@ class DashboardStats:
             'warmup_active': False,
             'inference_backend': 'cpu',
             'rknn_converting': False,
-            'nats_connected': False,
+            'zmq_connected': False,
             'server_status': 'unknown',
             'uptime_s': 0,
             # Live sensor/control
@@ -292,7 +289,7 @@ h1{text-align:center;font-size:1.4em;margin-bottom:10px;color:#7eb8ff}
     <div class="stat-row"><span class="label">Uptime</span><span class="val" id="uptime">0s</span></div>
     <div class="stat-row"><span class="label">Throughput</span><span class="val" id="tps">0.0 steps/s</span></div>
     <div class="stat-row"><span class="label">Backend</span><span class="val" id="backend">cpu</span></div>
-    <div class="stat-row"><span class="label">NATS</span><span class="val" id="nats">disconnected</span></div>
+    <div class="stat-row"><span class="label">ZMQ</span><span class="val" id="zmq">disconnected</span></div>
     <div class="stat-row"><span class="label">Server</span><span class="val" id="server">unknown</span></div>
   </div>
   <div class="card">
@@ -381,9 +378,9 @@ async function poll(){
     be.textContent=d.rknn_converting?'Converting RKNN...':d.inference_backend.toUpperCase();
     be.style.color=d.inference_backend==='npu'?'#4ade80':d.rknn_converting?'#facc15':'#888';
 
-    const natsEl=document.getElementById('nats');
-    natsEl.textContent=d.nats_connected?'Connected':'Disconnected';
-    natsEl.style.color=d.nats_connected?'#4ade80':'#f87171';
+    const zmqEl=document.getElementById('zmq');
+    zmqEl.textContent=d.zmq_connected?'Connected':'Disconnected';
+    zmqEl.style.color=d.zmq_connected?'#4ade80':'#f87171';
     document.getElementById('server').textContent=d.server_status;
 
     document.getElementById('model-ver').textContent='v'+d.model_version;
@@ -483,13 +480,15 @@ def start_dashboard_server(stats: DashboardStats, port: int = 8080):
 # ============================================================================
 
 class PPORemoteRunner(Node):
-    """PPO runner: RKNN inference on rover, training on V620 via NATS."""
+    """PPO runner: RKNN inference on rover, training on remote GPU server via ZMQ."""
 
     def __init__(self):
         super().__init__('ppo_remote_runner')
 
         # Parameters
-        self.declare_parameter('nats_server', 'nats://nats.gokickrocks.org:4222')
+        self.declare_parameter('server_addr', '192.168.1.100')
+        self.declare_parameter('server_pull_port', 5555)
+        self.declare_parameter('server_pub_port', 5556)
         self.declare_parameter('max_linear_speed', 0.18)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('inference_rate_hz', 30.0)
@@ -497,7 +496,9 @@ class PPORemoteRunner(Node):
         self.declare_parameter('invert_linear_vel', False)
         self.declare_parameter('dashboard_port', 8080)
 
-        self.nats_server = str(self.get_parameter('nats_server').value)
+        self.server_addr = str(self.get_parameter('server_addr').value)
+        self.server_pull_port = int(self.get_parameter('server_pull_port').value)
+        self.server_pub_port = int(self.get_parameter('server_pub_port').value)
         self.max_linear = float(self.get_parameter('max_linear_speed').value)
         self.max_angular = float(self.get_parameter('max_angular_speed').value)
         self.inference_rate = float(self.get_parameter('inference_rate_hz').value)
@@ -512,7 +513,7 @@ class PPORemoteRunner(Node):
         self._model_version = 0
         self._update_count = 0
         self._total_steps = 0
-        self._boot_time = time.time()  # Reject NATS messages older than this
+        self._boot_time = time.time()
 
         # RKNN inference state
         self._rknn_runtime = None
@@ -602,14 +603,15 @@ class PPORemoteRunner(Node):
         self._model_ready = True
         self._warmup_active = False
 
-        # NATS state
-        self.nc = None
-        self.js = None
-        self._nats_connected = False
-        self._nats_loop = None  # Reference to NATS thread's event loop
+        # ZMQ state
+        self._zmq_ctx = None
+        self._push_sock = None
+        self._sub_sock = None
+        self._zmq_connected = False
+        self._zmq_loop = None
         self._stop_event = threading.Event()
-        self._nats_thread = threading.Thread(target=self._run_nats_loop, daemon=True)
-        self._nats_thread.start()
+        self._zmq_thread = threading.Thread(target=self._run_zmq_loop, daemon=True)
+        self._zmq_thread.start()
 
         # BEV processor
         self.occupancy_processor = UnifiedBEVProcessor(grid_size=128, max_range=4.0)
@@ -633,7 +635,7 @@ class PPORemoteRunner(Node):
         self.get_logger().info(
             f'PPO Remote Runner initialized: '
             f'rollout={self.rollout_steps}, '
-            f'NATS={self.nats_server}, '
+            f'server={self.server_addr}:{self.server_pull_port}/{self.server_pub_port}, '
             f'dashboard=http://0.0.0.0:{self.dashboard_port}'
         )
 
@@ -1324,7 +1326,7 @@ class PPORemoteRunner(Node):
             training_active=self._uploading_rollout,
             warmup_active=self._warmup_active,
             inference_backend=backend,
-            nats_connected=self._nats_connected,
+            zmq_connected=self._zmq_connected,
             linear_vel=float(current_linear),
             angular_vel=float(current_angular),
             left_track=float(left_track),
@@ -1367,9 +1369,9 @@ class PPORemoteRunner(Node):
     # ========== Rollout Shipping ==========
 
     def _ship_rollout(self):
-        """Ship the completed rollout to the V620 server via NATS."""
-        if not self._nats_connected:
-            self.get_logger().warn('NATS not connected, training locally is not supported. Discarding rollout.')
+        """Ship the completed rollout to the server via ZMQ."""
+        if not self._zmq_connected:
+            self.get_logger().warn('ZMQ not connected, discarding rollout.')
             self.buffer.clear()
             return
 
@@ -1393,22 +1395,14 @@ class PPORemoteRunner(Node):
             'timestamp': time.time(),
         }
 
-        # Serialize in background thread, publish on NATS loop
+        # Serialize and send in background thread
         def _send():
             try:
                 msg_bytes = serialize_batch(rollout)
                 msg_size_mb = len(msg_bytes) / (1024 * 1024)
                 self.get_logger().info(f'Rollout serialized: {msg_size_mb:.1f} MB')
-
-                # Schedule publish on the NATS event loop (where self.js lives)
-                if self._nats_loop is not None and self._nats_loop.is_running():
-                    future = asyncio.run_coroutine_threadsafe(
-                        self._publish_rollout(msg_bytes), self._nats_loop
-                    )
-                    future.result(timeout=30.0)  # Block until published
-                    self.get_logger().info('Rollout shipped successfully')
-                else:
-                    self.get_logger().error('NATS event loop not running, cannot publish')
+                self._push_sock.send(msg_bytes)
+                self.get_logger().info('Rollout shipped successfully')
             except Exception as e:
                 self.get_logger().error(f'Rollout shipping failed: {e}')
             finally:
@@ -1418,185 +1412,85 @@ class PPORemoteRunner(Node):
         thread = threading.Thread(target=_send, daemon=True)
         thread.start()
 
-    async def _publish_rollout(self, msg_bytes):
-        """Publish rollout to NATS JetStream."""
-        if self.js is None:
-            return
-        ack = await self.js.publish(
-            subject="rover.ppo.rollout",
-            payload=msg_bytes,
-            timeout=30.0
-        )
-        self.get_logger().info(f'Rollout published (seq={ack.seq})')
+    # ========== ZMQ Communication ==========
 
-    # ========== NATS Communication ==========
+    def _run_zmq_loop(self):
+        """Entry point for ZMQ background thread."""
+        asyncio.run(self._zmq_main())
 
-    def _run_nats_loop(self):
-        """Entry point for NATS background thread."""
-        asyncio.run(self._nats_main())
-
-    async def _nats_main(self):
-        """Main NATS async event loop."""
+    async def _zmq_main(self):
+        """Main ZMQ event loop — connects sockets and listens for model/status."""
         try:
-            self._nats_loop = asyncio.get_running_loop()
-            await self._connect_nats()
+            self._zmq_loop = asyncio.get_running_loop()
+            self._zmq_ctx = zmq.asyncio.Context()
 
-            # Subscribe to PPO model updates
-            await self.nc.subscribe("models.ppo.metadata", cb=self._on_model_metadata)
-            await self.nc.subscribe("server.ppo.status", cb=self._on_server_status)
+            # PUSH socket for sending rollouts to server
+            self._push_sock = self._zmq_ctx.socket(zmq.PUSH)
+            self._push_sock.setsockopt(zmq.RECONNECT_IVL, 1000)
+            self._push_sock.setsockopt(zmq.LINGER, 5000)
+            push_addr = f"tcp://{self.server_addr}:{self.server_pull_port}"
+            self._push_sock.connect(push_addr)
+            self.get_logger().info(f'ZMQ PUSH connected to {push_addr}')
 
-            self._nats_connected = True
-            self.dashboard_stats.update(nats_connected=True)
+            # SUB socket for receiving models + status from server
+            self._sub_sock = self._zmq_ctx.socket(zmq.SUB)
+            self._sub_sock.setsockopt(zmq.RECONNECT_IVL, 1000)
+            self._sub_sock.subscribe(b"model")
+            self._sub_sock.subscribe(b"status")
+            pub_addr = f"tcp://{self.server_addr}:{self.server_pub_port}"
+            self._sub_sock.connect(pub_addr)
+            self.get_logger().info(f'ZMQ SUB connected to {pub_addr}')
 
+            self._zmq_connected = True
+            self.dashboard_stats.update(zmq_connected=True)
+
+            # Listen for messages from server
             while not self._stop_event.is_set():
-                await asyncio.sleep(0.1)
+                try:
+                    if await self._sub_sock.poll(timeout=100):
+                        frames = await self._sub_sock.recv_multipart()
+                        if len(frames) >= 2:
+                            topic = frames[0]
+                            data = frames[1]
+                            if topic == b"model":
+                                await self._handle_model_message(data)
+                            elif topic == b"status":
+                                self._handle_status_message(data)
+                except Exception as e:
+                    self.get_logger().error(f'ZMQ recv error: {e}')
+                    await asyncio.sleep(1.0)
 
         except Exception as e:
-            self.get_logger().error(f"NATS loop error: {e}")
+            self.get_logger().error(f"ZMQ loop error: {e}")
             import traceback
             traceback.print_exc()
         finally:
-            self._nats_connected = False
-            self.dashboard_stats.update(nats_connected=False)
-            if self.nc:
-                await self.nc.close()
+            self._zmq_connected = False
+            self.dashboard_stats.update(zmq_connected=False)
+            if self._zmq_ctx:
+                self._zmq_ctx.destroy(linger=0)
 
-    async def _connect_nats(self):
-        """Connect to NATS server."""
-        self.get_logger().info(f'Connecting to NATS at {self.nats_server}...')
-
-        async def on_disconnected():
-            self._nats_connected = False
-            self.dashboard_stats.update(nats_connected=False)
-            self.get_logger().warn('NATS disconnected')
-
-        async def on_reconnected():
-            self._nats_connected = True
-            self.dashboard_stats.update(nats_connected=True)
-            self.get_logger().info('NATS reconnected')
-
-        self.nc = await nats.connect(
-            servers=[self.nats_server],
-            name="rover-ppo-client",
-            max_reconnect_attempts=-1,
-            reconnect_time_wait=2,
-            ping_interval=20,
-            max_outstanding_pings=3,
-            disconnected_cb=on_disconnected,
-            reconnected_cb=on_reconnected,
-        )
-
-        self.js = self.nc.jetstream()
-        self.get_logger().info('Connected to NATS')
-
-        # Check for existing model (ignore stale messages from before this boot)
+    async def _handle_model_message(self, data):
+        """Handle a model update from the server."""
         try:
-            msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.metadata")
-            metadata = deserialize_metadata(msg.data)
-            server_version = metadata.get("latest_version", 0)
-            msg_timestamp = metadata.get("timestamp", 0)
-            if msg_timestamp < self._boot_time:
-                self.get_logger().info(
-                    f'Ignoring stale model v{server_version} '
-                    f'(published {self._boot_time - msg_timestamp:.0f}s before boot)')
-            elif server_version > self._model_version:
-                self.get_logger().info(f'Server has PPO model v{server_version}')
-                asyncio.create_task(self._download_model())
-        except Exception as e:
-            self.get_logger().info(f'No PPO model metadata yet: {e}')
+            model_msg = msgpack.unpackb(data)
+            model_version = model_msg["version"]
+            onnx_bytes = model_msg["onnx_bytes"]
 
-    async def _on_model_metadata(self, msg):
-        """Callback when new PPO model metadata is published."""
-        try:
-            metadata = deserialize_metadata(msg.data)
-            server_version = metadata.get("latest_version", 0)
-            msg_timestamp = metadata.get("timestamp", 0)
-
-            # Ignore stale messages from before this boot
-            if msg_timestamp < self._boot_time:
+            if model_version <= self._model_version:
                 return
 
-            if server_version > self._model_version:
-                self.get_logger().info(f'New PPO model v{server_version} available')
-                asyncio.create_task(self._download_model())
-
-                # Update training stats from server if included
-                train_stats = metadata.get("train_stats", {})
-                if train_stats:
-                    self.dashboard_stats.append_training(
-                        train_stats.get('policy_loss', 0),
-                        train_stats.get('value_loss', 0),
-                        train_stats.get('entropy', 0),
-                        train_stats.get('train_time', 0),
-                    )
-
-        except Exception as e:
-            self.get_logger().error(f"Model metadata callback error: {e}")
-
-    async def _on_server_status(self, msg):
-        """Callback for server status updates."""
-        try:
-            status = deserialize_status(msg.data)
-            server_status = status.get("status", "unknown")
-            self.dashboard_stats.update(
-                server_status=server_status,
-                update_count=status.get("model_version", self._update_count),
-            )
-        except Exception:
-            pass
-
-    async def _download_model(self):
-        """Download and convert the latest model from server (chunked transfer)."""
-        try:
-            self.get_logger().info('Downloading PPO model from NATS...')
-
-            # Get metadata to know how many chunks to expect
-            meta_msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.metadata")
-            metadata = deserialize_metadata(meta_msg.data)
-            total_chunks = metadata.get("total_chunks", 0)
-            model_version = metadata.get("latest_version", 0)
-
-            if total_chunks == 0:
-                # Legacy single-message model (small models)
-                msg = await self.js.get_last_msg("ROVER_PPO_MODELS", "models.ppo.update")
-                model_data = deserialize_model_update(msg.data)
-                onnx_bytes = model_data["onnx_bytes"]
-                model_version = model_data["version"]
-            else:
-                # Chunked model — pull all chunks via subscription
-                self.get_logger().info(f'Downloading {total_chunks} chunks for model v{model_version}...')
-                psub = await self.js.pull_subscribe(
-                    subject="models.ppo.update.chunk",
-                    durable="ppo_model_chunks"
-                )
-
-                chunk_map = {}
-                attempts = 0
-                max_attempts = total_chunks * 3  # Allow retries
-                while len(chunk_map) < total_chunks and attempts < max_attempts:
-                    try:
-                        msgs = await psub.fetch(batch=min(total_chunks - len(chunk_map), 10), timeout=5.0)
-                        for m in msgs:
-                            chunk = deserialize_model_chunk(m.data)
-                            # Only accept chunks for the version we want
-                            if chunk["version"] == model_version:
-                                chunk_map[chunk["chunk_idx"]] = chunk["data"]
-                            await m.ack()
-                    except Exception:
-                        pass
-                    attempts += 1
-
-                if len(chunk_map) < total_chunks:
-                    self.get_logger().error(
-                        f'Missing chunks: got {len(chunk_map)}/{total_chunks}')
-                    return
-
-                # Reassemble in order
-                onnx_bytes = b''.join(chunk_map[i] for i in range(total_chunks))
-                self.get_logger().info(
-                    f'Reassembled model v{model_version}: {len(onnx_bytes)} bytes from {total_chunks} chunks')
-
             self.get_logger().info(f'Received model v{model_version}, ONNX: {len(onnx_bytes)} bytes')
+
+            # Update training stats from server if included
+            train_stats = model_msg.get("train_stats", {})
+            if train_stats:
+                self.dashboard_stats.append_training(
+                    train_stats.get('policy_loss', 0),
+                    train_stats.get('value_loss', 0),
+                    train_stats.get('entropy', 0),
+                    train_stats.get('train_time', 0),
+                )
 
             # Save ONNX
             onnx_path = self._temp_dir / "latest_model.onnx"
@@ -1605,7 +1499,7 @@ class PPORemoteRunner(Node):
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Convert to RKNN (run in executor to avoid blocking NATS loop)
+            # Convert to RKNN
             if HAS_RKNN:
                 self.get_logger().info('Converting to RKNN...')
                 self.dashboard_stats.update(rknn_converting=True)
@@ -1618,14 +1512,25 @@ class PPORemoteRunner(Node):
 
                 self.dashboard_stats.update(rknn_converting=False)
             else:
-                # No RKNN - just update version (will use random exploration)
                 self._model_version = model_version
                 self._update_count = model_version
                 self.get_logger().info(f'Model v{model_version} received (no RKNN, exploration only)')
 
         except Exception as e:
-            self.get_logger().error(f'Model download failed: {e}')
+            self.get_logger().error(f'Model handling failed: {e}')
             self.dashboard_stats.update(rknn_converting=False)
+
+    def _handle_status_message(self, data):
+        """Handle a status update from the server."""
+        try:
+            status = deserialize_status(data)
+            server_status = status.get("status", "unknown")
+            self.dashboard_stats.update(
+                server_status=server_status,
+                update_count=status.get("model_version", self._update_count),
+            )
+        except Exception:
+            pass
 
     # ========== RKNN Management ==========
 
@@ -1720,8 +1625,8 @@ class PPORemoteRunner(Node):
 
     def destroy_node(self):
         self._stop_event.set()
-        if self._nats_thread.is_alive():
-            self._nats_thread.join(timeout=2.0)
+        if self._zmq_thread.is_alive():
+            self._zmq_thread.join(timeout=2.0)
         if self._dashboard_server:
             self._dashboard_server.shutdown()
         super().destroy_node()

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # PPO Remote Autonomous Rover Startup Script
-# Rover collects rollouts via RKNN NPU inference, ships to V620 server via NATS
+# Rover collects rollouts via RKNN NPU inference, ships to GPU server via ZMQ
 
 echo "=================================================="
 echo "ROS2 Rover - PPO Remote Training (Unified BEV)"
@@ -13,21 +13,21 @@ if [ ! -f "install/setup.bash" ]; then
 fi
 
 # Configuration
-NATS_SERVER="nats://nats.gokickrocks.org:4222"
-MAX_SPEED=${1:-"0.18"}
-ROLLOUT_STEPS=${2:-"2048"}
+SERVER_ADDR=${1:-"192.168.1.100"}
+MAX_SPEED=${2:-"0.18"}
+ROLLOUT_STEPS=${3:-"2048"}
 
 echo "Configuration:"
-echo "  NATS Server: ${NATS_SERVER}"
+echo "  Server Address: ${SERVER_ADDR}"
 echo "  Max Speed: ${MAX_SPEED} m/s"
 echo "  Rollout Steps: ${ROLLOUT_STEPS}"
 echo "  Architecture: Unified BEV (LiDAR + Depth fusion)"
-echo "  Training: Remote PPO (V620 GPU server)"
+echo "  Training: Remote PPO (GPU server via ZMQ)"
 echo ""
 
 echo "WARNING: Rover will drive AUTONOMOUSLY!"
-echo "  - Rollouts collected on-device, trained on V620 server"
-echo "  - PPO ships ${ROLLOUT_STEPS}-step rollouts via NATS"
+echo "  - Rollouts collected on-device, trained on GPU server"
+echo "  - PPO ships ${ROLLOUT_STEPS}-step rollouts via ZMQ to ${SERVER_ADDR}"
 echo "  - Updated ONNX models downloaded automatically"
 echo "  - Early episodes use random exploration"
 echo "  - Keep emergency stop ready"
@@ -71,7 +71,7 @@ mkdir -p log
 LOG_FILE="log/ppo_remote_rover_$(date +%Y%m%d_%H%M%S).log"
 
 ros2 launch tractor_bringup ppo_remote_autonomous.launch.py \
-  nats_server:=${NATS_SERVER} \
+  server_addr:=${SERVER_ADDR} \
   max_speed:=${MAX_SPEED} \
   rollout_steps:=${ROLLOUT_STEPS} \
   2>&1 | tee "$LOG_FILE" &
@@ -87,7 +87,7 @@ echo ""
 echo "What's happening:"
 echo "  1. Rover runs PPO policy on NPU (30Hz)"
 echo "  2. Collects ${ROLLOUT_STEPS}-step rollouts (BEV + Proprioception)"
-echo "  3. Ships complete rollouts to V620 server via NATS"
+echo "  3. Ships complete rollouts to GPU server via ZMQ"
 echo "  4. Server trains PPO on GPU, sends updated ONNX model back"
 echo "  5. Rover converts ONNX to RKNN and resumes with new policy"
 echo ""

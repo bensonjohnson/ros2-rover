@@ -33,13 +33,13 @@ else
 fi
 
 # Configuration
-NATS_SERVER="nats://nats.gokickrocks.org:4222"
 CHECKPOINT_DIR=${1:-./checkpoints_ppo}
 LOG_DIR=${2:-./logs_ppo}
 
 echo ""
 echo "Configuration:"
-echo "  NATS Server: ${NATS_SERVER}"
+echo "  ZMQ PULL port: 5555 (rollouts from rover)"
+echo "  ZMQ PUB port:  5556 (models to rover)"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
 echo "  Architecture: Unified BEV (LiDAR + Depth fusion)"
@@ -63,7 +63,7 @@ echo "=================================================="
 echo ""
 echo "  1) Keep everything (default)"
 echo "  2) Delete PPO checkpoints only"
-echo "  3) Delete ALL (checkpoints + ONNX + purge NATS streams)"
+echo "  3) Delete ALL (checkpoints + ONNX)"
 echo ""
 read -rp "Select [1-3] (default: 1): " PRUNE_CHOICE
 PRUNE_CHOICE=${PRUNE_CHOICE:-1}
@@ -81,7 +81,6 @@ if [[ "${PRUNE_CHOICE}" =~ ^[2-3]$ ]]; then
     3)
       echo "  - PPO checkpoints (${PPO_COUNT} files)"
       echo "  - ONNX exports (${ONNX_COUNT} files)"
-      echo "  - NATS streams (ROVER_PPO_ROLLOUTS, ROVER_PPO_MODELS, ROVER_PPO_CONTROL)"
       ;;
   esac
 
@@ -91,18 +90,6 @@ if [[ "${PRUNE_CHOICE}" =~ ^[2-3]$ ]]; then
       2) rm -f "${CHECKPOINT_DIR}"/ppo_update_*.pt ;;
       3)
         rm -f "${CHECKPOINT_DIR}"/ppo_update_*.pt "${CHECKPOINT_DIR}"/*.onnx "${CHECKPOINT_DIR}"/latest.pt
-        # Purge NATS streams so rover doesn't see stale model versions
-        if command -v nats &> /dev/null; then
-          echo "Purging NATS streams..."
-          nats stream purge ROVER_PPO_ROLLOUTS -f -s "${NATS_SERVER}" 2>/dev/null && echo "  Purged ROVER_PPO_ROLLOUTS" || echo "  ROVER_PPO_ROLLOUTS: not found or already empty"
-          nats stream purge ROVER_PPO_MODELS -f -s "${NATS_SERVER}" 2>/dev/null && echo "  Purged ROVER_PPO_MODELS" || echo "  ROVER_PPO_MODELS: not found or already empty"
-          nats stream purge ROVER_PPO_CONTROL -f -s "${NATS_SERVER}" 2>/dev/null && echo "  Purged ROVER_PPO_CONTROL" || echo "  ROVER_PPO_CONTROL: not found or already empty"
-        else
-          echo "WARNING: 'nats' CLI not found — purge NATS streams manually:"
-          echo "  nats stream purge ROVER_PPO_ROLLOUTS -f"
-          echo "  nats stream purge ROVER_PPO_MODELS -f"
-          echo "  nats stream purge ROVER_PPO_CONTROL -f"
-        fi
         ;;
     esac
     echo "Cleanup complete"
@@ -120,7 +107,7 @@ echo ""
 echo "Checking required packages..."
 MISSING_PACKAGES=()
 python3 -c "import torch" 2>/dev/null || MISSING_PACKAGES+=("torch")
-python3 -c "import nats" 2>/dev/null || MISSING_PACKAGES+=("nats-py")
+python3 -c "import zmq" 2>/dev/null || MISSING_PACKAGES+=("pyzmq")
 python3 -c "import numpy" 2>/dev/null || MISSING_PACKAGES+=("numpy")
 python3 -c "import tensorboard" 2>/dev/null || MISSING_PACKAGES+=("tensorboard")
 python3 -c "import msgpack" 2>/dev/null || MISSING_PACKAGES+=("msgpack")
@@ -204,7 +191,6 @@ echo ""
 echo "Starting V620 PPO Trainer..."
 
 python3 -u v620_ppo_trainer.py \
-  --nats_server "${NATS_SERVER}" \
   --checkpoint_dir "${CHECKPOINT_DIR}" \
   --log_dir "${LOG_DIR}" \
   "$@" > >(tee "${LOG_FILE}") 2>&1 &

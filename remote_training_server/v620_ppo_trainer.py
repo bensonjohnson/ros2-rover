@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""V620 PPO Training Server for Remote Rover Training.
+"""PPO Training Server for Remote Rover Training.
 
-Receives complete PPO rollouts from the rover via NATS JetStream,
+Receives complete PPO rollouts from the rover via ZeroMQ,
 runs PPO training on GPU, and sends updated ONNX models back.
 
 Flow:
 1. Rover collects rollout (2048 steps) using RKNN NPU inference
-2. Rover ships rollout to this server via NATS
+2. Rover ships rollout to this server via ZMQ PUSH/PULL
 3. Server recomputes log_probs + values from its PyTorch model
 4. Server runs PPO update (10 epochs, FP16 AMP on GPU)
-5. Server exports ONNX and publishes model update back via NATS
+5. Server exports ONNX and publishes model update back via ZMQ PUB/SUB
 6. Rover downloads ONNX, converts to RKNN, loads on NPU
 7. Rover resumes driving with updated policy
 
@@ -39,8 +39,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
-import nats
-from nats.js.api import StreamConfig
+import zmq
+import zmq.asyncio
 
 # Import model architectures
 from model_architectures import UnifiedBEVPPOPolicy
@@ -49,8 +49,6 @@ from model_architectures import UnifiedBEVPPOPolicy
 from serialization_utils import (
     serialize_batch, deserialize_batch,
     serialize_model_update, deserialize_model_update,
-    serialize_model_chunks, deserialize_model_chunk,
-    serialize_metadata, deserialize_metadata,
     serialize_status, deserialize_status
 )
 
@@ -210,10 +208,12 @@ class V620PPOTrainer:
         else:
             self.phase_manager = None
 
-        # NATS
-        self.nc = None
-        self.js = None
-        self.nats_server = args.nats_server
+        # ZMQ
+        self.zmq_ctx = None
+        self.pull_sock = None
+        self.pub_sock = None
+        self.zmq_pull_port = args.zmq_pull_port
+        self.zmq_pub_port = args.zmq_pub_port
         self.lock = threading.Lock()
         self._server_start_time = time.time()
 
@@ -509,191 +509,77 @@ class V620PPOTrainer:
             'onnx_path': onnx_path,
         }
 
-    # ========== NATS Communication ==========
+    # ========== ZMQ Communication ==========
 
-    async def setup_nats(self):
-        """Connect to NATS and set up streams."""
-        print(f"Connecting to NATS at {self.nats_server}...")
+    def setup_zmq(self):
+        """Bind ZMQ sockets for rover communication."""
+        self.zmq_ctx = zmq.asyncio.Context()
 
-        async def on_disconnected():
-            print("NATS disconnected")
+        # PULL socket — receives rollouts from rover
+        self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
+        self.pull_sock.bind(f"tcp://*:{self.zmq_pull_port}")
+        print(f"ZMQ PULL bound on tcp://*:{self.zmq_pull_port}")
 
-        async def on_reconnected():
-            print("NATS reconnected")
-
-        self.nc = await nats.connect(
-            servers=[self.nats_server],
-            name="v620-ppo-trainer",
-            max_reconnect_attempts=-1,
-            reconnect_time_wait=2,
-            ping_interval=20,
-            max_outstanding_pings=3,
-            disconnected_cb=on_disconnected,
-            reconnected_cb=on_reconnected,
-        )
-
-        self.js = self.nc.jetstream()
-        print("Connected to NATS")
-
-        await self._ensure_streams()
-
-    async def _ensure_streams(self):
-        """Create NATS JetStream streams if they don't exist."""
-        # PPO Rollout stream
-        try:
-            await self.js.add_stream(StreamConfig(
-                name="ROVER_PPO_ROLLOUTS",
-                subjects=["rover.ppo.rollout"],
-                retention="limits",
-                max_msgs=100,
-                max_bytes=10 * 1024 * 1024 * 1024,  # 10 GB
-                max_age=604800,  # 7 days
-                max_msg_size=200 * 1024 * 1024,  # 200 MB
-                storage="file",
-                discard="old",
-            ))
-            print("ROVER_PPO_ROLLOUTS stream ready")
-        except Exception as e:
-            if "stream name already in use" not in str(e).lower():
-                print(f"Stream setup: {e}")
-
-        # PPO Model stream
-        models_config = StreamConfig(
-            name="ROVER_PPO_MODELS",
-            subjects=["models.ppo.update", "models.ppo.update.chunk", "models.ppo.metadata"],
-            retention="limits",
-            max_msgs=100,
-            max_bytes=2 * 1024 * 1024 * 1024,  # 2 GB
-            max_age=2592000,  # 30 days
-            max_msg_size=50 * 1024 * 1024,  # 50 MB
-            storage="file",
-            discard="old",
-        )
-        try:
-            await self.js.add_stream(models_config)
-            print("ROVER_PPO_MODELS stream ready")
-        except Exception as e:
-            if "stream name already in use" in str(e).lower():
-                # Stream exists with old config — update subjects
-                await self.js.update_stream(models_config)
-                print("ROVER_PPO_MODELS stream updated")
-            else:
-                print(f"Stream setup: {e}")
-
-        # PPO Control stream
-        try:
-            await self.js.add_stream(StreamConfig(
-                name="ROVER_PPO_CONTROL",
-                subjects=["server.ppo.status"],
-                retention="limits",
-                max_msgs=10000,
-                max_bytes=100 * 1024 * 1024,
-                max_age=86400,  # 24 hours
-                max_msg_size=1 * 1024 * 1024,
-                storage="file",
-                discard="old",
-            ))
-            print("ROVER_PPO_CONTROL stream ready")
-        except Exception as e:
-            if "stream name already in use" not in str(e).lower():
-                print(f"Stream setup: {e}")
+        # PUB socket — publishes models + status to rover
+        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
+        self.pub_sock.bind(f"tcp://*:{self.zmq_pub_port}")
+        print(f"ZMQ PUB bound on tcp://*:{self.zmq_pub_port}")
 
     async def consume_rollouts(self):
         """Consume PPO rollouts from rover and train."""
-        print("Starting rollout consumer...")
-
-        psub = await self.js.pull_subscribe(
-            subject="rover.ppo.rollout",
-            durable="ppo_trainer"
-        )
+        print("Waiting for rollouts...")
 
         while True:
             try:
-                msgs = await psub.fetch(batch=1, timeout=1.0)
-                for msg in msgs:
-                    try:
-                        print(f"Received rollout: {len(msg.data)} bytes")
-                        rollout = deserialize_batch(msg.data)
+                data = await self.pull_sock.recv()
+                print(f"Received rollout: {len(data)} bytes")
+                rollout = deserialize_batch(data)
 
-                        # Skip stale rollouts from before this server started
-                        rollout_ts = rollout.get('metadata', {}).get('timestamp', 0)
-                        if rollout_ts and rollout_ts < self._server_start_time:
-                            age = self._server_start_time - rollout_ts
-                            print(f"Skipping stale rollout (sent {age:.0f}s before server start)")
-                            await msg.ack()
-                            continue
+                n_steps = len(rollout['rewards'])
+                print(f"Rollout: {n_steps} steps")
 
-                        n_steps = len(rollout['rewards'])
-                        print(f"Rollout: {n_steps} steps")
+                # Train PPO
+                train_result = self.train_on_rollout(rollout)
 
-                        # Train PPO
-                        train_result = self.train_on_rollout(rollout)
+                # Publish updated model
+                if train_result['onnx_path'] and os.path.exists(train_result['onnx_path']):
+                    await self._publish_model(train_result)
 
-                        # Publish updated model
-                        if train_result['onnx_path'] and os.path.exists(train_result['onnx_path']):
-                            await self._publish_model(train_result)
+                print(f"Rollout processed, model v{self.model_version} published")
 
-                        # Acknowledge
-                        await msg.ack()
-                        print(f"Rollout processed, model v{self.model_version} published")
-
-                    except Exception as e:
-                        print(f"Error processing rollout: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        await msg.ack()
-
-            except nats.errors.TimeoutError:
-                await asyncio.sleep(0.1)
-                continue
             except Exception as e:
-                print(f"Consumer error: {e}")
+                print(f"Error processing rollout: {e}")
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(1.0)
 
     async def _publish_model(self, train_result):
-        """Publish updated ONNX model to NATS in chunks for rover to download."""
+        """Publish updated ONNX model to rover via ZMQ PUB."""
         try:
             onnx_path = train_result['onnx_path']
             with open(onnx_path, 'rb') as f:
                 onnx_bytes = f.read()
 
-            # Publish model as chunks (4MB each to stay under NATS max_payload)
-            chunks = serialize_model_chunks(onnx_bytes, self.model_version)
-            for i, chunk in enumerate(chunks):
-                await self.js.publish(
-                    subject="models.ppo.update.chunk",
-                    payload=chunk,
-                    timeout=30.0
-                )
-            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes, {len(chunks)} chunks)")
-
-            # Publish metadata with training stats + chunk info
             import msgpack
-            metadata = {
-                "latest_version": self.model_version,
+            model_msg = msgpack.packb({
+                "version": self.model_version,
+                "onnx_bytes": onnx_bytes,
                 "timestamp": time.time(),
-                "total_chunks": len(chunks),
-                "onnx_size": len(onnx_bytes),
                 "train_stats": {
                     'policy_loss': train_result['policy_loss'],
                     'value_loss': train_result['value_loss'],
                     'entropy': train_result['entropy'],
                     'train_time': train_result['train_time'],
                 },
-            }
-            await self.js.publish(
-                subject="models.ppo.metadata",
-                payload=msgpack.packb(metadata),
-                timeout=10.0
-            )
+            })
+            await self.pub_sock.send_multipart([b"model", model_msg])
+            print(f"Published model v{self.model_version} ({len(onnx_bytes)} bytes)")
 
         except Exception as e:
             print(f"Model publish failed: {e}")
 
     async def publish_status(self):
-        """Periodically publish training status."""
+        """Periodically publish training status via ZMQ PUB."""
         while True:
             try:
                 status_msg = serialize_status(
@@ -702,17 +588,13 @@ class V620PPOTrainer:
                     total_steps=self.total_steps,
                     update_count=self.update_count,
                 )
-                await self.js.publish(
-                    subject="server.ppo.status",
-                    payload=status_msg,
-                    timeout=5.0
-                )
+                await self.pub_sock.send_multipart([b"status", status_msg])
             except Exception:
                 pass
             await asyncio.sleep(5.0)
 
     async def _publish_initial_model(self):
-        """Publish the initial (v0) ONNX model so the rover can start immediately."""
+        """Publish the initial ONNX model so the rover can start immediately."""
         onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
         if not os.path.exists(onnx_path):
             return
@@ -728,7 +610,10 @@ class V620PPOTrainer:
 
     async def run(self):
         """Main async loop."""
-        await self.setup_nats()
+        self.setup_zmq()
+
+        # Small delay to let PUB socket settle before publishing
+        await asyncio.sleep(0.5)
 
         # Publish initial model so rover picks it up immediately
         await self._publish_initial_model()
@@ -758,7 +643,8 @@ class V620PPOTrainer:
 
 def main():
     parser = argparse.ArgumentParser(description='V620 PPO Training Server')
-    parser.add_argument('--nats_server', type=str, default='nats://nats.gokickrocks.org:4222')
+    parser.add_argument('--zmq_pull_port', type=int, default=5555)
+    parser.add_argument('--zmq_pub_port', type=int, default=5556)
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_ppo')
     parser.add_argument('--log_dir', type=str, default='./logs_ppo')
     parser.add_argument('--lr', type=float, default=1e-4)

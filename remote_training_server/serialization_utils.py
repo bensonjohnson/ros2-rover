@@ -111,30 +111,6 @@ def deserialize_model_update(data: bytes) -> dict:
     return msgpack.unpackb(data)
 
 
-def serialize_model_chunks(onnx_bytes: bytes, version: int, chunk_size: int = 4 * 1024 * 1024) -> list:
-    """Split ONNX model into chunks for NATS transfer.
-
-    Returns list of msgpack-encoded chunk messages.
-    """
-    total_size = len(onnx_bytes)
-    total_chunks = (total_size + chunk_size - 1) // chunk_size
-    chunks = []
-    for i in range(total_chunks):
-        start = i * chunk_size
-        end = min(start + chunk_size, total_size)
-        chunks.append(msgpack.packb({
-            "version": version,
-            "chunk_idx": i,
-            "total_chunks": total_chunks,
-            "data": onnx_bytes[start:end],
-        }))
-    return chunks
-
-
-def deserialize_model_chunk(data: bytes) -> dict:
-    """Deserialize a single model chunk message."""
-    return msgpack.unpackb(data)
-
 
 def serialize_metadata(version: int, timestamp: float) -> bytes:
     """

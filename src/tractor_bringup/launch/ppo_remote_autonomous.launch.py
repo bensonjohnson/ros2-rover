@@ -11,9 +11,9 @@ def generate_launch_description():
     realsense_dir = get_package_share_directory('realsense2_camera')
     tractor_sensors_dir = get_package_share_directory('tractor_sensors')
 
-    nats_server_arg = DeclareLaunchArgument(
-        'nats_server', default_value='nats://nats.gokickrocks.org:4222',
-        description='NATS server URL')
+    server_addr_arg = DeclareLaunchArgument(
+        'server_addr', default_value='192.168.1.100',
+        description='Training server IP address')
 
     max_speed_arg = DeclareLaunchArgument(
         'max_speed', default_value='0.18',
@@ -120,7 +120,7 @@ def generate_launch_description():
         name='ppo_remote_runner',
         output='screen',
         parameters=[{
-            'nats_server': LaunchConfiguration('nats_server'),
+            'server_addr': LaunchConfiguration('server_addr'),
             'max_linear_speed': LaunchConfiguration('max_speed'),
             'max_angular_speed': 1.0,
             'inference_rate_hz': 30.0,
@@ -129,7 +129,7 @@ def generate_launch_description():
         }])
 
     return LaunchDescription([
-        nats_server_arg,
+        server_addr_arg,
         max_speed_arg,
         invert_vel_arg,
         rollout_steps_arg,
