@@ -520,10 +520,11 @@ class V620PPOTrainer:
         self.pull_sock.bind(f"tcp://*:{self.zmq_pull_port}")
         print(f"ZMQ PULL bound on tcp://*:{self.zmq_pull_port}")
 
-        # PUB socket — publishes models + status to rover
-        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
+        # XPUB socket — publishes models + status, notifies on new subscriptions
+        self.pub_sock = self.zmq_ctx.socket(zmq.XPUB)
+        self.pub_sock.setsockopt(zmq.XPUB_VERBOSE, 1)  # notify on every subscribe, not just first
         self.pub_sock.bind(f"tcp://*:{self.zmq_pub_port}")
-        print(f"ZMQ PUB bound on tcp://*:{self.zmq_pub_port}")
+        print(f"ZMQ XPUB bound on tcp://*:{self.zmq_pub_port}")
 
     async def consume_rollouts(self):
         """Consume PPO rollouts from rover and train."""
@@ -579,8 +580,7 @@ class V620PPOTrainer:
             print(f"Model publish failed: {e}")
 
     async def publish_status(self):
-        """Periodically publish training status and current model via ZMQ PUB."""
-        last_model_published = 0
+        """Periodically publish training status via ZMQ XPUB."""
         while True:
             try:
                 status_msg = serialize_status(
@@ -590,22 +590,35 @@ class V620PPOTrainer:
                     update_count=self.update_count,
                 )
                 await self.pub_sock.send_multipart([b"status", status_msg])
-
-                # Re-publish current model periodically so late-joining rovers pick it up
-                if self.model_version > last_model_published:
-                    onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
-                    if os.path.exists(onnx_path):
-                        await self._publish_model({
-                            'onnx_path': onnx_path,
-                            'policy_loss': 0.0,
-                            'value_loss': 0.0,
-                            'entropy': 0.0,
-                            'train_time': 0.0,
-                        })
-                        last_model_published = self.model_version
             except Exception:
                 pass
             await asyncio.sleep(5.0)
+
+    async def watch_subscriptions(self):
+        """Listen for new SUB connections on XPUB and send them the current model."""
+        while True:
+            try:
+                event = await self.pub_sock.recv()
+                # XPUB subscription events: first byte 1=subscribe, 0=unsubscribe
+                # remaining bytes = topic
+                if len(event) > 0 and event[0] == 1:
+                    topic = event[1:].decode('utf-8', errors='replace')
+                    print(f"New subscriber for topic: '{topic}'")
+                    if topic == "model":
+                        print(f"Rover subscribed — sending current model v{self.model_version}")
+                        await asyncio.sleep(0.2)  # brief settle
+                        onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+                        if os.path.exists(onnx_path):
+                            await self._publish_model({
+                                'onnx_path': onnx_path,
+                                'policy_loss': 0.0,
+                                'value_loss': 0.0,
+                                'entropy': 0.0,
+                                'train_time': 0.0,
+                            })
+            except Exception as e:
+                print(f"Subscription watch error: {e}")
+                await asyncio.sleep(1.0)
 
     async def _publish_initial_model(self):
         """Publish the initial ONNX model so the rover can start immediately."""
@@ -634,6 +647,7 @@ class V620PPOTrainer:
 
         # Start background tasks
         asyncio.create_task(self.publish_status())
+        asyncio.create_task(self.watch_subscriptions())
 
         # Main loop: consume rollouts and train
         await self.consume_rollouts()
