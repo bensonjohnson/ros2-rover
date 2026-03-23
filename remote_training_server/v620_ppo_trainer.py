@@ -397,11 +397,12 @@ class V620PPOTrainer:
         print(f"\n--- PPO Update #{self.update_count + 1} ({n} steps) ---")
 
         # Convert to tensors on GPU (.copy() needed — deserialization yields read-only arrays)
-        bev = torch.from_numpy(rollout['bev'].copy()).float().pin_memory().to(self.device, non_blocking=True)
-        proprio = torch.from_numpy(rollout['proprio'].copy()).float().pin_memory().to(self.device, non_blocking=True)
-        actions = torch.from_numpy(rollout['actions'].copy()).float().pin_memory().to(self.device, non_blocking=True)
-        rewards = torch.from_numpy(rollout['rewards'].copy()).float().pin_memory().to(self.device, non_blocking=True)
-        dones = torch.from_numpy(rollout['dones'].copy()).float().pin_memory().to(self.device, non_blocking=True)
+        # No pin_memory() — GB10/Grace Blackwell uses unified memory (CPU/GPU shared)
+        bev = torch.from_numpy(rollout['bev'].copy()).float().to(self.device)
+        proprio = torch.from_numpy(rollout['proprio'].copy()).float().to(self.device)
+        actions = torch.from_numpy(rollout['actions'].copy()).float().to(self.device)
+        rewards = torch.from_numpy(rollout['rewards'].copy()).float().to(self.device)
+        dones = torch.from_numpy(rollout['dones'].copy()).float().to(self.device)
 
         # Track episodes from rollout (count on GPU, single sync)
         self.episode_count += int(dones.sum().item())
