@@ -208,8 +208,8 @@ class V620PPOTrainer:
         # Load checkpoint if exists
         self._load_latest_checkpoint()
 
-        # Export initial model
-        self._export_onnx(increment_version=False)
+        # Export initial model (v1 so rover always picks it up on fresh start)
+        self._export_onnx(increment_version=True)
 
         param_count = sum(p.numel() for p in self.policy.parameters())
         print(f"PPO Trainer initialized: {param_count:,} params")
@@ -679,9 +679,27 @@ class V620PPOTrainer:
                 pass
             await asyncio.sleep(5.0)
 
+    async def _publish_initial_model(self):
+        """Publish the initial (v0) ONNX model so the rover can start immediately."""
+        onnx_path = os.path.join(self.args.checkpoint_dir, "latest_actor.onnx")
+        if not os.path.exists(onnx_path):
+            return
+        train_result = {
+            'onnx_path': onnx_path,
+            'policy_loss': 0.0,
+            'value_loss': 0.0,
+            'entropy': 0.0,
+            'train_time': 0.0,
+        }
+        await self._publish_model(train_result)
+        print(f"Published initial model v{self.model_version}")
+
     async def run(self):
         """Main async loop."""
         await self.setup_nats()
+
+        # Publish initial model so rover picks it up immediately
+        await self._publish_initial_model()
 
         # Start background tasks
         asyncio.create_task(self.publish_status())
