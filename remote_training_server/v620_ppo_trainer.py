@@ -415,30 +415,19 @@ class V620PPOTrainer:
         # Track episodes from rollout (count on GPU, single sync)
         self.episode_count += int(dones.sum().item())
 
-        # 1. Recompute log_probs and values in chunks (full batch blows up memory
-        #    on unified memory systems where vLLM claims most of the pool)
+        # 1. Recompute log_probs and values — single forward pass
         print("  Recomputing log_probs from PyTorch model...")
         self.policy.eval()
-        RECOMPUTE_CHUNK = 256
-        all_action_mean = []
-        all_values = []
-        log_std = None
         with torch.no_grad():
-            for i in range(0, n, RECOMPUTE_CHUNK):
-                b = bev[i:i+RECOMPUTE_CHUNK]
-                p = proprio[i:i+RECOMPUTE_CHUNK]
-                if self.use_amp:
-                    with torch.amp.autocast('cuda', dtype=self.amp_dtype):
-                        am, ls, v = self.policy(b, p)
-                else:
-                    am, ls, v = self.policy(b, p)
-                all_action_mean.append(am.float())
-                all_values.append(v.float())
-                if log_std is None:
-                    log_std = ls.float()  # shared parameter, same for all chunks
+            if self.use_amp:
+                with torch.amp.autocast('cuda', dtype=self.amp_dtype):
+                    action_mean, log_std, values = self.policy(bev, proprio)
+            else:
+                action_mean, log_std, values = self.policy(bev, proprio)
 
-            action_mean = torch.cat(all_action_mean, dim=0)
-            values = torch.cat(all_values, dim=0)
+            action_mean = action_mean.float()
+            log_std = log_std.float()
+            values = values.float()
 
             std = log_std.exp().clamp(min=1e-6, max=2.0)
             acts_clamped = actions.clamp(-0.999, 0.999)
