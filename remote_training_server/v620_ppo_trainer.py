@@ -1130,7 +1130,7 @@ def main():
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
     parser.add_argument('--update_epochs', type=int, default=20)
-    parser.add_argument('--mini_batch_size', type=int, default=256)
+    parser.add_argument('--mini_batch_size', type=int, default=512)
     parser.add_argument('--target_kl', type=float, default=0.08)
     parser.add_argument('--checkpoint_interval', type=int, default=5)
     args = parser.parse_args()
