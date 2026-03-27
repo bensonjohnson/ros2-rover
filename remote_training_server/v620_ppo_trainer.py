@@ -471,7 +471,10 @@ class V620PPOTrainer:
         self.mini_batch_size = args.mini_batch_size
         self.value_coef = 0.5
         self.vf_clip = 10.0  # Clip value loss to prevent huge gradients
-        self.entropy_coef = 0.01
+        self.entropy_coef_init = 0.03
+        self.entropy_coef_final = 0.005
+        self.entropy_anneal_updates = 500  # linear decay over 500 updates
+        self.entropy_coef = self.entropy_coef_init
         self.max_grad_norm = 0.3
         self.target_kl = args.target_kl
 
@@ -548,7 +551,10 @@ class V620PPOTrainer:
         self.update_count = ckpt.get('update_count', 0)
         self.model_version = ckpt.get('model_version', self.update_count)
         self.episode_count = ckpt.get('episode_count', 0)
-        print(f"Restored: {self.total_steps} steps, v{self.model_version}")
+        # Recompute entropy coef from update_count for consistent annealing
+        frac = min(self.update_count / max(self.entropy_anneal_updates, 1), 1.0)
+        self.entropy_coef = self.entropy_coef_init + frac * (self.entropy_coef_final - self.entropy_coef_init)
+        print(f"Restored: {self.total_steps} steps, v{self.model_version}, entropy_coef={self.entropy_coef:.4f}")
 
     def _save_checkpoint(self):
         state = {
@@ -894,6 +900,10 @@ class V620PPOTrainer:
         dt = time.time() - t0
         self.update_count += 1
 
+        # Anneal entropy coefficient
+        frac = min(self.update_count / max(self.entropy_anneal_updates, 1), 1.0)
+        self.entropy_coef = self.entropy_coef_init + frac * (self.entropy_coef_final - self.entropy_coef_init)
+
         # Single GPU→CPU sync for all three metrics
         avg_pl = (total_policy_loss / max(n_updates, 1)).item()
         avg_vl = (total_value_loss / max(n_updates, 1)).item()
@@ -922,6 +932,7 @@ class V620PPOTrainer:
         self.writer.add_scalar('loss/policy', avg_pl, self.update_count)
         self.writer.add_scalar('loss/value', avg_vl, self.update_count)
         self.writer.add_scalar('loss/entropy', avg_ent, self.update_count)
+        self.writer.add_scalar('training/entropy_coef', self.entropy_coef, self.update_count)
         self.writer.add_scalar('training/total_steps', self.total_steps, self.update_count)
         self.writer.add_scalar('training/model_version', self.model_version, self.update_count)
         self.writer.add_scalar('training/train_time_s', dt, self.update_count)

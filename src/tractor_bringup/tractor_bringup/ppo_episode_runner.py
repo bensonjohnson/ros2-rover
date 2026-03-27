@@ -195,23 +195,28 @@ class PPOEpisodeRunner(Node):
         if linear_vel < -0.01:
             reward -= abs(linear_vel) * 20.0
 
-        # 3. CONDITIONAL Spinning Penalty (Context-Aware for Tank Steering)
-        if abs(linear_vel) < 0.05 and abs(angular_vel) > 0.3:
+        # 3. CONDITIONAL Spinning Penalty (Continuous — no hard threshold)
+        # Smooth quadratic penalty scales with angular vel; no cliff to exploit
+        if abs(linear_vel) < 0.05:
             min_side_clearance = min(self._left_clearance, self._right_clearance)
 
             if clearance > 1.0 and min_side_clearance > 0.8:
-                # Wide open space - penalize stationary spinning
-                reward -= 12.0 + (abs(angular_vel) * 3.0)
+                # Wide open space — strong continuous penalty
+                reward -= (abs(angular_vel) ** 2) * 30.0
             elif clearance < 0.5 or min_side_clearance < 0.4:
-                # Tight space - ALLOW point-turns (energy cost only)
-                reward -= abs(angular_vel) * 0.5
+                # Tight space — allow point-turns (energy cost only)
+                reward -= (abs(angular_vel) ** 2) * 2.0
                 # Bonus for turning toward open space
                 if (self._left_clearance < self._right_clearance and angular_vel > 0) or \
                    (self._right_clearance < self._left_clearance and angular_vel < 0):
                     reward += 2.0
             else:
-                # Medium clearance - moderate penalty
-                reward -= abs(angular_vel) * 3.0
+                # Medium clearance — moderate continuous penalty
+                reward -= (abs(angular_vel) ** 2) * 12.0
+
+        # 3b. Idling Penalty — standing still is not free
+        if abs(linear_vel) < 0.02 and abs(angular_vel) < 0.1:
+            reward -= 3.0
 
         # 4. Clearance Adaptation
         if clearance > 1.5:
