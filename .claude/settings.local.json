@@ -21,7 +21,8 @@
       "Bash(cat:*)",
       "Bash(ros2 node list:*)",
       "Bash(python3:*)",
-      "Bash(python3.12:*)"
+      "Bash(python3.12:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

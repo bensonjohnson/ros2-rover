@@ -26,3 +26,6 @@ hiwonder_motor_driver:
     odom_frame_id: "odom"
     base_frame_id: "base_link"
     odom_topic: "/odom"
+    # Disable TF broadcast - robot_localization EKF owns odom -> base_footprint.
+    # Dual TF publishers on the same edge is a silent source of "teleporting" bugs.
+    publish_tf: false

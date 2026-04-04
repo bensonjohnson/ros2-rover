@@ -13,8 +13,8 @@ slam_toolbox:
     # Consistent frame configuration across SLAM and Nav2
     odom_frame: odom
     map_frame: map  # Correct frame for SLAM
-    base_frame: base_footprint
-    scan_topic: /scan # From pointcloud_to_laserscan conversion
+    base_frame: base_link  # Consistent with Nav2; resolves via URDF base_footprint->base_link
+    scan_topic: /scan  # Real STL-19p LiDAR (launched from tractor_sensors)
     mode: mapping  # Enable mapping mode to create the map frame
 
     # If you want to use the lifecycle interface for slam toolbox, 
@@ -33,11 +33,11 @@ slam_toolbox:
     number_of_threads: 4  # Use 4 cores available
 
     # Performance tuning
-    max_laser_range: 4.0  # Reduced for better near-field accuracy
+    max_laser_range: 8.0  # Outdoor open yards (STL-19p reliable range ~6-8 m outdoors, 12 m spec)
     minimum_travel_distance: 0.2  # Increased from 0.15 for better stability
     minimum_travel_heading: 0.2   # Increased from 0.15 for better stability
     resolution: 0.05 # Must match costmap resolution
-    laser_min_range: 0.25 # Match pointcloud_to_laserscan min range
+    laser_min_range: 0.15  # STL-19p minimum reliable range
     tf_buffer_duration: 60.0 # Increased from 30.0 to 60.0 for better transform availability
     stack_size_to_use: 40000000 # Default 40000000
     enable_interactive_mode: true

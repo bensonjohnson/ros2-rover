@@ -1,18 +1,24 @@
 ### EKF Configuration for Tractor Robot Localization
 ### This provides sensor fusion of GPS, IMU, and wheel odometry
 
-# Local EKF - fuses wheel odometry and IMU for continuous localization
+# Local EKF - fuses wheel odometry, RF2O laser odometry, and IMU for continuous localization.
+# Publishes odom -> base_footprint. URDF provides the static base_footprint -> base_link
+# joint, so Nav2 / SLAM can still query base_link via the TF chain.
 ekf_filter_node:
   ros__parameters:
     # General parameters
     frequency: 30.0          # Filter update frequency (Hz)
     sensor_timeout: 0.1      # Timeout for sensor data (seconds)
     two_d_mode: true         # Operate in 2D mode (no z, roll, pitch estimation)
-    
+    publish_tf: true         # Own the odom -> base_footprint transform
+    publish_acceleration: false
+
     # Transform parameters
     map_frame: map
     odom_frame: odom
-    base_link_frame: base_link
+    # IMPORTANT: URDF has base_footprint -> base_link as a fixed joint, so EKF must
+    # estimate base_footprint to avoid base_link having two parents.
+    base_link_frame: base_footprint
     world_frame: odom        # For local EKF, world_frame should be odom
     
     # Process noise covariance (15x15 matrix)
@@ -110,11 +116,12 @@ ekf_filter_node_map:
     frequency: 10.0          # Lower frequency for GPS-based global localization
     sensor_timeout: 0.2      # Longer timeout for GPS
     two_d_mode: true         # Operate in 2D mode
-    
-    # Transform parameters  
+
+    # Transform parameters
     map_frame: map
     odom_frame: odom
-    base_link_frame: base_link
+    # Same reasoning as local EKF: URDF has base_footprint -> base_link static joint.
+    base_link_frame: base_footprint
     world_frame: map         # For global EKF, world_frame should be map
     
     # Process noise covariance - similar to local EKF but adjusted for GPS
@@ -188,7 +195,7 @@ navsat_transform_node:
     
     # Frame IDs
     frame_id: map
-    child_frame_id: base_link
+    child_frame_id: base_footprint
     
     # Topic remapping handled in launch file
     # Subscribes to: /gps/fix, /imu/data, /odometry/filtered
