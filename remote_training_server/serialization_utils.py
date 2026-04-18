@@ -47,6 +47,9 @@ def serialize_batch(batch: dict) -> bytes:
         "rewards": batch["rewards"].tolist(),
         "dones": batch["dones"].tolist(),
         "is_eval": is_eval_data,
+        # is_first flag per step (used by DreamerV3 to reset RSSM state on episode boundaries).
+        # Optional — old PPO rollouts without this key continue to work.
+        "is_first": batch.get("is_first", np.zeros(len(batch["rewards"]), dtype=bool)).tolist(),
         # Include metadata if present
         "metadata": batch.get("metadata", {}),
     }
@@ -85,6 +88,7 @@ def deserialize_batch(data: bytes) -> dict:
         "rewards": np.array(compressed["rewards"], dtype=np.float32),
         "dones": np.array(compressed["dones"], dtype=bool),
         "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
+        "is_first": np.array(compressed.get("is_first", [False]*len(compressed["rewards"])), dtype=bool),
         "metadata": compressed.get("metadata", {}),
     }
 

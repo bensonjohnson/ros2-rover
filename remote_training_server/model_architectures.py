@@ -7,6 +7,7 @@ training dependencies, making it safe to import on the rover for model conversio
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Tuple
 
 
@@ -1157,3 +1158,455 @@ class UnifiedBEVPPOPolicy(nn.Module):
             log_probs -= (2 * (np.log(2) - actions_sample - F.softplus(-2 * actions_sample))).sum(dim=-1)
 
         return actions, log_probs, value
+
+
+# =============================================================================
+# DreamerV3 World-Model Architecture (BEV + proprio + RGB)
+# =============================================================================
+#
+# Reuses UnifiedBEVEncoder, RGBEncoder, BEVDecoder from above.
+# Implements:
+#   - RSSM: deterministic GRU + stochastic categorical latent
+#   - DreamerWorldModel: encoder + RSSM + decoder/reward/continue heads
+#   - DreamerActor / DreamerCritic on latent state
+#   - DreamerActorOnnxWrapper: single-shot ONNX graph for rover NPU deployment
+#
+# Reference: https://github.com/danijar/dreamerv3 (JAX; this is a PyTorch port)
+# =============================================================================
+
+
+def symlog(x: torch.Tensor) -> torch.Tensor:
+    """Symmetric log: sign(x) * log(|x|+1). Compresses large magnitudes."""
+    return torch.sign(x) * torch.log1p(torch.abs(x))
+
+
+def symexp(x: torch.Tensor) -> torch.Tensor:
+    """Inverse of symlog."""
+    return torch.sign(x) * (torch.exp(torch.abs(x)) - 1.0)
+
+
+class OneHotDist:
+    """Straight-through categorical distribution used for the stochastic latent.
+
+    During the forward pass, returns a one-hot sample. Gradients flow through
+    the softmax probabilities (straight-through estimator). Matches the
+    behavior of DreamerV3's OneHotDist with 1% uniform mixing (unimix).
+    """
+
+    def __init__(self, logits: torch.Tensor, unimix: float = 0.01):
+        # logits: (..., classes)
+        if unimix > 0:
+            probs = F.softmax(logits, dim=-1)
+            uniform = torch.ones_like(probs) / probs.shape[-1]
+            probs = (1.0 - unimix) * probs + unimix * uniform
+            logits = torch.log(probs + 1e-10)
+        self.logits = logits
+        self.probs = F.softmax(logits, dim=-1)
+
+    def sample(self) -> torch.Tensor:
+        """Straight-through one-hot sample."""
+        # Gumbel-max style sampling
+        u = torch.rand_like(self.probs).clamp(1e-10, 1.0)
+        gumbel = -torch.log(-torch.log(u))
+        idx = (self.logits + gumbel).argmax(dim=-1)
+        one_hot = F.one_hot(idx, num_classes=self.probs.shape[-1]).float()
+        # Straight-through: forward uses one_hot, backward uses probs
+        return one_hot + self.probs - self.probs.detach()
+
+    def mode(self) -> torch.Tensor:
+        idx = self.probs.argmax(dim=-1)
+        return F.one_hot(idx, num_classes=self.probs.shape[-1]).float()
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        # value: (..., classes) one-hot. Sum log-probs over class dim.
+        log_probs = F.log_softmax(self.logits, dim=-1)
+        return (value * log_probs).sum(-1)
+
+    def entropy(self) -> torch.Tensor:
+        log_probs = F.log_softmax(self.logits, dim=-1)
+        return -(self.probs * log_probs).sum(-1)
+
+
+def kl_categorical(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tensor:
+    """KL(p || q) for categorical distributions. Reduces over the class dim only."""
+    p_logp = F.log_softmax(p_logits, dim=-1)
+    q_logp = F.log_softmax(q_logits, dim=-1)
+    p = p_logp.exp()
+    return (p * (p_logp - q_logp)).sum(-1)
+
+
+class RSSM(nn.Module):
+    """Recurrent State-Space Model (DreamerV3 style).
+
+    State consists of:
+      - h: deterministic hidden state (GRU) — (B, hidden_dim)
+      - z: stochastic latent (categorical) — (B, classes * groups) flattened
+           (grouped softmax: `groups` independent categoricals, each with `classes` values)
+
+    The prior p(z_t | h_t) is predicted from h alone (used in imagination).
+    The posterior q(z_t | h_t, obs_t) is predicted from h + observation features.
+    """
+
+    def __init__(
+        self,
+        obs_embed_dim: int,
+        action_dim: int = 2,
+        hidden_dim: int = 512,
+        classes: int = 32,
+        groups: int = 32,
+        mlp_hidden: int = 512,
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.classes = classes
+        self.groups = groups
+        self.stoch_dim = classes * groups
+
+        # Input to GRU: prev_z (flattened one-hot) + prev_action, projected
+        self.pre_gru = nn.Sequential(
+            nn.Linear(self.stoch_dim + action_dim, mlp_hidden),
+            nn.SiLU(),
+        )
+        self.gru = nn.GRUCell(mlp_hidden, hidden_dim)
+
+        # Prior: h -> z_logits
+        self.prior_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_hidden),
+            nn.SiLU(),
+            nn.Linear(mlp_hidden, self.stoch_dim),
+        )
+        # Posterior: h + obs_embed -> z_logits
+        self.post_mlp = nn.Sequential(
+            nn.Linear(hidden_dim + obs_embed_dim, mlp_hidden),
+            nn.SiLU(),
+            nn.Linear(mlp_hidden, self.stoch_dim),
+        )
+
+    def initial_state(self, batch: int, device) -> Tuple[torch.Tensor, torch.Tensor]:
+        h = torch.zeros(batch, self.hidden_dim, device=device)
+        z = torch.zeros(batch, self.stoch_dim, device=device)
+        return h, z
+
+    def step_deterministic(
+        self, prev_h: torch.Tensor, prev_z: torch.Tensor, prev_action: torch.Tensor
+    ) -> torch.Tensor:
+        """Advance GRU one step. Returns new h."""
+        x = self.pre_gru(torch.cat([prev_z, prev_action], dim=-1))
+        return self.gru(x, prev_h)
+
+    def prior_logits(self, h: torch.Tensor) -> torch.Tensor:
+        return self.prior_mlp(h).view(-1, self.groups, self.classes)
+
+    def post_logits(self, h: torch.Tensor, obs_embed: torch.Tensor) -> torch.Tensor:
+        return self.post_mlp(torch.cat([h, obs_embed], dim=-1)).view(-1, self.groups, self.classes)
+
+    def observe(
+        self,
+        obs_embeds: torch.Tensor,   # (B, T, obs_embed_dim)
+        actions: torch.Tensor,       # (B, T, action_dim)
+        is_first: torch.Tensor,      # (B, T) bool/float
+        init_state: Tuple[torch.Tensor, torch.Tensor] = None,
+    ):
+        """Unroll the RSSM over a trajectory with posterior updates.
+
+        Returns dict with:
+            h: (B, T, hidden_dim)
+            z: (B, T, stoch_dim)  — sampled posterior
+            prior_logits: (B, T, groups, classes)
+            post_logits:  (B, T, groups, classes)
+        """
+        B, T, _ = obs_embeds.shape
+        device = obs_embeds.device
+        if init_state is None:
+            h, z = self.initial_state(B, device)
+        else:
+            h, z = init_state
+
+        hs, zs, prior_lgs, post_lgs = [], [], [], []
+
+        # We need a "prev_action" at each step. Convention: action at index t was taken AFTER obs t-1.
+        # The paper uses prev_action for the GRU update to produce h_t, then obs_t informs posterior.
+        # Simpler convention used here: action[t] is the action produced at obs[t]. To compute h_t from
+        # h_{t-1}, we use action[t-1]. For t=0 we use zeros. is_first resets state.
+        prev_action = torch.zeros(B, actions.shape[-1], device=device)
+
+        for t in range(T):
+            # Reset-on-first: zero out h, z, prev_action where is_first[:, t] is True.
+            mask = (1.0 - is_first[:, t].float()).unsqueeze(-1)
+            h = h * mask
+            z = z * mask
+            pa = prev_action * mask
+
+            h = self.step_deterministic(h, z, pa)
+
+            prior_lg = self.prior_logits(h)
+            post_lg = self.post_logits(h, obs_embeds[:, t])
+            dist = OneHotDist(post_lg)
+            z_sample = dist.sample().view(B, self.stoch_dim)
+
+            hs.append(h)
+            zs.append(z_sample)
+            prior_lgs.append(prior_lg)
+            post_lgs.append(post_lg)
+
+            z = z_sample
+            prev_action = actions[:, t]
+
+        return {
+            'h': torch.stack(hs, dim=1),
+            'z': torch.stack(zs, dim=1),
+            'prior_logits': torch.stack(prior_lgs, dim=1),
+            'post_logits': torch.stack(post_lgs, dim=1),
+            'final_h': h,
+            'final_z': z,
+        }
+
+    def imagine(
+        self,
+        init_h: torch.Tensor,       # (B, hidden_dim)
+        init_z: torch.Tensor,       # (B, stoch_dim)
+        actor,                       # DreamerActor: maps (h, z) -> action_dist
+        horizon: int,
+    ):
+        """Roll out the policy in latent space using the learned dynamics (prior).
+
+        Returns:
+            hs, zs, actions, action_log_probs, action_entropies  (each (B, H, ...))
+        """
+        B = init_h.shape[0]
+        h, z = init_h, init_z
+
+        hs, zs, acts, logps, ents = [], [], [], [], []
+
+        for _ in range(horizon):
+            # Actor takes current (h, z) and produces an action
+            action, log_prob, entropy = actor.act(h, z, deterministic=False)
+            # Advance latent using prior (no observation)
+            h = self.step_deterministic(h, z, action)
+            prior_lg = self.prior_logits(h)
+            z = OneHotDist(prior_lg).sample().view(B, self.stoch_dim)
+
+            hs.append(h)
+            zs.append(z)
+            acts.append(action)
+            logps.append(log_prob)
+            ents.append(entropy)
+
+        return {
+            'h': torch.stack(hs, dim=1),
+            'z': torch.stack(zs, dim=1),
+            'actions': torch.stack(acts, dim=1),
+            'log_probs': torch.stack(logps, dim=1),
+            'entropies': torch.stack(ents, dim=1),
+        }
+
+
+class DreamerEncoder(nn.Module):
+    """Fuses BEV + RGB + proprio into a single observation embedding.
+
+    Output is (B, obs_embed_dim). Reuses UnifiedBEVEncoder (4096) and RGBEncoder (512).
+    """
+
+    def __init__(self, proprio_dim: int = 6, embed_dim: int = 1024):
+        super().__init__()
+        self.bev_encoder = UnifiedBEVEncoder(input_channels=2)
+        self.rgb_encoder = RGBEncoder()
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(proprio_dim, 128),
+            nn.SiLU(),
+            nn.Linear(128, 128),
+            nn.SiLU(),
+        )
+        fusion_dim = self.bev_encoder.output_dim + self.rgb_encoder.output_dim + 128
+        self.fuse = nn.Sequential(
+            nn.Linear(fusion_dim, embed_dim),
+            nn.SiLU(),
+        )
+        self._embed_dim = embed_dim
+
+    @property
+    def embed_dim(self):
+        return self._embed_dim
+
+    def forward(self, bev: torch.Tensor, proprio: torch.Tensor, rgb: torch.Tensor = None) -> torch.Tensor:
+        bev_f = self.bev_encoder(bev)
+        if rgb is None:
+            rgb = torch.zeros(bev.shape[0], 3, 84, 84, device=bev.device)
+        rgb_f = self.rgb_encoder(rgb)
+        pro_f = self.proprio_encoder(proprio)
+        return self.fuse(torch.cat([bev_f, rgb_f, pro_f], dim=-1))
+
+
+class DreamerWorldModel(nn.Module):
+    """Full world model: encoder + RSSM + decoder/reward/continue heads."""
+
+    def __init__(
+        self,
+        proprio_dim: int = 6,
+        action_dim: int = 2,
+        embed_dim: int = 1024,
+        hidden_dim: int = 512,
+        classes: int = 32,
+        groups: int = 32,
+    ):
+        super().__init__()
+        self.encoder = DreamerEncoder(proprio_dim=proprio_dim, embed_dim=embed_dim)
+        self.rssm = RSSM(
+            obs_embed_dim=embed_dim,
+            action_dim=action_dim,
+            hidden_dim=hidden_dim,
+            classes=classes,
+            groups=groups,
+        )
+        self.feat_dim = hidden_dim + self.rssm.stoch_dim
+
+        # BEV decoder: latent (h, z) → 2×128×128 logits
+        self.bev_decoder = BEVDecoder(latent_dim=self.feat_dim, output_channels=2)
+
+        # Proprio decoder (MSE on symlog)
+        self.proprio_decoder = nn.Sequential(
+            nn.Linear(self.feat_dim, 256),
+            nn.SiLU(),
+            nn.Linear(256, proprio_dim),
+        )
+
+        # Reward head (scalar, symlog-transformed target)
+        self.reward_head = nn.Sequential(
+            nn.Linear(self.feat_dim, 256),
+            nn.SiLU(),
+            nn.Linear(256, 1),
+        )
+
+        # Continue head (Bernoulli logit)
+        self.continue_head = nn.Sequential(
+            nn.Linear(self.feat_dim, 256),
+            nn.SiLU(),
+            nn.Linear(256, 1),
+        )
+
+        # Zero-init final layers of reward/continue for stable early training
+        nn.init.zeros_(self.reward_head[-1].weight)
+        nn.init.zeros_(self.reward_head[-1].bias)
+        nn.init.zeros_(self.continue_head[-1].weight)
+        nn.init.zeros_(self.continue_head[-1].bias)
+
+    def feat(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        return torch.cat([h, z], dim=-1)
+
+
+class DreamerActor(nn.Module):
+    """Actor on (h, z). Outputs tanh-squashed 2-D action with learned per-dim log-std."""
+
+    def __init__(self, feat_dim: int, action_dim: int = 2, hidden: int = 512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(feat_dim, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
+            nn.SiLU(),
+        )
+        self.mean_head = nn.Linear(hidden, action_dim)
+        self.log_std = nn.Parameter(torch.zeros(action_dim))
+        nn.init.orthogonal_(self.mean_head.weight, gain=0.1)
+        nn.init.zeros_(self.mean_head.bias)
+
+    def forward(self, h: torch.Tensor, z: torch.Tensor):
+        x = self.net(torch.cat([h, z], dim=-1))
+        mean = self.mean_head(x)
+        log_std = self.log_std.clamp(-5.0, 2.0)
+        return mean, log_std
+
+    def act(self, h: torch.Tensor, z: torch.Tensor, deterministic: bool = False):
+        """Sample tanh-squashed action with log-prob and entropy.
+
+        Returns:
+            action: (B, action_dim) in [-1, 1]
+            log_prob: (B,)
+            entropy: (B,) — underlying Gaussian entropy (pre-tanh; used as bonus)
+        """
+        mean, log_std = self.forward(h, z)
+        std = log_std.exp()
+        if deterministic:
+            raw = mean
+        else:
+            eps = torch.randn_like(mean)
+            raw = mean + std * eps
+        action = torch.tanh(raw)
+        # log prob of raw under Normal + tanh correction
+        var = std.pow(2)
+        log_prob = (-0.5 * ((raw - mean) ** 2) / var - log_std - 0.9189385332046727).sum(-1)
+        # tanh squash correction: log(1 - tanh(raw)^2) = 2*(log2 - raw - softplus(-2*raw))
+        log_prob = log_prob - (2 * (0.6931471805599453 - raw - F.softplus(-2 * raw))).sum(-1)
+        entropy = (0.5 + 0.9189385332046727 + log_std).sum(-1).expand(h.shape[0])
+        return action, log_prob, entropy
+
+
+class DreamerCritic(nn.Module):
+    """Scalar value head on (h, z). Predicts symlog-transformed λ-returns."""
+
+    def __init__(self, feat_dim: int, hidden: int = 512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(feat_dim, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, 1),
+        )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat([h, z], dim=-1)).squeeze(-1)
+
+
+class DreamerActorOnnxWrapper(nn.Module):
+    """Single-shot ONNX-exportable actor step.
+
+    Inputs:
+        bev:      (1, 2, 128, 128)
+        proprio:  (1, 6)
+        rgb:      (1, 3, 84, 84)
+        prev_h:   (1, hidden_dim)        -- RSSM deterministic state from previous tick
+        prev_z:   (1, stoch_dim)          -- RSSM stochastic latent from previous tick (soft probs)
+        prev_a:   (1, action_dim)         -- previous action (for GRU input)
+
+    Outputs:
+        action_mean: (1, action_dim)
+        log_std:     (action_dim,)
+        new_h:       (1, hidden_dim)
+        new_z:       (1, stoch_dim)       -- posterior *probabilities* (not sampled; deterministic for NPU)
+
+    The rover caches new_h and new_z between ticks and passes them in as prev_h/prev_z.
+    Sampling is skipped at deployment: we use the posterior mean (softmax probs) as the
+    stochastic latent, which is a standard Dreamer inference simplification.
+    """
+
+    def __init__(self, world_model: DreamerWorldModel, actor: DreamerActor):
+        super().__init__()
+        self.world_model = world_model
+        self.actor = actor
+
+    def forward(
+        self,
+        bev: torch.Tensor,
+        proprio: torch.Tensor,
+        rgb: torch.Tensor,
+        prev_h: torch.Tensor,
+        prev_z: torch.Tensor,
+        prev_a: torch.Tensor,
+    ):
+        # 1) Advance deterministic state using prev_z and prev_a
+        h = self.world_model.rssm.step_deterministic(prev_h, prev_z, prev_a)
+
+        # 2) Encode observation and compute posterior probs (not sampled — use softmax)
+        obs_embed = self.world_model.encoder(bev, proprio, rgb)
+        post_lg = self.world_model.rssm.post_logits(h, obs_embed)  # (B, groups, classes)
+        post_probs = F.softmax(post_lg, dim=-1)
+        B = bev.shape[0]
+        new_z = post_probs.view(B, self.world_model.rssm.stoch_dim)
+
+        # 3) Actor on (h, new_z)
+        mean, log_std = self.actor(h, new_z)
+        return mean, log_std, h, new_z
+
