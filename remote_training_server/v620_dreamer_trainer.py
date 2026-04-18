@@ -491,6 +491,8 @@ class V620DreamerTrainer:
             dummy_z = torch.zeros(1, rssm.stoch_dim, device=self.device)
             dummy_a = torch.zeros(1, self.action_dim, device=self.device)
 
+            # dynamo=False: nn.GRUCell uses _thnn_fused_gru_cell which has no
+            # fake-tensor impl; the legacy TorchScript exporter handles it fine.
             torch.onnx.export(
                 wrapper,
                 (dummy_bev, dummy_proprio, dummy_rgb, dummy_h, dummy_z, dummy_a),
@@ -502,6 +504,7 @@ class V620DreamerTrainer:
                     'bev': {0: 'batch'}, 'proprio': {0: 'batch'}, 'rgb': {0: 'batch'},
                     'prev_h': {0: 'batch'}, 'prev_z': {0: 'batch'}, 'prev_a': {0: 'batch'},
                 },
+                dynamo=False,
             )
 
             # Collapse external data file (required for ZMQ single-blob transport)
