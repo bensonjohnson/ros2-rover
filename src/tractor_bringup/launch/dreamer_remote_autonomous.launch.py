@@ -106,6 +106,8 @@ def generate_launch_description():
             'use_gps': 'false'
         }.items())
 
+    reward_weights_path = os.path.join(tractor_bringup_dir, 'config', 'reward_weights.yaml')
+
     dreamer_runner_node = Node(
         package='tractor_bringup',
         executable='dreamer_remote_runner',
@@ -118,6 +120,7 @@ def generate_launch_description():
             'inference_rate_hz': 30.0,
             'chunk_len': LaunchConfiguration('chunk_len'),
             'invert_linear_vel': LaunchConfiguration('invert_linear_vel'),
+            'reward_weights_path': reward_weights_path,
         }])
 
     return LaunchDescription([

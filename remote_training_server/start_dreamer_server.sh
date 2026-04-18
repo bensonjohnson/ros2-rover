@@ -71,6 +71,7 @@ PRUNE_CHOICE=${PRUNE_CHOICE:-1}
 if [[ "${PRUNE_CHOICE}" =~ ^[2-3]$ ]]; then
   CKPT_COUNT=$(find "${CHECKPOINT_DIR}" -maxdepth 1 -name "dreamer_update_*.pt" 2>/dev/null | wc -l | tr -d ' ')
   ONNX_COUNT=$(find "${CHECKPOINT_DIR}" -maxdepth 1 -name "*.onnx" 2>/dev/null | wc -l | tr -d ' ')
+  HAS_SIMHASH=$([ -f "${CHECKPOINT_DIR}/lifetime_simhash.pkl" ] && echo yes || echo no)
 
   echo ""
   echo "The following will be deleted:"
@@ -81,6 +82,7 @@ if [[ "${PRUNE_CHOICE}" =~ ^[2-3]$ ]]; then
     3)
       echo "  - Dreamer checkpoints (${CKPT_COUNT} files)"
       echo "  - ONNX exports (${ONNX_COUNT} files)"
+      echo "  - Lifetime SimHash novelty memory (${HAS_SIMHASH})"
       ;;
   esac
 
@@ -89,7 +91,7 @@ if [[ "${PRUNE_CHOICE}" =~ ^[2-3]$ ]]; then
     case "${PRUNE_CHOICE}" in
       2) rm -f "${CHECKPOINT_DIR}"/dreamer_update_*.pt ;;
       3)
-        rm -f "${CHECKPOINT_DIR}"/dreamer_update_*.pt "${CHECKPOINT_DIR}"/*.onnx "${CHECKPOINT_DIR}"/latest_dreamer.pt "${CHECKPOINT_DIR}"/latest_dreamer.onnx
+        rm -f "${CHECKPOINT_DIR}"/dreamer_update_*.pt "${CHECKPOINT_DIR}"/*.onnx "${CHECKPOINT_DIR}"/latest_dreamer.pt "${CHECKPOINT_DIR}"/latest_dreamer.onnx "${CHECKPOINT_DIR}"/lifetime_simhash.pkl
         ;;
     esac
     echo "Cleanup complete"

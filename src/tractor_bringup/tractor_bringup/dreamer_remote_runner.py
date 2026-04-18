@@ -56,7 +56,14 @@ from std_msgs.msg import Float32, Bool, Float32MultiArray
 from std_srvs.srv import Trigger
 
 from tractor_bringup.occupancy_processor import UnifiedBEVProcessor
-from tractor_bringup.phase_manager import PhaseManager
+from tractor_bringup.coverage_tracker import CoverageTracker
+from tractor_bringup.episodic_novelty import EpisodicNovelty
+
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 PROPRIO_MEAN = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 PROPRIO_STD = np.array([2.0, 1.0, 1.0, 0.2, 1.0, 1.0], dtype=np.float32)
@@ -81,18 +88,24 @@ def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
 # ============================================================================
 
 class ChunkBuffer:
-    """Short-horizon buffer for Dreamer. Ships every `chunk_len` steps."""
+    """Short-horizon buffer for Dreamer. Ships every `chunk_len` steps.
 
-    def __init__(self, chunk_len: int, proprio_dim: int = 6):
+    Rewards are multi-channel: (T, K). Channel order:
+        0 = coverage, 1 = frontier, 2 = collision, 3 = episodic novelty.
+    P2E intrinsic and lifetime modulator are server-side only.
+    """
+
+    def __init__(self, chunk_len: int, proprio_dim: int = 6, reward_dim: int = 4):
         self.chunk_len = chunk_len
         self.capacity = chunk_len + 16  # small slack
+        self.reward_dim = reward_dim
         self.ptr = 0
         self.size = 0
         self.bev = np.zeros((self.capacity, 2, 128, 128), dtype=np.uint8)
         self.rgb = np.zeros((self.capacity, 3, 84, 84), dtype=np.uint8)
         self.proprio = np.zeros((self.capacity, proprio_dim), dtype=np.float32)
         self.actions = np.zeros((self.capacity, 2), dtype=np.float32)
-        self.rewards = np.zeros((self.capacity,), dtype=np.float32)
+        self.rewards = np.zeros((self.capacity, reward_dim), dtype=np.float32)
         self.dones = np.zeros((self.capacity,), dtype=np.bool_)
         self.is_first = np.zeros((self.capacity,), dtype=np.bool_)
 
@@ -105,7 +118,10 @@ class ChunkBuffer:
             self.rgb[i] = 0
         self.proprio[i] = proprio
         self.actions[i] = action
-        self.rewards[i] = reward
+        r = np.asarray(reward, dtype=np.float32)
+        if r.ndim == 0:
+            r = np.broadcast_to(r, (self.reward_dim,))
+        self.rewards[i] = r
         self.dones[i] = done
         self.is_first[i] = is_first
         self.ptr = (self.ptr + 1) % self.capacity
@@ -174,7 +190,6 @@ class DashboardStats:
             'buffer_fill': 0,
             'buffer_capacity': 0,
             'chunks_shipped': 0,
-            'phase': 'exploration',
             'inference_backend': 'cpu',
             'rknn_converting': False,
             'zmq_connected': False,
@@ -386,6 +401,7 @@ class DreamerRemoteRunner(Node):
         self.declare_parameter('chunk_len', 64)
         self.declare_parameter('invert_linear_vel', False)
         self.declare_parameter('dashboard_port', 8080)
+        self.declare_parameter('reward_weights_path', '')
 
         self.server_addr = str(self.get_parameter('server_addr').value)
         self.server_pull_port = int(self.get_parameter('server_pull_port').value)
@@ -396,8 +412,22 @@ class DreamerRemoteRunner(Node):
         self.chunk_len = int(self.get_parameter('chunk_len').value)
         self.invert_linear_vel = bool(self.get_parameter('invert_linear_vel').value)
         self.dashboard_port = int(self.get_parameter('dashboard_port').value)
+        self._reward_weights_path = str(self.get_parameter('reward_weights_path').value)
 
-        self.buffer = ChunkBuffer(chunk_len=self.chunk_len, proprio_dim=6)
+        # Reward channel order is load-bearing: must match REWARD_CHANNELS in
+        # remote_training_server/model_architectures.py.
+        self.REWARD_CHANNEL_ORDER = ('coverage', 'frontier', 'collision', 'episodic')
+        self._reward_clip = {
+            'coverage': (0.0, 0.5),
+            'frontier': (-0.1, 0.1),
+            'episodic': (0.0, 1.0),
+        }
+        self._load_reward_clip()
+
+        self.buffer = ChunkBuffer(
+            chunk_len=self.chunk_len, proprio_dim=6,
+            reward_dim=len(self.REWARD_CHANNEL_ORDER),
+        )
 
         self._model_version = 0
         self._update_count = 0
@@ -431,7 +461,6 @@ class DreamerRemoteRunner(Node):
         self._latest_rf2o_odom = None
         self._latest_imu = None
         self._latest_wheel_vels = None
-        self._min_forward_dist = 10.0
         self._safety_override = False
         self._velocity_confidence = 1.0
         self._latest_fused_yaw = 0.0
@@ -439,43 +468,24 @@ class DreamerRemoteRunner(Node):
         self._curriculum_max_speed = self.max_linear
         self._prev_action = np.array([0.0, 0.0])
         self._prev_linear_cmds = deque(maxlen=20)
-        self._prev_actions_buffer = deque(maxlen=30)
 
-        self._target_heading = 0.0
-        self._bev_heading = 0.0
-
-        self.phase_manager = PhaseManager(initial_phase='exploration')
         self._current_episode_length = 0
         self._current_episode_reward = 0.0
         self._episode_reward_history = deque(maxlen=50)
-        self._state_visits = {}
         self.MAX_EPISODE_STEPS = 512
 
+        # Stuck/slip detectors remain alive — but only as recovery triggers.
+        # They no longer write to reward or set `done`. Preserving persistent
+        # RSSM state across these events lets the world model learn escapes.
         self.stuck_detector = StuckDetector(stuck_threshold=0.05)
         self._is_stuck = False
-        self._consecutive_idle_steps = 0
-        self._intent_without_motion_count = 0
-        self._prev_min_clearance = 10.0
-        self._steps_in_tight_space = 0
-        self._steps_since_wall_stop = 0
-        self._wall_stop_active = False
-        self._wall_stop_steps = 0
         # Post-reset cooldown: suppress termination + clear stale stuck history
         # right after an episode boundary so we don't spin-loop on persistently
-        # blocked physical states. 90 steps ~= 3s at 30Hz.
+        # blocked physical states.
         self._post_reset_cooldown_steps = 30
         self._post_reset_cooldown = 0
-        # Scripted recovery: when wall-pinned, override the actor with a
-        # reverse+turn burst so replay gets real transitions showing how
-        # clearance increases from backing up. Without this, the world model
-        # never sees unsticking and can't imagine recovery.
         self._recovery_steps_remaining = 0
         self._recovery_turn_dir = 0.0
-        self._cumulative_rotation = 0.0
-        self._last_yaw_for_rotation = None
-        self._forward_progress_threshold = 0.3
-        self._last_position_for_rotation = None
-        self._revolution_penalty_triggered = False
         self._fwd_cmd_no_motion_count = 0
         self._slip_detected = False
         self._slip_recovery_active = False
@@ -485,6 +495,31 @@ class DreamerRemoteRunner(Node):
         self.SLIP_CMD_THRESHOLD = 0.2
         self.SLIP_VEL_THRESHOLD = 0.03
         self.SLIP_BACKUP_LIMIT = 0.15
+
+        # Consecutive ticks the safety stop has been asserted. Drives the
+        # scripted reverse-and-turn recovery; *not* an episode-termination
+        # signal. (The old code used this to set done=True after 450 ticks,
+        # which wiped RSSM state mid-recovery and prevented learning escapes.)
+        self._wall_stop_steps = 0
+
+        # --- Reward system (replaces the old phase-gated shaping) ---
+        # Channels:
+        #   coverage  : driven by newly-known cells this tick (CoverageTracker)
+        #   frontier  : potential-based shaping  Φ(s') - Φ(s)  with Φ = -frontier_distance
+        #   collision : -10 on /emergency_stop rising edge (single terminal event)
+        #   episodic  : k-NN pseudo-count over the RSSM feat (h ⊕ z)
+        self.coverage_tracker = CoverageTracker(
+            grid_size=200, resolution=0.05, max_range=4.0,
+            coverage_alpha=0.001,
+        )
+        self.episodic_novelty = EpisodicNovelty(
+            embed_dim=RSSM_HIDDEN_DIM + RSSM_Z_DIM,
+            buffer_size=256, k=10,
+        )
+        self._prev_phi: float | None = None
+        self._frontier_angle_pi = 0.0      # last frontier bearing / π ∈ [-1, 1]
+        self._emergency_prev = False       # rising-edge tracker for /emergency_stop
+        self._collision_latched = False    # true for one tick after rising edge
 
         self._sensor_warmup_complete = False
         self._sensor_warmup_countdown = 90
@@ -579,307 +614,110 @@ class DreamerRemoteRunner(Node):
         if len(msg.velocity) >= 4:
             self._latest_wheel_vels = (msg.velocity[2], msg.velocity[3])
 
+    def _load_reward_clip(self):
+        """Populate `self._reward_clip` from `reward_weights.yaml`, if provided."""
+        if not self._reward_weights_path or not HAS_YAML:
+            return
+        try:
+            with open(self._reward_weights_path, 'r') as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception as e:
+            self.get_logger().warn(f'Could not read reward weights yaml: {e}')
+            return
+        clip = cfg.get('clip', {})
+        for ch in ('coverage', 'frontier', 'episodic'):
+            if ch in clip and isinstance(clip[ch], (list, tuple)) and len(clip[ch]) == 2:
+                self._reward_clip[ch] = (float(clip[ch][0]), float(clip[ch][1]))
+
     def _safety_cb(self, msg):
-        self._safety_override = msg.data
+        # Rising-edge of the safety-stop signal is the ONLY collision
+        # signal that enters the reward / episode boundary. Staying stopped
+        # does not keep emitting a penalty.
+        state = bool(msg.data)
+        if state and not self._emergency_prev:
+            self._collision_latched = True
+        self._safety_override = state
+        self._emergency_prev = state
 
     def _vel_conf_cb(self, msg):
         self._velocity_confidence = msg.data
 
     # ========== LiDAR Processing ==========
 
-    def _find_best_gap_multiscale(self, ranges, angles, valid, scan_msg):
-        if not np.any(valid):
-            return 0.0, 0.0
-        all_ranges = ranges.copy()
-        all_ranges[~valid] = 0.0
-        sort_idx = np.argsort(angles)
-        sorted_angles = angles[sort_idx]
-        sorted_ranges = all_ranges[sort_idx]
-        if len(sorted_ranges) < 5:
-            return 0.0, 0.0
-        best_gap = {'angle': 0.0, 'depth': 0.0, 'score': -np.inf}
-        for window_deg in [15, 25, 35]:
-            window_rad = np.radians(window_deg)
-            window_size = int(window_rad / scan_msg.angle_increment)
-            window_size = max(3, min(window_size, len(sorted_ranges) // 3))
-            if len(sorted_ranges) >= window_size:
-                smoothed = np.convolve(sorted_ranges, np.ones(window_size) / window_size, mode='same')
-                for i in range(window_size, len(smoothed) - window_size):
-                    if smoothed[i] < 0.5:
-                        continue
-                    if smoothed[i] > smoothed[i - 1] and smoothed[i] > smoothed[i + 1]:
-                        angle = sorted_angles[i]
-                        abs_angle = abs(angle)
-                        if abs_angle < math.pi / 2:
-                            forward_bias = 1.0 - (abs_angle / (math.pi / 2)) * 0.7
-                        else:
-                            forward_bias = 0.3 - ((abs_angle - math.pi / 2) / (math.pi / 2)) * 0.2
-                        width_bonus = 1.0 + (window_deg / 35.0) * 0.3
-                        score = smoothed[i] * forward_bias * width_bonus
-                        if score > best_gap['score']:
-                            best_gap = {'angle': angle, 'depth': smoothed[i], 'score': score}
-        return best_gap['angle'], best_gap['depth']
-
-    def _process_lidar_metrics(self, scan_msg):
+    def _lidar_min_dist(self, scan_msg) -> float:
+        """Closest valid LiDAR return, used for the safety / recovery heuristics
+        and as a proprio channel. Heading hints from gap-finding are gone — the
+        world model + frontier shaping now drive direction selection."""
         if not scan_msg:
-            return 0.0, 0.0, 0.0
-        ranges = np.array(scan_msg.ranges)
+            return 3.0
+        ranges = np.asarray(scan_msg.ranges, dtype=np.float32)
         valid = (ranges > 0.15) & (ranges < scan_msg.range_max) & np.isfinite(ranges)
         if not np.any(valid):
-            return 3.0, 3.0, 0.0
-        valid_ranges = ranges[valid]
-        min_dist_all = np.min(valid_ranges)
-        angles = scan_msg.angle_min + np.arange(len(ranges)) * scan_msg.angle_increment
-        angles = (angles + np.pi) % (2 * np.pi) - np.pi
-        left_mask = (angles > 0.78) & (angles < 2.35) & valid
-        right_mask = (angles > -2.35) & (angles < -0.78) & valid
-        l_dist = np.mean(ranges[left_mask]) if np.any(left_mask) else 3.0
-        r_dist = np.mean(ranges[right_mask]) if np.any(right_mask) else 3.0
-        mean_side_dist = (l_dist + r_dist) / 2.0
-        best_angle, _ = self._find_best_gap_multiscale(ranges, angles, valid, scan_msg)
-        target = np.clip(best_angle / math.pi, -1.0, 1.0)
-        return min_dist_all, mean_side_dist, target
+            return 3.0
+        return float(ranges[valid].min())
 
-    # ========== Reward (same as PPO runner) ==========
+    # ========== Reward (multi-channel; see config/reward_weights.yaml) ==========
 
-    def _get_current_phase(self):
-        return self.phase_manager.phase
+    def _reset_reward_state_on_episode(self):
+        """Clear per-episode novelty memory + potential baseline on is_first."""
+        self.episodic_novelty.reset()
+        self._prev_phi = None
+        self._collision_latched = False
 
-    def _compute_exploration_bonus(self, bev_grid):
-        phase = self._get_current_phase()
-        hash_size = 8 if phase == 'exploration' else 16
-        bev_small = cv2.resize(bev_grid[0], (hash_size, hash_size))
-        state_hash = tuple(bev_small.flatten().astype(np.uint8))
-        if state_hash not in self._state_visits:
-            self._state_visits[state_hash] = 0
-        visit_count = self._state_visits[state_hash]
-        magnitude = {'exploration': 0.20, 'learning': 0.12, 'refinement': 0.10}[phase]
-        bonus = magnitude / (1.0 + np.sqrt(visit_count))
-        self._state_visits[state_hash] += 1
-        return bonus
+    def _compute_reward_channels(self, robot_x, robot_y, robot_yaw, scan_msg,
+                                 feat_embed: np.ndarray):
+        """Assemble the 4-channel reward vector. Called once per control tick.
 
-    def _compute_action_diversity_bonus(self):
-        if len(self._prev_actions_buffer) < 10:
-            return 0.0
-        actions = np.array(list(self._prev_actions_buffer))
-        lin_std = np.std(actions[:, 0])
-        ang_std = np.std(actions[:, 1])
-        return float(np.clip(0.05 * (lin_std + ang_std), 0.0, 0.15))
+        Returns:
+            reward_vec: np.ndarray shape (4,) — [coverage, frontier, collision, episodic]
+            coverage_step: CoverageStep (used to fill proprio `frontier_angle / π`)
+            collision: bool (drives episode termination)
+        """
+        cov_step = self.coverage_tracker.step(
+            ranges=np.asarray(scan_msg.ranges, dtype=np.float32),
+            angle_min=scan_msg.angle_min,
+            angle_increment=scan_msg.angle_increment,
+            robot_x=robot_x, robot_y=robot_y, robot_yaw=robot_yaw,
+        )
 
-    def _compute_reward(self, action, linear_vel, angular_vel, min_lidar_dist,
-                        side_clearance, episode_done, is_stuck, is_slipping=False,
-                        slip_recovery_active=False, safety_blocked=False):
-        VELOCITY_DEADBAND = 0.03
-        if abs(linear_vel) < VELOCITY_DEADBAND:
-            linear_vel = 0.0
+        # Channel 0: coverage (already clipped inside CoverageTracker)
+        lo, hi = self._reward_clip['coverage']
+        r_coverage = float(np.clip(cov_step.coverage_delta, lo, hi))
 
-        reward = 0.0
-        target_speed = self._curriculum_max_speed
-        left_track, right_track = action[0], action[1]
-        phase = self._get_current_phase()
-
-        if phase == 'exploration':
-            forward_bonus_mult, spin_penalty_scale = 1.5, 0.3
-        elif phase == 'learning':
-            forward_bonus_mult, spin_penalty_scale = 1.0, 0.6
+        # Channel 1: frontier potential-based shaping (γ Φ(s') − Φ(s) with γ=1 here;
+        # the policy's γ=0.997 is applied server-side in λ-returns already)
+        if cov_step.has_frontier:
+            phi = cov_step.phi
+            if self._prev_phi is None:
+                r_frontier = 0.0
+            else:
+                r_frontier = phi - self._prev_phi
+            self._prev_phi = phi
         else:
-            forward_bonus_mult, spin_penalty_scale = 0.8, 1.0
+            r_frontier = 0.0
+            self._prev_phi = None
+        lo, hi = self._reward_clip['frontier']
+        r_frontier = float(np.clip(r_frontier, lo, hi))
 
-        cmd_fwd = (left_track + right_track) / 2.0
+        # Channel 2: collision (rising edge of /emergency_stop)
+        collision = self._collision_latched
+        r_collision = -10.0 if collision else 0.0
+        self._collision_latched = False
 
-        if phase == 'exploration':
-            reward += 0.08
-            if linear_vel < 0.08:
-                self._consecutive_idle_steps += 1
-            else:
-                self._consecutive_idle_steps = 0
-            if self._consecutive_idle_steps > 30:
-                ramp = min((self._consecutive_idle_steps - 30) / 60.0, 1.0)
-                reward -= 0.05 * ramp
-        elif phase == 'learning':
-            reward += 0.04
-            if linear_vel < 0.08:
-                self._consecutive_idle_steps += 1
-                reward -= 0.08
-            else:
-                self._consecutive_idle_steps = 0
+        # Channel 3: episodic novelty over RSSM feat (h ⊕ z). Feat is what the
+        # server-side SimHash also buckets on, so the two timescales are aligned.
+        lo, hi = self._reward_clip['episodic']
+        r_episodic = float(np.clip(self.episodic_novelty.step(feat_embed), lo, hi))
+
+        # Remember the frontier bearing for proprio (rover-observable steering hint).
+        if cov_step.has_frontier:
+            self._frontier_angle_pi = float(np.clip(cov_step.frontier_angle / math.pi, -1.0, 1.0))
         else:
-            if linear_vel < 0.08:
-                self._consecutive_idle_steps += 1
-                reward -= 0.1
-            else:
-                self._consecutive_idle_steps = 0
+            self._frontier_angle_pi = 0.0
 
-        intent_reward = 0.0
-        if phase == 'exploration':
-            if cmd_fwd > 0.05:
-                if linear_vel < 0.03:
-                    self._intent_without_motion_count += 1
-                else:
-                    self._intent_without_motion_count = 0
-                decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
-                intent_reward = 0.12 * min(cmd_fwd, 0.5) * decay
-            else:
-                self._intent_without_motion_count = 0
-        elif phase == 'learning':
-            if cmd_fwd > 0.1:
-                if linear_vel < 0.03:
-                    self._intent_without_motion_count += 1
-                else:
-                    self._intent_without_motion_count = 0
-                decay = max(0.0, 1.0 - self._intent_without_motion_count / 60.0)
-                intent_reward = 0.04 * min(cmd_fwd, 0.5) * decay
-            else:
-                self._intent_without_motion_count = 0
-        reward += intent_reward
+        return np.array([r_coverage, r_frontier, r_collision, r_episodic], dtype=np.float32), \
+               cov_step, collision
 
-        meas_fwd = linear_vel / target_speed if target_speed > 0 else 0.0
-        if cmd_fwd > 0 and meas_fwd > 0:
-            max_abs = max(abs(left_track), abs(right_track))
-            track_agreement = min(abs(left_track), abs(right_track)) / (max_abs + 1e-6) if max_abs > 0.05 else 1.0
-            reward += min(cmd_fwd, meas_fwd) * forward_bonus_mult * (0.3 + 0.7 * track_agreement)
-
-        if phase == 'exploration' and linear_vel > 0.03:
-            reward += 0.30 * min(linear_vel / target_speed, 1.0)
-        elif phase == 'learning' and linear_vel > 0.05:
-            reward += 0.20 * min(linear_vel / target_speed, 1.0)
-        elif linear_vel > 0.10:
-            reward += 0.15 * min(linear_vel / target_speed, 1.0)
-
-        if linear_vel < -0.03:
-            if slip_recovery_active:
-                reward += 0.1
-            elif safety_blocked or min_lidar_dist < 0.25:
-                reward += 0.2 * abs(linear_vel)
-            else:
-                reward -= 0.15 + abs(linear_vel) * 0.8
-
-        if abs(cmd_fwd) < 0.1:
-            symmetry_error = abs(abs(left_track) - abs(right_track))
-            if symmetry_error > 0.2:
-                reward -= 0.2 * symmetry_error * spin_penalty_scale
-
-        max_abs_track = max(abs(left_track), abs(right_track))
-        utilization = 0.0
-        if max_abs_track > 0.1:
-            utilization = min(abs(left_track), abs(right_track)) / max_abs_track
-            should_penalize = utilization < 0.3
-            if phase == 'exploration':
-                should_penalize = should_penalize and (cmd_fwd < 0.05)
-            if should_penalize:
-                reward -= 0.3 * (1.0 - utilization) * spin_penalty_scale
-
-        if utilization > 0.6 and cmd_fwd > 0.1:
-            coord_bonus = 0.12 if phase == 'exploration' else 0.08
-            reward += coord_bonus * utilization
-
-        action_diff = np.abs(action - self._prev_action)
-        smoothness_mult = {'exploration': 0.02, 'learning': 0.03, 'refinement': 0.05}[phase]
-        reward -= np.mean(action_diff) * smoothness_mult
-
-        if phase != 'refinement' and self._latest_bev is not None:
-            reward += self._compute_exploration_bonus(self._latest_bev)
-        reward += self._compute_action_diversity_bonus()
-
-        if abs(self._target_heading) > 0.1:
-            intended_turn = right_track - left_track
-            gap_direction = self._target_heading
-            if linear_vel > 0.03:
-                alignment = intended_turn * gap_direction
-                if alignment > 0:
-                    reward += 0.15 * min(alignment, 0.4)
-                elif abs(gap_direction) > 0.5:
-                    reward -= 0.05
-
-        TIGHT_SPACE_THRESHOLD = 0.35
-        if min_lidar_dist < TIGHT_SPACE_THRESHOLD:
-            self._steps_in_tight_space += 1
-        else:
-            self._steps_in_tight_space = 0
-
-        clearance_delta = min_lidar_dist - self._prev_min_clearance
-        if min_lidar_dist < TIGHT_SPACE_THRESHOLD and clearance_delta > 0.02:
-            tightness = (TIGHT_SPACE_THRESHOLD - min_lidar_dist) / TIGHT_SPACE_THRESHOLD
-            reward += float(np.clip(clearance_delta * 2.0 * (1.0 + tightness), 0.0, 0.3))
-
-        if min_lidar_dist < TIGHT_SPACE_THRESHOLD and self._steps_in_tight_space > 15:
-            ang_mag = abs(right_track - left_track)
-            if ang_mag > 0.3:
-                reward += 0.1 * ang_mag
-
-        if is_stuck:
-            reward -= 1.0 * abs(left_track + right_track)
-            reward += 1.0 * abs(left_track - right_track)
-            if left_track * right_track > 0:
-                reward -= 0.5
-
-        if is_slipping:
-            reward -= 0.3 * max(cmd_fwd, 0.0)
-
-        if phase == 'exploration':
-            avt, aat, act_c = 0.05, 0.2, 0.25
-        elif phase == 'learning':
-            avt, aat, act_c = 0.10, 0.3, 0.25
-        else:
-            avt, aat, act_c = 0.2, 0.5, 0.3
-        if linear_vel > avt and abs(angular_vel) > aat and min_lidar_dist > act_c:
-            reward += 0.3 * abs(linear_vel) * abs(angular_vel)
-
-        # Strong wall-proximity penalty scaling with forward speed. Heavy so the
-        # policy cannot profitably rocket toward a wall and eat a single terminal
-        # penalty — every tick near an obstacle while moving fast is negative.
-        if min_lidar_dist < 0.6 and linear_vel > 0.05:
-            proximity = (0.6 - min_lidar_dist) / 0.6  # 0..1
-            reward -= 1.5 * proximity * linear_vel
-
-        if slip_recovery_active and linear_vel < -0.02:
-            reward += 0.2 * abs(linear_vel)
-
-        if cmd_fwd > 0.05:
-            td = abs(right_track - left_track)
-            straight_intent = max(0.0, 1.0 - td * 5.0)
-            if straight_intent > 0.1 and abs(angular_vel) > 0.1:
-                reward -= 0.2 * abs(angular_vel) * straight_intent
-
-        if cmd_fwd > 0.05 and linear_vel > 0.05:
-            straightness = max(0.0, 1.0 - abs(angular_vel) * 2.5)
-            if straightness > 0.3:
-                reward += 0.15 * straightness * min(linear_vel / target_speed, 1.0)
-
-        wall_stopped = safety_blocked and linear_vel < 0.05
-        if wall_stopped:
-            self._wall_stop_active = True
-            self._wall_stop_steps += 1
-            self._steps_since_wall_stop = 0
-        else:
-            if self._wall_stop_active:
-                self._wall_stop_active = False
-                self._wall_stop_steps = 0
-            self._steps_since_wall_stop += 1
-
-        if not wall_stopped and linear_vel > 0.05:
-            streak = min(self._steps_since_wall_stop / 150.0, 1.0)
-            vf = min(linear_vel / target_speed, 1.0)
-            cf = np.clip((min_lidar_dist - 0.3) / 0.5, 0.0, 1.0)
-            base = {'exploration': 0.20, 'learning': 0.25, 'refinement': 0.30}[phase]
-            reward += base * streak * vf * cf
-
-        if wall_stopped:
-            # Applied every tick while wall-pinned (not just at episode boundary)
-            # so aggregate return for "rocket into wall" cannot be positive.
-            ramp = min(self._wall_stop_steps / 90.0, 1.0)
-            reward -= 0.8 + 1.2 * ramp
-            rot = abs(left_track - right_track)
-            if rot > 0.3:
-                reward += 0.2 * rot
-            if linear_vel < -0.02:
-                reward += 0.25 * abs(linear_vel)
-
-        self._prev_min_clearance = min_lidar_dist
-        # Widened clip: original [-1, 1] was too narrow — a multi-tick wall-pin
-        # needs headroom for the penalty terms to actually outweigh accumulated
-        # forward-motion reward from the approach phase.
-        return float(np.clip(reward, -3.0, 2.0))
 
     # ========== Control Loop ==========
 
@@ -899,25 +737,7 @@ class DreamerRemoteRunner(Node):
         )
         self._latest_bev = bev_grid
 
-        # BEV heading
-        laser_channel = bev_grid[0]
-        front_half = laser_channel[64:128, :]
-        free_space = 1.0 - front_half
-        col_scores = np.mean(free_space, axis=0)
-        forward_bias = np.zeros(128)
-        forward_bias[54:74] = 0.1
-        col_scores = col_scores + forward_bias
-        col_scores = np.convolve(col_scores, np.ones(13) / 13, mode='same')
-        best_col = np.argmax(col_scores)
-        raw_heading = (64 - best_col) / 64.0
-        self._bev_heading = 0.3 * raw_heading + 0.7 * self._bev_heading
-
-        center_patch = laser_channel[118:128, 59:69]
-        obstacle_density = np.mean(center_patch) if center_patch.size > 0 else 0.0
-        self._min_forward_dist = (1.0 - obstacle_density) * 4.0
-
-        lidar_min, lidar_sides, gap_heading = self._process_lidar_metrics(self._latest_scan)
-        self._target_heading = gap_heading
+        lidar_min = self._lidar_min_dist(self._latest_scan)
 
         current_linear = 0.0
         current_angular = 0.0
@@ -928,7 +748,9 @@ class DreamerRemoteRunner(Node):
         if self.invert_linear_vel:
             current_linear = -current_linear
 
-        # Slip detection
+        # Slip detection — kept as a *recovery* trigger only. Does not write
+        # to reward and does not set `done` (those would wipe RSSM state and
+        # block the world model from learning recovery dynamics).
         cmd_fwd_prev = (self._prev_action[0] + self._prev_action[1]) / 2.0
         if cmd_fwd_prev > self.SLIP_CMD_THRESHOLD and abs(current_linear) < self.SLIP_VEL_THRESHOLD:
             self._fwd_cmd_no_motion_count += 1
@@ -954,31 +776,14 @@ class DreamerRemoteRunner(Node):
             if self._slip_backup_distance >= self.SLIP_BACKUP_LIMIT:
                 self._slip_recovery_active = False
 
-        # Rotation tracking
-        if self._last_yaw_for_rotation is not None:
-            yaw_delta = self._latest_fused_yaw - self._last_yaw_for_rotation
-            if yaw_delta > math.pi:
-                yaw_delta -= 2 * math.pi
-            elif yaw_delta < -math.pi:
-                yaw_delta += 2 * math.pi
-            self._cumulative_rotation += abs(yaw_delta)
-            if self._cumulative_rotation >= 2 * math.pi:
-                self._revolution_penalty_triggered = True
-                self._cumulative_rotation = 0.0
-        self._last_yaw_for_rotation = self._latest_fused_yaw
-
-        if self._latest_odom and self._last_position_for_rotation is not None:
-            x, y = self._latest_odom[0], self._latest_odom[1]
-            lx, ly = self._last_position_for_rotation
-            if math.sqrt((x - lx) ** 2 + (y - ly) ** 2) > self._forward_progress_threshold:
-                self._cumulative_rotation = 0.0
-                self._last_position_for_rotation = (x, y)
-        elif self._latest_odom:
-            self._last_position_for_rotation = (self._latest_odom[0], self._latest_odom[1])
-
+        # Proprio. The 6th channel is the **frontier bearing** (in [-1, 1] =
+        # angle / π) computed by CoverageTracker — a rover-observable steering
+        # hint toward the closest unexplored cell. Replaces the old BEV-derived
+        # gap heading; gap-finding is now subsumed by the world model + the
+        # frontier potential reward.
         proprio_raw = np.array([
             lidar_min, self._prev_action[0], self._prev_action[1],
-            current_linear, current_angular, self._bev_heading
+            current_linear, current_angular, self._frontier_angle_pi,
         ], dtype=np.float32)
         proprio = normalize_proprio(proprio_raw)
 
@@ -1044,12 +849,21 @@ class DreamerRemoteRunner(Node):
         is_stuck = self._is_stuck
         monitor_blocking = self._safety_override
 
+        # `_wall_stop_steps` is now a *recovery counter only* — it never sets
+        # `done`. The plan removed the old "blocked for 450 ticks → episode done"
+        # path because terminating wiped RSSM state mid-recovery and stopped the
+        # WM from learning escapes.
+        if monitor_blocking:
+            self._wall_stop_steps += 1
+        else:
+            self._wall_stop_steps = 0
+
         # Scripted recovery: fires on prolonged no-progress. Action depends on
         # whether there's actually an obstacle nearby:
         #   - near wall  → reverse + turn (needs clearance before going forward)
         #   - open space → forward + turn (policy is spinning, just needs to go)
         stuck_long_enough = self.stuck_detector.stuck_counter >= 15
-        wall_pinned = monitor_blocking and self._wall_stop_steps >= 15
+        wall_pinned = self._wall_stop_steps >= 15
         if (wall_pinned or stuck_long_enough) and self._recovery_steps_remaining == 0:
             self._recovery_steps_remaining = 30  # ~1s at 30Hz
             self._recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
@@ -1094,60 +908,52 @@ class DreamerRemoteRunner(Node):
         track_msg = Float32MultiArray()
         track_msg.data = [float(left_track), float(right_track)]
         self.track_cmd_pub.publish(track_msg)
-        self._prev_actions_buffer.append(actual_action.copy())
 
         # Feed action back to RSSM for next tick
         self._prev_a = actual_action.astype(np.float32)[None, :]
 
-        # Episode boundary detection (suppressed during post-reset cooldown so
-        # we don't terminate ep#N+1 on its very first tick while the rover is
-        # still physically wedged — that would spin-loop and poison replay).
-        episode_done = False
-        done_reason = None
-        if self._post_reset_cooldown > 0:
-            self._post_reset_cooldown -= 1
-        elif self._recovery_steps_remaining > 0:
-            # Don't terminate while scripted recovery is running — we want those
-            # reverse+turn transitions to enter replay as non-terminal steps so
-            # the world model learns recovery dynamics.
-            pass
-        else:
-            if monitor_blocking and self._wall_stop_steps >= 450:
-                episode_done = True
-                done_reason = 'blocked'
-            elif is_stuck:
-                episode_done = True
-                done_reason = 'stuck'
-            elif self._revolution_penalty_triggered:
-                episode_done = True
-                done_reason = 'spinning'
-                self._revolution_penalty_triggered = False
-
-        reward = self._compute_reward(
-            actual_action, current_linear, current_angular,
-            lidar_min, lidar_sides, episode_done, is_stuck,
-            is_slipping=self._slip_detected,
-            slip_recovery_active=self._slip_recovery_active,
-            safety_blocked=monitor_blocking,
+        # ---- Reward (multi-channel) ----
+        # `feat_embed` = concat(h_t, z_t) computed from the just-observed step.
+        # This is the same representation the server-side LifetimeSimHash buckets
+        # on, so the episodic (rover) and lifetime (server) novelty signals stay
+        # aligned. Pre-RKNN the state is zeros → episodic novelty saturates near
+        # 1.0, which is fine for the random-exploration warm-up.
+        feat_embed = np.concatenate([self._prev_h.ravel(), self._prev_z.ravel()])
+        robot_x = self._latest_odom[0] if self._latest_odom else 0.0
+        robot_y = self._latest_odom[1] if self._latest_odom else 0.0
+        reward_vec, _cov_step, collision = self._compute_reward_channels(
+            robot_x, robot_y, self._latest_fused_yaw,
+            self._latest_scan, feat_embed,
         )
-        if np.isnan(reward) or np.isinf(reward):
+        if np.isnan(reward_vec).any() or np.isinf(reward_vec).any():
             return
 
-        # Store transition (with is_first marker)
+        # ---- Episode boundary ----
+        # Only **collision** (rising edge of /emergency_stop) and the step cap
+        # terminate. Stuck / spinning / wall-pinned no longer set `done` —
+        # they exist purely as recovery triggers above.
+        if self._post_reset_cooldown > 0:
+            self._post_reset_cooldown -= 1
+        episode_done = False
+        done_reason = None
+        if collision:
+            episode_done = True
+            done_reason = 'collision'
+        elif self._current_episode_length + 1 >= self.MAX_EPISODE_STEPS:
+            episode_done = True
+            done_reason = 'max_steps'
+
+        # Store transition (with is_first marker). Reward is the (4,) vector.
         self.buffer.add(
-            bev_grid, proprio, actual_action, reward, episode_done,
+            bev_grid, proprio, actual_action, reward_vec, episode_done,
             is_first=is_first, rgb=rgb_chw_uint8
         )
+        reward_scalar = float(reward_vec.sum())
         self._total_steps += 1
-        self._current_episode_reward += reward
+        self._current_episode_reward += reward_scalar
         self._current_episode_length += 1
 
         if episode_done:
-            self.phase_manager.record_training_episode(
-                reward=self._current_episode_reward,
-                collided=(done_reason == 'blocked'),
-                length=self._current_episode_length
-            )
             self._episode_reward_history.append(self._current_episode_reward)
             self._episode_count += 1
             self.get_logger().info(
@@ -1156,8 +962,11 @@ class DreamerRemoteRunner(Node):
             )
             self._current_episode_reward = 0.0
             self._current_episode_length = 0
-            # Next tick is the first of a new episode — RSSM state will be reset
+            # Next tick is the first of a new episode — RSSM state will be
+            # reset; clear per-episode reward state (novelty buffer, frontier
+            # potential baseline) so the new episode starts fresh.
             self._next_is_first = True
+            self._reset_reward_state_on_episode()
             # Clear stuck detector history so the new episode isn't instantly
             # flagged as stuck based on pre-reset positions, and enforce a
             # cooldown window before any new termination can fire.
@@ -1166,8 +975,6 @@ class DreamerRemoteRunner(Node):
             self.stuck_detector.recovery_mode = False
             self.stuck_detector.recovery_steps = 0
             self._wall_stop_steps = 0
-            self._wall_stop_active = False
-            self._revolution_penalty_triggered = False
             self._post_reset_cooldown = self._post_reset_cooldown_steps
 
         self._prev_action = actual_action
@@ -1182,7 +989,6 @@ class DreamerRemoteRunner(Node):
             buffer_fill=self.buffer.size,
             buffer_capacity=self.chunk_len,
             chunks_shipped=self._chunks_shipped,
-            phase=self._get_current_phase(),
             inference_backend=backend,
             zmq_connected=self._zmq_connected,
             linear_vel=float(current_linear),
@@ -1190,21 +996,20 @@ class DreamerRemoteRunner(Node):
             left_track=float(left_track),
             right_track=float(right_track),
             min_lidar_dist=float(lidar_min),
-            reward=float(reward),
+            reward=reward_scalar,
             safety_blocked=bool(monitor_blocking),
             is_stuck=bool(is_stuck),
             episode_count=self._episode_count,
             episode_reward_avg=avg_ep_rew,
             episode_reward_history=list(self._episode_reward_history),
         )
-        self.dashboard_stats.append_reward(float(reward), float(current_linear))
+        self.dashboard_stats.append_reward(reward_scalar, float(current_linear))
         self.dashboard_stats.record_step()
 
         if self._total_steps % 300 == 0:
-            phase = self._get_current_phase()
             self.get_logger().info(
-                f'Step {self._total_steps} | Phase: {phase} | '
-                f'AvgRew: {avg_ep_rew:.3f} | v{self._model_version} | chunks={self._chunks_shipped}'
+                f'Step {self._total_steps} | AvgRew: {avg_ep_rew:.3f} | '
+                f'v{self._model_version} | chunks={self._chunks_shipped}'
             )
 
         if np.random.rand() < 0.1:

@@ -1463,8 +1463,28 @@ class DreamerEncoder(nn.Module):
         return self.fuse(torch.cat([bev_f, rgb_f, pro_f], dim=-1))
 
 
+REWARD_CHANNELS = ('coverage', 'frontier', 'collision', 'episodic')
+
+
+def _mk_reward_head(feat_dim: int) -> nn.Sequential:
+    head = nn.Sequential(
+        nn.Linear(feat_dim, 256),
+        nn.SiLU(),
+        nn.Linear(256, 1),
+    )
+    nn.init.zeros_(head[-1].weight)
+    nn.init.zeros_(head[-1].bias)
+    return head
+
+
 class DreamerWorldModel(nn.Module):
-    """Full world model: encoder + RSSM + decoder/reward/continue heads."""
+    """Full world model: encoder + RSSM + decoder + multi-channel reward + continue heads.
+
+    Reward channels (per-step extrinsic + episodic intrinsic, all rover-shipped):
+        coverage, frontier, collision, episodic.
+    Plan2Explore intrinsic (`r_p2e`) and the lifetime SimHash modulator are
+    server-side only — see `P2EEnsemble` and `intrinsic_rewards.LifetimeSimHash`.
+    """
 
     def __init__(
         self,
@@ -1485,6 +1505,7 @@ class DreamerWorldModel(nn.Module):
             groups=groups,
         )
         self.feat_dim = hidden_dim + self.rssm.stoch_dim
+        self.reward_channels = REWARD_CHANNELS
 
         # BEV decoder: latent (h, z) → 2×128×128 logits
         self.bev_decoder = BEVDecoder(latent_dim=self.feat_dim, output_channels=2)
@@ -1496,12 +1517,10 @@ class DreamerWorldModel(nn.Module):
             nn.Linear(256, proprio_dim),
         )
 
-        # Reward head (scalar, symlog-transformed target)
-        self.reward_head = nn.Sequential(
-            nn.Linear(self.feat_dim, 256),
-            nn.SiLU(),
-            nn.Linear(256, 1),
-        )
+        # Per-channel reward heads (each is symlog-MSE on a scalar)
+        self.reward_heads = nn.ModuleDict({
+            name: _mk_reward_head(self.feat_dim) for name in REWARD_CHANNELS
+        })
 
         # Continue head (Bernoulli logit)
         self.continue_head = nn.Sequential(
@@ -1510,14 +1529,72 @@ class DreamerWorldModel(nn.Module):
             nn.Linear(256, 1),
         )
 
-        # Zero-init final layers of reward/continue for stable early training
-        nn.init.zeros_(self.reward_head[-1].weight)
-        nn.init.zeros_(self.reward_head[-1].bias)
+        # Zero-init continue head for stable early training (reward heads zero'd in factory)
         nn.init.zeros_(self.continue_head[-1].weight)
         nn.init.zeros_(self.continue_head[-1].bias)
 
     def feat(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         return torch.cat([h, z], dim=-1)
+
+    def predict_rewards(self, feat: torch.Tensor) -> torch.Tensor:
+        """Return symlog-space reward predictions stacked as (..., K).
+
+        K matches `len(REWARD_CHANNELS)`; channel order is `REWARD_CHANNELS`.
+        Caller applies symexp to recover real-space values.
+        """
+        preds = [self.reward_heads[name](feat).squeeze(-1) for name in REWARD_CHANNELS]
+        return torch.stack(preds, dim=-1)
+
+
+class P2EEnsemble(nn.Module):
+    """Plan2Explore latent-prediction ensemble (Sekar et al. 2020).
+
+    Each head predicts the next stochastic latent `z_{t+1}` (logits, flattened
+    to `stoch_dim`) from `(h_t, z_t, a_t)`. Disagreement (per-element variance
+    averaged over the latent) is the intrinsic reward at imagination time.
+
+    Server-side only. Never exported to ONNX/RKNN — the rover ships
+    extrinsic+episodic rewards; `r_p2e` is added at the actor objective.
+    """
+
+    def __init__(
+        self,
+        feat_dim: int,
+        action_dim: int,
+        stoch_dim: int,
+        n_heads: int = 5,
+        hidden: int = 400,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+        self.stoch_dim = stoch_dim
+        in_dim = feat_dim + action_dim
+        self.heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(in_dim, hidden),
+                nn.SiLU(),
+                nn.Linear(hidden, hidden),
+                nn.SiLU(),
+                nn.Linear(hidden, stoch_dim),
+            )
+            for _ in range(n_heads)
+        ])
+
+    def forward(self, feat: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """Predict next-z logits per head. Returns (n_heads, ..., stoch_dim)."""
+        x = torch.cat([feat, action], dim=-1)
+        return torch.stack([h(x) for h in self.heads], dim=0)
+
+    def disagreement(self, feat: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """Intrinsic reward = mean per-dim variance of head predictions.
+
+        Shape: feat/action (..., D) → reward (...,). Stop-grad applied so the
+        intrinsic signal does not pull the ensemble toward agreement.
+        """
+        with torch.no_grad():
+            preds = self.forward(feat, action)  # (n_heads, ..., stoch_dim)
+            var = preds.var(dim=0, unbiased=False)  # (..., stoch_dim)
+            return var.mean(dim=-1)  # (...,)
 
 
 class DreamerActor(nn.Module):

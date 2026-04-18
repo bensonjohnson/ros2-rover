@@ -1,0 +1,27 @@
+# Reward weights for the DreamerV3 indoor/outdoor exploration rover.
+#
+# Channels carried in the chunk wire format (rover-side computed, server-trained):
+#   - coverage  : new cells revealed in the per-session occupancy grid
+#   - frontier  : potential-based shaping toward the nearest unknown frontier
+#   - collision : sparse penalty on /emergency_stop rising edge
+#   - episodic  : k-NN Gaussian-kernel novelty over encoder embeddings (per-episode)
+#
+# Server-only reward terms (added inside imagination, never shipped to rover):
+#   - p2e_intrinsic    : Plan2Explore ensemble disagreement on next-z prediction
+#   - lifetime_modulator: SimHash count over encoder embeddings, multiplies episodic
+#
+# All weights are linear: total = sum(w_i * channel_i). Tune in TensorBoard.
+
+weights:
+  coverage:           1.0
+  frontier:           0.5
+  collision:          1.0    # the channel emits −10 on hit, so weight stays at 1.0
+  episodic:           0.2
+  p2e_intrinsic:      0.3
+  lifetime_strength:  1.0    # multiplier `c` in `1 + c / sqrt(1 + count)`
+
+# Bounds applied per channel before weighting (rover side).
+clip:
+  coverage:   [0.0,  0.5]
+  frontier:   [-0.1, 0.1]
+  episodic:   [0.0,  1.0]

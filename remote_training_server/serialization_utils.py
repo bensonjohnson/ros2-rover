@@ -20,21 +20,24 @@ def serialize_batch(batch: dict) -> bytes:
     Args:
         batch: Dictionary containing:
             - bev: np.array of shape (N, 2, 128, 128) float32 - Unified BEV grid
-            - proprio: np.array of shape (N, 12) float32
+            - proprio: np.array of shape (N, 6) float32
             - actions: np.array of shape (N, 2) float32
-            - rewards: np.array of shape (N,) float32
+            - rewards: np.array of shape (N, K) float32 — K reward channels
             - dones: np.array of shape (N,) bool
+            - is_first: np.array of shape (N,) bool
+            - rgb: (optional) np.array of shape (N, 3, 84, 84) uint8/float32
             - metadata: (optional) dict with rover_id, model_id, etc.
 
     Returns:
-        Serialized bytes ready for NATS publish
+        Serialized bytes ready for transport
     """
     compressor = zstd.ZstdCompressor(level=3)
 
-    # Convert is_eval to list if it exists (backward compatibility handled in extraction)
-    is_eval_data = batch.get("is_eval", np.zeros(len(batch["rewards"]), dtype=bool)).tolist()
+    rewards = np.asarray(batch["rewards"], dtype=np.float32)
+    if rewards.ndim == 1:
+        rewards = rewards[:, None]
+    n_steps = rewards.shape[0]
 
-    # Compress large arrays
     compressed = {
         "bev": {
             "data": compressor.compress(batch["bev"].tobytes()),
@@ -44,13 +47,11 @@ def serialize_batch(batch: dict) -> bytes:
         # Small arrays don't benefit from compression
         "proprio": batch["proprio"].tolist(),
         "actions": batch["actions"].tolist(),
-        "rewards": batch["rewards"].tolist(),
+        # rewards is (N, K); .tolist() yields a list of K-length lists
+        "rewards": rewards.tolist(),
+        "reward_channels": int(rewards.shape[1]),
         "dones": batch["dones"].tolist(),
-        "is_eval": is_eval_data,
-        # is_first flag per step (used by DreamerV3 to reset RSSM state on episode boundaries).
-        # Optional — old PPO rollouts without this key continue to work.
-        "is_first": batch.get("is_first", np.zeros(len(batch["rewards"]), dtype=bool)).tolist(),
-        # Include metadata if present
+        "is_first": batch.get("is_first", np.zeros(n_steps, dtype=bool)).tolist(),
         "metadata": batch.get("metadata", {}),
     }
 
@@ -70,13 +71,19 @@ def deserialize_batch(data: bytes) -> dict:
     Deserialize an experience batch.
 
     Args:
-        data: Serialized bytes from NATS message
+        data: Serialized bytes from transport
 
     Returns:
-        Dictionary with numpy arrays reconstructed
+        Dictionary with numpy arrays reconstructed. `rewards` is always (N, K)
+        where K is the number of reward channels.
     """
     decompressor = zstd.ZstdDecompressor()
     compressed = msgpack.unpackb(data)
+
+    rewards = np.array(compressed["rewards"], dtype=np.float32)
+    if rewards.ndim == 1:
+        rewards = rewards[:, None]
+    n_steps = rewards.shape[0]
 
     result = {
         "bev": np.frombuffer(
@@ -85,14 +92,14 @@ def deserialize_batch(data: bytes) -> dict:
         ).reshape(compressed["bev"]["shape"]),
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
-        "rewards": np.array(compressed["rewards"], dtype=np.float32),
+        "rewards": rewards,
+        "reward_channels": int(compressed.get("reward_channels", rewards.shape[1])),
         "dones": np.array(compressed["dones"], dtype=bool),
-        "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
-        "is_first": np.array(compressed.get("is_first", [False]*len(compressed["rewards"])), dtype=bool),
+        "is_first": np.array(compressed.get("is_first", [False] * n_steps), dtype=bool),
         "metadata": compressed.get("metadata", {}),
     }
 
-    # RGB stream (backward compatible)
+    # RGB stream (optional)
     if compressed.get("rgb") is not None:
         result["rgb"] = np.frombuffer(
             decompressor.decompress(compressed["rgb"]["data"]),

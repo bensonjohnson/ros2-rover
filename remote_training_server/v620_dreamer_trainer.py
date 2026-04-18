@@ -57,9 +57,11 @@ except ImportError:
 
 from model_architectures import (
     DreamerWorldModel, DreamerActor, DreamerCritic, DreamerActorOnnxWrapper,
+    P2EEnsemble, REWARD_CHANNELS,
     OneHotDist, kl_categorical, symlog, symexp,
 )
 from serialization_utils import deserialize_batch, serialize_status
+from intrinsic_rewards import LifetimeSimHash, p2e_ensemble_loss
 
 # ============================================================================
 # Replay buffer — stores whole chunks (length T_chunk) keyed by arrival order
@@ -72,7 +74,7 @@ class Chunk:
     rgb: np.ndarray        # (T, 3, 84, 84) float32 [0,1]
     proprio: np.ndarray    # (T, 6) float32
     actions: np.ndarray    # (T, 2) float32
-    rewards: np.ndarray    # (T,) float32
+    rewards: np.ndarray    # (T, K) float32 — K=4 channels: coverage, frontier, collision, episodic
     dones: np.ndarray      # (T,) bool
     is_first: np.ndarray   # (T,) bool
 
@@ -112,7 +114,7 @@ class ChunkReplay:
                 return Chunk(
                     bev=_pad(c.bev), rgb=_pad(c.rgb), proprio=_pad(c.proprio),
                     actions=_pad(c.actions),
-                    rewards=np.pad(c.rewards, (0, pad), mode='constant'),
+                    rewards=_pad(c.rewards, mode='constant'),
                     dones=np.pad(c.dones, (0, pad), mode='constant'),
                     is_first=np.pad(c.is_first, (0, pad), mode='constant'),
                 )
@@ -383,9 +385,46 @@ class V620DreamerTrainer:
         for p in self.target_critic.parameters():
             p.requires_grad_(False)
 
+        # Plan2Explore ensemble — predicts next-z latent; intrinsic reward = disagreement
+        self.p2e = P2EEnsemble(
+            feat_dim=feat_dim,
+            action_dim=self.action_dim,
+            stoch_dim=self.world_model.rssm.stoch_dim,
+            n_heads=args.p2e_n_heads,
+        ).to(self.device)
+
         self.wm_opt = optim.Adam(self.world_model.parameters(), lr=args.wm_lr, eps=1e-5)
         self.actor_opt = optim.Adam(self.actor.parameters(), lr=args.actor_lr, eps=1e-5)
         self.critic_opt = optim.Adam(self.critic.parameters(), lr=args.critic_lr, eps=1e-5)
+        self.p2e_opt = optim.Adam(self.p2e.parameters(), lr=args.p2e_lr, eps=1e-5)
+
+        # Reward channel weights — kept as a plain dict so they can be hot-tuned
+        # by reloading config. Channel order matches model_architectures.REWARD_CHANNELS.
+        self.reward_weights = {
+            'coverage':  args.w_coverage,
+            'frontier':  args.w_frontier,
+            'collision': args.w_collision,
+            'episodic':  args.w_episodic,
+        }
+        self.w_p2e = args.w_p2e
+
+        # Lifetime SimHash novelty — persists across runs / environments.
+        # Operates on (h, z) latents so it transfers indoors ↔ outdoors without
+        # the metric coverage grid biasing it.
+        simhash_path = Path(args.checkpoint_dir) / 'lifetime_simhash.pkl'
+        loaded = LifetimeSimHash.load(simhash_path)
+        if loaded is not None and loaded.embed_dim == feat_dim and loaded.n_bits == args.simhash_bits:
+            self.lifetime_simhash = loaded
+            self.lifetime_simhash.modulator_strength = args.lifetime_strength
+            print(f"Lifetime SimHash restored: {len(loaded.counts)} buckets populated "
+                  f"({loaded.hit_rate() * 100:.2f}% of {1 << loaded.n_bits})")
+        else:
+            self.lifetime_simhash = LifetimeSimHash(
+                embed_dim=feat_dim, n_bits=args.simhash_bits,
+                modulator_strength=args.lifetime_strength,
+            )
+            print(f"Lifetime SimHash initialized fresh ({args.simhash_bits} bits)")
+        self._simhash_path = simhash_path
 
         # --- Hyperparameters (DreamerV3 defaults) ---
         self.T_chunk = args.chunk_len           # trajectory length per sample (training)
@@ -447,10 +486,14 @@ class V620DreamerTrainer:
         self.actor.load_state_dict(ckpt['actor'], strict=False)
         self.critic.load_state_dict(ckpt['critic'], strict=False)
         self.target_critic.load_state_dict(ckpt['critic'], strict=False)
+        if 'p2e' in ckpt:
+            self.p2e.load_state_dict(ckpt['p2e'], strict=False)
         try:
             self.wm_opt.load_state_dict(ckpt['wm_opt'])
             self.actor_opt.load_state_dict(ckpt['actor_opt'])
             self.critic_opt.load_state_dict(ckpt['critic_opt'])
+            if 'p2e_opt' in ckpt:
+                self.p2e_opt.load_state_dict(ckpt['p2e_opt'])
         except (ValueError, KeyError):
             print("Optimizer states incompatible, re-initialized")
         self.total_steps = ckpt.get('total_steps', 0)
@@ -463,9 +506,11 @@ class V620DreamerTrainer:
             'world_model': self.world_model.state_dict(),
             'actor': self.actor.state_dict(),
             'critic': self.critic.state_dict(),
+            'p2e': self.p2e.state_dict(),
             'wm_opt': self.wm_opt.state_dict(),
             'actor_opt': self.actor_opt.state_dict(),
             'critic_opt': self.critic_opt.state_dict(),
+            'p2e_opt': self.p2e_opt.state_dict(),
             'total_steps': self.total_steps,
             'update_count': self.update_count,
             'model_version': self.model_version,
@@ -474,6 +519,11 @@ class V620DreamerTrainer:
         latest = Path(self.args.checkpoint_dir) / 'latest_dreamer.pt'
         torch.save(state, p)
         torch.save(state, latest)
+        # Persist the lifetime SimHash alongside model checkpoints so that
+        # restarts (and environment switches) preserve the cross-run novelty
+        # memory. SimHash uses encoder-latent buckets, not world coordinates,
+        # so it's portable indoors ↔ outdoors.
+        self.lifetime_simhash.save(self._simhash_path)
         print(f"Checkpoint saved: {p}")
 
     def _export_onnx(self, increment_version=True):
@@ -570,16 +620,19 @@ class V620DreamerTrainer:
         return t
 
     def _compute_wm_loss(self, batch):
-        """World model loss: reconstruction + reward + continue + KL."""
+        """World model loss: reconstruction + per-channel reward + continue + KL."""
         bev = self._to_device(batch['bev'])
         rgb = self._to_device(batch['rgb'])
         proprio = self._to_device(batch['proprio'])
         actions = self._to_device(batch['actions'])
-        rewards = self._to_device(batch['rewards'])
+        rewards = self._to_device(batch['rewards'])  # (B, T, K)
         dones = self._to_device(batch['dones'].astype(np.float32))
         is_first = self._to_device(batch['is_first'].astype(np.float32))
 
         B, T = bev.shape[0], bev.shape[1]
+        K = rewards.shape[-1]
+        assert K == len(REWARD_CHANNELS), \
+            f"reward channel mismatch: chunk has K={K}, model expects {len(REWARD_CHANNELS)}"
 
         # Encode all observations: flatten (B*T, ...) through the encoder
         bev_flat = bev.reshape(B * T, 2, 128, 128)
@@ -597,7 +650,8 @@ class V620DreamerTrainer:
         h, z = out['h'], out['z']
         prior_lg, post_lg = out['prior_logits'], out['post_logits']
 
-        feat = self.world_model.feat(h, z).reshape(B * T, -1)
+        feat_BT = self.world_model.feat(h, z)              # (B, T, feat_dim)
+        feat = feat_BT.reshape(B * T, -1)
 
         # BEV reconstruction (BCE on logits vs target in [0,1])
         bev_logits = self.world_model.bev_decoder(feat).reshape(B, T, 2, 128, 128)
@@ -608,9 +662,12 @@ class V620DreamerTrainer:
         proprio_pred = self.world_model.proprio_decoder(feat).reshape(B, T, -1)
         proprio_loss = F.mse_loss(proprio_pred, symlog(proprio), reduction='mean')
 
-        # Reward (MSE on symlog-transformed target)
-        reward_pred = self.world_model.reward_head(feat).reshape(B, T)
-        reward_loss = F.mse_loss(reward_pred, symlog(rewards), reduction='mean')
+        # Per-channel reward (MSE on symlog targets). Predictions are returned
+        # as (B*T, K); compare against symlog(rewards) which is (B, T, K).
+        reward_pred = self.world_model.predict_rewards(feat).reshape(B, T, K)
+        reward_target = symlog(rewards)
+        per_channel = F.mse_loss(reward_pred, reward_target, reduction='none').mean(dim=(0, 1))  # (K,)
+        reward_loss = per_channel.sum()
 
         # Continue (BCE; target = 1 - done)
         continue_logits = self.world_model.continue_head(feat).reshape(B, T)
@@ -630,18 +687,45 @@ class V620DreamerTrainer:
 
         wm_loss = recon_loss + proprio_loss + reward_loss + continue_loss + kl_loss
 
+        # Plan2Explore ensemble target: predict next-step posterior z from
+        # (h_t, z_t, a_t). Drop the final timestep (no t+1 target available).
+        # Detached inputs/targets — the ensemble must not back-propagate into
+        # the world model, otherwise the disagreement signal vanishes.
+        if T >= 2:
+            p2e_feat = feat_BT[:, :-1].detach()
+            p2e_act = actions[:, :-1].detach()
+            p2e_target = z[:, 1:].detach()
+            p2e_loss = p2e_ensemble_loss(self.p2e, p2e_feat, p2e_act, p2e_target)
+        else:
+            p2e_loss = torch.zeros((), device=self.device)
+
+        per_channel_d = {f'reward/{name}': per_channel[i].detach()
+                         for i, name in enumerate(REWARD_CHANNELS)}
         return wm_loss, {
             'recon': recon_loss.detach(), 'proprio': proprio_loss.detach(),
             'reward': reward_loss.detach(), 'continue': continue_loss.detach(),
             'kl': kl_loss.detach(), 'kl_raw': kl.mean().detach(),
             'wm_total': wm_loss.detach(),
+            'p2e_loss': p2e_loss,  # NOT detached — the trainer optimizes it separately
+            **per_channel_d,
             # For actor-critic step: starting latents (detached) and continue preds
             'h_start': h.detach(), 'z_start': z.detach(),
             'continue_pred': torch.sigmoid(continue_logits).detach(),
         }
 
     def _compute_actor_critic_loss(self, wm_info):
-        """Imagine H steps from every latent in the chunk and update actor/critic."""
+        """Imagine H steps from every latent in the chunk and update actor/critic.
+
+        Combined imagination reward at each step τ:
+            r[τ] = Σ_c w_c · symexp(reward_head_c(feat[τ]))
+                   + w_p2e · ensemble_disagreement(feat[τ], action[τ])
+                   + (lifetime_modulator(feat[τ]) − 1) · w_episodic · symexp(reward_head_episodic(feat[τ]))
+
+        The lifetime modulator additively *boosts* the episodic channel (so the
+        baseline `w_episodic · r_episodic` is preserved when the bucket is
+        saturated). Modulator is computed without grad — it's a gating signal,
+        not a learnable head.
+        """
         h0 = wm_info['h_start'].reshape(-1, wm_info['h_start'].shape[-1])
         z0 = wm_info['z_start'].reshape(-1, wm_info['z_start'].shape[-1])
 
@@ -653,13 +737,32 @@ class V620DreamerTrainer:
         imag_ent = imag['entropies']                # (N, H)
 
         N, H, _ = imag_h.shape
-        feat_flat = torch.cat([imag_h, imag_z], dim=-1).reshape(N * H, -1)
+        feat = torch.cat([imag_h, imag_z], dim=-1)            # (N, H, feat_dim)
+        feat_flat = feat.reshape(N * H, -1)
 
-        # Predict rewards and continues for imagined trajectories (symlog-decoded reward)
-        reward_pred_sym = self.world_model.reward_head(feat_flat).reshape(N, H).squeeze(-1) \
-            if self.world_model.reward_head(feat_flat).dim() == 1 else \
-            self.world_model.reward_head(feat_flat).reshape(N, H)
+        # Per-channel reward predictions in symlog space, then symexp → real
+        reward_pred_sym = self.world_model.predict_rewards(feat_flat).reshape(N, H, -1)  # (N, H, K)
         reward_pred = symexp(reward_pred_sym)
+
+        # Combine extrinsic + collision + base episodic by weight
+        weighted = torch.zeros(N, H, device=self.device)
+        for i, name in enumerate(REWARD_CHANNELS):
+            weighted = weighted + self.reward_weights[name] * reward_pred[..., i]
+
+        # Plan2Explore intrinsic (ensemble disagreement, no grad through ensemble)
+        r_p2e = self.p2e.disagreement(feat, imag_acts)  # (N, H)
+
+        # Lifetime SimHash modulator on (h, z) feat: 1 + c / sqrt(1 + count)
+        # `modulator >= 1.0`; subtract 1 so the baseline episodic stays at w_episodic.
+        with torch.no_grad():
+            lifetime_mod = self.lifetime_simhash.modulator(feat) - 1.0  # (N, H)
+        episodic_idx = REWARD_CHANNELS.index('episodic')
+        episodic_real = reward_pred[..., episodic_idx]
+        weighted = weighted + lifetime_mod * self.reward_weights['episodic'] * episodic_real
+
+        # P2E intrinsic
+        weighted = weighted + self.w_p2e * r_p2e
+
         continue_pred = torch.sigmoid(self.world_model.continue_head(feat_flat)).reshape(N, H)
         discount = self.gamma * continue_pred
 
@@ -670,40 +773,41 @@ class V620DreamerTrainer:
             ).reshape(N, H)
 
         # λ-returns (bootstrap from final value)
-        returns = torch.zeros_like(reward_pred)
+        returns = torch.zeros_like(weighted)
         last = value_target[:, -1]
         for t in range(H - 1, -1, -1):
             if t == H - 1:
-                returns[:, t] = reward_pred[:, t] + discount[:, t] * last
+                returns[:, t] = weighted[:, t] + discount[:, t] * last
             else:
-                returns[:, t] = reward_pred[:, t] + discount[:, t] * (
+                returns[:, t] = weighted[:, t] + discount[:, t] * (
                     (1 - self.lam) * value_target[:, t + 1] + self.lam * returns[:, t + 1]
                 )
 
         # Discount weights (product of continues): weight earlier steps more
-        weights = torch.cumprod(torch.cat([torch.ones(N, 1, device=self.device), discount[:, :-1]], dim=1), dim=1).detach()
+        weights_t = torch.cumprod(torch.cat([torch.ones(N, 1, device=self.device), discount[:, :-1]], dim=1), dim=1).detach()
 
         # Actor loss: REINFORCE with learned baseline, + entropy bonus
         baseline = value_target.detach()
         advantage = (returns - baseline).detach()
-        # Per-sample normalization (Dreamer uses percentile-based; mean-std is acceptable)
         adv_std = advantage.std().clamp(min=1.0)
         advantage = advantage / adv_std
         actor_loss = -(imag_logp * advantage + self.entropy_coef * imag_ent)
-        actor_loss = (weights * actor_loss).mean()
+        actor_loss = (weights_t * actor_loss).mean()
 
         # Critic loss: MSE on symlog(return), target detached
         value_pred_sym = self.critic(
             imag_h.detach().reshape(N * H, -1), imag_z.detach().reshape(N * H, -1)
         ).reshape(N, H)
         critic_target = symlog(returns.detach())
-        critic_loss = ((value_pred_sym - critic_target) ** 2 * weights).mean()
+        critic_loss = ((value_pred_sym - critic_target) ** 2 * weights_t).mean()
 
         imag_return = returns.detach().mean()
 
         return actor_loss, critic_loss, {
             'imag_return': imag_return,
             'adv_std': adv_std.detach(),
+            'r_p2e_mean': r_p2e.detach().mean(),
+            'lifetime_mod_mean': lifetime_mod.detach().mean(),
         }
 
     def _train_step(self):
@@ -770,12 +874,37 @@ class V620DreamerTrainer:
             self.actor_opt.step()
             self.critic_opt.step()
 
+        # ---- P2E ensemble update (own optimizer; gradients don't touch the WM) ----
+        # The loss tensor was returned attached so we can backprop through the
+        # ensemble heads here. Inputs and targets were already detached inside
+        # `_compute_wm_loss`, so the WM graph has already been freed.
+        p2e_loss_t = wm_info['p2e_loss']
+        if p2e_loss_t.requires_grad:
+            self.p2e_opt.zero_grad(set_to_none=True)
+            if self.use_amp and self.scaler is not None:
+                self.scaler.scale(p2e_loss_t).backward()
+                self.scaler.unscale_(self.p2e_opt)
+                nn.utils.clip_grad_norm_(self.p2e.parameters(), self.max_grad_norm)
+                self.scaler.step(self.p2e_opt)
+                self.scaler.update()
+            else:
+                p2e_loss_t.backward()
+                nn.utils.clip_grad_norm_(self.p2e.parameters(), self.max_grad_norm)
+                self.p2e_opt.step()
+
+        # ---- Lifetime SimHash update on real (training-sampled) latents ----
+        # Done outside the autograd graph; this just bumps bucket counters.
+        with torch.no_grad():
+            real_feat = self.world_model.feat(wm_info['h_start'], wm_info['z_start'])
+            real_feat_np = real_feat.reshape(-1, real_feat.shape[-1]).cpu().numpy()
+            self.lifetime_simhash.update_and_query(real_feat_np)
+
         # Target critic EMA
         with torch.no_grad():
             for p, tp in zip(self.critic.parameters(), self.target_critic.parameters()):
                 tp.data.mul_(self.target_ema).add_(p.data, alpha=1.0 - self.target_ema)
 
-        return {
+        out = {
             'wm_total': wm_info['wm_total'].item(),
             'recon': wm_info['recon'].item(),
             'proprio': wm_info['proprio'].item(),
@@ -786,7 +915,15 @@ class V620DreamerTrainer:
             'actor': actor_loss.item(),
             'critic': critic_loss.item(),
             'imag_return': ac_info['imag_return'].item(),
+            'p2e_loss': float(p2e_loss_t.detach().item()),
+            'r_p2e_mean': ac_info['r_p2e_mean'].item(),
+            'lifetime_mod_mean': ac_info['lifetime_mod_mean'].item(),
+            'lifetime_hit_rate': self.lifetime_simhash.hit_rate(),
         }
+        for name in REWARD_CHANNELS:
+            key = f'reward/{name}'
+            out[key] = wm_info[key].item()
+        return out
 
     # ========== ZMQ ==========
 
@@ -858,6 +995,14 @@ class V620DreamerTrainer:
                 self.writer.add_scalar('actor/imag_return', metrics['imag_return'], self.update_count)
                 self.writer.add_scalar('training/train_time_s', dt, self.update_count)
                 self.writer.add_scalar('training/replay_chunks', len(self.replay), self.update_count)
+                # Per-channel reward MSE — tune weights from these
+                for name in REWARD_CHANNELS:
+                    self.writer.add_scalar(f'wm/reward_{name}', metrics[f'reward/{name}'], self.update_count)
+                # Intrinsic motivation
+                self.writer.add_scalar('intrinsic/p2e_loss', metrics['p2e_loss'], self.update_count)
+                self.writer.add_scalar('intrinsic/p2e_mean', metrics['r_p2e_mean'], self.update_count)
+                self.writer.add_scalar('intrinsic/lifetime_mod_mean', metrics['lifetime_mod_mean'], self.update_count)
+                self.writer.add_scalar('intrinsic/lifetime_hit_rate', metrics['lifetime_hit_rate'], self.update_count)
 
                 # Dashboard
                 self.dashboard_stats.update(
@@ -1010,6 +1155,17 @@ def main():
     parser.add_argument('--publish_interval', type=int, default=50,
                         help='Export + publish new ONNX every N updates')
     parser.add_argument('--checkpoint_interval', type=int, default=200)
+    # Reward channel weights (rover ships 4-channel; server adds P2E + lifetime modulator)
+    parser.add_argument('--w_coverage', type=float, default=1.0)
+    parser.add_argument('--w_frontier', type=float, default=0.5)
+    parser.add_argument('--w_collision', type=float, default=1.0)
+    parser.add_argument('--w_episodic', type=float, default=0.2)
+    parser.add_argument('--w_p2e', type=float, default=0.3)
+    parser.add_argument('--lifetime_strength', type=float, default=1.0,
+                        help='c in (1 + c / sqrt(1 + count(embed))) lifetime modulator')
+    parser.add_argument('--p2e_n_heads', type=int, default=5)
+    parser.add_argument('--p2e_lr', type=float, default=3e-4)
+    parser.add_argument('--simhash_bits', type=int, default=16)
     args = parser.parse_args()
 
     trainer = V620DreamerTrainer(args)
