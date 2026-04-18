@@ -1634,5 +1634,9 @@ class DreamerActorOnnxWrapper(nn.Module):
 
         # 3) Actor on (h, new_z)
         mean, log_std = self.actor(h, new_z)
+        # log_std is a shared nn.Parameter (shape [action_dim]); without a data
+        # dependency on the inputs, ONNX/RKNN optimizers prune it as a constant
+        # output. Broadcast to batch shape tied to `mean` so it survives export.
+        log_std = log_std.unsqueeze(0).expand_as(mean).contiguous()
         return mean, log_std, h, new_z
 
