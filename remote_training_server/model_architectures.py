@@ -1012,7 +1012,9 @@ class RGBEncoder(nn.Module):
             nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),# 6→3
             nn.ReLU(inplace=True),
         )
-        self.pool = nn.AdaptiveAvgPool2d(2)  # → (B, 128, 2, 2)
+        # 3x3 → 2x2 via explicit AvgPool2d (AdaptiveAvgPool2d(2) from 3x3 is
+        # not expressible in ONNX since 3 is not a clean factor of 2).
+        self.pool = nn.AvgPool2d(kernel_size=2, stride=1)  # → (B, 128, 2, 2)
         self._output_dim = 128 * 2 * 2  # 512
 
     def forward(self, x):
