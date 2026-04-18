@@ -62,7 +62,12 @@ def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
     return normalized.astype(np.float32)
 
 
-def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_lstm: bool = True):
+RSSM_H_DIM = 512
+RSSM_Z_DIM = 1024
+ACTION_DIM = 2
+
+
+def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_lstm: bool = True, has_rssm: bool = False):
     """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
 
     Args:
@@ -150,6 +155,17 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_
                     np.save(hx_path, hx_batch)
                     np.save(cx_path, cx_batch)
                     f.write(f"{bev_path} {proprio_path} {rgb_path} {hx_path} {cx_path}\n")
+                elif has_rssm:
+                    h_batch = np.zeros((1, RSSM_H_DIM), dtype=np.float32)
+                    z_batch = np.zeros((1, RSSM_Z_DIM), dtype=np.float32)
+                    a_batch = np.zeros((1, ACTION_DIM), dtype=np.float32)
+                    h_path = os.path.abspath(os.path.join(dataset_dir, f"prev_h_{i}.npy"))
+                    z_path = os.path.abspath(os.path.join(dataset_dir, f"prev_z_{i}.npy"))
+                    a_path = os.path.abspath(os.path.join(dataset_dir, f"prev_a_{i}.npy"))
+                    np.save(h_path, h_batch)
+                    np.save(z_path, z_batch)
+                    np.save(a_path, a_batch)
+                    f.write(f"{bev_path} {proprio_path} {rgb_path} {h_path} {z_path} {a_path}\n")
                 else:
                     f.write(f"{bev_path} {proprio_path} {rgb_path}\n")
 
@@ -217,6 +233,7 @@ def convert_onnx_to_rknn(
         mean_values = []
         std_values = []
         has_lstm = False
+        has_rssm = False
 
         if HAS_ONNX:
             model = onnx.load(onnx_path)
@@ -233,6 +250,7 @@ def convert_onnx_to_rknn(
                 std_values.append([1] * n_channels)
                 print(f"  {name}: {shape}")
             has_lstm = any(n in ('hx', 'cx') for n in input_names)
+            has_rssm = any(n in ('prev_h', 'prev_z', 'prev_a') for n in input_names)
         else:
             # Fallback: try loading without explicit inputs first
             print("  onnx package not available, trying auto-detect via RKNN...")
@@ -276,7 +294,7 @@ def convert_onnx_to_rknn(
         if quantize and calibration_dir:
             print("Building RKNN model with INT8 quantization...")
             print("  Loading calibration dataset...")
-            dataset = _load_calibration_dataset(calibration_dir, has_lstm=has_lstm)
+            dataset = _load_calibration_dataset(calibration_dir, has_lstm=has_lstm, has_rssm=has_rssm)
             print("  Running quantization (this may take a few minutes)...")
             ret = rknn.build(do_quantization=True, dataset=dataset)
         else:
@@ -323,6 +341,10 @@ def convert_onnx_to_rknn(
                     if has_lstm:
                         inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
                         inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                    if has_rssm:
+                        inputs.append(np.zeros((1, RSSM_H_DIM), dtype=np.float32))
+                        inputs.append(np.zeros((1, RSSM_Z_DIM), dtype=np.float32))
+                        inputs.append(np.zeros((1, ACTION_DIM), dtype=np.float32))
                     return inputs
 
                 # Test 1: NaN/Inf Check
@@ -413,6 +435,10 @@ def convert_onnx_to_rknn(
                                 if has_lstm:
                                     calib_inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
                                     calib_inputs.append(np.zeros((1, LSTM_HIDDEN), dtype=np.float32))
+                                if has_rssm:
+                                    calib_inputs.append(np.zeros((1, RSSM_H_DIM), dtype=np.float32))
+                                    calib_inputs.append(np.zeros((1, RSSM_Z_DIM), dtype=np.float32))
+                                    calib_inputs.append(np.zeros((1, ACTION_DIM), dtype=np.float32))
                                 out = rknn.inference(inputs=calib_inputs)
                                 if out:
                                     calib_success += 1
