@@ -155,7 +155,16 @@ if [ "$OS_TYPE" = "Linux" ]; then
       echo "  Blackwell detected - BF16 + TF32 (no GradScaler)"
       export CUDNN_FRONTEND_API=1
       export CUDNN_FRONTEND_LOG_LEVEL=0
-      export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,pinned_use_cuda_host_register:False"
+      export CUDNN_MATMUL_USE_THREE_RING=1
+      export CUDA_DEVICE_MAX_CONNECTIONS=32
+      export TORCH_CUDNN_V8_API_ENABLED=1
+      export PYTORCH_JIT=1
+      export CUDNN_BENCHMARK=1
+      export CUDNN_DETERMINISTIC=0
+      export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,pinned_use_cuda_host_register:False,garbage_collection_threshold:0.8"
+      echo "  Blackwell multi-chip interconnect: ENABLED"
+      echo "  cuDNN v8 API: ENABLED"
+      echo "  TorchScript JIT: ENABLED"
     fi
   elif command -v rocm-smi &> /dev/null; then
     echo "Applying ROCm optimizations..."

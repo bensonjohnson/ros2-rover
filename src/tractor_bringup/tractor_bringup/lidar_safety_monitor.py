@@ -351,12 +351,17 @@ class LidarSafetyMonitor(Node):
                 if self._sector_stopped['rear']:
                     if rear_dist > self.resume_dist_rear:
                         self._sector_stopped['rear'] = False
+                        self.get_logger().info(
+                            f'CLEAR rear (held dist={rear_dist:.2f}m)')
                     else:
                         left = max(left, 0.0)
                         right = max(right, 0.0)
                 else:
                     if rear_dist < self.stop_dist_rear:
                         self._sector_stopped['rear'] = True
+                        self.get_logger().warn(
+                            f'BLOCKED rear={rear_dist:.2f}m '
+                            f'(stop={self.stop_dist_rear:.2f}m)')
                         left = max(left, 0.0)
                         right = max(right, 0.0)
 
@@ -428,11 +433,16 @@ class LidarSafetyMonitor(Node):
                 if self._sector_stopped['rear']:
                     if rear_dist > self.resume_dist_rear:
                         self._sector_stopped['rear'] = False
+                        self.get_logger().info(
+                            f'CLEAR rear (held dist={rear_dist:.2f}m)')
                     else:
                         out_cmd.linear.x = 0.0
                 else:
                     if rear_dist < self.stop_dist_rear:
                         self._sector_stopped['rear'] = True
+                        self.get_logger().warn(
+                            f'BLOCKED rear={rear_dist:.2f}m '
+                            f'(stop={self.stop_dist_rear:.2f}m)')
                         out_cmd.linear.x = 0.0
 
             # --- FORWARD+TURN: slow/stop forward speed toward turn-side obstacles ---

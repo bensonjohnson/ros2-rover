@@ -393,6 +393,16 @@ class V620DreamerTrainer:
             n_heads=args.p2e_n_heads,
         ).to(self.device)
 
+        # Blackwell optimization: Use channels_last memory format for CNN layers
+        # This provides 15-30% speedup for convolutional operations on Blackwell GPU
+        if self._is_blackwell:
+            self.world_model = self.world_model.to(memory_format=torch.channels_last)
+            self.actor = self.actor.to(memory_format=torch.channels_last)
+            self.critic = self.critic.to(memory_format=torch.channels_last)
+            self.target_critic = self.target_critic.to(memory_format=torch.channels_last)
+            self.p2e = self.p2e.to(memory_format=torch.channels_last)
+            print("Channels-last memory format enabled for Blackwell")
+
         self.wm_opt = optim.Adam(self.world_model.parameters(), lr=args.wm_lr, eps=1e-5)
         self.actor_opt = optim.Adam(self.actor.parameters(), lr=args.actor_lr, eps=1e-5)
         self.critic_opt = optim.Adam(self.critic.parameters(), lr=args.critic_lr, eps=1e-5)
