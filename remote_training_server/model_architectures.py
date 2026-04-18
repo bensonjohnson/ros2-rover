@@ -1235,6 +1235,30 @@ def kl_categorical(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tens
     return (p * (p_logp - q_logp)).sum(-1)
 
 
+class ExportableGRUCell(nn.Module):
+    """Manual GRU cell equivalent to nn.GRUCell but built from primitives
+    (Linear + sigmoid + tanh) so it exports cleanly to ONNX. nn.GRUCell lowers
+    to aten::_thnn_fused_gru_cell which has no ONNX symbolic and no fake-tensor
+    kernel, breaking both the legacy and dynamo exporters."""
+
+    def __init__(self, input_size: int, hidden_size: int):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.x2h = nn.Linear(input_size, 3 * hidden_size)
+        self.h2h = nn.Linear(hidden_size, 3 * hidden_size)
+
+    def forward(self, x: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+        gx = self.x2h(x)
+        gh = self.h2h(h)
+        r_x, z_x, n_x = gx.chunk(3, dim=-1)
+        r_h, z_h, n_h = gh.chunk(3, dim=-1)
+        r = torch.sigmoid(r_x + r_h)
+        z = torch.sigmoid(z_x + z_h)
+        n = torch.tanh(n_x + r * n_h)
+        return (1.0 - z) * n + z * h
+
+
 class RSSM(nn.Module):
     """Recurrent State-Space Model (DreamerV3 style).
 
@@ -1267,7 +1291,7 @@ class RSSM(nn.Module):
             nn.Linear(self.stoch_dim + action_dim, mlp_hidden),
             nn.SiLU(),
         )
-        self.gru = nn.GRUCell(mlp_hidden, hidden_dim)
+        self.gru = ExportableGRUCell(mlp_hidden, hidden_dim)
 
         # Prior: h -> z_logits
         self.prior_mlp = nn.Sequential(
