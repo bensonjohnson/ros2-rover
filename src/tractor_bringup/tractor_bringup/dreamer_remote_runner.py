@@ -712,7 +712,7 @@ class DreamerRemoteRunner(Node):
         # Channel 4 (implicit): spin penalty — discourage spinning in place without
         # forward progress. Uses measured angular velocity, not commanded, to avoid
         # penalizing intentional zero-turns that produce actual motion.
-        r_spin = -abs(angular_vel) * 0.2
+        r_spin = -abs(angular_vel) * 1.0
 
         # Remember the frontier bearing for proprio (rover-observable steering hint).
         if cov_step.has_frontier:
@@ -935,7 +935,7 @@ class DreamerRemoteRunner(Node):
 
         # Apply spin penalty to total reward (r_spin is computed inside _compute_reward_channels
         # but not included in the 4-channel reward vector to keep server-side alignment)
-        r_spin = -abs(current_angular) * 0.2
+        r_spin = -abs(current_angular) * 1.0
         reward_scalar = float(reward_vec.sum()) + r_spin
 
         # ---- Episode boundary ----
