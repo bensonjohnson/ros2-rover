@@ -498,7 +498,7 @@ class V620DreamerTrainer:
                 (dummy_bev, dummy_proprio, dummy_rgb, dummy_h, dummy_z, dummy_a),
                 str(onnx_path),
                 input_names=['bev', 'proprio', 'rgb', 'prev_h', 'prev_z', 'prev_a'],
-                output_names=['action_mean', 'log_std', 'new_h', 'new_z'],
+                output_names=['mean_logstd', 'new_h', 'new_z'],
                 opset_version=18,
                 dynamic_axes={
                     'bev': {0: 'batch'}, 'proprio': {0: 'batch'}, 'rgb': {0: 'batch'},

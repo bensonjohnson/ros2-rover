@@ -1634,9 +1634,13 @@ class DreamerActorOnnxWrapper(nn.Module):
 
         # 3) Actor on (h, new_z)
         mean, log_std = self.actor(h, new_z)
-        # log_std is a shared nn.Parameter (shape [action_dim]); without a data
-        # dependency on the inputs, ONNX/RKNN optimizers prune it as a constant
-        # output. Broadcast to batch shape tied to `mean` so it survives export.
-        log_std = log_std.unsqueeze(0).expand_as(mean).contiguous()
-        return mean, log_std, h, new_z
+        # log_std is a shared nn.Parameter (shape [action_dim]); exported as a
+        # standalone output it gets pruned by ONNX/RKNN as a constant with no
+        # data dependency. Concatenate with `mean` so the tensor is genuinely
+        # input-dependent; the rover splits the first `action_dim` channels
+        # back out as action_mean and the rest as log_std.
+        B = mean.shape[0]
+        log_std_b = log_std.unsqueeze(0).expand(B, -1)
+        mean_logstd = torch.cat([mean, log_std_b], dim=-1)  # (B, 2*action_dim)
+        return mean_logstd, h, new_z
 

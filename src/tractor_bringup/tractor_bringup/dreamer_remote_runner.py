@@ -992,17 +992,18 @@ class DreamerRemoteRunner(Node):
                     bev_input, proprio_input, rgb_input,
                     self._prev_h, self._prev_z, self._prev_a,
                 ])
-                if outputs is None or len(outputs) < 4:
+                if outputs is None or len(outputs) < 3:
                     n = 0 if outputs is None else len(outputs)
                     shapes = [getattr(o, 'shape', None) for o in (outputs or [])]
                     raise RuntimeError(
-                        f'RKNN returned {n} outputs (shapes={shapes}), expected 4 '
-                        '[action_mean, log_std, new_h, new_z]. Rebuild .rknn from latest ONNX.'
+                        f'RKNN returned {n} outputs (shapes={shapes}), expected 3 '
+                        '[mean_logstd, new_h, new_z]. Rebuild .rknn from latest ONNX.'
                     )
-                action_mean = outputs[0][0]
-                log_std = outputs[1][0]
-                new_h = outputs[2]
-                new_z = outputs[3]
+                mean_logstd = outputs[0][0]  # (2*action_dim,)
+                action_mean = mean_logstd[:2]
+                log_std = mean_logstd[2:4]
+                new_h = outputs[1]
+                new_z = outputs[2]
 
                 if np.isnan(action_mean).any() or np.isinf(action_mean).any():
                     self.get_logger().error('RKNN output NaN/Inf, using zeros')
