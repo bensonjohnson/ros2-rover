@@ -460,6 +460,11 @@ class DreamerRemoteRunner(Node):
         self._steps_since_wall_stop = 0
         self._wall_stop_active = False
         self._wall_stop_steps = 0
+        # Post-reset cooldown: suppress termination + clear stale stuck history
+        # right after an episode boundary so we don't spin-loop on persistently
+        # blocked physical states. 90 steps ~= 3s at 30Hz.
+        self._post_reset_cooldown_steps = 90
+        self._post_reset_cooldown = 0
         self._cumulative_rotation = 0.0
         self._last_yaw_for_rotation = None
         self._forward_progress_threshold = 0.3
@@ -1063,19 +1068,24 @@ class DreamerRemoteRunner(Node):
         # Feed action back to RSSM for next tick
         self._prev_a = actual_action.astype(np.float32)[None, :]
 
-        # Episode boundary detection
+        # Episode boundary detection (suppressed during post-reset cooldown so
+        # we don't terminate ep#N+1 on its very first tick while the rover is
+        # still physically wedged — that would spin-loop and poison replay).
         episode_done = False
         done_reason = None
-        if monitor_blocking and self._wall_stop_steps >= 450:
-            episode_done = True
-            done_reason = 'blocked'
-        elif is_stuck:
-            episode_done = True
-            done_reason = 'stuck'
-        elif self._revolution_penalty_triggered:
-            episode_done = True
-            done_reason = 'spinning'
-            self._revolution_penalty_triggered = False
+        if self._post_reset_cooldown > 0:
+            self._post_reset_cooldown -= 1
+        else:
+            if monitor_blocking and self._wall_stop_steps >= 450:
+                episode_done = True
+                done_reason = 'blocked'
+            elif is_stuck:
+                episode_done = True
+                done_reason = 'stuck'
+            elif self._revolution_penalty_triggered:
+                episode_done = True
+                done_reason = 'spinning'
+                self._revolution_penalty_triggered = False
 
         reward = self._compute_reward(
             actual_action, current_linear, current_angular,
@@ -1112,6 +1122,17 @@ class DreamerRemoteRunner(Node):
             self._current_episode_length = 0
             # Next tick is the first of a new episode — RSSM state will be reset
             self._next_is_first = True
+            # Clear stuck detector history so the new episode isn't instantly
+            # flagged as stuck based on pre-reset positions, and enforce a
+            # cooldown window before any new termination can fire.
+            self.stuck_detector.position_history.clear()
+            self.stuck_detector.stuck_counter = 0
+            self.stuck_detector.recovery_mode = False
+            self.stuck_detector.recovery_steps = 0
+            self._wall_stop_steps = 0
+            self._wall_stop_active = False
+            self._revolution_penalty_triggered = False
+            self._post_reset_cooldown = self._post_reset_cooldown_steps
 
         self._prev_action = actual_action
         self._prev_linear_cmds.append(actual_action[0])
