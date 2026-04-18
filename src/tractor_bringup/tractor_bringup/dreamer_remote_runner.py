@@ -463,8 +463,14 @@ class DreamerRemoteRunner(Node):
         # Post-reset cooldown: suppress termination + clear stale stuck history
         # right after an episode boundary so we don't spin-loop on persistently
         # blocked physical states. 90 steps ~= 3s at 30Hz.
-        self._post_reset_cooldown_steps = 90
+        self._post_reset_cooldown_steps = 30
         self._post_reset_cooldown = 0
+        # Scripted recovery: when wall-pinned, override the actor with a
+        # reverse+turn burst so replay gets real transitions showing how
+        # clearance increases from backing up. Without this, the world model
+        # never sees unsticking and can't imagine recovery.
+        self._recovery_steps_remaining = 0
+        self._recovery_turn_dir = 0.0
         self._cumulative_rotation = 0.0
         self._last_yaw_for_rotation = None
         self._forward_progress_threshold = 0.3
@@ -819,8 +825,12 @@ class DreamerRemoteRunner(Node):
         if linear_vel > avt and abs(angular_vel) > aat and min_lidar_dist > act_c:
             reward += 0.3 * abs(linear_vel) * abs(angular_vel)
 
-        if min_lidar_dist < 0.4 and linear_vel > 0.1:
-            reward -= 0.25 * (0.4 - min_lidar_dist) * linear_vel
+        # Strong wall-proximity penalty scaling with forward speed. Heavy so the
+        # policy cannot profitably rocket toward a wall and eat a single terminal
+        # penalty — every tick near an obstacle while moving fast is negative.
+        if min_lidar_dist < 0.6 and linear_vel > 0.05:
+            proximity = (0.6 - min_lidar_dist) / 0.6  # 0..1
+            reward -= 1.5 * proximity * linear_vel
 
         if slip_recovery_active and linear_vel < -0.02:
             reward += 0.2 * abs(linear_vel)
@@ -855,13 +865,10 @@ class DreamerRemoteRunner(Node):
             reward += base * streak * vf * cf
 
         if wall_stopped:
-            ramp = min(self._wall_stop_steps / 450.0, 1.0)
-            penalty = -0.2 - 0.5 * ramp
-            if phase == 'exploration':
-                penalty *= 0.5
-            elif phase == 'learning':
-                penalty *= 0.75
-            reward += penalty
+            # Applied every tick while wall-pinned (not just at episode boundary)
+            # so aggregate return for "rocket into wall" cannot be positive.
+            ramp = min(self._wall_stop_steps / 90.0, 1.0)
+            reward -= 0.8 + 1.2 * ramp
             rot = abs(left_track - right_track)
             if rot > 0.3:
                 reward += 0.2 * rot
@@ -869,7 +876,10 @@ class DreamerRemoteRunner(Node):
                 reward += 0.25 * abs(linear_vel)
 
         self._prev_min_clearance = min_lidar_dist
-        return float(np.clip(reward, -1.0, 1.0))
+        # Widened clip: original [-1, 1] was too narrow — a multi-tick wall-pin
+        # needs headroom for the penalty terms to actually outweigh accumulated
+        # forward-motion reward from the approach phase.
+        return float(np.clip(reward, -3.0, 2.0))
 
     # ========== Control Loop ==========
 
@@ -1033,6 +1043,18 @@ class DreamerRemoteRunner(Node):
         # Apply safety + deadzone
         is_stuck = self._is_stuck
         monitor_blocking = self._safety_override
+
+        # Trigger scripted recovery once wall-stop debounces (~0.5s pinned).
+        if monitor_blocking and self._wall_stop_steps >= 15 and self._recovery_steps_remaining == 0:
+            self._recovery_steps_remaining = 30  # ~1s at 30Hz
+            self._recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
+
+        if self._recovery_steps_remaining > 0:
+            # Reverse with a turning bias so the rover arcs away from the wall.
+            rl = -0.5 + self._recovery_turn_dir * 0.15
+            rr = -0.5 - self._recovery_turn_dir * 0.15
+            action_np = np.array([rl, rr], dtype=np.float32)
+            self._recovery_steps_remaining -= 1
 
         def soft_deadzone(v, m):
             if abs(v) < 0.001:

@@ -1003,7 +1003,7 @@ def main():
     parser.add_argument('--kl_free', type=float, default=1.0, help='Free bits per step')
     parser.add_argument('--kl_dyn_scale', type=float, default=0.5)
     parser.add_argument('--kl_rep_scale', type=float, default=0.1)
-    parser.add_argument('--entropy_coef', type=float, default=3e-4)
+    parser.add_argument('--entropy_coef', type=float, default=3e-3)
     parser.add_argument('--replay_chunks', type=int, default=4000)
     parser.add_argument('--min_replay_chunks', type=int, default=4,
                         help='Wait for this many chunks before starting training')

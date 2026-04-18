@@ -1539,7 +1539,10 @@ class DreamerActor(nn.Module):
     def forward(self, h: torch.Tensor, z: torch.Tensor):
         x = self.net(torch.cat([h, z], dim=-1))
         mean = self.mean_head(x)
-        log_std = self.log_std.clamp(-5.0, 2.0)
+        # Floor lifted from -5 to -1.5: on a real robot with narrow spaces the
+        # policy tends to collapse to near-deterministic actions within minutes,
+        # after which no exploration occurs and stuck recovery is unlearnable.
+        log_std = self.log_std.clamp(-1.5, 2.0)
         return mean, log_std
 
     def act(self, h: torch.Tensor, z: torch.Tensor, deterministic: bool = False):
