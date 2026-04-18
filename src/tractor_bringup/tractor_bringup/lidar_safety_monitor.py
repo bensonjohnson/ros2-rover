@@ -253,7 +253,8 @@ class LidarSafetyMonitor(Node):
             self._min_overall_dist = min(self._sector_dists.values())
 
             # Publish estop on every scan so subscribers always have latest state
-            self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
+            # Include both front and rear blocked states for comprehensive safety
+            self.estop_pub.publish(Bool(data=self._sector_stopped['front'] or self._sector_stopped['rear']))
 
         except Exception as exc:
             self.get_logger().warn(f'LIDAR processing error: {exc}')
@@ -493,7 +494,8 @@ class LidarSafetyMonitor(Node):
         self.sector_dist_pub.publish(sector_msg)
 
         # Publish estop continuously so late-joining subscribers get current state
-        self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
+        # Include both front and rear blocked states for comprehensive safety
+        self.estop_pub.publish(Bool(data=self._sector_stopped['front'] or self._sector_stopped['rear']))
 
         blocked = [s for s, v in self._sector_stopped.items() if v]
         f = self._sector_dists
