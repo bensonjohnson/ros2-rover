@@ -665,7 +665,7 @@ class DreamerRemoteRunner(Node):
         self._collision_latched = False
 
     def _compute_reward_channels(self, robot_x, robot_y, robot_yaw, scan_msg,
-                                 feat_embed: np.ndarray):
+                                 feat_embed: np.ndarray, angular_vel: float = 0.0):
         """Assemble the 4-channel reward vector. Called once per control tick.
 
         Returns:
@@ -708,6 +708,11 @@ class DreamerRemoteRunner(Node):
         # server-side SimHash also buckets on, so the two timescales are aligned.
         lo, hi = self._reward_clip['episodic']
         r_episodic = float(np.clip(self.episodic_novelty.step(feat_embed), lo, hi))
+
+        # Channel 4 (implicit): spin penalty — discourage spinning in place without
+        # forward progress. Uses measured angular velocity, not commanded, to avoid
+        # penalizing intentional zero-turns that produce actual motion.
+        r_spin = -abs(angular_vel) * 0.2
 
         # Remember the frontier bearing for proprio (rover-observable steering hint).
         if cov_step.has_frontier:
@@ -923,10 +928,15 @@ class DreamerRemoteRunner(Node):
         robot_y = self._latest_odom[1] if self._latest_odom else 0.0
         reward_vec, _cov_step, collision = self._compute_reward_channels(
             robot_x, robot_y, self._latest_fused_yaw,
-            self._latest_scan, feat_embed,
+            self._latest_scan, feat_embed, angular_vel=current_angular,
         )
         if np.isnan(reward_vec).any() or np.isinf(reward_vec).any():
             return
+
+        # Apply spin penalty to total reward (r_spin is computed inside _compute_reward_channels
+        # but not included in the 4-channel reward vector to keep server-side alignment)
+        r_spin = -abs(current_angular) * 0.2
+        reward_scalar = float(reward_vec.sum()) + r_spin
 
         # ---- Episode boundary ----
         # Only **collision** (rising edge of /emergency_stop) and the step cap
@@ -948,7 +958,6 @@ class DreamerRemoteRunner(Node):
             bev_grid, proprio, actual_action, reward_vec, episode_done,
             is_first=is_first, rgb=rgb_chw_uint8
         )
-        reward_scalar = float(reward_vec.sum())
         self._total_steps += 1
         self._current_episode_reward += reward_scalar
         self._current_episode_length += 1
