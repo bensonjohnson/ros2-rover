@@ -992,6 +992,13 @@ class DreamerRemoteRunner(Node):
                     bev_input, proprio_input, rgb_input,
                     self._prev_h, self._prev_z, self._prev_a,
                 ])
+                if outputs is None or len(outputs) < 4:
+                    n = 0 if outputs is None else len(outputs)
+                    shapes = [getattr(o, 'shape', None) for o in (outputs or [])]
+                    raise RuntimeError(
+                        f'RKNN returned {n} outputs (shapes={shapes}), expected 4 '
+                        '[action_mean, log_std, new_h, new_z]. Rebuild .rknn from latest ONNX.'
+                    )
                 action_mean = outputs[0][0]
                 log_std = outputs[1][0]
                 new_h = outputs[2]
