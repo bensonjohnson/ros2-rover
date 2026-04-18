@@ -1044,15 +1044,24 @@ class DreamerRemoteRunner(Node):
         is_stuck = self._is_stuck
         monitor_blocking = self._safety_override
 
-        # Trigger scripted recovery once wall-stop debounces (~0.5s pinned).
-        if monitor_blocking and self._wall_stop_steps >= 15 and self._recovery_steps_remaining == 0:
+        # Scripted recovery: fires on prolonged no-progress. Action depends on
+        # whether there's actually an obstacle nearby:
+        #   - near wall  → reverse + turn (needs clearance before going forward)
+        #   - open space → forward + turn (policy is spinning, just needs to go)
+        stuck_long_enough = self.stuck_detector.stuck_counter >= 15
+        wall_pinned = monitor_blocking and self._wall_stop_steps >= 15
+        if (wall_pinned or stuck_long_enough) and self._recovery_steps_remaining == 0:
             self._recovery_steps_remaining = 30  # ~1s at 30Hz
             self._recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
+            self._recovery_is_reverse = wall_pinned or lidar_min < 0.4
 
         if self._recovery_steps_remaining > 0:
-            # Reverse with a turning bias so the rover arcs away from the wall.
-            rl = -0.5 + self._recovery_turn_dir * 0.15
-            rr = -0.5 - self._recovery_turn_dir * 0.15
+            if getattr(self, '_recovery_is_reverse', False):
+                rl = -0.5 + self._recovery_turn_dir * 0.15
+                rr = -0.5 - self._recovery_turn_dir * 0.15
+            else:
+                rl = 0.5 + self._recovery_turn_dir * 0.25
+                rr = 0.5 - self._recovery_turn_dir * 0.25
             action_np = np.array([rl, rr], dtype=np.float32)
             self._recovery_steps_remaining -= 1
 
@@ -1097,6 +1106,11 @@ class DreamerRemoteRunner(Node):
         done_reason = None
         if self._post_reset_cooldown > 0:
             self._post_reset_cooldown -= 1
+        elif self._recovery_steps_remaining > 0:
+            # Don't terminate while scripted recovery is running — we want those
+            # reverse+turn transitions to enter replay as non-terminal steps so
+            # the world model learns recovery dynamics.
+            pass
         else:
             if monitor_blocking and self._wall_stop_steps >= 450:
                 episode_done = True
