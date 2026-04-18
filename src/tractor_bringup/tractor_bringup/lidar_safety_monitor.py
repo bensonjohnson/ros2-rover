@@ -48,6 +48,7 @@ class LidarSafetyMonitor(Node):
 
         # Safety thresholds
         self.declare_parameter('stop_distance', 0.20)
+        self.declare_parameter('stop_distance_rear', 0.40)  # Larger for rear since LIDAR is front-mounted
         self.declare_parameter('slow_distance', 0.40)
         self.declare_parameter('hysteresis', 0.05)
         self.declare_parameter('max_eval_distance', 4.0)
@@ -131,6 +132,7 @@ class LidarSafetyMonitor(Node):
         self.output_track_topic = str(self.get_parameter('output_track_topic').value)
 
         self.stop_dist = float(self.get_parameter('stop_distance').value)
+        self.stop_dist_rear = float(self.get_parameter('stop_distance_rear').value)
         self.slow_dist = float(self.get_parameter('slow_distance').value)
         self.hysteresis = float(self.get_parameter('hysteresis').value)
         self.max_distance = float(self.get_parameter('max_eval_distance').value)
@@ -141,10 +143,11 @@ class LidarSafetyMonitor(Node):
         self.robot_half_width = float(self.get_parameter('robot_half_width').value)
 
         self.resume_dist = self.stop_dist + self.hysteresis
+        self.resume_dist_rear = self.stop_dist_rear + self.hysteresis
 
     def _log_params(self):
         self.get_logger().info(
-            f'Params: Stop={self.stop_dist:.2f}m  Slow={self.slow_dist:.2f}m  '
+            f'Params: Stop={self.stop_dist:.2f}m  Rear={self.stop_dist_rear:.2f}m  Slow={self.slow_dist:.2f}m  '
             f'Resume={self.resume_dist:.2f}m  '
             f'MinHold={self.min_block_duration:.2f}s  '
             f'HalfWidth={self.robot_half_width:.3f}m  '
@@ -346,13 +349,13 @@ class LidarSafetyMonitor(Node):
             if min(left, right) < -0.01:
                 rear_dist = self._sector_dists['rear']
                 if self._sector_stopped['rear']:
-                    if rear_dist > self.resume_dist:
+                    if rear_dist > self.resume_dist_rear:
                         self._sector_stopped['rear'] = False
                     else:
                         left = max(left, 0.0)
                         right = max(right, 0.0)
                 else:
-                    if rear_dist < self.stop_dist:
+                    if rear_dist < self.stop_dist_rear:
                         self._sector_stopped['rear'] = True
                         left = max(left, 0.0)
                         right = max(right, 0.0)
@@ -423,12 +426,12 @@ class LidarSafetyMonitor(Node):
             if out_cmd.linear.x < -0.01:
                 rear_dist = self._sector_dists['rear']
                 if self._sector_stopped['rear']:
-                    if rear_dist > self.resume_dist:
+                    if rear_dist > self.resume_dist_rear:
                         self._sector_stopped['rear'] = False
                     else:
                         out_cmd.linear.x = 0.0
                 else:
-                    if rear_dist < self.stop_dist:
+                    if rear_dist < self.stop_dist_rear:
                         self._sector_stopped['rear'] = True
                         out_cmd.linear.x = 0.0
 
