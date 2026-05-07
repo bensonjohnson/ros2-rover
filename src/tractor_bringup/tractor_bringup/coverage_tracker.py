@@ -5,8 +5,16 @@ Drives two reward channels:
 * `coverage`  — `α · (cells transitioning UNKNOWN → KNOWN this tick)`,
   clipped. Dense extrinsic gradient toward driving into virgin space.
 * `frontier`  — potential-based shaping `γ Φ(s') − Φ(s)` with
-  `Φ(s) = −d(robot, nearest frontier)`. Pure shaping (Ng et al. 1999); does
-  not bias the optimal policy.
+  `Φ(s) = −d(robot, nearest UNKNOWN cell)` (Euclidean, ignoring walls). Pure
+  shaping (Ng et al. 1999); does not bias the optimal policy. Distance is
+  cell-geometric, not reachability — in walled indoor environments where
+  FREE is fully encircled by OCCUPIED, the classic "FREE adjacent to
+  UNKNOWN" frontier definition returns no result, but `nearest UNKNOWN`
+  still yields a continuous gradient (typically pointing through the
+  closest wall). The collision penalty teaches the rover not to drive
+  through walls; the shaping pushes it to navigate along walls until it
+  finds a doorway, after which the lidar maps the corridor and the
+  nearest-UNKNOWN target retreats further out.
 
 The grid is intentionally **world-fixed and per-session**: it resets on
 operator command or when the robot teleports (large odometry jump). The
@@ -20,7 +28,6 @@ under 2% CPU on an RK3588 at 30 Hz with ~600 returns per scan.
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -178,8 +185,10 @@ class CoverageTracker:
         coverage_reward = float(np.clip(delta * self.coverage_alpha,
                                         self.coverage_clip[0], self.coverage_clip[1]))
 
-        # Frontier distance + bearing
-        frontier_d, frontier_a, has_f = self._nearest_frontier(rr, rc, robot_yaw)
+        # Nearest-UNKNOWN distance + bearing (replaces the BFS-frontier;
+        # see module docstring for why nearest-UNKNOWN is robust to
+        # walled-indoor topologies where FREE-UNKNOWN borders don't exist).
+        frontier_d, frontier_a, has_f = self._nearest_unknown(rr, rc, robot_yaw)
         phi = -frontier_d if has_f else 0.0
 
         return CoverageStep(
@@ -208,64 +217,55 @@ class CoverageTracker:
         return 0 <= r < self.grid_size and 0 <= c < self.grid_size
 
     def _empty_step(self, x, y, yaw, rr, rc) -> CoverageStep:
-        d, a, has_f = self._nearest_frontier(rr, rc, yaw)
+        d, a, has_f = self._nearest_unknown(rr, rc, yaw)
         phi = -d if has_f else 0.0
         return CoverageStep(coverage_delta=0.0, frontier_distance=d, phi=phi,
                             frontier_angle=a, has_frontier=has_f)
 
     # ------------------------------------------------------------------
-    # Frontier search — BFS on the grid, capped by max search radius
+    # Nearest-UNKNOWN search — Euclidean, ignores reachability
     # ------------------------------------------------------------------
 
-    def _nearest_frontier(self, rr: int, rc: int, yaw: float) -> tuple[float, float, bool]:
+    def _nearest_unknown(self, rr: int, rc: int, yaw: float) -> tuple[float, float, bool]:
         """Return (metric_distance, robot-frame bearing, found_flag).
 
-        A frontier cell is a FREE cell with at least one UNKNOWN 4-neighbour.
-        BFS from `(rr, rc)` over FREE cells; first frontier found is the
-        Manhattan-shortest one (good enough for shaping; PBRS only needs
-        monotonicity, not Euclidean optimality).
+        Geometric (cell-Euclidean) distance from the robot's cell to the
+        closest UNKNOWN cell anywhere on the grid — ignores OCCUPIED cells,
+        i.e. doesn't require a FREE path. This is intentional: in walled
+        indoor environments the BFS-frontier definition (FREE adjacent to
+        UNKNOWN) returns nothing because OCCUPIED always sandwiches the two,
+        but the nearest UNKNOWN cell still exists (typically just on the
+        far side of the closest wall). Combined with the sticky collision
+        penalty, this gives a "find the doorway" gradient: the rover is
+        rewarded for getting closer to UNKNOWN, but punished for hitting
+        walls along the way, so it learns to traverse along walls until
+        an opening reveals UNKNOWN through FREE.
         """
-        if not self._in_bounds(rr, rc) or self.grid[rr, rc] == OCCUPIED:
+        if not self._in_bounds(rr, rc):
+            return float('inf'), 0.0, False
+        unknown_mask = (self.grid == UNKNOWN)
+        if not unknown_mask.any():
             return float('inf'), 0.0, False
 
-        max_radius = int(self.frontier_max_search / self.resolution)
-        visited = np.zeros_like(self.grid, dtype=bool)
-        visited[rr, rc] = True
-        q = deque()
-        q.append((rr, rc, 0))
+        rows, cols = np.where(unknown_mask)
+        drow = rows.astype(np.float32) - float(rr)
+        dcol = cols.astype(np.float32) - float(rc)
+        d2 = drow * drow + dcol * dcol
+        idx = int(np.argmin(d2))
+        d_cells = float(np.sqrt(d2[idx]))
+        metric_d = d_cells * self.resolution
+        if metric_d > self.frontier_max_search:
+            return float('inf'), 0.0, False
 
-        while q:
-            r, c, d = q.popleft()
-            if d > max_radius:
-                break
-
-            # Frontier check
-            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                nr, nc = r + dr, c + dc
-                if not self._in_bounds(nr, nc):
-                    continue
-                if self.grid[nr, nc] == UNKNOWN and self.grid[r, c] == FREE:
-                    # (r, c) is a frontier — return it
-                    metric_d = d * self.resolution
-                    wx = self.origin_x + (c + 0.5) * self.resolution
-                    wy = self.origin_y + (r + 0.5) * self.resolution
-                    rx = wx - (self.origin_x + (rc + 0.5) * self.resolution)
-                    ry = wy - (self.origin_y + (rr + 0.5) * self.resolution)
-                    angle_world = np.arctan2(ry, rx)
-                    bearing = _wrap_pi(angle_world - yaw)
-                    return metric_d, float(bearing), True
-
-            # Expand BFS — only walk through FREE cells
-            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                nr, nc = r + dr, c + dc
-                if (not self._in_bounds(nr, nc)) or visited[nr, nc]:
-                    continue
-                visited[nr, nc] = True
-                if self.grid[nr, nc] == FREE:
-                    q.append((nr, nc, d + 1))
-
-        # No frontier within search radius — likely fully explored locally.
-        return float('inf'), 0.0, False
+        target_r = int(rows[idx])
+        target_c = int(cols[idx])
+        wx = self.origin_x + (target_c + 0.5) * self.resolution
+        wy = self.origin_y + (target_r + 0.5) * self.resolution
+        rx = wx - (self.origin_x + (rc + 0.5) * self.resolution)
+        ry = wy - (self.origin_y + (rr + 0.5) * self.resolution)
+        angle_world = float(np.arctan2(ry, rx))
+        bearing = _wrap_pi(angle_world - yaw)
+        return metric_d, float(bearing), True
 
 
 def _wrap_pi(a: float) -> float:
