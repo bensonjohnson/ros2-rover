@@ -519,7 +519,16 @@ class DreamerRemoteRunner(Node):
         self._prev_phi: float | None = None
         self._frontier_angle_pi = 0.0      # last frontier bearing / π ∈ [-1, 1]
         self._emergency_prev = False       # rising-edge tracker for /emergency_stop
-        self._collision_latched = False    # true for one tick after rising edge
+        self._collision_latched = False    # sticky: true every tick while /emergency_stop asserted
+        self._collision_first = False      # rising-edge only: drives episode boundary
+
+        # Extrinsic-reward diagnostics: rolling 300-tick window (~10 s at 30 Hz).
+        # Logged once per filled window; primary signal is `nz_frac` on
+        # coverage_delta — < 0.05 means CoverageTracker isn't firing and the
+        # whole extrinsic reward channel is upstream-broken.
+        self._diag_cov_deltas = deque(maxlen=300)
+        self._diag_has_frontier = deque(maxlen=300)
+        self._diag_counter = 0
 
         self._sensor_warmup_complete = False
         self._sensor_warmup_countdown = 90
@@ -630,12 +639,14 @@ class DreamerRemoteRunner(Node):
                 self._reward_clip[ch] = (float(clip[ch][0]), float(clip[ch][1]))
 
     def _safety_cb(self, msg):
-        # Rising-edge of the safety-stop signal is the ONLY collision
-        # signal that enters the reward / episode boundary. Staying stopped
-        # does not keep emitting a penalty.
+        # Reward latch is *sticky* — every tick the rover is pinned against
+        # an obstacle accrues the collision penalty so the world model can
+        # actually learn that "pinned latent" is bad. Episode boundary uses
+        # the rising-edge flag so we don't thrash is_first / RSSM resets.
         state = bool(msg.data)
         if state and not self._emergency_prev:
-            self._collision_latched = True
+            self._collision_first = True
+        self._collision_latched = state
         self._safety_override = state
         self._emergency_prev = state
 
@@ -663,15 +674,17 @@ class DreamerRemoteRunner(Node):
         self.episodic_novelty.reset()
         self._prev_phi = None
         self._collision_latched = False
+        self._collision_first = False
 
     def _compute_reward_channels(self, robot_x, robot_y, robot_yaw, scan_msg,
-                                 feat_embed: np.ndarray, angular_vel: float = 0.0):
+                                 feat_embed: np.ndarray, angular_vel: float = 0.0,
+                                 linear_vel: float = 0.0):
         """Assemble the 4-channel reward vector. Called once per control tick.
 
         Returns:
             reward_vec: np.ndarray shape (4,) — [coverage, frontier, collision, episodic]
             coverage_step: CoverageStep (used to fill proprio `frontier_angle / π`)
-            collision: bool (drives episode termination)
+            collision: bool (rising-edge only — drives episode termination)
         """
         cov_step = self.coverage_tracker.step(
             ranges=np.asarray(scan_msg.ranges, dtype=np.float32),
@@ -680,9 +693,14 @@ class DreamerRemoteRunner(Node):
             robot_x=robot_x, robot_y=robot_y, robot_yaw=robot_yaw,
         )
 
-        # Channel 0: coverage (already clipped inside CoverageTracker)
+        # Channel 0: coverage delta + forward-progress shaping. The shaping
+        # term breaks the forward/backward symmetry that nothing else in the
+        # reward vector breaks (coverage / frontier / episodic are all
+        # direction-agnostic). Folded into r_coverage rather than a 5th
+        # channel so we don't have to renegotiate the chunk wire format.
         lo, hi = self._reward_clip['coverage']
-        r_coverage = float(np.clip(cov_step.coverage_delta, lo, hi))
+        r_coverage = float(cov_step.coverage_delta) + 0.05 * max(0.0, linear_vel)
+        r_coverage = float(np.clip(r_coverage, lo, hi))
 
         # Channel 1: frontier potential-based shaping (γ Φ(s') − Φ(s) with γ=1 here;
         # the policy's γ=0.997 is applied server-side in λ-returns already)
@@ -699,10 +717,15 @@ class DreamerRemoteRunner(Node):
         lo, hi = self._reward_clip['frontier']
         r_frontier = float(np.clip(r_frontier, lo, hi))
 
-        # Channel 2: collision (rising edge of /emergency_stop)
-        collision = self._collision_latched
-        r_collision = -10.0 if collision else 0.0
-        self._collision_latched = False
+        # Channel 2: collision. Penalty is sticky — every tick the rover is
+        # pinned against an obstacle accrues -50 so the world model actually
+        # learns "pinned latent = bad." Episode termination uses the rising-
+        # edge flag (`_collision_first`) so we don't thrash is_first / RSSM
+        # resets while held.
+        penalty_active = self._collision_latched
+        collision = self._collision_first
+        self._collision_first = False
+        r_collision = -50.0 if penalty_active else 0.0
 
         # Channel 3: episodic novelty over RSSM feat (h ⊕ z). Feat is what the
         # server-side SimHash also buckets on, so the two timescales are aligned.
@@ -719,6 +742,21 @@ class DreamerRemoteRunner(Node):
             self._frontier_angle_pi = float(np.clip(cov_step.frontier_angle / math.pi, -1.0, 1.0))
         else:
             self._frontier_angle_pi = 0.0
+
+        # Diagnostics: rolling 300-tick window. Primary signal is `nz_frac` on
+        # coverage_delta — < 0.05 means CoverageTracker isn't yielding gain on
+        # most ticks (BEV cell size or lidar→BEV mapping is the upstream bug).
+        self._diag_cov_deltas.append(float(cov_step.coverage_delta))
+        self._diag_has_frontier.append(1.0 if cov_step.has_frontier else 0.0)
+        self._diag_counter += 1
+        if self._diag_counter % 300 == 0 and len(self._diag_cov_deltas) == self._diag_cov_deltas.maxlen:
+            cov = np.asarray(self._diag_cov_deltas)
+            fr = np.asarray(self._diag_has_frontier)
+            self.get_logger().info(
+                f'reward-diag(300t): coverage_delta nz_frac={float((cov > 0).mean()):.3f} '
+                f'mean={float(cov.mean()):.4f} max={float(cov.max()):.4f} | '
+                f'has_frontier_frac={float(fr.mean()):.3f}'
+            )
 
         return np.array([r_coverage, r_frontier, r_collision, r_episodic], dtype=np.float32), \
                cov_step, collision
@@ -928,7 +966,8 @@ class DreamerRemoteRunner(Node):
         robot_y = self._latest_odom[1] if self._latest_odom else 0.0
         reward_vec, _cov_step, collision = self._compute_reward_channels(
             robot_x, robot_y, self._latest_fused_yaw,
-            self._latest_scan, feat_embed, angular_vel=current_angular,
+            self._latest_scan, feat_embed,
+            angular_vel=current_angular, linear_vel=current_linear,
         )
         if np.isnan(reward_vec).any() or np.isinf(reward_vec).any():
             return

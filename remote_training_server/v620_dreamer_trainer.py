@@ -1223,7 +1223,9 @@ def main():
     parser.add_argument('--w_coverage', type=float, default=1.0)
     parser.add_argument('--w_frontier', type=float, default=0.5)
     parser.add_argument('--w_collision', type=float, default=1.0)
-    parser.add_argument('--w_episodic', type=float, default=0.2)
+    parser.add_argument('--w_episodic', type=float, default=0.05,
+                        help='Lowered from 0.2: extrinsic channels were silent and '
+                             'episodic was the only live signal, driving backward-novelty exploit')
     parser.add_argument('--w_p2e', type=float, default=0.3)
     parser.add_argument('--lifetime_strength', type=float, default=1.0,
                         help='c in (1 + c / sqrt(1 + count(embed))) lifetime modulator')
