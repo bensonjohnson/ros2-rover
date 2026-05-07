@@ -1237,6 +1237,54 @@ def kl_categorical(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tens
     return (p * (p_logp - q_logp)).sum(-1)
 
 
+# =============================================================================
+# TwoHot — categorical value target encoding (DreamerV3 critic)
+# =============================================================================
+#
+# The critic predicts a discrete distribution over symlog-space bins. The
+# scalar target `y` (in symlog space) is encoded by placing weight on the two
+# bins that bracket it, inversely proportional to distance:
+#     encode(y) places weight (1 - frac) on bin_low and weight `frac` on bin_high
+# Decoding is the expectation under softmax(logits) — still in symlog space;
+# callers symexp() to recover real-space.
+
+
+def twohot_encode(target: torch.Tensor, bins: torch.Tensor) -> torch.Tensor:
+    """Two-hot encode a scalar target (in symlog space) over `bins`.
+
+    target: (...) scalar per element
+    bins:   (num_bins,) uniformly spaced
+    returns: (..., num_bins) sums to 1 along last dim
+    """
+    num_bins = bins.shape[0]
+    bin_low = bins[0]
+    bin_high = bins[-1]
+    bin_step = (bin_high - bin_low) / (num_bins - 1)
+    target = target.clamp(bin_low, bin_high)
+    idx_float = (target - bin_low) / bin_step                    # (...)
+    idx_lo = idx_float.floor().long().clamp(0, num_bins - 2)
+    idx_hi = idx_lo + 1
+    w_hi = idx_float - idx_lo.to(idx_float.dtype)                # (...)
+    w_lo = 1.0 - w_hi
+    out = torch.zeros(*target.shape, num_bins, device=target.device, dtype=target.dtype)
+    out.scatter_add_(-1, idx_lo.unsqueeze(-1), w_lo.unsqueeze(-1))
+    out.scatter_add_(-1, idx_hi.unsqueeze(-1), w_hi.unsqueeze(-1))
+    return out
+
+
+def twohot_decode(logits: torch.Tensor, bins: torch.Tensor) -> torch.Tensor:
+    """Expectation in symlog space: E[bins | softmax(logits)]. Returns (...)."""
+    probs = F.softmax(logits, dim=-1)
+    return (probs * bins).sum(-1)
+
+
+def twohot_loss(logits: torch.Tensor, target: torch.Tensor, bins: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy between two-hot(target) and softmax(logits). Returns (...)."""
+    target_probs = twohot_encode(target, bins)
+    log_probs = F.log_softmax(logits, dim=-1)
+    return -(target_probs * log_probs).sum(-1)
+
+
 class ExportableGRUCell(nn.Module):
     """Manual GRU cell equivalent to nn.GRUCell but built from primitives
     (Linear + sigmoid + tanh) so it exports cleanly to ONNX. nn.GRUCell lowers
@@ -1598,9 +1646,18 @@ class P2EEnsemble(nn.Module):
 
 
 class DreamerActor(nn.Module):
-    """Actor on (h, z). Outputs tanh-squashed 2-D action with learned per-dim log-std."""
+    """Actor on (h, z). Samples raw ~ Normal(mean, std); deployment applies tanh.
 
-    def __init__(self, feat_dim: int, action_dim: int = 2, hidden: int = 512):
+    Mean is bounded to ±`mean_scale` via tanh on the head output. Log-prob uses
+    the underlying Gaussian density on `raw` (no tanh-Jacobian correction) —
+    the tanh squash is part of the deterministic action forward (matching the
+    rover's `tanh(mean + std·noise)` execution), not part of the policy density.
+    Including the Jacobian made the policy gradient exploitable: the optimizer
+    would push `mean` to extreme values to inflate `−log(1 − tanh²)` for free.
+    """
+
+    def __init__(self, feat_dim: int, action_dim: int = 2, hidden: int = 512,
+                 mean_scale: float = 5.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feat_dim, hidden),
@@ -1610,25 +1667,32 @@ class DreamerActor(nn.Module):
         )
         self.mean_head = nn.Linear(hidden, action_dim)
         self.log_std = nn.Parameter(torch.zeros(action_dim))
+        self.mean_scale = mean_scale
         nn.init.orthogonal_(self.mean_head.weight, gain=0.1)
         nn.init.zeros_(self.mean_head.bias)
 
     def forward(self, h: torch.Tensor, z: torch.Tensor):
         x = self.net(torch.cat([h, z], dim=-1))
-        mean = self.mean_head(x)
-        # Floor lifted from -5 to -1.5: on a real robot with narrow spaces the
-        # policy tends to collapse to near-deterministic actions within minutes,
-        # after which no exploration occurs and stuck recovery is unlearnable.
+        # Bounded mean prevents the unbounded-Jacobian exploit and keeps `raw`
+        # within roughly ±(mean_scale + a few std), so tanh(raw) doesn't always
+        # saturate and exploration noise still has effect.
+        mean = self.mean_scale * torch.tanh(self.mean_head(x))
         log_std = self.log_std.clamp(-1.5, 2.0)
         return mean, log_std
 
     def act(self, h: torch.Tensor, z: torch.Tensor, deterministic: bool = False):
-        """Sample tanh-squashed action with log-prob and entropy.
+        """Sample action; return score-function log_prob and entropy.
+
+        We use the *score-function* policy gradient: log_prob is computed on a
+        detached sample, so ∂log_prob/∂mean = (sample - mean) / var (non-zero)
+        rather than the reparametrization-trick zero. The action `tanh(raw)`
+        is what the dynamics and rover consume; the squash is part of the
+        deterministic forward, not part of the policy density.
 
         Returns:
-            action: (B, action_dim) in [-1, 1]
-            log_prob: (B,)
-            entropy: (B,) — underlying Gaussian entropy (pre-tanh; used as bonus)
+            action: (B, action_dim) = tanh(raw), in [-1, 1].
+            log_prob: (B,) score-function log p(raw_detached | mean, std).
+            entropy: (B,) underlying Gaussian entropy.
         """
         mean, log_std = self.forward(h, z)
         std = log_std.exp()
@@ -1638,32 +1702,47 @@ class DreamerActor(nn.Module):
             eps = torch.randn_like(mean)
             raw = mean + std * eps
         action = torch.tanh(raw)
-        # log prob of raw under Normal + tanh correction
+        # Detach `raw` so PG gradient flows through (mean, log_std) only —
+        # the standard score-function (REINFORCE-style) policy gradient.
+        raw_sample = raw.detach()
         var = std.pow(2)
-        log_prob = (-0.5 * ((raw - mean) ** 2) / var - log_std - 0.9189385332046727).sum(-1)
-        # tanh squash correction: log(1 - tanh(raw)^2) = 2*(log2 - raw - softplus(-2*raw))
-        log_prob = log_prob - (2 * (0.6931471805599453 - raw - F.softplus(-2 * raw))).sum(-1)
+        log_prob = (
+            -0.5 * ((raw_sample - mean) ** 2) / var - log_std - 0.9189385332046727
+        ).sum(-1)
         entropy = (0.5 + 0.9189385332046727 + log_std).sum(-1).expand(h.shape[0])
         return action, log_prob, entropy
 
 
 class DreamerCritic(nn.Module):
-    """Scalar value head on (h, z). Predicts symlog-transformed λ-returns."""
+    """Categorical (TwoHot) value head on (h, z).
 
-    def __init__(self, feat_dim: int, hidden: int = 512):
+    Outputs logits over `num_bins` evenly spaced symlog-space bins. The scalar
+    value is `symexp(E[bins | softmax(logits)])` — `forward(h, z)` returns this
+    real-space scalar so existing call sites stay unchanged. Use `.logits(h, z)`
+    for the raw distribution (training loss + critic self-regularization).
+    """
+
+    def __init__(self, feat_dim: int, hidden: int = 512, num_bins: int = 255,
+                 bin_low: float = -20.0, bin_high: float = 20.0):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feat_dim, hidden),
             nn.SiLU(),
             nn.Linear(hidden, hidden),
             nn.SiLU(),
-            nn.Linear(hidden, 1),
+            nn.Linear(hidden, num_bins),
         )
+        # Zero-init final logits: softmax is uniform → expected bin = 0 → value = 0
         nn.init.zeros_(self.net[-1].weight)
         nn.init.zeros_(self.net[-1].bias)
+        self.register_buffer('bins', torch.linspace(bin_low, bin_high, num_bins))
+
+    def logits(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        return self.net(torch.cat([h, z], dim=-1))
 
     def forward(self, h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        return self.net(torch.cat([h, z], dim=-1)).squeeze(-1)
+        # Real-space scalar value (symexp of symlog-space expectation).
+        return symexp(twohot_decode(self.logits(h, z), self.bins))
 
 
 class DreamerActorOnnxWrapper(nn.Module):

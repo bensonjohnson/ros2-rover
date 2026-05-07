@@ -1,0 +1,53 @@
+Using GPU: NVIDIA GB10 (121.6GB)
+GPU sanity test passed
+AMP BF16 - Blackwell (NVIDIA GB10)
+Dashboard on http://0.0.0.0:8080
+No checkpoint found. Starting fresh.
+Exported ONNX: checkpoints_dreamer/latest_actor.onnx (68423798 bytes)
+Dreamer Trainer initialized: WM=19,097,578, Actor+Critic=2,100,741
+  T_chunk=64, batch=16, horizon=15
+ZMQ PULL bound on tcp://*:5555
+ZMQ XPUB bound on tcp://*:5556
+Published v1 (ONNX: 68423798B, no RKNN)
+Waiting for 4 chunks before training starts...
+Waiting for rover chunks...
+Subscriber: 'model'
+Published v1 (ONNX: 68423798B, no RKNN)
+Subscriber: 'status'
+Chunk received: 64 steps (buffer: 1 chunks, 64 steps)
+Chunk received: 64 steps (buffer: 2 chunks, 128 steps)
+Chunk received: 64 steps (buffer: 3 chunks, 192 steps)
+Chunk received: 64 steps (buffer: 4 chunks, 256 steps)
+Training started
+Chunk received: 64 steps (buffer: 5 chunks, 320 steps)
+Chunk received: 64 steps (buffer: 6 chunks, 384 steps)
+Chunk received: 64 steps (buffer: 7 chunks, 448 steps)
+Chunk received: 64 steps (buffer: 8 chunks, 512 steps)
+Chunk received: 64 steps (buffer: 9 chunks, 576 steps)
+Chunk received: 64 steps (buffer: 10 chunks, 640 steps)
+Chunk received: 64 steps (buffer: 11 chunks, 704 steps)
+Chunk received: 64 steps (buffer: 12 chunks, 768 steps)
+Chunk received: 64 steps (buffer: 13 chunks, 832 steps)
+Chunk received: 64 steps (buffer: 14 chunks, 896 steps)
+Chunk received: 64 steps (buffer: 15 chunks, 960 steps)
+Chunk received: 64 steps (buffer: 16 chunks, 1024 steps)
+Chunk received: 64 steps (buffer: 17 chunks, 1088 steps)
+Chunk received: 64 steps (buffer: 18 chunks, 1152 steps)
+Chunk received: 64 steps (buffer: 19 chunks, 1216 steps)
+Chunk received: 64 steps (buffer: 20 chunks, 1280 steps)
+Chunk received: 64 steps (buffer: 21 chunks, 1344 steps)
+Chunk received: 64 steps (buffer: 22 chunks, 1408 steps)
+Chunk received: 64 steps (buffer: 23 chunks, 1472 steps)
+Chunk received: 64 steps (buffer: 24 chunks, 1536 steps)
+Chunk received: 64 steps (buffer: 25 chunks, 1600 steps)
+Chunk received: 64 steps (buffer: 26 chunks, 1664 steps)
+Chunk received: 64 steps (buffer: 27 chunks, 1728 steps)
+[upd 50] wm=10047.405 recon=10045.876 kl=0.384 actor=0.151 critic=0.044 imag_R=0.682 (1.12s)
+Exported ONNX: checkpoints_dreamer/latest_actor.onnx (68423774 bytes)
+Published v2 (ONNX: 68423774B, no RKNN)
+[upd 100] wm=3758.947 recon=3758.184 kl=0.421 actor=1.915 critic=0.098 imag_R=1.794 (1.12s)
+Exported ONNX: checkpoints_dreamer/latest_actor.onnx (68423774 bytes)
+Published v3 (ONNX: 68423774B, no RKNN)
+[upd 150] wm=3304.495 recon=3303.730 kl=0.741 actor=-28.728 critic=0.071 imag_R=2.248 (1.12s)
+Exported ONNX: checkpoints_dreamer/latest_actor.onnx (68423774 bytes)
+Published v4 (ONNX: 68423774B, no RKNN)

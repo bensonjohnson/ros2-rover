@@ -1,0 +1,280 @@
+Using GPU: NVIDIA GB10 (121.6GB)
+GPU sanity test passed
+AMP BF16 - Blackwell (NVIDIA GB10)
+Dashboard on http://0.0.0.0:8080
+No checkpoint found. Starting fresh.
+/home/benson/ros2-rover/remote_training_server/v620_dreamer_trainer.py:494: UserWarning: # 'dynamic_axes' is not recommended when dynamo=True, and may lead to 'torch._dynamo.exc.UserError: Constraints violated.' Supply the 'dynamic_shapes' argument instead if export is unsuccessful.
+  torch.onnx.export(
+[torch.onnx] Obtain model graph for `DreamerActorOnnxWrapper([...]` with `torch.export.export(..., strict=False)`...
+[torch.onnx] Obtain model graph for `DreamerActorOnnxWrapper([...]` with `torch.export.export(..., strict=False)`... ❌
+[torch.onnx] Obtain model graph for `DreamerActorOnnxWrapper([...]` with `torch.export.export(..., strict=True)`...
+[torch.onnx] Obtain model graph for `DreamerActorOnnxWrapper([...]` with `torch.export.export(..., strict=True)`... ❌
+ONNX export failed: Failed to export the model with torch.export. [96mThis is step 1/3[0m of exporting the model to ONNX. Next steps:
+- Modify the model code for `torch.export.export` to succeed. Refer to https://pytorch.org/docs/stable/generated/exportdb/index.html for more information.
+- Debug `torch.export.export` and submit a PR to PyTorch.
+- Create an issue in the PyTorch GitHub repository against the [96m*torch.export*[0m component and attach the full error stack as well as reproduction scripts.
+
+## Exception summary
+
+<class 'torch._subclasses.fake_tensor.UnsupportedOperatorException'>: aten._thnn_fused_gru_cell.default
+
+The error above occurred when calling torch.export.export. If you would like to view some more information about this error, and get a list of all other errors that may occur in your export call, you can replace your `export()` call with `draft_export()`.
+
+(Refer to the full stack trace above for more information.)
+Traceback (most recent call last):
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 2904, in _dispatch_impl
+    r = func(*args, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_ops.py", line 865, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+NotImplementedError: aten::_thnn_fused_gru_cell: attempted to run this operator with Meta tensors, but there was no fake impl or Meta kernel registered. You may have run into this message while using an operator with PT2 compilation APIs (torch.compile/torch.export); in order to use this operator with those APIs you'll need to add a fake impl. Please see the following for next steps:  https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_capture_strategies.py", line 121, in __call__
+    exported_program = self._capture(model, args, kwargs, dynamic_shapes)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_capture_strategies.py", line 219, in _capture
+    return torch.export.export(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/__init__.py", line 205, in export
+    raise e
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/__init__.py", line 171, in export
+    return _export(
+           ^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1343, in wrapper
+    raise e
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1309, in wrapper
+    ep = fn(*args, **kwargs)
+         ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/exported_program.py", line 124, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_utils_internal.py", line 96, in wrapper_function
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2508, in _export
+    ep = _export_for_training(
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1343, in wrapper
+    raise e
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1309, in wrapper
+    ep = fn(*args, **kwargs)
+         ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/exported_program.py", line 124, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2296, in _export_for_training
+    export_artifact = export_func(
+                      ^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2225, in _non_strict_export
+    aten_export_artifact = _to_aten_func(
+                           ^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2002, in _export_to_aten_ir_make_fx
+    gm, graph_signature = transform(_make_fx_helper)(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2132, in _aot_export_non_strict
+    gm, sig = aot_export(stack, wrapped_mod, args, kwargs=kwargs, **flags)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1910, in _make_fx_helper
+    gm = make_fx(
+         ^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2824, in wrapped
+    return make_fx_tracer.trace(f, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2725, in trace
+    return self._trace_inner(f, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2686, in _trace_inner
+    t = dispatch_trace(
+        ^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_compile.py", line 54, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1262, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1533, in dispatch_trace
+    graph = tracer.trace(root, concrete_args)  # type: ignore[arg-type]
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2264, in trace
+    res = super().trace(root, concrete_args)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 890, in trace
+    (self.create_arg(fn(*args)),),
+                     ^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1603, in wrapped
+    out = f(*tensors)  # type:ignore[call-arg]
+          ^^^^^^^^^^^
+  File "<string>", line 1, in <lambda>
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 1794, in wrapped_fn
+    return tuple(flat_fn(*args))
+                 ^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/utils.py", line 204, in flat_fn
+    tree_out = fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/graph_capture_wrappers.py", line 1502, in functional_call
+    out = mod(*args[params_len:], **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 864, in module_call_wrapper
+    return self.call_module(mod, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2353, in call_module
+    return Tracer.call_module(self, m, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 572, in call_module
+    ret_val = forward(*args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 857, in forward
+    return _orig_module_call(mod, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/export/_trace.py", line 2116, in forward
+    tree_out = mod(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 864, in module_call_wrapper
+    return self.call_module(mod, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2353, in call_module
+    return Tracer.call_module(self, m, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 572, in call_module
+    ret_val = forward(*args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 857, in forward
+    return _orig_module_call(mod, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/ros2-rover/remote_training_server/model_architectures.py", line 1600, in forward
+    h = self.world_model.rssm.step_deterministic(prev_h, prev_z, prev_a)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/ros2-rover/remote_training_server/model_architectures.py", line 1295, in step_deterministic
+    return self.gru(x, prev_h)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 864, in module_call_wrapper
+    return self.call_module(mod, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 2353, in call_module
+    return Tracer.call_module(self, m, forward, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 572, in call_module
+    ret_val = forward(*args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/_symbolic_trace.py", line 857, in forward
+    return _orig_module_call(mod, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1779, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1790, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/nn/modules/rnn.py", line 1874, in forward
+    ret = _VF.gru_cell(
+          ^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1654, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1725, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_export/non_strict_utils.py", line 1159, in __torch_function__
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_ops.py", line 988, in handler
+    return torch._library.utils.handle_dispatch_mode(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_library/utils.py", line 325, in handle_dispatch_mode
+    return curr_mode.__torch_dispatch__(op_overload, overload_types, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_compile.py", line 54, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1263, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/utils/_stats.py", line 29, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1785, in __torch_dispatch__
+    return proxy_call(self, func, self.pre_dispatch, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/fx/experimental/proxy_tensor.py", line 1212, in proxy_call
+    out = func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_ops.py", line 865, in __call__
+    return self._op(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_compile.py", line 54, in inner
+    return disable_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1263, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/utils/_stats.py", line 29, in wrapper
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 1428, in __torch_dispatch__
+    return self.dispatch(func, types, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 2207, in dispatch
+    return self._cached_dispatch_impl(func, types, args, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 1576, in _cached_dispatch_impl
+    output = self._dispatch_impl(func, types, args, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 2906, in _dispatch_impl
+    return maybe_run_unsafe_fallback(not_implemented_error)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/_subclasses/fake_tensor.py", line 2888, in maybe_run_unsafe_fallback
+    raise UnsupportedOperatorException(func)
+torch._subclasses.fake_tensor.UnsupportedOperatorException: aten._thnn_fused_gru_cell.default
+
+The error above occurred when calling torch.export.export. If you would like to view some more information about this error, and get a list of all other errors that may occur in your export call, you can replace your `export()` call with `draft_export()`.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/benson/ros2-rover/remote_training_server/v620_dreamer_trainer.py", line 494, in _export_onnx
+    torch.onnx.export(
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/__init__.py", line 291, in export
+    return _compat.export_compat(
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_compat.py", line 161, in export_compat
+    onnx_program = _core.export(
+                   ^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_flags.py", line 27, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/benson/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_core.py", line 1428, in export
+    raise _errors.TorchExportError(
+torch.onnx._internal.exporter._errors.TorchExportError: Failed to export the model with torch.export. [96mThis is step 1/3[0m of exporting the model to ONNX. Next steps:
+- Modify the model code for `torch.export.export` to succeed. Refer to https://pytorch.org/docs/stable/generated/exportdb/index.html for more information.
+- Debug `torch.export.export` and submit a PR to PyTorch.
+- Create an issue in the PyTorch GitHub repository against the [96m*torch.export*[0m component and attach the full error stack as well as reproduction scripts.
+
+## Exception summary
+
+<class 'torch._subclasses.fake_tensor.UnsupportedOperatorException'>: aten._thnn_fused_gru_cell.default
+
+The error above occurred when calling torch.export.export. If you would like to view some more information about this error, and get a list of all other errors that may occur in your export call, you can replace your `export()` call with `draft_export()`.
+
+(Refer to the full stack trace above for more information.)
+Dreamer Trainer initialized: WM=19,097,578, Actor+Critic=2,100,741
+  T_chunk=64, batch=16, horizon=15
+ZMQ PULL bound on tcp://*:5555
+ZMQ XPUB bound on tcp://*:5556
+Waiting for 4 chunks before training starts...
+Waiting for rover chunks...

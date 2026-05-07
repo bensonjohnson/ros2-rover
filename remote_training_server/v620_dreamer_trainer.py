@@ -59,6 +59,7 @@ from model_architectures import (
     DreamerWorldModel, DreamerActor, DreamerCritic, DreamerActorOnnxWrapper,
     P2EEnsemble, REWARD_CHANNELS,
     OneHotDist, kl_categorical, symlog, symexp,
+    twohot_loss,
 )
 from serialization_utils import deserialize_batch, serialize_status
 from intrinsic_rewards import LifetimeSimHash, p2e_ensemble_loss
@@ -449,11 +450,16 @@ class V620DreamerTrainer:
         self.target_update_interval = 100
         self.target_ema = 0.98
         self.max_grad_norm = 1000.0  # Dreamer uses very high clip; grads naturally small
+        self.critic_reg_coef = args.critic_reg_coef  # β for critic→target self-regularization
 
         # --- State ---
         self.total_steps = 0
         self.update_count = 0
         self.model_version = 0
+        # Percentile EMAs for return normalization (DreamerV3 paper). S = max(1, p95-p5).
+        self.ret_ema_p5 = None
+        self.ret_ema_p95 = None
+        self.ret_ema_decay = 0.99
 
         # --- IO ---
         os.makedirs(args.log_dir, exist_ok=True)
@@ -492,12 +498,33 @@ class V620DreamerTrainer:
             print("No checkpoint found. Starting fresh.")
             return
         ckpt = torch.load(latest, map_location=self.device, weights_only=False)
-        self.world_model.load_state_dict(ckpt['world_model'], strict=False)
-        self.actor.load_state_dict(ckpt['actor'], strict=False)
-        self.critic.load_state_dict(ckpt['critic'], strict=False)
-        self.target_critic.load_state_dict(ckpt['critic'], strict=False)
+
+        def _safe_load(module, sd, name):
+            # strict=False ignores missing/unexpected keys but still raises on
+            # shape mismatch — which happens when arch changes (e.g. critic
+            # head went scalar → categorical 255 bins). Fall back to per-param
+            # filtering so we keep what fits and re-init the rest.
+            try:
+                module.load_state_dict(sd, strict=False)
+            except (RuntimeError, ValueError) as e:
+                own = module.state_dict()
+                kept, skipped = 0, []
+                for k, v in sd.items():
+                    if k in own and own[k].shape == v.shape:
+                        own[k] = v
+                        kept += 1
+                    else:
+                        skipped.append(k)
+                module.load_state_dict(own, strict=False)
+                print(f"  {name}: shape-mismatch tolerant load — kept {kept}, "
+                      f"re-initialized {len(skipped)} ({skipped[:3]}{'…' if len(skipped) > 3 else ''})")
+
+        _safe_load(self.world_model, ckpt['world_model'], 'world_model')
+        _safe_load(self.actor, ckpt['actor'], 'actor')
+        _safe_load(self.critic, ckpt['critic'], 'critic')
+        _safe_load(self.target_critic, ckpt['critic'], 'target_critic')
         if 'p2e' in ckpt:
-            self.p2e.load_state_dict(ckpt['p2e'], strict=False)
+            _safe_load(self.p2e, ckpt['p2e'], 'p2e')
         try:
             self.wm_opt.load_state_dict(ckpt['wm_opt'])
             self.actor_opt.load_state_dict(ckpt['actor_opt'])
@@ -796,26 +823,51 @@ class V620DreamerTrainer:
         # Discount weights (product of continues): weight earlier steps more
         weights_t = torch.cumprod(torch.cat([torch.ones(N, 1, device=self.device), discount[:, :-1]], dim=1), dim=1).detach()
 
-        # Actor loss: REINFORCE with learned baseline, + entropy bonus
+        # Percentile-based return normalization (DreamerV3 paper, eq. 13).
+        # S = max(1, EMA(p95) - EMA(p5)) over imagined returns. Cast to fp32 —
+        # torch.quantile is not supported on bf16/fp16 inside autocast.
+        returns_fp32 = returns.detach().float()
+        p5 = torch.quantile(returns_fp32.flatten(), 0.05).item()
+        p95 = torch.quantile(returns_fp32.flatten(), 0.95).item()
+        if self.ret_ema_p5 is None:
+            self.ret_ema_p5 = p5
+            self.ret_ema_p95 = p95
+        else:
+            d = self.ret_ema_decay
+            self.ret_ema_p5 = d * self.ret_ema_p5 + (1.0 - d) * p5
+            self.ret_ema_p95 = d * self.ret_ema_p95 + (1.0 - d) * p95
+        return_scale = max(1.0, self.ret_ema_p95 - self.ret_ema_p5)
+
+        # Actor loss: REINFORCE with learned baseline + entropy bonus,
+        # advantage scaled by the percentile-derived range (not a unit clamp).
         baseline = value_target.detach()
-        advantage = (returns - baseline).detach()
-        adv_std = advantage.std().clamp(min=1.0)
-        advantage = advantage / adv_std
+        advantage = ((returns - baseline) / return_scale).detach()
         actor_loss = -(imag_logp * advantage + self.entropy_coef * imag_ent)
         actor_loss = (weights_t * actor_loss).mean()
 
-        # Critic loss: MSE on symlog(return), target detached
-        value_pred_sym = self.critic(
-            imag_h.detach().reshape(N * H, -1), imag_z.detach().reshape(N * H, -1)
-        ).reshape(N, H)
-        critic_target = symlog(returns.detach())
-        critic_loss = ((value_pred_sym - critic_target) ** 2 * weights_t).mean()
+        # Critic: cross-entropy of two-hot encoded symlog(return) against the
+        # online critic's categorical distribution.
+        h_det = imag_h.detach().reshape(N * H, -1)
+        z_det = imag_z.detach().reshape(N * H, -1)
+        critic_logits = self.critic.logits(h_det, z_det)              # (N*H, num_bins)
+        target_symlog = symlog(returns.detach()).reshape(N * H)
+        critic_ce = twohot_loss(critic_logits, target_symlog, self.critic.bins).reshape(N, H)
+
+        # Critic self-regularization: pull online logits toward target critic
+        # logits via cross-entropy. Necessary with the categorical critic to
+        # keep bins active and prevent value collapse (paper eq. 14).
+        with torch.no_grad():
+            target_logits = self.target_critic.logits(h_det, z_det)
+            target_probs = F.softmax(target_logits, dim=-1)
+        log_probs_online = F.log_softmax(critic_logits, dim=-1)
+        reg_ce = -(target_probs * log_probs_online).sum(-1).reshape(N, H)
+        critic_loss = ((critic_ce + self.critic_reg_coef * reg_ce) * weights_t).mean()
 
         imag_return = returns.detach().mean()
 
         return actor_loss, critic_loss, {
             'imag_return': imag_return,
-            'adv_std': adv_std.detach(),
+            'return_scale': torch.tensor(return_scale, device=self.device),
             'r_p2e_mean': r_p2e.detach().mean(),
             'lifetime_mod_mean': lifetime_mod.detach().mean(),
         }
@@ -1159,6 +1211,8 @@ def main():
     parser.add_argument('--kl_dyn_scale', type=float, default=0.5)
     parser.add_argument('--kl_rep_scale', type=float, default=0.1)
     parser.add_argument('--entropy_coef', type=float, default=3e-3)
+    parser.add_argument('--critic_reg_coef', type=float, default=1.0,
+                        help='β for critic CE-regularization toward target critic (DreamerV3 paper)')
     parser.add_argument('--replay_chunks', type=int, default=4000)
     parser.add_argument('--min_replay_chunks', type=int, default=4,
                         help='Wait for this many chunks before starting training')
