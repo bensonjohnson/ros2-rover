@@ -510,7 +510,7 @@ class DreamerRemoteRunner(Node):
         #   episodic  : k-NN pseudo-count over the RSSM feat (h ⊕ z)
         self.coverage_tracker = CoverageTracker(
             grid_size=200, resolution=0.05, max_range=4.0,
-            coverage_alpha=0.001,
+            coverage_alpha=0.01,   # was 0.001 — diagnostic showed max reward at 1% of clip cap
         )
         self.episodic_novelty = EpisodicNovelty(
             embed_dim=RSSM_HIDDEN_DIM + RSSM_Z_DIM,
@@ -752,10 +752,22 @@ class DreamerRemoteRunner(Node):
         if self._diag_counter % 300 == 0 and len(self._diag_cov_deltas) == self._diag_cov_deltas.maxlen:
             cov = np.asarray(self._diag_cov_deltas)
             fr = np.asarray(self._diag_has_frontier)
+            # Grid cell breakdown — triangulates the has_frontier=0 mystery:
+            #   - high `unk` + zero frontier → BFS bug (FREE region exists but
+            #     never reaches UNKNOWN border within 8m search).
+            #   - low `unk` (≈ 0) → robot pose locked or grid fully explored;
+            #     no UNKNOWN within search radius is *correct* in that case.
+            #   - tiny `free` despite cov>0 trickle → ray-tracing is barely
+            #     marking, robot likely stationary at (0,0).
+            grid = self.coverage_tracker.grid
+            n_unk = int((grid == 0).sum())
+            n_free = int((grid == 1).sum())
+            n_occ = int((grid == 2).sum())
             self.get_logger().info(
                 f'reward-diag(300t): coverage_delta nz_frac={float((cov > 0).mean()):.3f} '
                 f'mean={float(cov.mean()):.4f} max={float(cov.max()):.4f} | '
-                f'has_frontier_frac={float(fr.mean()):.3f}'
+                f'has_frontier_frac={float(fr.mean()):.3f} | '
+                f'grid unk={n_unk} free={n_free} occ={n_occ}'
             )
 
         return np.array([r_coverage, r_frontier, r_collision, r_episodic], dtype=np.float32), \
