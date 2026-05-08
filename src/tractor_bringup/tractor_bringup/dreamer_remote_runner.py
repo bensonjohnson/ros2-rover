@@ -506,7 +506,7 @@ class DreamerRemoteRunner(Node):
         # Channels:
         #   coverage  : driven by newly-known cells this tick (CoverageTracker)
         #   frontier  : potential-based shaping  Φ(s') - Φ(s)  with Φ = -frontier_distance
-        #   collision : -10 on /emergency_stop rising edge (single terminal event)
+        #   collision : sticky -50 every tick /emergency_stop is asserted (no longer terminal)
         #   episodic  : k-NN pseudo-count over the RSSM feat (h ⊕ z)
         self.coverage_tracker = CoverageTracker(
             grid_size=200, resolution=0.05, max_range=4.0,
@@ -520,7 +520,7 @@ class DreamerRemoteRunner(Node):
         self._frontier_angle_pi = 0.0      # last frontier bearing / π ∈ [-1, 1]
         self._emergency_prev = False       # rising-edge tracker for /emergency_stop
         self._collision_latched = False    # sticky: true every tick while /emergency_stop asserted
-        self._collision_first = False      # rising-edge only: drives episode boundary
+        self._collision_first = False      # rising-edge only: kept for diagnostic logging
 
         # Extrinsic-reward diagnostics: rolling 300-tick window (~10 s at 30 Hz).
         # Logged once per filled window; primary signal is `nz_frac` on
@@ -917,8 +917,12 @@ class DreamerRemoteRunner(Node):
         # whether there's actually an obstacle nearby:
         #   - near wall  → reverse + turn (needs clearance before going forward)
         #   - open space → forward + turn (policy is spinning, just needs to go)
+        # `wall_pinned` threshold is 60 ticks (~2s) so the policy has time to
+        # attempt its own escape under the sticky -50 collision penalty before
+        # the scripted backstop rescues it. Shorter than 60 made the recovery
+        # script the dominant escape mechanism and the policy never learned.
         stuck_long_enough = self.stuck_detector.stuck_counter >= 15
-        wall_pinned = self._wall_stop_steps >= 15
+        wall_pinned = self._wall_stop_steps >= 60
         if (wall_pinned or stuck_long_enough) and self._recovery_steps_remaining == 0:
             self._recovery_steps_remaining = 30  # ~1s at 30Hz
             self._recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
@@ -990,19 +994,23 @@ class DreamerRemoteRunner(Node):
         reward_scalar = float(reward_vec.sum()) + r_spin
 
         # ---- Episode boundary ----
-        # Only **collision** (rising edge of /emergency_stop) and the step cap
-        # terminate. Stuck / spinning / wall-pinned no longer set `done` —
-        # they exist purely as recovery triggers above.
+        # Only the step cap terminates. Collision rising-edge no longer sets
+        # `done`: the WM needs continuous experience across pinned states so
+        # the sticky -50 penalty can teach "pinned latent → reverse → free."
+        # Terminating on the rising edge wiped RSSM state after one tick of
+        # collision, so the WM only ever saw the impact and never the escape.
         if self._post_reset_cooldown > 0:
             self._post_reset_cooldown -= 1
         episode_done = False
         done_reason = None
-        if collision:
-            episode_done = True
-            done_reason = 'collision'
-        elif self._current_episode_length + 1 >= self.MAX_EPISODE_STEPS:
+        if self._current_episode_length + 1 >= self.MAX_EPISODE_STEPS:
             episode_done = True
             done_reason = 'max_steps'
+        if collision:
+            self.get_logger().info(
+                f'collision (no episode reset) | step={self._current_episode_length} | '
+                f'ep_rew_so_far={self._current_episode_reward:.2f}'
+            )
 
         # Store transition (with is_first marker). Reward is the (4,) vector.
         self.buffer.add(
