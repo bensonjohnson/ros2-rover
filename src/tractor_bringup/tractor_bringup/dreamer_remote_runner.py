@@ -484,8 +484,6 @@ class DreamerRemoteRunner(Node):
         # blocked physical states.
         self._post_reset_cooldown_steps = 30
         self._post_reset_cooldown = 0
-        self._recovery_steps_remaining = 0
-        self._recovery_turn_dir = 0.0
         self._fwd_cmd_no_motion_count = 0
         self._slip_detected = False
         self._slip_recovery_active = False
@@ -904,39 +902,19 @@ class DreamerRemoteRunner(Node):
         is_stuck = self._is_stuck
         monitor_blocking = self._safety_override
 
-        # `_wall_stop_steps` is now a *recovery counter only* — it never sets
-        # `done`. The plan removed the old "blocked for 450 ticks → episode done"
-        # path because terminating wiped RSSM state mid-recovery and stopped the
-        # WM from learning escapes.
+        # `_wall_stop_steps` is a diagnostic counter only. The scripted-recovery
+        # path was removed: with sticky -50 on collision and the safety monitor's
+        # forward-clamp making forward-pinning physically harmless, the policy
+        # is the *only* escape mechanism. The actor's learned log_std should
+        # widen on pinned latents under the unbounded sticky cost, producing
+        # reverse/turn samples that the safety clamp passes through (negative
+        # tracks are allowed). Scripted recovery contaminated the buffer
+        # (actual_action ≠ policy action) and starved the policy of credit
+        # for escapes.
         if monitor_blocking:
             self._wall_stop_steps += 1
         else:
             self._wall_stop_steps = 0
-
-        # Scripted recovery: fires on prolonged no-progress. Action depends on
-        # whether there's actually an obstacle nearby:
-        #   - near wall  → reverse + turn (needs clearance before going forward)
-        #   - open space → forward + turn (policy is spinning, just needs to go)
-        # `wall_pinned` threshold is 60 ticks (~2s) so the policy has time to
-        # attempt its own escape under the sticky -50 collision penalty before
-        # the scripted backstop rescues it. Shorter than 60 made the recovery
-        # script the dominant escape mechanism and the policy never learned.
-        stuck_long_enough = self.stuck_detector.stuck_counter >= 15
-        wall_pinned = self._wall_stop_steps >= 60
-        if (wall_pinned or stuck_long_enough) and self._recovery_steps_remaining == 0:
-            self._recovery_steps_remaining = 30  # ~1s at 30Hz
-            self._recovery_turn_dir = 1.0 if np.random.rand() > 0.5 else -1.0
-            self._recovery_is_reverse = wall_pinned or lidar_min < 0.4
-
-        if self._recovery_steps_remaining > 0:
-            if getattr(self, '_recovery_is_reverse', False):
-                rl = -0.5 + self._recovery_turn_dir * 0.15
-                rr = -0.5 - self._recovery_turn_dir * 0.15
-            else:
-                rl = 0.5 + self._recovery_turn_dir * 0.25
-                rr = 0.5 - self._recovery_turn_dir * 0.25
-            action_np = np.array([rl, rr], dtype=np.float32)
-            self._recovery_steps_remaining -= 1
 
         def soft_deadzone(v, m):
             if abs(v) < 0.001:
