@@ -447,6 +447,7 @@ class V620DreamerTrainer:
         self.kl_dyn_scale = args.kl_dyn_scale   # β_dyn (dynamics loss weight)
         self.kl_rep_scale = args.kl_rep_scale   # β_rep (representation loss weight)
         self.entropy_coef = args.entropy_coef
+        self.reward_loss_scale = args.reward_loss_scale
         self.target_update_interval = 100
         self.target_ema = 0.98
         self.max_grad_norm = 1000.0  # Dreamer uses very high clip; grads naturally small
@@ -722,7 +723,10 @@ class V620DreamerTrainer:
         rep_kl = torch.clamp(rep_kl, min=self.kl_free)
         kl_loss = self.kl_dyn_scale * dyn_kl + self.kl_rep_scale * rep_kl
 
-        wm_loss = recon_loss + proprio_loss + reward_loss + continue_loss + kl_loss
+        # Reward loss is scaled (default 100x): recon BCE is summed over all
+        # BEV pixels (~1300), reward MSE is in symlog space (~0.2). Without
+        # this scale the encoder ignores the reward signal entirely.
+        wm_loss = recon_loss + proprio_loss + self.reward_loss_scale * reward_loss + continue_loss + kl_loss
 
         # Plan2Explore ensemble target: predict next-step posterior z from
         # (h_t, z_t, a_t). Drop the final timestep (no t+1 target available).
@@ -1213,6 +1217,12 @@ def main():
     parser.add_argument('--entropy_coef', type=float, default=3e-3)
     parser.add_argument('--critic_reg_coef', type=float, default=1.0,
                         help='β for critic CE-regularization toward target critic (DreamerV3 paper)')
+    parser.add_argument('--reward_loss_scale', type=float, default=100.0,
+                        help='Multiplier on reward MSE in wm_loss. Recon (BCE.sum() over BEV pixels) is '
+                             '~1300, while reward MSE in symlog space is ~0.2. Without scaling, reward '
+                             'gradient is ~6500× smaller than recon and the encoder ignores reward signal '
+                             '— the WM head cannot fit collisions, the critic bootstraps optimistically, '
+                             'and policy advantages collapse to noise.')
     parser.add_argument('--replay_chunks', type=int, default=4000)
     parser.add_argument('--min_replay_chunks', type=int, default=4,
                         help='Wait for this many chunks before starting training')

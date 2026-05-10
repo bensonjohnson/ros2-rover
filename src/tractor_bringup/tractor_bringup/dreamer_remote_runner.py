@@ -53,6 +53,7 @@ except ImportError:
 from sensor_msgs.msg import Image, Imu, JointState, LaserScan
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float32, Bool, Float32MultiArray
+from geometry_msgs.msg import Twist
 from std_srvs.srv import Trigger
 
 from tractor_bringup.occupancy_processor import UnifiedBEVProcessor
@@ -402,6 +403,8 @@ class DreamerRemoteRunner(Node):
         self.declare_parameter('invert_linear_vel', False)
         self.declare_parameter('dashboard_port', 8080)
         self.declare_parameter('reward_weights_path', '')
+        self.declare_parameter('teleop_mode', False)
+        self.declare_parameter('teleop_cmd_topic', '/cmd_vel_teleop')
 
         self.server_addr = str(self.get_parameter('server_addr').value)
         self.server_pull_port = int(self.get_parameter('server_pull_port').value)
@@ -413,6 +416,9 @@ class DreamerRemoteRunner(Node):
         self.invert_linear_vel = bool(self.get_parameter('invert_linear_vel').value)
         self.dashboard_port = int(self.get_parameter('dashboard_port').value)
         self._reward_weights_path = str(self.get_parameter('reward_weights_path').value)
+        self._teleop_mode = bool(self.get_parameter('teleop_mode').value)
+        self._teleop_cmd_topic = str(self.get_parameter('teleop_cmd_topic').value)
+        self._latest_teleop = (0.0, 0.0)  # (linear.x m/s, angular.z rad/s)
 
         # Reward channel order is load-bearing: must match REWARD_CHANNELS in
         # remote_training_server/model_architectures.py.
@@ -560,6 +566,13 @@ class DreamerRemoteRunner(Node):
         self._setup_subscribers()
         self.track_cmd_pub = self.create_publisher(Float32MultiArray, 'track_cmd_ai', 10)
 
+        if self._teleop_mode:
+            self.create_subscription(Twist, self._teleop_cmd_topic, self._teleop_cmd_cb, 10)
+            self.get_logger().info(
+                f'TELEOP COLLECTION MODE — actions sourced from {self._teleop_cmd_topic}; '
+                f'RKNN inference disabled. Drive with the controller; chunks ship as usual.'
+            )
+
         self.create_timer(1.0 / self.inference_rate, self._control_loop)
         self.reset_episode_client = self.create_client(Trigger, '/reset_episode')
 
@@ -648,6 +661,9 @@ class DreamerRemoteRunner(Node):
         self._safety_override = state
         self._emergency_prev = state
 
+    def _teleop_cmd_cb(self, msg):
+        self._latest_teleop = (float(msg.linear.x), float(msg.angular.z))
+
     def _vel_conf_cb(self, msg):
         self._velocity_confidence = msg.data
 
@@ -716,14 +732,16 @@ class DreamerRemoteRunner(Node):
         r_frontier = float(np.clip(r_frontier, lo, hi))
 
         # Channel 2: collision. Penalty is sticky — every tick the rover is
-        # pinned against an obstacle accrues -50 so the world model actually
-        # learns "pinned latent = bad." Episode termination uses the rising-
-        # edge flag (`_collision_first`) so we don't thrash is_first / RSSM
-        # resets while held.
+        # pinned against an obstacle accrues -1.0 so the world model can fit
+        # the signal (symlog(-1) = -0.69, ~30× smaller squared error per
+        # sample than -50 in symlog space). Cumulative pinned cost over a
+        # typical 60-tick pin is then ~-60, comparable in magnitude to the
+        # old single-event -50. `_collision_first` rising-edge flag is kept
+        # for diagnostic logging only — episodes no longer terminate on it.
         penalty_active = self._collision_latched
         collision = self._collision_first
         self._collision_first = False
-        r_collision = -50.0 if penalty_active else 0.0
+        r_collision = -1.0 if penalty_active else 0.0
 
         # Channel 3: episodic novelty over RSSM feat (h ⊕ z). Feat is what the
         # server-side SimHash also buckets on, so the two timescales are aligned.
@@ -857,7 +875,17 @@ class DreamerRemoteRunner(Node):
         self._next_is_first = False
 
         # Inference
-        if self._rknn_runtime is not None:
+        if self._teleop_mode:
+            lin, ang = self._latest_teleop
+            max_lin = self.max_linear if self.max_linear > 0 else 1.0
+            max_ang = self.max_angular if self.max_angular > 0 else 1.0
+            norm_lin = max(-1.0, min(1.0, lin / max_lin))
+            norm_ang = max(-1.0, min(1.0, ang / max_ang))
+            left = max(-1.0, min(1.0, norm_lin - norm_ang))
+            right = max(-1.0, min(1.0, norm_lin + norm_ang))
+            action_np = np.array([left, right], dtype=np.float32)
+            # RSSM state stays zero — no policy this phase.
+        elif self._rknn_runtime is not None:
             bev_input = bev_grid[None, ...].astype(np.float32)
             proprio_input = proprio[None, ...]
             try:
@@ -1087,6 +1115,7 @@ class DreamerRemoteRunner(Node):
             'model_version': self._model_version,
             'total_steps': self._total_steps,
             'algorithm': 'dreamer',
+            'mode': 'teleop' if self._teleop_mode else 'autonomous',
             'timestamp': time.time(),
         }
         self.buffer.clear()
@@ -1144,6 +1173,8 @@ class DreamerRemoteRunner(Node):
                 self._zmq_ctx.destroy(linger=0)
 
     async def _handle_model_message(self, data):
+        if self._teleop_mode:
+            return
         try:
             model_msg = msgpack.unpackb(data)
             model_version = model_msg["version"]
