@@ -107,7 +107,7 @@ def generate_launch_description():
             "input_track_topic": "/track_cmd_ai",
             "output_track_topic": "/track_cmd",
             "stop_distance": 0.15,
-            "slow_distance": 0.40,  # 25 cm gradual slowdown zone (was 0.20 = 5 cm, too abrupt)
+            "slow_distance": 0.15,  # disabled — hard stop only; scaled PWM in the slow zone fell below the tracks' static-friction threshold
             "hysteresis": 0.10,
             "min_valid_range": 0.05,
             "max_eval_distance": 5.0,

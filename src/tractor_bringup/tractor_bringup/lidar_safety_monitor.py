@@ -332,10 +332,14 @@ class LidarSafetyMonitor(Node):
             front_dist = self._front_path_dist
 
             # --- FRONT: block all forward motion per-track ---
+            # Slow zone is only applied when `slow_dist > stop_dist + eps`.
+            # When the two thresholds are equal (disable slow zone), the
+            # scaled motor PWM would otherwise drop below the track's static-
+            # friction threshold and the rover stalls instead of approaching.
             if self._sector_stopped['front']:
                 left = min(left, 0.0)
                 right = min(right, 0.0)
-            elif front_dist < self.slow_dist:
+            elif self.slow_dist > self.stop_dist + 1e-3 and front_dist < self.slow_dist:
                 # Slow zone: scale both tracks uniformly (preserves turn ratio)
                 if max(left, right) > 0.01:
                     scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
@@ -417,11 +421,14 @@ class LidarSafetyMonitor(Node):
             # --- FRONT: block all forward motion ---
             # When blocked, hard-zero any forward command. Allow backward commands
             # to pass through so the rover can reverse away from obstacles.
+            # Slow zone disabled when `slow_dist <= stop_dist` (see track path).
             if self._sector_stopped['front']:
                 out_cmd.linear.x = min(msg.linear.x, 0.0)
                 if msg.linear.x > 0:
                     self._commands_blocked += 1
-            elif msg.linear.x > 0.01 and front_dist < self.slow_dist:
+            elif (self.slow_dist > self.stop_dist + 1e-3
+                  and msg.linear.x > 0.01
+                  and front_dist < self.slow_dist):
                 # Gradual slowdown in the slow zone
                 scale = (front_dist - self.stop_dist) / (self.slow_dist - self.stop_dist)
                 scale = max(0.0, min(1.0, scale))
@@ -448,7 +455,12 @@ class LidarSafetyMonitor(Node):
             # --- FORWARD+TURN: slow/stop forward speed toward turn-side obstacles ---
             # When curving, the rover sweeps into the turn side. Scale down
             # forward speed proportionally to the turn-side obstacle distance.
-            if out_cmd.linear.x > 0.01 and abs(msg.angular.z) > 0.1:
+            # Disabled when slow zone is disabled (slow_dist == stop_dist) —
+            # the side-stop branch below still triggers a hard block on close
+            # turn-side obstacles, so this taper isn't load-bearing for safety.
+            if (self.slow_dist > self.stop_dist + 1e-3
+                    and out_cmd.linear.x > 0.01
+                    and abs(msg.angular.z) > 0.1):
                 turn_side = 'left' if msg.angular.z > 0 else 'right'
                 side_dist = self._sector_dists[turn_side]
                 if side_dist < self.slow_dist:
