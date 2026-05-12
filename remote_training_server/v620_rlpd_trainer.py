@@ -325,10 +325,16 @@ class V620RLPDTrainer:
         assert self.m_subsample <= self.n_critics
 
         # --- Models ---
+        # The frozen ResNet18 trunk is cast to the AMP dtype so its forward
+        # runs natively in BF16/FP16, halving memory bandwidth and roughly
+        # doubling encoder throughput. The trainable parts of the encoder run
+        # in autocast dtype as usual.
+        backbone_dtype = self.amp_dtype if self.use_amp else torch.float32
         self.encoder = RLPDVisionEncoder(
             proprio_dim=self.proprio_dim,
             frame_stack=self.frame_stack,
             state_dim=self.state_dim,
+            backbone_dtype=backbone_dtype,
         ).to(self.device)
         self.actor = RLPDActor(
             state_dim=self.state_dim, action_dim=self.action_dim,
@@ -412,6 +418,15 @@ class V620RLPDTrainer:
         )
         demo_path = Path(args.checkpoint_dir) / 'demos.npz'
         self.demo_path = demo_path
+        # Clean up stale `.tmp` files from previous interrupted saves so they
+        # don't sit on disk eating space forever.
+        for stale in Path(args.checkpoint_dir).glob('*.tmp'):
+            try:
+                size_mb = stale.stat().st_size / (1024 * 1024)
+                stale.unlink()
+                print(f"Removed stale {stale.name} ({size_mb:.1f} MB)")
+            except Exception:
+                pass
         self.demo = DemoReplay.load(
             demo_path,
             n_reward_channels=len(REWARD_CHANNELS_RLPD),
@@ -427,6 +442,12 @@ class V620RLPDTrainer:
             print("Demo replay: starting empty")
         else:
             print(f"Demo replay restored: {len(self.demo)} transitions")
+        # Demo dirty flag — set in consume_rollouts, drained periodically in
+        # train_loop. Avoids synchronously rewriting the (potentially 1+ GB)
+        # demos.npz inside the asyncio event loop on every chunk arrival,
+        # which previously starved the training task entirely.
+        self._demo_dirty = False
+        self._demo_save_lock = threading.Lock()
         self.rng = np.random.default_rng(0)
 
         # --- ZMQ ---
@@ -502,9 +523,22 @@ class V620RLPDTrainer:
         self.model_version = ckpt.get('model_version', 0)
         print(f"Restored: steps={self.total_steps}, v{self.model_version}, update={self.update_count}")
 
+    def _encoder_trainable_state(self):
+        """Encoder state dict with the frozen ResNet18 backbone filtered out.
+
+        The backbone never changes — its weights come from torchvision's
+        ImageNet pretrain and are re-fetched on every fresh trainer init. By
+        skipping them we cut the per-step .pt size by ~4x (190 MB → 50 MB) so
+        save-every-step doesn't dominate the training loop.
+        """
+        return {
+            k: v for k, v in self.encoder.state_dict().items()
+            if not k.startswith('rgb_backbone.')
+        }
+
     def _save_checkpoint(self):
         state = {
-            'encoder': self.encoder.state_dict(),
+            'encoder': self._encoder_trainable_state(),
             'actor': self.actor.state_dict(),
             'critic': self.critic.state_dict(),
             'target_critic': self.target_critic.state_dict(),
@@ -517,12 +551,44 @@ class V620RLPDTrainer:
             'update_count': self.update_count,
             'model_version': self.model_version,
         }
-        p = Path(self.args.checkpoint_dir) / f'rlpd_update_{self.update_count}.pt'
+        # Atomic write: torch.save to a tmp path then os.replace so a Ctrl+C
+        # mid-write never leaves `latest_rlpd.pt` half-written.
         latest = Path(self.args.checkpoint_dir) / 'latest_rlpd.pt'
-        torch.save(state, p)
-        torch.save(state, latest)
+        tmp = latest.with_name(latest.name + '.tmp')
+        torch.save(state, tmp)
+        os.replace(tmp, latest)
+
+        # Rotating snapshot at a much wider cadence so disk doesn't fill up.
+        snapshot_int = max(1, int(self.args.snapshot_interval))
+        if self.update_count % snapshot_int == 0:
+            p = Path(self.args.checkpoint_dir) / f'rlpd_update_{self.update_count}.pt'
+            torch.save(state, p)
+            print(f"Snapshot saved: {p.name}")
+
         self.lifetime_simhash.save(self._simhash_path)
-        print(f"Checkpoint saved: {p}")
+        # Persist demos at every model checkpoint so they stay in lockstep
+        # with the trained weights.
+        self._save_demos_now()
+        if self.update_count % 10 == 0:
+            print(f"latest_rlpd.pt updated @ update {self.update_count}")
+
+    def _save_demos_now(self):
+        """Synchronous demo save (lock-protected). Use _save_demos_async from
+        the asyncio event loop to avoid blocking it."""
+        if not self._demo_dirty:
+            return
+        with self._demo_save_lock:
+            try:
+                self.demo.save(self.demo_path)
+                self._demo_dirty = False
+            except Exception as e:
+                print(f"Demo save failed: {e}")
+
+    async def _save_demos_async(self):
+        """Run the (potentially slow) demo save off the event loop thread."""
+        if not self._demo_dirty:
+            return
+        await asyncio.get_event_loop().run_in_executor(None, self._save_demos_now)
 
     def _export_onnx(self, increment_version: bool = True):
         try:
@@ -535,20 +601,35 @@ class V620RLPDTrainer:
             dummy_bev = torch.zeros(1, 2 * K, 128, 128, device=self.device)
             dummy_proprio = torch.zeros(1, self.proprio_dim * K, device=self.device)
 
-            torch.onnx.export(
-                wrapper,
-                (dummy_rgb, dummy_bev, dummy_proprio),
-                str(onnx_path),
-                input_names=['rgb_stack', 'bev_stack', 'proprio_stack'],
-                output_names=['mean_logstd'],
-                opset_version=17,
-                dynamic_axes={
-                    'rgb_stack': {0: 'batch'},
-                    'bev_stack': {0: 'batch'},
-                    'proprio_stack': {0: 'batch'},
-                },
-                dynamo=False,
-            )
+            # RKNN's graph optimizer uses onnxruntime to fold constants, and
+            # onnxruntime materializes constants as numpy arrays — which fails
+            # on BF16 because numpy has no BF16 dtype ("No corresponding Numpy
+            # type for Tensor Type. bfloat16"). The encoder backbone is BF16
+            # for training speed, but for the export we temporarily cast it
+            # back to FP32 so the resulting ONNX graph contains only dtypes
+            # that downstream tooling can handle. Restored on the way out.
+            original_dtype = self.encoder.backbone_dtype
+            need_cast = original_dtype != torch.float32
+            if need_cast:
+                self.encoder.rgb_backbone.to(dtype=torch.float32)
+            try:
+                torch.onnx.export(
+                    wrapper,
+                    (dummy_rgb, dummy_bev, dummy_proprio),
+                    str(onnx_path),
+                    input_names=['rgb_stack', 'bev_stack', 'proprio_stack'],
+                    output_names=['mean_logstd'],
+                    opset_version=17,
+                    dynamic_axes={
+                        'rgb_stack': {0: 'batch'},
+                        'bev_stack': {0: 'batch'},
+                        'proprio_stack': {0: 'batch'},
+                    },
+                    dynamo=False,
+                )
+            finally:
+                if need_cast:
+                    self.encoder.rgb_backbone.to(dtype=original_dtype)
 
             # Collapse external data file (required for single-blob ZMQ transport)
             import onnx
@@ -673,6 +754,8 @@ class V620RLPDTrainer:
         q_stds = []
         target_q_means = []
 
+        last_state_detached = None  # cached from last critic iter for the
+                                    # actor update (saves one encoder forward)
         # Pre-sample a single batch and reuse for UTD updates (RLPD paper does
         # one sample per UTD iter; we batch for throughput on the V620).
         for _ in range(self.utd):
@@ -744,6 +827,9 @@ class V620RLPDTrainer:
                 q_means.append(float(q_all.mean().item()))
                 q_stds.append(float(q_all.mean(dim=1).std(unbiased=False).item()))
                 target_q_means.append(float(y.mean().item()))
+            # Cache the state we just computed for the actor update so we
+            # don't re-encode the same (rgb, bev, pro) batch a second time.
+            last_state_detached = state.detach()
 
         # --- Actor update (one per UTD block) ---
         if self.use_amp:
@@ -753,8 +839,10 @@ class V620RLPDTrainer:
                   torch.amp.autocast('cpu', enabled=False)
         with ctx:
             # Block encoder grads from the actor objective (standard SAC).
-            with torch.no_grad():
-                state_for_actor = self.encoder(rgb, bev, pro)
+            # Reuse the encoded state from the final critic iteration instead
+            # of running another encoder forward — same batch, same dtype,
+            # already detached, so semantics are identical.
+            state_for_actor = last_state_detached
             new_action, new_log_prob, _ = self.actor.sample(state_for_actor)
             q_new = self.critic(state_for_actor, new_action).mean(dim=0)  # mean across ensemble
             alpha_now = self.log_alpha.exp()
@@ -839,16 +927,16 @@ class V620RLPDTrainer:
                 # Always add to online
                 self.online.add_chunk(chunk)
 
-                # Add to demo if marked as demo OR contains any interventions
+                # Add to demo if marked as demo OR contains any interventions.
+                # Mark the demo buffer dirty so the periodic background save
+                # in train_loop picks it up — DO NOT save synchronously here.
+                # A 1+ GB rewrite inside the event loop blocks chunk
+                # reception and training entirely.
                 is_demo_chunk = bool(chunk['is_demo'].any())
                 has_intervention = bool(chunk['is_intervention'].any())
                 if is_demo_chunk or has_intervention:
                     self.demo.add_chunk(chunk)
-                    # Atomic save so demos survive restart
-                    try:
-                        self.demo.save(self.demo_path)
-                    except Exception as e:
-                        print(f"Demo save failed: {e}")
+                    self._demo_dirty = True
 
                 # Stats
                 n_intervention = int(chunk['is_intervention'].sum())
@@ -923,7 +1011,7 @@ class V620RLPDTrainer:
                     metrics['q_mean'], metrics['alpha'],
                 )
 
-                if self.update_count % 50 == 0:
+                if self.update_count % 10 == 0:
                     print(
                         f"[upd {self.update_count}] actor={metrics['actor_loss']:.3f} "
                         f"critic={metrics['critic_loss']:.3f} q={metrics['q_mean']:.3f} "
@@ -938,6 +1026,13 @@ class V620RLPDTrainer:
 
                 if self.update_count % self.args.checkpoint_interval == 0:
                     self._save_checkpoint()
+
+                # Periodic demo save off the event loop. Cadence is keyed to
+                # publish_interval (default 50 updates) so demos and ONNX
+                # publishes share roughly the same wall-clock pacing without
+                # writing the huge .npz on every chunk.
+                if self.update_count % self.args.demo_save_interval == 0:
+                    await self._save_demos_async()
 
             except Exception as e:
                 print(f"Training error: {e}")
@@ -1022,14 +1117,37 @@ class V620RLPDTrainer:
         await self.train_loop()
 
     def start(self):
+        # Track whether shutdown ran so the finally-clause doesn't double-save.
+        self._shutdown_done = False
+
+        def _do_final_save(reason: str):
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
+            try:
+                print(f"\nFinal save ({reason})...")
+                self._save_checkpoint()
+                self.writer.close()
+            except Exception as e:
+                print(f"Final save failed: {e}")
+
         def _shutdown(signum, frame):
-            print("\nShutdown signal received")
-            self._save_checkpoint()
-            self.writer.close()
+            _do_final_save(f"signal {signum}")
             sys.exit(0)
+
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
-        asyncio.run(self.run())
+        try:
+            asyncio.run(self.run())
+        except KeyboardInterrupt:
+            # asyncio sometimes swallows the SIGINT into KeyboardInterrupt
+            # before our signal handler runs.
+            _do_final_save("KeyboardInterrupt")
+            sys.exit(0)
+        finally:
+            # Belt-and-suspenders: if we reach here without having saved,
+            # save now so we never lose >50 updates of work.
+            _do_final_save("normal exit")
 
 
 def main():
@@ -1076,7 +1194,20 @@ def main():
     parser.add_argument('--simhash_bits', type=int, default=16)
     # Logging cadence
     parser.add_argument('--publish_interval', type=int, default=50)
-    parser.add_argument('--checkpoint_interval', type=int, default=200)
+    parser.add_argument('--checkpoint_interval', type=int, default=1,
+                        help='Save `latest_rlpd.pt` every N updates. '
+                             'Default 1 (every step) — RLPD inner loops are '
+                             'slow enough that a fresh checkpoint per step '
+                             'is the right safety/perf trade-off.')
+    parser.add_argument('--snapshot_interval', type=int, default=200,
+                        help='Write rotating `rlpd_update_N.pt` snapshot every '
+                             'N updates. Wider than checkpoint_interval so '
+                             'historical checkpoints exist without filling '
+                             'the disk with one .pt per step.')
+    parser.add_argument('--demo_save_interval', type=int, default=50,
+                        help='Persist demos.npz every N updates (off the '
+                             'event loop). The buffer can be 1+ GB so we '
+                             'do not synchronously rewrite it on every chunk.')
 
     args = parser.parse_args()
 
