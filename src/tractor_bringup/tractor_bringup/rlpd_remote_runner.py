@@ -974,10 +974,19 @@ class RLPDRemoteRunner(Node):
             if hasattr(self, '_slip_recovery_turn_dir'):
                 delattr(self, '_slip_recovery_turn_dir')
 
-        # Publish
-        track_msg = Float32MultiArray()
-        track_msg.data = [float(left_track), float(right_track)]
-        self.track_cmd_pub.publish(track_msg)
+        # Publish track command — BUT NOT in teleop mode. The hiwonder motor
+        # driver subscribes to BOTH /cmd_vel AND /track_cmd; in teleop mode
+        # the safety_monitor → /cmd_vel → motor pipeline is already driving
+        # the rover from /cmd_vel_teleop. Publishing /track_cmd_ai here would
+        # create a second motor command stream at slightly different scaling
+        # and timing, causing yaw drift (the two pipelines fight each other).
+        # We still build the chunk with `actual_action` so demos are
+        # consistent across teleop and autonomous, but only the runner's
+        # autonomous path actually drives the motor.
+        if not self._teleop_mode:
+            track_msg = Float32MultiArray()
+            track_msg.data = [float(left_track), float(right_track)]
+            self.track_cmd_pub.publish(track_msg)
 
         # ---- Reward (5-channel) ----
         robot_x = self._latest_odom[0] if self._latest_odom else 0.0

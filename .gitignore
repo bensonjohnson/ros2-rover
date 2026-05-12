@@ -54,6 +54,20 @@ models/
 remote_training_server/logs/
 remote_training_server/logs_sac/
 remote_training_server/logs_ppo/
+remote_training_server/logs_dreamer/
+remote_training_server/logs_rlpd/
 remote_training_server/checkpoints/
 remote_training_server/checkpoints_sac/
 remote_training_server/checkpoints_ppo/
+remote_training_server/checkpoints_dreamer/
+remote_training_server/checkpoints_rlpd/
+
+# TensorBoard event files (in case logs land elsewhere)
+events.out.tfevents.*
+
+# RKNN calibration captures (rover-side)
+calibration_data_dreamer/
+calibration_data_rlpd/
+
+# Numpy archives (replay buffers, demo dumps, training dataset shards)
+*.npz
