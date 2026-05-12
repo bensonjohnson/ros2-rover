@@ -26,6 +26,11 @@ def serialize_batch(batch: dict) -> bytes:
             - dones: np.array of shape (N,) bool
             - is_first: np.array of shape (N,) bool
             - rgb: (optional) np.array of shape (N, 3, 84, 84) uint8/float32
+            - is_intervention: (optional, RLPD) np.array of shape (N,) bool —
+              True for steps where the human took over via deadman.
+            - is_demo: (optional, RLPD) np.array of shape (N,) bool —
+              True for entire teleop collection chunks.
+            - schema_version: (optional) int. Default 1 (Dreamer). RLPD ships 2.
             - metadata: (optional) dict with rover_id, model_id, etc.
 
     Returns:
@@ -52,6 +57,7 @@ def serialize_batch(batch: dict) -> bytes:
         "reward_channels": int(rewards.shape[1]),
         "dones": batch["dones"].tolist(),
         "is_first": batch.get("is_first", np.zeros(n_steps, dtype=bool)).tolist(),
+        "schema_version": int(batch.get("schema_version", 1)),
         "metadata": batch.get("metadata", {}),
     }
 
@@ -62,6 +68,15 @@ def serialize_batch(batch: dict) -> bytes:
             "shape": batch["rgb"].shape,
             "dtype": str(batch["rgb"].dtype),
         }
+
+    # RLPD / HIL-SERL flags (optional). Only emitted if the rover provided them,
+    # so Dreamer chunks stay byte-identical on the wire.
+    if "is_intervention" in batch:
+        compressed["is_intervention"] = np.asarray(
+            batch["is_intervention"], dtype=bool
+        ).tolist()
+    if "is_demo" in batch:
+        compressed["is_demo"] = np.asarray(batch["is_demo"], dtype=bool).tolist()
 
     return msgpack.packb(compressed)
 
@@ -96,6 +111,7 @@ def deserialize_batch(data: bytes) -> dict:
         "reward_channels": int(compressed.get("reward_channels", rewards.shape[1])),
         "dones": np.array(compressed["dones"], dtype=bool),
         "is_first": np.array(compressed.get("is_first", [False] * n_steps), dtype=bool),
+        "schema_version": int(compressed.get("schema_version", 1)),
         "metadata": compressed.get("metadata", {}),
     }
 
@@ -105,6 +121,14 @@ def deserialize_batch(data: bytes) -> dict:
             decompressor.decompress(compressed["rgb"]["data"]),
             dtype=np.dtype(compressed["rgb"]["dtype"])
         ).reshape(compressed["rgb"]["shape"])
+
+    # RLPD / HIL-SERL flags. Absent on Dreamer chunks → caller gets all-False.
+    if compressed.get("is_intervention") is not None:
+        result["is_intervention"] = np.array(
+            compressed["is_intervention"], dtype=bool
+        )
+    if compressed.get("is_demo") is not None:
+        result["is_demo"] = np.array(compressed["is_demo"], dtype=bool)
 
     return result
 

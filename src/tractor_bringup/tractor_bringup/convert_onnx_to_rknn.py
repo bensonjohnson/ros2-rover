@@ -66,18 +66,35 @@ RSSM_H_DIM = 512
 RSSM_Z_DIM = 1024
 ACTION_DIM = 2
 
+# RLPD calibration shapes — match RLPDActorOnnxWrapper inputs in
+# remote_training_server/rlpd_networks.py. Stacked across `frame_stack=4` frames.
+RLPD_FRAME_STACK = 4
+RLPD_RGB_STACK_SHAPE = (3 * RLPD_FRAME_STACK, 84, 84)
+RLPD_BEV_STACK_SHAPE = (2 * RLPD_FRAME_STACK, 128, 128)
+RLPD_PROPRIO_STACK_DIM = 6 * RLPD_FRAME_STACK
 
-def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_lstm: bool = True, has_rssm: bool = False):
+
+def _load_calibration_dataset(
+    calibration_dir: str,
+    max_samples: int = 100,
+    has_lstm: bool = True,
+    has_rssm: bool = False,
+    has_rlpd_stack: bool = False,
+):
     """Prepare calibration dataset by saving samples to .npy files and creating a dataset.txt.
 
     Args:
         calibration_dir: Directory containing calibration_XXXX.npz files
         max_samples: Maximum number of samples to use
         has_lstm: Whether model has LSTM inputs (hx, cx)
+        has_rssm: Whether model has Dreamer RSSM state inputs (prev_h, prev_z, prev_a)
+        has_rlpd_stack: Whether model has RLPD stacked inputs (rgb_stack, bev_stack, proprio_stack)
 
     Returns:
         Path to the generated dataset.txt file
     """
+    if has_rlpd_stack:
+        return _load_calibration_dataset_rlpd(calibration_dir, max_samples)
     calibration_files = sorted([
         os.path.join(calibration_dir, f)
         for f in os.listdir(calibration_dir)
@@ -179,6 +196,91 @@ def _load_calibration_dataset(calibration_dir: str, max_samples: int = 100, has_
     return dataset_txt_path
 
 
+def _load_calibration_dataset_rlpd(calibration_dir: str, max_samples: int = 100):
+    """RLPD-flavored calibration: expects .npz files with rgb_stack, bev_stack,
+    proprio_stack keys. Falls back to replicating single-frame Dreamer-style
+    .npz files 4× if no RLPD-stacked samples are available.
+    """
+    calibration_files = sorted([
+        os.path.join(calibration_dir, f)
+        for f in os.listdir(calibration_dir)
+        if f.endswith('.npz')
+    ])[:max_samples]
+
+    print(f"Preparing RLPD calibration dataset from {len(calibration_files)} samples...")
+
+    dataset_dir = os.path.join(calibration_dir, "rknn_dataset_rlpd")
+    os.makedirs(dataset_dir, exist_ok=True)
+    dataset_txt_path = os.path.join(dataset_dir, "dataset.txt")
+
+    valid_samples = 0
+    with open(dataset_txt_path, 'w') as f:
+        for i, file_path in enumerate(calibration_files):
+            try:
+                data = np.load(file_path)
+
+                if 'rgb_stack' in data.files and 'bev_stack' in data.files and 'proprio_stack' in data.files:
+                    rgb_stack = data['rgb_stack']        # (12, 84, 84) uint8
+                    bev_stack = data['bev_stack']        # (8, 128, 128) uint8
+                    proprio_stack = data['proprio_stack']  # (24,) float32
+                else:
+                    # Fallback: legacy Dreamer .npz — replicate single frame 4×.
+                    if 'rgb' not in data.files or 'bev' not in data.files or 'proprio' not in data.files:
+                        print(f"⚠ Skipping {file_path}: no stacked or legacy keys")
+                        continue
+                    rgb = data['rgb']           # (3, 84, 84) uint8
+                    bev = data['bev']           # (2, 128, 128) any
+                    proprio = data['proprio']   # (6,) float32
+
+                    if bev.ndim == 2 and bev.shape == (128, 128):
+                        bev = np.stack([bev, bev], axis=0)
+                    if bev.shape != (2, 128, 128) or rgb.shape != (3, 84, 84) or proprio.shape != (6,):
+                        print(f"⚠ Skipping {file_path}: legacy shapes mismatch")
+                        continue
+                    rgb_stack = np.tile(rgb, (RLPD_FRAME_STACK, 1, 1))         # (12, 84, 84)
+                    bev_stack = np.tile(bev, (RLPD_FRAME_STACK, 1, 1))         # (8, 128, 128)
+                    proprio_stack = np.tile(proprio, (RLPD_FRAME_STACK,))      # (24,)
+
+                # Shape validation
+                if rgb_stack.shape != RLPD_RGB_STACK_SHAPE:
+                    print(f"⚠ Skipping {file_path}: rgb_stack {rgb_stack.shape} != {RLPD_RGB_STACK_SHAPE}")
+                    continue
+                if bev_stack.shape != RLPD_BEV_STACK_SHAPE:
+                    print(f"⚠ Skipping {file_path}: bev_stack {bev_stack.shape} != {RLPD_BEV_STACK_SHAPE}")
+                    continue
+                if proprio_stack.shape != (RLPD_PROPRIO_STACK_DIM,):
+                    print(f"⚠ Skipping {file_path}: proprio_stack {proprio_stack.shape} != ({RLPD_PROPRIO_STACK_DIM},)")
+                    continue
+
+                # Normalize to [0, 1] for the ONNX forward expectation
+                # (RLPDVisionEncoder applies ImageNet mean/std internally).
+                rgb_float = rgb_stack.astype(np.float32) / 255.0
+                bev_float = bev_stack.astype(np.float32) / 255.0
+                proprio_float = proprio_stack.astype(np.float32)
+                proprio_float = np.nan_to_num(proprio_float, nan=0.0, posinf=3.0, neginf=-3.0)
+
+                rgb_batch = rgb_float[None, ...]
+                bev_batch = bev_float[None, ...]
+                proprio_batch = proprio_float[None, ...]
+
+                rgb_path = os.path.abspath(os.path.join(dataset_dir, f"rgb_stack_{i}.npy"))
+                bev_path = os.path.abspath(os.path.join(dataset_dir, f"bev_stack_{i}.npy"))
+                pro_path = os.path.abspath(os.path.join(dataset_dir, f"proprio_stack_{i}.npy"))
+                np.save(rgb_path, rgb_batch)
+                np.save(bev_path, bev_batch)
+                np.save(pro_path, proprio_batch)
+                # Input order must match the ONNX graph: rgb_stack, bev_stack, proprio_stack
+                f.write(f"{rgb_path} {bev_path} {pro_path}\n")
+                valid_samples += 1
+
+            except Exception as exc:
+                print(f"⚠ Warning: Failed to process {file_path}: {exc}")
+                continue
+
+    print(f"✓ Generated RLPD dataset.txt with {valid_samples} samples")
+    return dataset_txt_path
+
+
 def convert_onnx_to_rknn(
     onnx_path: str,
     output_path: str,
@@ -251,7 +353,15 @@ def convert_onnx_to_rknn(
                 print(f"  {name}: {shape}")
             has_lstm = any(n in ('hx', 'cx') for n in input_names)
             has_rssm = any(n in ('prev_h', 'prev_z', 'prev_a') for n in input_names)
+            has_rlpd_stack = any(n in ('rgb_stack', 'bev_stack', 'proprio_stack') for n in input_names)
+            if has_rlpd_stack:
+                # RLPD model. ImageNet normalization is applied inside the
+                # encoder forward, so RKNN sees inputs already in [0, 1]; pass
+                # mean=0, std=1 across all channels (the per-input lists above
+                # are already initialized that way — leaving as-is is correct).
+                print("  Detected RLPD-stacked input signature (model-free SAC)")
         else:
+            has_rlpd_stack = False
             # Fallback: try loading without explicit inputs first
             print("  onnx package not available, trying auto-detect via RKNN...")
 
@@ -294,7 +404,12 @@ def convert_onnx_to_rknn(
         if quantize and calibration_dir:
             print("Building RKNN model with INT8 quantization...")
             print("  Loading calibration dataset...")
-            dataset = _load_calibration_dataset(calibration_dir, has_lstm=has_lstm, has_rssm=has_rssm)
+            dataset = _load_calibration_dataset(
+                calibration_dir,
+                has_lstm=has_lstm,
+                has_rssm=has_rssm,
+                has_rlpd_stack=has_rlpd_stack,
+            )
             print("  Running quantization (this may take a few minutes)...")
             ret = rknn.build(do_quantization=True, dataset=dataset)
         else:

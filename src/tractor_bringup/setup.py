@@ -48,6 +48,7 @@ setup(
             "ppo_local_runner = tractor_bringup.ppo_local_runner:main",
             "ppo_remote_runner = tractor_bringup.ppo_remote_runner:main",
             "dreamer_remote_runner = tractor_bringup.dreamer_remote_runner:main",
+            "rlpd_remote_runner = tractor_bringup.rlpd_remote_runner:main",
             "es_episode_runner.py = tractor_bringup.es_episode_runner:main",
         ],
     },

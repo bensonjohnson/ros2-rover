@@ -22,8 +22,13 @@ def serialize_batch(batch: dict) -> bytes:
             - bev: np.array of shape (N, 2, 128, 128) float32 - Unified BEV grid
             - proprio: np.array of shape (N, 12) float32
             - actions: np.array of shape (N, 2) float32
-            - rewards: np.array of shape (N,) float32
+            - rewards: np.array of shape (N,) float32 OR (N, K) float32 — K reward channels
             - dones: np.array of shape (N,) bool
+            - is_intervention: (optional, RLPD) np.array of shape (N,) bool —
+              True for steps where the human took over via deadman during autonomy.
+            - is_demo: (optional, RLPD) np.array of shape (N,) bool —
+              True for entire teleop collection chunks.
+            - schema_version: (optional) int. Default 1 (PPO/Dreamer). RLPD ships 2.
             - metadata: (optional) dict with rover_id, model_id, etc.
 
     Returns:
@@ -33,6 +38,11 @@ def serialize_batch(batch: dict) -> bytes:
 
     # Convert is_eval to list if it exists (backward compatibility handled in extraction)
     is_eval_data = batch.get("is_eval", np.zeros(len(batch["rewards"]), dtype=bool)).tolist()
+
+    rewards = np.asarray(batch["rewards"], dtype=np.float32)
+    if rewards.ndim == 1:
+        rewards = rewards[:, None]
+    n_steps = rewards.shape[0]
 
     # Compress large arrays
     compressed = {
@@ -44,12 +54,14 @@ def serialize_batch(batch: dict) -> bytes:
         # Small arrays don't benefit from compression
         "proprio": batch["proprio"].tolist(),
         "actions": batch["actions"].tolist(),
-        "rewards": batch["rewards"].tolist(),
+        "rewards": rewards.tolist(),
+        "reward_channels": int(rewards.shape[1]),
         "dones": batch["dones"].tolist(),
         "is_eval": is_eval_data,
         # is_first flag per step (used by DreamerV3 to reset RSSM state on episode boundaries).
         # Optional — old PPO rollouts without this key continue to work.
-        "is_first": batch.get("is_first", np.zeros(len(batch["rewards"]), dtype=bool)).tolist(),
+        "is_first": batch.get("is_first", np.zeros(n_steps, dtype=bool)).tolist(),
+        "schema_version": int(batch.get("schema_version", 1)),
         # Include metadata if present
         "metadata": batch.get("metadata", {}),
     }
@@ -61,6 +73,15 @@ def serialize_batch(batch: dict) -> bytes:
             "shape": batch["rgb"].shape,
             "dtype": str(batch["rgb"].dtype),
         }
+
+    # RLPD / HIL-SERL flags (optional). Only emitted if the rover provided them,
+    # so PPO/Dreamer chunks stay byte-identical on the wire.
+    if "is_intervention" in batch:
+        compressed["is_intervention"] = np.asarray(
+            batch["is_intervention"], dtype=bool
+        ).tolist()
+    if "is_demo" in batch:
+        compressed["is_demo"] = np.asarray(batch["is_demo"], dtype=bool).tolist()
 
     return msgpack.packb(compressed)
 
@@ -78,6 +99,11 @@ def deserialize_batch(data: bytes) -> dict:
     decompressor = zstd.ZstdDecompressor()
     compressed = msgpack.unpackb(data)
 
+    rewards = np.array(compressed["rewards"], dtype=np.float32)
+    if rewards.ndim == 1:
+        rewards = rewards[:, None]
+    n_steps = rewards.shape[0]
+
     result = {
         "bev": np.frombuffer(
             decompressor.decompress(compressed["bev"]["data"]),
@@ -85,10 +111,12 @@ def deserialize_batch(data: bytes) -> dict:
         ).reshape(compressed["bev"]["shape"]),
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
-        "rewards": np.array(compressed["rewards"], dtype=np.float32),
+        "rewards": rewards,
+        "reward_channels": int(compressed.get("reward_channels", rewards.shape[1])),
         "dones": np.array(compressed["dones"], dtype=bool),
-        "is_eval": np.array(compressed.get("is_eval", [False]*len(compressed["rewards"])), dtype=bool),
-        "is_first": np.array(compressed.get("is_first", [False]*len(compressed["rewards"])), dtype=bool),
+        "is_eval": np.array(compressed.get("is_eval", [False] * n_steps), dtype=bool),
+        "is_first": np.array(compressed.get("is_first", [False] * n_steps), dtype=bool),
+        "schema_version": int(compressed.get("schema_version", 1)),
         "metadata": compressed.get("metadata", {}),
     }
 
@@ -98,6 +126,14 @@ def deserialize_batch(data: bytes) -> dict:
             decompressor.decompress(compressed["rgb"]["data"]),
             dtype=np.dtype(compressed["rgb"]["dtype"])
         ).reshape(compressed["rgb"]["shape"])
+
+    # RLPD / HIL-SERL flags. Absent on Dreamer/PPO chunks → caller doesn't see them.
+    if compressed.get("is_intervention") is not None:
+        result["is_intervention"] = np.array(
+            compressed["is_intervention"], dtype=bool
+        )
+    if compressed.get("is_demo") is not None:
+        result["is_demo"] = np.array(compressed["is_demo"], dtype=bool)
 
     return result
 

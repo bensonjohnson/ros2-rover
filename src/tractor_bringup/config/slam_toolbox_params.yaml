@@ -43,8 +43,8 @@ slam_toolbox:
     enable_interactive_mode: true
 
     # General Parameters for mapping
-    map_file_name: /home/ubuntu/ros2-rover/maps/yard_slam_map
-    map_start_at_dock: true
+    map_file_name: ""
+    map_start_at_dock: false
     map_start_pose: [0.0, 0.0, 0.0]  # Start robot at map center
 
     # Outdoor mapping optimized parameters
