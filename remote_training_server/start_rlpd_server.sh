@@ -47,7 +47,7 @@ echo "  Dashboard:     http://localhost:8081"
 echo "  TensorBoard:   http://localhost:6008"
 echo "  Checkpoint Dir: ${CHECKPOINT_DIR}"
 echo "  Log Dir: ${LOG_DIR}"
-echo "  Architecture: RLPD (SAC + critic ensemble + frozen ResNet18)"
+echo "  Architecture: RLPD v3 (SAC + critic ensemble; Depth 96×72 + 1D LiDAR 360 + proprio)"
 echo "  Algorithm: HIL-SERL (50/50 demo replay + intervention reward)"
 echo ""
 

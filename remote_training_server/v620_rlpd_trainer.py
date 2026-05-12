@@ -55,11 +55,18 @@ except ImportError:
 
 from rlpd_networks import (
     RLPDVisionEncoder, RLPDActor, RLPDCriticEnsemble, RLPDActorOnnxWrapper,
+    RLPDVisionEncoderV3, RLPDActorOnnxWrapperV3,
     REWARD_CHANNELS_RLPD,
 )
-from rlpd_replay import OnlineReplay, DemoReplay
+from rlpd_replay import OnlineReplay, DemoReplay, OnlineReplayV3, DemoReplayV3
 from serialization_utils import deserialize_batch, serialize_status
 from intrinsic_rewards import LifetimeSimHash
+
+# v3 wire format constants — kept here (not in serialization_utils) because the
+# server is the source of truth; the rover-side serializer mirrors them.
+V3_SCHEMA_VERSION = 3
+V3_DEPTH_HW = (72, 96)
+V3_LIDAR_BEAMS = 360
 
 
 # ============================================================================
@@ -323,19 +330,30 @@ class V620RLPDTrainer:
         self.n_critics = args.n_critics
         self.m_subsample = args.m_subsample
         assert self.m_subsample <= self.n_critics
+        self.obs_mode = args.obs_mode
+        assert self.obs_mode in ('legacy', 'v3'), \
+            f"Unknown --obs_mode {self.obs_mode!r}"
 
         # --- Models ---
-        # The frozen ResNet18 trunk is cast to the AMP dtype so its forward
-        # runs natively in BF16/FP16, halving memory bandwidth and roughly
-        # doubling encoder throughput. The trainable parts of the encoder run
-        # in autocast dtype as usual.
+        # Legacy: frozen ResNet18 (RGB) + BEV CNN + proprio. Backbone is cast
+        # to AMP dtype so its forward runs natively in BF16/FP16.
+        # v3: depth CNN + 1D LiDAR CNN + proprio (fully trainable, ~570k enc params).
         backbone_dtype = self.amp_dtype if self.use_amp else torch.float32
-        self.encoder = RLPDVisionEncoder(
-            proprio_dim=self.proprio_dim,
-            frame_stack=self.frame_stack,
-            state_dim=self.state_dim,
-            backbone_dtype=backbone_dtype,
-        ).to(self.device)
+        if self.obs_mode == 'legacy':
+            self.encoder = RLPDVisionEncoder(
+                proprio_dim=self.proprio_dim,
+                frame_stack=self.frame_stack,
+                state_dim=self.state_dim,
+                backbone_dtype=backbone_dtype,
+            ).to(self.device)
+        else:
+            self.encoder = RLPDVisionEncoderV3(
+                proprio_dim=self.proprio_dim,
+                frame_stack=self.frame_stack,
+                state_dim=self.state_dim,
+                lidar_beams=V3_LIDAR_BEAMS,
+                depth_hw=V3_DEPTH_HW,
+            ).to(self.device)
         self.actor = RLPDActor(
             state_dim=self.state_dim, action_dim=self.action_dim,
         ).to(self.device)
@@ -410,12 +428,22 @@ class V620RLPDTrainer:
         self.writer = SummaryWriter(args.log_dir)
 
         # --- Replay ---
-        self.online = OnlineReplay(
-            capacity=args.online_capacity,
-            n_reward_channels=len(REWARD_CHANNELS_RLPD),
-            proprio_dim=self.proprio_dim,
-            action_dim=self.action_dim,
-        )
+        if self.obs_mode == 'legacy':
+            self.online = OnlineReplay(
+                capacity=args.online_capacity,
+                n_reward_channels=len(REWARD_CHANNELS_RLPD),
+                proprio_dim=self.proprio_dim,
+                action_dim=self.action_dim,
+            )
+        else:
+            self.online = OnlineReplayV3(
+                capacity=args.online_capacity,
+                depth_shape=(1, *V3_DEPTH_HW),
+                lidar_beams=V3_LIDAR_BEAMS,
+                n_reward_channels=len(REWARD_CHANNELS_RLPD),
+                proprio_dim=self.proprio_dim,
+                action_dim=self.action_dim,
+            )
         demo_path = Path(args.checkpoint_dir) / 'demos.npz'
         self.demo_path = demo_path
         # Clean up stale `.tmp` files from previous interrupted saves so they
@@ -427,21 +455,52 @@ class V620RLPDTrainer:
                 print(f"Removed stale {stale.name} ({size_mb:.1f} MB)")
             except Exception:
                 pass
-        self.demo = DemoReplay.load(
-            demo_path,
-            n_reward_channels=len(REWARD_CHANNELS_RLPD),
-            proprio_dim=self.proprio_dim,
-            action_dim=self.action_dim,
-        )
-        if self.demo is None:
-            self.demo = DemoReplay(
+        if self.obs_mode == 'legacy':
+            self.demo = DemoReplay.load(
+                demo_path,
                 n_reward_channels=len(REWARD_CHANNELS_RLPD),
                 proprio_dim=self.proprio_dim,
                 action_dim=self.action_dim,
             )
-            print("Demo replay: starting empty")
+            if self.demo is None:
+                self.demo = DemoReplay(
+                    n_reward_channels=len(REWARD_CHANNELS_RLPD),
+                    proprio_dim=self.proprio_dim,
+                    action_dim=self.action_dim,
+                )
+                print("Demo replay: starting empty")
+            else:
+                print(f"Demo replay restored: {len(self.demo)} transitions")
         else:
-            print(f"Demo replay restored: {len(self.demo)} transitions")
+            # v3 mode rejects any legacy demos.npz silently — re-collect via teleop.
+            self.demo = DemoReplayV3.load(
+                demo_path,
+                depth_shape=(1, *V3_DEPTH_HW),
+                lidar_beams=V3_LIDAR_BEAMS,
+                n_reward_channels=len(REWARD_CHANNELS_RLPD),
+                proprio_dim=self.proprio_dim,
+                action_dim=self.action_dim,
+            )
+            if self.demo is None:
+                # If a legacy demos.npz is sitting on disk, archive it so the
+                # user can recover it later but doesn't get confused by stale data.
+                if demo_path.exists():
+                    archive = demo_path.with_name('demos_legacy.npz')
+                    try:
+                        os.replace(demo_path, archive)
+                        print(f"Archived legacy demos.npz → {archive.name}")
+                    except Exception as e:
+                        print(f"Could not archive legacy demos.npz: {e}")
+                self.demo = DemoReplayV3(
+                    depth_shape=(1, *V3_DEPTH_HW),
+                    lidar_beams=V3_LIDAR_BEAMS,
+                    n_reward_channels=len(REWARD_CHANNELS_RLPD),
+                    proprio_dim=self.proprio_dim,
+                    action_dim=self.action_dim,
+                )
+                print("Demo replay (v3): starting empty")
+            else:
+                print(f"Demo replay (v3) restored: {len(self.demo)} transitions")
         # Demo dirty flag — set in consume_rollouts, drained periodically in
         # train_loop. Avoids synchronously rewriting the (potentially 1+ GB)
         # demos.npz inside the asyncio event loop on every chunk arrival,
@@ -524,17 +583,19 @@ class V620RLPDTrainer:
         print(f"Restored: steps={self.total_steps}, v{self.model_version}, update={self.update_count}")
 
     def _encoder_trainable_state(self):
-        """Encoder state dict with the frozen ResNet18 backbone filtered out.
+        """Encoder state dict with the frozen ResNet18 backbone filtered out
+        (legacy mode only).
 
         The backbone never changes — its weights come from torchvision's
         ImageNet pretrain and are re-fetched on every fresh trainer init. By
         skipping them we cut the per-step .pt size by ~4x (190 MB → 50 MB) so
-        save-every-step doesn't dominate the training loop.
+        save-every-step doesn't dominate the training loop. v3 mode has no
+        frozen submodule, so the full state_dict is saved.
         """
-        return {
-            k: v for k, v in self.encoder.state_dict().items()
-            if not k.startswith('rgb_backbone.')
-        }
+        sd = self.encoder.state_dict()
+        if self.obs_mode == 'legacy':
+            return {k: v for k, v in sd.items() if not k.startswith('rgb_backbone.')}
+        return sd
 
     def _save_checkpoint(self):
         state = {
@@ -593,38 +654,50 @@ class V620RLPDTrainer:
     def _export_onnx(self, increment_version: bool = True):
         try:
             onnx_path = Path(self.args.checkpoint_dir) / "latest_actor.onnx"
-            wrapper = RLPDActorOnnxWrapper(self.encoder, self.actor).to(self.device)
-            wrapper.eval()
-
             K = self.frame_stack
-            dummy_rgb = torch.zeros(1, 3 * K, 84, 84, device=self.device)
-            dummy_bev = torch.zeros(1, 2 * K, 128, 128, device=self.device)
-            dummy_proprio = torch.zeros(1, self.proprio_dim * K, device=self.device)
+            if self.obs_mode == 'legacy':
+                wrapper = RLPDActorOnnxWrapper(self.encoder, self.actor).to(self.device)
+                wrapper.eval()
+                dummy_rgb = torch.zeros(1, 3 * K, 84, 84, device=self.device)
+                dummy_bev = torch.zeros(1, 2 * K, 128, 128, device=self.device)
+                dummy_proprio = torch.zeros(1, self.proprio_dim * K, device=self.device)
+                inputs = (dummy_rgb, dummy_bev, dummy_proprio)
+                input_names = ['rgb_stack', 'bev_stack', 'proprio_stack']
+                dyn_axes = {n: {0: 'batch'} for n in input_names}
 
-            # RKNN's graph optimizer uses onnxruntime to fold constants, and
-            # onnxruntime materializes constants as numpy arrays — which fails
-            # on BF16 because numpy has no BF16 dtype ("No corresponding Numpy
-            # type for Tensor Type. bfloat16"). The encoder backbone is BF16
-            # for training speed, but for the export we temporarily cast it
-            # back to FP32 so the resulting ONNX graph contains only dtypes
-            # that downstream tooling can handle. Restored on the way out.
-            original_dtype = self.encoder.backbone_dtype
-            need_cast = original_dtype != torch.float32
-            if need_cast:
-                self.encoder.rgb_backbone.to(dtype=torch.float32)
+                # RKNN's graph optimizer uses onnxruntime to fold constants,
+                # and onnxruntime materializes constants as numpy arrays —
+                # which fails on BF16 because numpy has no BF16 dtype. The
+                # encoder backbone is BF16 for training speed, but for the
+                # export we temporarily cast it back to FP32 so the ONNX
+                # graph contains only dtypes that downstream tooling can
+                # handle. Restored on the way out.
+                original_dtype = self.encoder.backbone_dtype
+                need_cast = original_dtype != torch.float32
+                if need_cast:
+                    self.encoder.rgb_backbone.to(dtype=torch.float32)
+            else:
+                wrapper = RLPDActorOnnxWrapperV3(self.encoder, self.actor).to(self.device)
+                wrapper.eval()
+                dummy_depth = torch.zeros(1, K, V3_DEPTH_HW[0], V3_DEPTH_HW[1], device=self.device)
+                dummy_lidar = torch.zeros(1, K, V3_LIDAR_BEAMS, device=self.device)
+                dummy_proprio = torch.zeros(1, self.proprio_dim * K, device=self.device)
+                inputs = (dummy_depth, dummy_lidar, dummy_proprio)
+                input_names = ['depth_stack', 'lidar_stack', 'proprio_stack']
+                dyn_axes = {n: {0: 'batch'} for n in input_names}
+                # No frozen backbone in v3 → no BF16-cast dance.
+                need_cast = False
+                original_dtype = None
+
             try:
                 torch.onnx.export(
                     wrapper,
-                    (dummy_rgb, dummy_bev, dummy_proprio),
+                    inputs,
                     str(onnx_path),
-                    input_names=['rgb_stack', 'bev_stack', 'proprio_stack'],
+                    input_names=input_names,
                     output_names=['mean_logstd'],
                     opset_version=17,
-                    dynamic_axes={
-                        'rgb_stack': {0: 'batch'},
-                        'bev_stack': {0: 'batch'},
-                        'proprio_stack': {0: 'batch'},
-                    },
+                    dynamic_axes=dyn_axes,
                     dynamo=False,
                 )
             finally:
@@ -701,17 +774,35 @@ class V620RLPDTrainer:
         return t
 
     def _batch_to_tensors(self, batch: dict):
-        """Convert a sampled batch (numpy) to device tensors. Casts uint8→float/255."""
-        rgb = self._to_device(batch['rgb_stack'].astype(np.float32) / 255.0)
-        bev = self._to_device(batch['bev_stack'].astype(np.float32) / 255.0)
+        """Convert a sampled batch (numpy) to device tensors.
+
+        Returns a tuple `(obs, next_obs, action, reward, done)` where `obs` and
+        `next_obs` are themselves tuples in the order the encoder's `forward`
+        consumes them:
+          legacy: (rgb, bev, proprio)
+          v3:     (depth, lidar, proprio)
+        Casts uint8 visual modalities to float/255 here.
+        """
         pro = self._to_device(batch['proprio_stack'])
-        next_rgb = self._to_device(batch['next_rgb_stack'].astype(np.float32) / 255.0)
-        next_bev = self._to_device(batch['next_bev_stack'].astype(np.float32) / 255.0)
         next_pro = self._to_device(batch['next_proprio_stack'])
         action = self._to_device(batch['action'])
         reward = self._to_device(batch['reward'])  # (B, 5)
         done = self._to_device(batch['done'].astype(np.float32))
-        return rgb, bev, pro, next_rgb, next_bev, next_pro, action, reward, done
+        if self.obs_mode == 'legacy':
+            rgb = self._to_device(batch['rgb_stack'].astype(np.float32) / 255.0)
+            bev = self._to_device(batch['bev_stack'].astype(np.float32) / 255.0)
+            next_rgb = self._to_device(batch['next_rgb_stack'].astype(np.float32) / 255.0)
+            next_bev = self._to_device(batch['next_bev_stack'].astype(np.float32) / 255.0)
+            obs = (rgb, bev, pro)
+            next_obs = (next_rgb, next_bev, next_pro)
+        else:
+            depth = self._to_device(batch['depth_stack'].astype(np.float32) / 255.0)
+            lidar = self._to_device(batch['lidar_stack'])  # already float32 in [0,1]
+            next_depth = self._to_device(batch['next_depth_stack'].astype(np.float32) / 255.0)
+            next_lidar = self._to_device(batch['next_lidar_stack'])
+            obs = (depth, lidar, pro)
+            next_obs = (next_depth, next_lidar, next_pro)
+        return obs, next_obs, action, reward, done
 
     def _sample_mixed(self):
         """RLPD 50/50 sampler. Degrades to 100% online if demo is empty."""
@@ -760,9 +851,8 @@ class V620RLPDTrainer:
         # one sample per UTD iter; we batch for throughput on the V620).
         for _ in range(self.utd):
             batch, demo_frac_actual = self._sample_mixed()
-            (rgb, bev, pro, next_rgb, next_bev, next_pro,
-             action, reward_channels, done) = self._batch_to_tensors(batch)
-            B = rgb.shape[0]
+            obs, next_obs, action, reward_channels, done = self._batch_to_tensors(batch)
+            B = obs[0].shape[0]
 
             # --- Critic update ---
             if self.use_amp:
@@ -771,9 +861,9 @@ class V620RLPDTrainer:
                 ctx = torch.amp.autocast('cuda', enabled=False) if self.device.type == 'cuda' else \
                       torch.amp.autocast('cpu', enabled=False)
             with ctx:
-                state = self.encoder(rgb, bev, pro)                  # encoder grads on
+                state = self.encoder(*obs)                           # encoder grads on
                 with torch.no_grad():
-                    next_state_tgt = self.encoder(next_rgb, next_bev, next_pro)
+                    next_state_tgt = self.encoder(*next_obs)
                     next_action, next_log_prob, _ = self.actor.sample(next_state_tgt)
                     # REDQ: M-subset min over target critics
                     idx = torch.from_numpy(
@@ -909,20 +999,44 @@ class V620RLPDTrainer:
                 if K_chunk != len(REWARD_CHANNELS_RLPD):
                     print(f"WARNING: Dropping chunk with K={K_chunk} (expected {len(REWARD_CHANNELS_RLPD)})")
                     continue
+                sv = int(rollout.get('schema_version', 1))
+                expected_sv = V3_SCHEMA_VERSION if self.obs_mode == 'v3' else 2
+                if sv != expected_sv:
+                    print(f"WARNING: Dropping chunk schema_version={sv} "
+                          f"(obs_mode={self.obs_mode} expects {expected_sv})")
+                    continue
                 n = len(rollout['rewards'])
                 self.total_steps += n
 
-                chunk = {
-                    'bev': rollout['bev'].astype(np.uint8) if rollout['bev'].dtype != np.uint8 else rollout['bev'],
-                    'rgb': rollout.get('rgb', np.zeros((n, 3, 84, 84), dtype=np.uint8)),
-                    'proprio': rollout['proprio'].astype(np.float32),
-                    'actions': rollout['actions'].astype(np.float32),
-                    'rewards': rollout['rewards'].astype(np.float32),
-                    'dones': rollout['dones'].astype(bool),
-                    'is_first': rollout['is_first'].astype(bool),
-                    'is_intervention': rollout.get('is_intervention', np.zeros(n, dtype=bool)),
-                    'is_demo': rollout.get('is_demo', np.zeros(n, dtype=bool)),
-                }
+                if self.obs_mode == 'legacy':
+                    chunk = {
+                        'bev': rollout['bev'].astype(np.uint8) if rollout['bev'].dtype != np.uint8 else rollout['bev'],
+                        'rgb': rollout.get('rgb', np.zeros((n, 3, 84, 84), dtype=np.uint8)),
+                        'proprio': rollout['proprio'].astype(np.float32),
+                        'actions': rollout['actions'].astype(np.float32),
+                        'rewards': rollout['rewards'].astype(np.float32),
+                        'dones': rollout['dones'].astype(bool),
+                        'is_first': rollout['is_first'].astype(bool),
+                        'is_intervention': rollout.get('is_intervention', np.zeros(n, dtype=bool)),
+                        'is_demo': rollout.get('is_demo', np.zeros(n, dtype=bool)),
+                    }
+                else:
+                    depth_raw = rollout.get('depth')
+                    lidar_raw = rollout.get('lidar')
+                    if depth_raw is None or lidar_raw is None:
+                        print(f"WARNING: v3 chunk missing depth/lidar — dropping")
+                        continue
+                    chunk = {
+                        'depth': depth_raw.astype(np.uint8) if depth_raw.dtype != np.uint8 else depth_raw,
+                        'lidar': lidar_raw.astype(np.float32),
+                        'proprio': rollout['proprio'].astype(np.float32),
+                        'actions': rollout['actions'].astype(np.float32),
+                        'rewards': rollout['rewards'].astype(np.float32),
+                        'dones': rollout['dones'].astype(bool),
+                        'is_first': rollout['is_first'].astype(bool),
+                        'is_intervention': rollout.get('is_intervention', np.zeros(n, dtype=bool)),
+                        'is_demo': rollout.get('is_demo', np.zeros(n, dtype=bool)),
+                    }
 
                 # Always add to online
                 self.online.add_chunk(chunk)
@@ -1159,6 +1273,11 @@ def main():
     parser.add_argument('--log_dir', type=str, default='./logs_rlpd')
     parser.add_argument('--dashboard_port', type=int, default=8081)
     # Architecture
+    parser.add_argument('--obs_mode', type=str, default='v3',
+                        choices=['legacy', 'v3'],
+                        help='v3 (default) = Depth(96×72) + 1D LiDAR(360) + proprio, '
+                             'fully trainable; legacy = RGB(84²) + BEV(128²) + ResNet18 '
+                             '(deprecated — rover no longer emits v2 chunks)')
     parser.add_argument('--frame_stack', type=int, default=4)
     parser.add_argument('--state_dim', type=int, default=512)
     parser.add_argument('--n_critics', type=int, default=10)

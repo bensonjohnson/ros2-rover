@@ -74,12 +74,14 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "false",
             "align_depth.enable": "false",
-            "enable_color": "true",
-            "rgb_camera.color_profile": "424x240x30",
+            # v3 RLPD only consumes depth — color disabled to free USB bandwidth.
+            "enable_color": "false",
             "enable_depth": "true",
-            "enable_sync": "true",
+            "enable_sync": "false",
             "device_type": "435i",
-            "depth_module.depth_profile": "848x100x100",
+            # 4:3 full vertical FOV; the rover resizes to 96×72 for the encoder.
+            # Old 848×100 mode is too vertically thin for ground navigation.
+            "depth_module.depth_profile": "640x480x30",
             "enable_gyro": "false",
             "enable_accel": "false",
             "enable_imu": "false",

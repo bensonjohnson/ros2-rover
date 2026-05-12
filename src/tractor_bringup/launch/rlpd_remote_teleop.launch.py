@@ -65,12 +65,12 @@ def generate_launch_description():
         launch_arguments={
             "pointcloud.enable": "false",
             "align_depth.enable": "false",
-            "enable_color": "true",
-            "rgb_camera.color_profile": "424x240x30",
+            # v3 RLPD consumes depth only.
+            "enable_color": "false",
             "enable_depth": "true",
-            "enable_sync": "true",
+            "enable_sync": "false",
             "device_type": "435i",
-            "depth_module.depth_profile": "848x100x100",
+            "depth_module.depth_profile": "640x480x30",
             "enable_gyro": "false",
             "enable_accel": "false",
             "enable_imu": "false",

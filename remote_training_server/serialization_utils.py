@@ -19,19 +19,19 @@ def serialize_batch(batch: dict) -> bytes:
 
     Args:
         batch: Dictionary containing:
-            - bev: np.array of shape (N, 2, 128, 128) float32 - Unified BEV grid
-            - proprio: np.array of shape (N, 6) float32
-            - actions: np.array of shape (N, 2) float32
-            - rewards: np.array of shape (N, K) float32 — K reward channels
-            - dones: np.array of shape (N,) bool
-            - is_first: np.array of shape (N,) bool
-            - rgb: (optional) np.array of shape (N, 3, 84, 84) uint8/float32
-            - is_intervention: (optional, RLPD) np.array of shape (N,) bool —
-              True for steps where the human took over via deadman.
-            - is_demo: (optional, RLPD) np.array of shape (N,) bool —
-              True for entire teleop collection chunks.
-            - schema_version: (optional) int. Default 1 (Dreamer). RLPD ships 2.
-            - metadata: (optional) dict with rover_id, model_id, etc.
+            - bev: (legacy) np.array (N, 2, 128, 128) - omit for v3
+            - proprio: np.array (N, 6) float32
+            - actions: np.array (N, 2) float32
+            - rewards: np.array (N, K) float32
+            - dones: np.array (N,) bool
+            - is_first: np.array (N,) bool
+            - rgb: (legacy/optional) np.array (N, 3, 84, 84) uint8 - omit for v3
+            - depth: (v3, optional) np.array (N, 1, 72, 96) uint8
+            - lidar: (v3, optional) np.array (N, 360) float32
+            - is_intervention: (RLPD, optional) np.array (N,) bool
+            - is_demo: (RLPD, optional) np.array (N,) bool
+            - schema_version: (optional) int. 1=Dreamer, 2=RLPD-legacy, 3=RLPD-v3.
+            - metadata: (optional) dict.
 
     Returns:
         Serialized bytes ready for transport
@@ -44,11 +44,6 @@ def serialize_batch(batch: dict) -> bytes:
     n_steps = rewards.shape[0]
 
     compressed = {
-        "bev": {
-            "data": compressor.compress(batch["bev"].tobytes()),
-            "shape": batch["bev"].shape,
-            "dtype": str(batch["bev"].dtype),
-        },
         # Small arrays don't benefit from compression
         "proprio": batch["proprio"].tolist(),
         "actions": batch["actions"].tolist(),
@@ -61,12 +56,36 @@ def serialize_batch(batch: dict) -> bytes:
         "metadata": batch.get("metadata", {}),
     }
 
-    # RGB stream (optional, compressed like BEV)
-    if "rgb" in batch:
+    # Legacy BEV (Dreamer + RLPD v2). v3 chunks omit it.
+    if "bev" in batch and batch["bev"] is not None:
+        compressed["bev"] = {
+            "data": compressor.compress(batch["bev"].tobytes()),
+            "shape": batch["bev"].shape,
+            "dtype": str(batch["bev"].dtype),
+        }
+
+    # Legacy RGB stream (Dreamer + RLPD v2). v3 chunks omit it.
+    if "rgb" in batch and batch["rgb"] is not None:
         compressed["rgb"] = {
             "data": compressor.compress(batch["rgb"].tobytes()),
             "shape": batch["rgb"].shape,
             "dtype": str(batch["rgb"].dtype),
+        }
+
+    # v3 depth stream (uint8 96x72, zstd compresses ~10x)
+    if "depth" in batch and batch["depth"] is not None:
+        compressed["depth"] = {
+            "data": compressor.compress(batch["depth"].tobytes()),
+            "shape": batch["depth"].shape,
+            "dtype": str(batch["depth"].dtype),
+        }
+
+    # v3 lidar stream (float32 360 beams, compresses ~3x via spatial correlation)
+    if "lidar" in batch and batch["lidar"] is not None:
+        compressed["lidar"] = {
+            "data": compressor.compress(batch["lidar"].tobytes()),
+            "shape": batch["lidar"].shape,
+            "dtype": str(batch["lidar"].dtype),
         }
 
     # RLPD / HIL-SERL flags (optional). Only emitted if the rover provided them,
@@ -101,10 +120,6 @@ def deserialize_batch(data: bytes) -> dict:
     n_steps = rewards.shape[0]
 
     result = {
-        "bev": np.frombuffer(
-            decompressor.decompress(compressed["bev"]["data"]),
-            dtype=np.dtype(compressed["bev"]["dtype"])
-        ).reshape(compressed["bev"]["shape"]),
         "proprio": np.array(compressed["proprio"], dtype=np.float32),
         "actions": np.array(compressed["actions"], dtype=np.float32),
         "rewards": rewards,
@@ -115,12 +130,31 @@ def deserialize_batch(data: bytes) -> dict:
         "metadata": compressed.get("metadata", {}),
     }
 
-    # RGB stream (optional)
+    # Legacy BEV (Dreamer + RLPD v2)
+    if compressed.get("bev") is not None:
+        result["bev"] = np.frombuffer(
+            decompressor.decompress(compressed["bev"]["data"]),
+            dtype=np.dtype(compressed["bev"]["dtype"])
+        ).reshape(compressed["bev"]["shape"])
+
+    # Legacy RGB (Dreamer + RLPD v2)
     if compressed.get("rgb") is not None:
         result["rgb"] = np.frombuffer(
             decompressor.decompress(compressed["rgb"]["data"]),
             dtype=np.dtype(compressed["rgb"]["dtype"])
         ).reshape(compressed["rgb"]["shape"])
+
+    # v3 depth + lidar
+    if compressed.get("depth") is not None:
+        result["depth"] = np.frombuffer(
+            decompressor.decompress(compressed["depth"]["data"]),
+            dtype=np.dtype(compressed["depth"]["dtype"])
+        ).reshape(compressed["depth"]["shape"])
+    if compressed.get("lidar") is not None:
+        result["lidar"] = np.frombuffer(
+            decompressor.decompress(compressed["lidar"]["data"]),
+            dtype=np.dtype(compressed["lidar"]["dtype"])
+        ).reshape(compressed["lidar"]["shape"])
 
     # RLPD / HIL-SERL flags. Absent on Dreamer chunks → caller gets all-False.
     if compressed.get("is_intervention") is not None:

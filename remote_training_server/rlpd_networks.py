@@ -215,6 +215,127 @@ class RLPDVisionEncoder(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# v3 vision encoder — depth (96×72) + 1D LiDAR (360) + proprio
+# ---------------------------------------------------------------------------
+#
+# Replaces the legacy RGB + BEV + ResNet18 path. No ImageNet dependency, no
+# frozen backbone, ~20× fewer encoder params. Depth gives dense short-range
+# geometry; 360° LaserScan gives sparse long-range omnidirectional coverage.
+
+
+class _DepthStackCNN(nn.Module):
+    """CNN over `frame_stack` stacked depth frames → 256-D.
+
+    Input: (B, K, 72, 96) float32 in [0, 1] (rover stores uint8/255).
+    """
+
+    def __init__(self, frame_stack: int, out_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(frame_stack, 32, kernel_size=4, stride=2, padding=1),   # 36×48
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),            # 18×24
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),           # 9×12
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),          # 5×6
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(128, out_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, depth_stack: torch.Tensor) -> torch.Tensor:
+        return self.net(depth_stack)
+
+
+class _LiDAR1DCNN(nn.Module):
+    """1D CNN over `frame_stack` stacked LaserScan range vectors → 192-D.
+
+    Input: (B, K, 360) float32 in [0, 1]. First conv uses circular padding so
+    the 360° wraparound contributes to the receptive field at both ends.
+    """
+
+    def __init__(self, frame_stack: int, out_dim: int = 192):
+        super().__init__()
+        # Conv1d only accepts a single padding_mode; the first layer needs
+        # circular wraparound and the rest are happy with zero padding.
+        self.conv1 = nn.Conv1d(frame_stack, 32, kernel_size=7, stride=2, padding=3,
+                               padding_mode='circular')
+        self.net = nn.Sequential(
+            nn.ReLU(inplace=True),
+            nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2),            # 90
+            nn.ReLU(inplace=True),
+            nn.Conv1d(64, 128, kernel_size=5, stride=2, padding=2),           # 45
+            nn.ReLU(inplace=True),
+            nn.Conv1d(128, 128, kernel_size=3, stride=2, padding=1),          # 23
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(128, out_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, lidar_stack: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(lidar_stack)
+        return self.net(x)
+
+
+class RLPDVisionEncoderV3(nn.Module):
+    """v3 multimodal encoder: depth + LiDAR + proprio.
+
+    Inputs:
+        depth_stack:   (B, K, 72, 96) float32 in [0, 1]
+        lidar_stack:   (B, K, 360)    float32 in [0, 1]
+        proprio_stack: (B, 6*K)       float32, pre-normalized on the rover
+
+    Output: (B, state_dim) float32. Fully trainable; no frozen backbone.
+    """
+
+    def __init__(
+        self,
+        proprio_dim: int = 6,
+        frame_stack: int = 4,
+        state_dim: int = 512,
+        lidar_beams: int = 360,
+        depth_hw: tuple = (72, 96),
+    ):
+        super().__init__()
+        self.frame_stack = frame_stack
+        self.proprio_dim = proprio_dim
+        self.state_dim = state_dim
+        self.lidar_beams = lidar_beams
+        self.depth_hw = depth_hw
+
+        self.depth_cnn = _DepthStackCNN(frame_stack=frame_stack, out_dim=256)
+        self.lidar_cnn = _LiDAR1DCNN(frame_stack=frame_stack, out_dim=192)
+        self.proprio_mlp = nn.Sequential(
+            nn.Linear(proprio_dim * frame_stack, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, 64),
+            nn.ReLU(inplace=True),
+        )
+        fuse_in = 256 + 192 + 64
+        self.fuse = nn.Sequential(
+            nn.Linear(fuse_in, state_dim),
+            nn.LayerNorm(state_dim),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(
+        self,
+        depth_stack: torch.Tensor,
+        lidar_stack: torch.Tensor,
+        proprio_stack: torch.Tensor,
+    ) -> torch.Tensor:
+        d = self.depth_cnn(depth_stack)
+        l = self.lidar_cnn(lidar_stack)
+        p = self.proprio_mlp(proprio_stack)
+        return self.fuse(torch.cat([d, l, p], dim=-1))
+
+
+# ---------------------------------------------------------------------------
 # Actor — tanh-squashed Gaussian
 # ---------------------------------------------------------------------------
 
@@ -404,4 +525,31 @@ class RLPDActorOnnxWrapper(nn.Module):
         proprio_stack: torch.Tensor,
     ) -> torch.Tensor:
         state = self.encoder(rgb_stack, bev_stack, proprio_stack)
+        return self.actor(state)
+
+
+class RLPDActorOnnxWrapperV3(nn.Module):
+    """v3 single-blob ONNX wrapper: depth + lidar + proprio.
+
+    Inputs (named, in this order):
+        depth_stack   : (1, K, 72, 96) float32 in [0, 1]  — rover sends uint8/255
+        lidar_stack   : (1, K, 360)    float32 in [0, 1]
+        proprio_stack : (1, 6*K)       float32
+
+    Output:
+        mean_logstd : (1, 2*action_dim)
+    """
+
+    def __init__(self, encoder: RLPDVisionEncoderV3, actor: RLPDActor):
+        super().__init__()
+        self.encoder = encoder
+        self.actor = actor
+
+    def forward(
+        self,
+        depth_stack: torch.Tensor,
+        lidar_stack: torch.Tensor,
+        proprio_stack: torch.Tensor,
+    ) -> torch.Tensor:
+        state = self.encoder(depth_stack, lidar_stack, proprio_stack)
         return self.actor(state)

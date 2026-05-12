@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """RLPD + HIL-SERL Remote Runner — model-free SAC inference on rover, training on remote GPU.
 
-Fork of dreamer_remote_runner.py adapted for the RLPD pipeline:
-  - No RSSM. RKNN inputs are 4-frame-stacked observations only:
-        rgb_stack     (1, 12, 84, 84)
-        bev_stack     (1,  8, 128, 128)
-        proprio_stack (1, 24)
+v3 observation pipeline (replaces legacy RGB+BEV+ResNet18):
+  - RKNN inputs (K=frame_stack=4 by default):
+        depth_stack   (1, K, 72, 96) float32 in [0, 1]
+        lidar_stack   (1, K, 360)    float32 in [0, 1]
+        proprio_stack (1, 6*K)       float32 (normalized)
     Output is mean_logstd (1, 4).
+  - Realsense D435i 640×480 depth is clipped to [0.2, 6.0]m, resized to 96×72
+    with INTER_NEAREST (preserves invalid-edge geometry), stored uint8 on the
+    wire (trainer divides by 255).
+  - STL19P /scan ranges are resampled to 360 beams via np.interp against the
+    angle grid, invalid/inf replaced by range_max, normalized to [0, 1].
   - Episode boundary / model swap resets the frame stacks (zero-pad).
-  - HIL-SERL interventions: the joy_node + teleop_twist_joy are kept running
-    in autonomous mode. Holding RB (deadman) overrides the policy action with
+  - HIL-SERL interventions: joy_node + teleop_twist_joy stay running in
+    autonomous mode. Holding RB (deadman) overrides the policy action with
     the teleop-derived track command for that tick AND sets
-    `is_intervention[t] = True` and `rewards[t, 4] = -1.0` (intervention
-    penalty — policy learns to avoid needing correction).
-  - Chunk schema bumps to 5 reward channels and adds is_intervention/is_demo
-    bool arrays. schema_version=2 on the wire.
-  - Calibration .npz now captures stacked frames so RKNN INT8 calibration
-    sees the actual deployment input distribution.
-
-Coexists with dreamer_remote_runner — separate ROS node name, separate
-calibration directory (`calibration_data_rlpd/`), bumped dashboard port.
+    `is_intervention[t] = True` and `rewards[t, 4] = -1.0` — policy learns
+    to avoid needing correction.
+  - Chunk schema_version=3 on the wire. demos.npz from v2 is incompatible
+    and gets archived by the server on first v3 start.
+  - Calibration .npz captures stacked depth/lidar/proprio for RKNN INT8.
 """
 
 import os
@@ -63,7 +64,6 @@ from std_msgs.msg import Float32, Bool, Float32MultiArray
 from geometry_msgs.msg import Twist
 from std_srvs.srv import Trigger
 
-from tractor_bringup.occupancy_processor import UnifiedBEVProcessor
 from tractor_bringup.coverage_tracker import CoverageTracker
 
 try:
@@ -85,6 +85,15 @@ PROPRIO_STD = np.array([2.0, 1.0, 1.0, 0.2, 1.0, 1.0], dtype=np.float32)
 # Xbox RB button index — used for HIL-SERL interventions.
 JOY_RB_BUTTON_IDX = 5
 
+# v3 observation shapes — must match the server's RLPDVisionEncoderV3.
+V3_SCHEMA_VERSION = 3
+DEPTH_H, DEPTH_W = 72, 96            # resize target for D435i depth
+DEPTH_CLIP_MIN_MM = 200              # 0.2 m
+DEPTH_CLIP_MAX_MM = 6000             # 6.0 m
+DEPTH_RANGE_MM = DEPTH_CLIP_MAX_MM - DEPTH_CLIP_MIN_MM
+LIDAR_BEAMS = 360                    # resampled count
+LIDAR_DEFAULT_MAX_RANGE = 12.0       # STL19P typical max range
+
 
 def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
     normalized = (proprio - PROPRIO_MEAN) / PROPRIO_STD
@@ -92,15 +101,16 @@ def normalize_proprio(proprio: np.ndarray) -> np.ndarray:
 
 
 # ============================================================================
-# Chunk Buffer — 5-channel rewards + intervention/demo flags
+# Chunk Buffer — v3: depth (uint8 96×72) + lidar (float32 360) + proprio
 # ============================================================================
 
 
 class ChunkBuffer:
-    """Buffer of single-frame transitions; server-side frame stacking is performed
-    at sample time so the wire format stays minimal.
+    """Buffer of single-frame transitions for the v3 wire format.
 
     Reward channels (T, 5): coverage, frontier, collision, episodic, intervention.
+    Server-side frame stacking happens at replay sample time so the wire
+    format stays minimal (one frame per step).
     """
 
     def __init__(self, chunk_len: int, proprio_dim: int = PROPRIO_DIM,
@@ -110,8 +120,8 @@ class ChunkBuffer:
         self.reward_dim = reward_dim
         self.ptr = 0
         self.size = 0
-        self.bev = np.zeros((self.capacity, 2, 128, 128), dtype=np.uint8)
-        self.rgb = np.zeros((self.capacity, 3, 84, 84), dtype=np.uint8)
+        self.depth = np.zeros((self.capacity, 1, DEPTH_H, DEPTH_W), dtype=np.uint8)
+        self.lidar = np.zeros((self.capacity, LIDAR_BEAMS), dtype=np.float32)
         self.proprio = np.zeros((self.capacity, proprio_dim), dtype=np.float32)
         self.actions = np.zeros((self.capacity, ACTION_DIM), dtype=np.float32)
         self.rewards = np.zeros((self.capacity, reward_dim), dtype=np.float32)
@@ -120,14 +130,12 @@ class ChunkBuffer:
         self.is_intervention = np.zeros(self.capacity, dtype=np.bool_)
         self.is_demo = np.zeros(self.capacity, dtype=np.bool_)
 
-    def add(self, bev, proprio, action, reward, done, is_first, rgb=None,
+    def add(self, depth_u8, lidar, proprio, action, reward, done, is_first,
             is_intervention=False, is_demo=False):
         i = self.ptr
-        self.bev[i] = (np.asarray(bev) * 255.0).astype(np.uint8)
-        if rgb is not None:
-            self.rgb[i] = rgb
-        else:
-            self.rgb[i] = 0
+        # depth_u8 must already be uint8 (1, H, W) in [0, 255]; lidar float32 (360,) in [0, 1]
+        self.depth[i] = depth_u8
+        self.lidar[i] = lidar
         self.proprio[i] = proprio
         self.actions[i] = action
         r = np.asarray(reward, dtype=np.float32)
@@ -144,8 +152,8 @@ class ChunkBuffer:
     def get_chunk(self):
         n = self.size
         return {
-            'bev': self.bev[:n].copy(),  # uint8 in {0, 255}
-            'rgb': self.rgb[:n].copy(),  # uint8 in [0, 255]
+            'depth': self.depth[:n].copy(),   # uint8 (n, 1, 72, 96)
+            'lidar': self.lidar[:n].copy(),   # float32 (n, 360) in [0, 1]
             'proprio': self.proprio[:n].copy(),
             'actions': self.actions[:n].copy(),
             'rewards': self.rewards[:n].copy(),
@@ -153,7 +161,7 @@ class ChunkBuffer:
             'is_first': self.is_first[:n].copy(),
             'is_intervention': self.is_intervention[:n].copy(),
             'is_demo': self.is_demo[:n].copy(),
-            'schema_version': 2,
+            'schema_version': V3_SCHEMA_VERSION,
         }
 
     def clear(self):
@@ -422,10 +430,10 @@ def start_dashboard_server(stats, port=8081):
 class RLPDRemoteRunner(Node):
     """RLPD runner: model-free SAC on the rover NPU with HIL-SERL interventions.
 
-    Inputs to RKNN graph (per tick):
-        rgb_stack     (1, 12, 84, 84) float32 in [0, 1] (uint8/255)
-        bev_stack     (1,  8, 128, 128) float32 in [0, 1]
-        proprio_stack (1, 24) float32 (already normalized)
+    v3 RKNN inputs (per tick, K=frame_stack):
+        depth_stack   (1, K, 72, 96) float32 in [0, 1]
+        lidar_stack   (1, K, 360)    float32 in [0, 1]
+        proprio_stack (1, 6*K)       float32 (normalized)
 
     Output:
         mean_logstd (1, 4) = [mean_l, mean_r, log_std_l, log_std_r]
@@ -477,9 +485,11 @@ class RLPDRemoteRunner(Node):
         }
         self._load_reward_clip()
 
-        # Frame stackers — must match the server's encoder layout.
-        self.rgb_stacker = FrameStacker(k=self.frame_stack, shape=(3, 84, 84), dtype=np.uint8)
-        self.bev_stacker = FrameStacker(k=self.frame_stack, shape=(2, 128, 128), dtype=np.uint8)
+        # Frame stackers — must match the server's RLPDVisionEncoderV3 layout.
+        # Depth stored as uint8 (rover converts mm → [0,1] float → uint8*255);
+        # lidar stored as float32 (already normalized to [0,1] by /range_max).
+        self.depth_stacker = FrameStacker(k=self.frame_stack, shape=(1, DEPTH_H, DEPTH_W), dtype=np.uint8)
+        self.lidar_stacker = FrameStacker(k=self.frame_stack, shape=(LIDAR_BEAMS,), dtype=np.float32)
         self.pro_stacker = FrameStacker(k=self.frame_stack, shape=(PROPRIO_DIM,), dtype=np.float32)
 
         self.buffer = ChunkBuffer(chunk_len=self.chunk_len)
@@ -505,10 +515,8 @@ class RLPDRemoteRunner(Node):
         self._next_is_first = True  # first transition after boot
 
         # Sensor state
-        self._latest_rgb = None
-        self._latest_depth_raw = None
-        self._latest_scan = None
-        self._latest_bev = None
+        self._latest_depth_raw = None  # uint16 mm passthrough from D435i
+        self._latest_scan = None       # LaserScan msg
         self._latest_odom = None
         self._latest_rf2o_odom = None
         self._latest_imu = None
@@ -572,8 +580,6 @@ class RLPDRemoteRunner(Node):
         self._push_sock.connect(push_addr)
         self.get_logger().info(f'ZMQ PUSH connected to {push_addr}')
 
-        self.occupancy_processor = UnifiedBEVProcessor(grid_size=128, max_range=4.0)
-
         self.dashboard_stats = DashboardStats()
         self.dashboard_stats.update(mode='teleop' if self._teleop_mode else 'autonomous')
         self._dashboard_server = start_dashboard_server(self.dashboard_stats, self.dashboard_port)
@@ -619,8 +625,6 @@ class RLPDRemoteRunner(Node):
     def _setup_subscribers(self):
         self.create_subscription(Image, '/camera/camera/depth/image_rect_raw',
                                  self._depth_cb, qos_profile_sensor_data)
-        self.create_subscription(Image, '/camera/camera/color/image_raw',
-                                 self._rgb_cb, qos_profile_sensor_data)
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odometry/filtered', self._odom_cb, 10)
         self.create_subscription(Odometry, '/odom_rf2o', self._rf2o_odom_cb, 10)
@@ -633,11 +637,6 @@ class RLPDRemoteRunner(Node):
 
     def _depth_cb(self, msg):
         self._latest_depth_raw = self.bridge.imgmsg_to_cv2(msg, 'passthrough')
-
-    def _rgb_cb(self, msg):
-        rgb_raw = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
-        rgb_resized = cv2.resize(rgb_raw, (84, 84), interpolation=cv2.INTER_AREA)
-        self._latest_rgb = cv2.cvtColor(rgb_resized, cv2.COLOR_BGR2RGB)
 
     def _scan_cb(self, msg):
         self._latest_scan = msg
@@ -714,6 +713,60 @@ class RLPDRemoteRunner(Node):
         if not np.any(valid):
             return 3.0
         return float(ranges[valid].min())
+
+    def _scan_to_range_vector(self, scan_msg) -> np.ndarray:
+        """LaserScan → fixed-length (360,) float32 range image in [0, 1].
+
+        Invalid readings (inf / NaN / <=0 / >range_max) get clipped to
+        `range_max` so the network sees a clean sentinel for "no obstacle in
+        this beam". Resampled to LIDAR_BEAMS via linear interpolation against
+        the scanner's native angle grid (STL19P delivers a variable count).
+        """
+        ranges = np.asarray(scan_msg.ranges, dtype=np.float32)
+        range_max = float(scan_msg.range_max) if scan_msg.range_max > 0.0 else LIDAR_DEFAULT_MAX_RANGE
+        # Replace invalid first, then clip.
+        invalid = ~np.isfinite(ranges) | (ranges <= 0.0)
+        ranges = np.where(invalid, range_max, ranges)
+        ranges = np.clip(ranges, 0.0, range_max)
+
+        n_native = ranges.shape[0]
+        if n_native == LIDAR_BEAMS:
+            resampled = ranges
+        else:
+            # Map each native beam to its angle, then sample LIDAR_BEAMS evenly
+            # over the same angular span. `np.interp` handles the count change
+            # without assuming the native count.
+            native_angles = scan_msg.angle_min + np.arange(n_native, dtype=np.float32) * scan_msg.angle_increment
+            target_angles = np.linspace(scan_msg.angle_min,
+                                        scan_msg.angle_min + (n_native - 1) * scan_msg.angle_increment,
+                                        LIDAR_BEAMS, dtype=np.float32)
+            resampled = np.interp(target_angles, native_angles, ranges).astype(np.float32)
+        return (resampled / range_max).astype(np.float32)
+
+    # ========== Depth Processing ==========
+
+    def _depth_to_input(self, depth_raw) -> np.ndarray:
+        """uint16 mm depth → uint8 (1, 72, 96) in [0, 255].
+
+        Pipeline: clip to [0.2, 6.0]m, replace invalid (0 / NaN / out-of-range)
+        with the max-range value (255 after normalization — "no nearby obstacle"
+        sentinel), resize to 96×72 with INTER_NEAREST (nearest preserves the
+        invalid-edge geometry; bilinear would blend mm values from invalid
+        pixels into their neighbors).
+        """
+        d = np.asarray(depth_raw)
+        if d.dtype != np.uint16:
+            d = d.astype(np.float32)
+            invalid = ~np.isfinite(d) | (d <= 0) | (d > DEPTH_CLIP_MAX_MM)
+            d = np.where(invalid, DEPTH_CLIP_MAX_MM, d).astype(np.uint16)
+        else:
+            invalid = (d == 0) | (d > DEPTH_CLIP_MAX_MM)
+            d = np.where(invalid, DEPTH_CLIP_MAX_MM, d).astype(np.uint16)
+        d = np.clip(d, DEPTH_CLIP_MIN_MM, DEPTH_CLIP_MAX_MM)
+        d_norm = ((d.astype(np.float32) - DEPTH_CLIP_MIN_MM) / DEPTH_RANGE_MM)  # [0, 1]
+        d_u8 = (d_norm * 255.0 + 0.5).astype(np.uint8)
+        d_resized = cv2.resize(d_u8, (DEPTH_W, DEPTH_H), interpolation=cv2.INTER_NEAREST)
+        return d_resized[None, :, :]  # (1, H, W)
 
     # ========== Teleop → tracks ==========
 
@@ -808,11 +861,9 @@ class RLPDRemoteRunner(Node):
                 self.get_logger().info('Sensor warmup complete')
             return
 
-        bev_grid = self.occupancy_processor.process(
-            depth_img=self._latest_depth_raw, laser_scan=self._latest_scan
-        )
-        self._latest_bev = bev_grid
-
+        # v3 visual modalities: depth tile (1, 72, 96) uint8 + lidar (360,) float32.
+        depth_u8 = self._depth_to_input(self._latest_depth_raw)
+        lidar_vec = self._scan_to_range_vector(self._latest_scan)
         lidar_min = self._lidar_min_dist(self._latest_scan)
 
         current_linear = 0.0
@@ -857,27 +908,18 @@ class RLPDRemoteRunner(Node):
         ], dtype=np.float32)
         proprio = normalize_proprio(proprio_raw)
 
-        # RGB → uint8 CHW
-        if self._latest_rgb is not None:
-            rgb_chw_uint8 = np.transpose(self._latest_rgb, (2, 0, 1)).astype(np.uint8)
-        else:
-            rgb_chw_uint8 = np.zeros((3, 84, 84), dtype=np.uint8)
-
-        # BEV → uint8 (0 / 255) so the frame stacker keeps a compact buffer
-        bev_uint8 = (np.asarray(bev_grid) * 255.0).astype(np.uint8)
-
         # Episode boundary / model swap → reset stacks
         is_first = self._next_is_first
         if is_first:
-            self.rgb_stacker.reset()
-            self.bev_stacker.reset()
+            self.depth_stacker.reset()
+            self.lidar_stacker.reset()
             self.pro_stacker.reset()
             self._reset_reward_state_on_episode()
         self._next_is_first = False
 
         # Update stacks with the just-observed step
-        self.rgb_stacker.push(rgb_chw_uint8)
-        self.bev_stacker.push(bev_uint8)
+        self.depth_stacker.push(depth_u8)
+        self.lidar_stacker.push(lidar_vec)
         self.pro_stacker.push(proprio)
 
         # Determine whether this tick is a human intervention. Pure teleop mode
@@ -897,16 +939,13 @@ class RLPDRemoteRunner(Node):
             action_np = self._teleop_to_tracks()
             policy_used = False
         elif self._rknn_runtime is not None:
-            # Build stacked RKNN inputs in [0, 1]
-            rgb_stack_in = self.rgb_stacker.get_stacked().astype(np.float32) / 255.0
-            bev_stack_in = self.bev_stacker.get_stacked().astype(np.float32) / 255.0
-            pro_stack_in = self.pro_stacker.get_stacked()
-            rgb_stack_in = rgb_stack_in[None, ...]
-            bev_stack_in = bev_stack_in[None, ...]
-            pro_stack_in = pro_stack_in[None, ...]
+            # v3 RKNN inputs in [0, 1] with batch dim prepended.
+            depth_stack_in = (self.depth_stacker.get_stacked().astype(np.float32) / 255.0)[None, ...]
+            lidar_stack_in = self.lidar_stacker.get_stacked()[None, ...]  # already float32 [0,1]
+            pro_stack_in = self.pro_stacker.get_stacked()[None, ...]
             try:
                 outputs = self._rknn_runtime.inference(
-                    inputs=[rgb_stack_in, bev_stack_in, pro_stack_in]
+                    inputs=[depth_stack_in, lidar_stack_in, pro_stack_in]
                 )
                 if outputs is None or len(outputs) < 1:
                     raise RuntimeError(
@@ -1020,8 +1059,9 @@ class RLPDRemoteRunner(Node):
         # Store transition with is_first / is_intervention / is_demo flags.
         is_demo_flag = self._teleop_mode
         self.buffer.add(
-            bev_grid, proprio, actual_action, reward_vec, episode_done,
-            is_first=is_first, rgb=rgb_chw_uint8,
+            depth_u8=depth_u8, lidar=lidar_vec, proprio=proprio,
+            action=actual_action, reward=reward_vec, done=episode_done,
+            is_first=is_first,
             is_intervention=intervention_now, is_demo=is_demo_flag,
         )
         self._total_steps += 1
@@ -1084,16 +1124,18 @@ class RLPDRemoteRunner(Node):
                 f'intervene={int(intervention_now)}'
             )
 
-        # Calibration: save stacked frames so RKNN INT8 quantization sees the
-        # actual deployment input distribution (not single-frame slices).
+        # Calibration: save stacked v3 frames so RKNN INT8 quantization sees
+        # the actual deployment input distribution. Depth saved as uint8
+        # (converter will divide by 255 to match the ONNX [0, 1] expectation);
+        # lidar saved as float32 in [0, 1]; proprio float32 already normalized.
         if np.random.rand() < 0.1:
             calib_files = list(self._calibration_dir.glob('*.npz'))
             if len(calib_files) < 100:
                 timestamp = int(time.time() * 1000)
                 np.savez_compressed(
                     self._calibration_dir / f"calib_{timestamp}.npz",
-                    rgb_stack=self.rgb_stacker.get_stacked(),
-                    bev_stack=self.bev_stacker.get_stacked(),
+                    depth_stack=self.depth_stacker.get_stacked(),
+                    lidar_stack=self.lidar_stacker.get_stacked(),
                     proprio_stack=self.pro_stacker.get_stacked(),
                 )
 
