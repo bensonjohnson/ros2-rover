@@ -82,6 +82,15 @@ class HiwonderMotorDriver(Node):
         self.declare_parameter("hardware_clear_encoders", True)
         # Tolerance in encoder counts for verifying successful hardware clear.
         self.declare_parameter("encoder_clear_verify_tolerance", 50)  # counts within which hardware clear considered successful
+        # Per-track scalar trims applied just before the I2C write to
+        # compensate for mechanical asymmetry (one track running faster than
+        # the other on a straight-line command). Values are multipliers on
+        # the signed motor command; default 1.0 = no change. To correct a
+        # right-drift (left track faster), reduce left_track_trim (e.g. 0.9).
+        # Boosting the slower side above 1.0 has no effect at full throttle
+        # because the command is already clamped to the [-100, 100] range.
+        self.declare_parameter("left_track_trim", 1.0)
+        self.declare_parameter("right_track_trim", 1.0)
         # NEW: Timeout for receiving /cmd_vel before auto stop (seconds)
         self.declare_parameter("cmd_vel_timeout_secs", 1.0)
         # NEW: Watchdog check frequency (Hz)
@@ -116,6 +125,8 @@ class HiwonderMotorDriver(Node):
         ).value
         self.hardware_clear_encoders = self.get_parameter("hardware_clear_encoders").value
         self.encoder_clear_verify_tolerance = self.get_parameter("encoder_clear_verify_tolerance").value
+        self.left_track_trim = float(self.get_parameter("left_track_trim").value)
+        self.right_track_trim = float(self.get_parameter("right_track_trim").value)
         # NEW: Retrieve watchdog parameters
         self.cmd_vel_timeout_secs = self.get_parameter("cmd_vel_timeout_secs").value
         self.watchdog_check_hz = self.get_parameter("watchdog_check_hz").value
@@ -603,7 +614,11 @@ class HiwonderMotorDriver(Node):
             return
 
         try:
-            speeds = [right_speed, left_speed, 0, 0]
+            # Apply per-track trim. Zero is preserved exactly so stop commands
+            # remain stop commands regardless of trim value.
+            left_trimmed = left_speed if left_speed == 0 else left_speed * self.left_track_trim
+            right_trimmed = right_speed if right_speed == 0 else right_speed * self.right_track_trim
+            speeds = [right_trimmed, left_trimmed, 0, 0]
 
             base_addr = (
                 self.MOTOR_FIXED_PWM_ADDR
