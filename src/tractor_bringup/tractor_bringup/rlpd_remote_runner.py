@@ -489,7 +489,9 @@ class RLPDRemoteRunner(Node):
         # Depth stored as uint8 (rover converts mm → [0,1] float → uint8*255);
         # lidar stored as float32 (already normalized to [0,1] by /range_max).
         self.depth_stacker = FrameStacker(k=self.frame_stack, shape=(1, DEPTH_H, DEPTH_W), dtype=np.uint8)
-        self.lidar_stacker = FrameStacker(k=self.frame_stack, shape=(LIDAR_BEAMS,), dtype=np.float32)
+        # Lidar declared with a leading 1-dim so axis-0 concat in FrameStacker
+        # yields (K, 360) — matches the RKNN graph's 3D input[1] (B, K, 360).
+        self.lidar_stacker = FrameStacker(k=self.frame_stack, shape=(1, LIDAR_BEAMS), dtype=np.float32)
         self.pro_stacker = FrameStacker(k=self.frame_stack, shape=(PROPRIO_DIM,), dtype=np.float32)
 
         self.buffer = ChunkBuffer(chunk_len=self.chunk_len)
@@ -919,7 +921,7 @@ class RLPDRemoteRunner(Node):
 
         # Update stacks with the just-observed step
         self.depth_stacker.push(depth_u8)
-        self.lidar_stacker.push(lidar_vec)
+        self.lidar_stacker.push(lidar_vec[None, :])  # (360,) → (1, 360)
         self.pro_stacker.push(proprio)
 
         # Determine whether this tick is a human intervention. Pure teleop mode
