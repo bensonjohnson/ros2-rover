@@ -745,7 +745,10 @@ class V620RLPDTrainer:
                 shape = [1 if d == 0 else d for d in shape]
                 input_names.append(inp.name)
                 input_sizes.append(shape)
-                n_ch = shape[1] if len(shape) == 4 else shape[-1]
+                # RKNN expects one mean/std per channel. For 4D (B,C,H,W) and
+                # 3D (B,C,L) that's shape[1]; for 2D (B,F) flat features it's
+                # shape[-1].
+                n_ch = shape[1] if len(shape) >= 3 else shape[-1]
                 mean_values.append([0] * n_ch)
                 std_values.append([1] * n_ch)
             if rknn.config(mean_values=mean_values, std_values=std_values,
