@@ -18,7 +18,7 @@ fi
 
 # Configuration
 SERVER_ADDR=${1:-"192.168.1.100"}
-MAX_SPEED=${2:-"0.18"}
+MAX_SPEED=${2:-"0.25"}
 CHUNK_LEN=${3:-"64"}
 FRAME_STACK=${4:-"4"}
 

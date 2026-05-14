@@ -33,7 +33,7 @@ def generate_launch_description():
         description='Training server IP address')
 
     max_speed_arg = DeclareLaunchArgument(
-        'max_speed', default_value='0.18',
+        'max_speed', default_value='0.25',
         description='Maximum linear speed (m/s)')
 
     invert_vel_arg = DeclareLaunchArgument(
