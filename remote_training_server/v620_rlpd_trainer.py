@@ -386,10 +386,10 @@ class V620RLPDTrainer:
 
         # Reward channel weights (channel order matches REWARD_CHANNELS_RLPD)
         self.reward_weights = {
-            'coverage':     args.w_coverage,
-            'frontier':     args.w_frontier,
+            'smoothness':   args.w_smoothness,
+            'progress':     args.w_progress,
+            'turn_penalty': args.w_turn,
             'collision':    args.w_collision,
-            'episodic':     args.w_episodic,
             'intervention': args.w_intervention,
         }
 
@@ -826,19 +826,15 @@ class V620RLPDTrainer:
         return merged, n_demo / B
 
     def _scalar_reward(self, reward_channels: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
-        """Combine 5 reward channels + SimHash modulator on episodic.
+        """Linear combination of the 5 style-learning channels.
 
-        reward_channels: (B, 5), state: (B, state_dim).
+        reward_channels: (B, 5), state: (B, state_dim) — kept in the signature
+        for future curiosity-style bonuses that consume the encoder state.
         Returns scalar reward (B,).
         """
         r = torch.zeros(reward_channels.shape[0], device=reward_channels.device)
         for i, name in enumerate(REWARD_CHANNELS_RLPD):
             r = r + self.reward_weights[name] * reward_channels[:, i]
-        # SimHash modulator gives a count-decaying bonus on the episodic channel
-        with torch.no_grad():
-            mod = self.lifetime_simhash.modulator(state) - 1.0  # ≥ 0
-        ep_idx = REWARD_CHANNELS_RLPD.index('episodic')
-        r = r + mod * self.reward_weights['episodic'] * reward_channels[:, ep_idx]
         return r
 
     def _train_step(self):
@@ -1303,14 +1299,20 @@ def main():
     parser.add_argument('--online_capacity', type=int, default=100_000)
     parser.add_argument('--min_online_size', type=int, default=1000,
                         help='Wait for this many online transitions before training starts')
-    # Reward channel weights (channel order: coverage, frontier, collision, episodic, intervention)
-    parser.add_argument('--w_coverage', type=float, default=1.0)
-    parser.add_argument('--w_frontier', type=float, default=0.5)
-    parser.add_argument('--w_collision', type=float, default=1.0)
-    parser.add_argument('--w_episodic', type=float, default=0.05)
+    # Reward channel weights — style-learning scheme.
+    # Channel order: smoothness, progress, turn_penalty, collision, intervention.
+    # The rover emits the raw signed channel value (negative for penalties,
+    # positive for progress); these weights are positive scaling factors.
+    parser.add_argument('--w_smoothness', type=float, default=0.02,
+                        help='Action-jerk penalty (channel = -||a_t - a_{t-1}||^2)')
+    parser.add_argument('--w_progress', type=float, default=0.05,
+                        help='Forward-progress bonus (channel = max(0, linear_vel))')
+    parser.add_argument('--w_turn', type=float, default=0.01,
+                        help='Turn-in-place penalty (channel = -|angular_vel|)')
+    parser.add_argument('--w_collision', type=float, default=1.0,
+                        help='Channel emits -1 per tick while /emergency_stop is held')
     parser.add_argument('--w_intervention', type=float, default=1.0,
-                        help='Multiplier on the intervention reward channel '
-                             '(channel already carries -1 from the rover on intervened steps)')
+                        help='Channel emits -1 per tick the human holds RB to override')
     # Lifetime SimHash
     parser.add_argument('--lifetime_strength', type=float, default=1.0)
     parser.add_argument('--simhash_bits', type=int, default=16)

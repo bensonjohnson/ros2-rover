@@ -64,7 +64,6 @@ from std_msgs.msg import Float32, Bool, Float32MultiArray
 from geometry_msgs.msg import Twist
 from std_srvs.srv import Trigger
 
-from tractor_bringup.coverage_tracker import CoverageTracker
 
 try:
     import yaml
@@ -74,7 +73,7 @@ except ImportError:
 
 
 # Reward channel order — must match REWARD_CHANNELS_RLPD on the server.
-RLPD_REWARD_CHANNELS = ('coverage', 'frontier', 'collision', 'episodic', 'intervention')
+RLPD_REWARD_CHANNELS = ('smoothness', 'progress', 'turn_penalty', 'collision', 'intervention')
 N_REWARD_CHANNELS = len(RLPD_REWARD_CHANNELS)
 
 PROPRIO_DIM = 6
@@ -477,11 +476,12 @@ class RLPDRemoteRunner(Node):
         self._latest_teleop = (0.0, 0.0)  # (linear.x m/s, angular.z rad/s)
         self._intervention_active = False  # RB held in autonomous mode
 
-        # Reward channel clip values
+        # Reward channel clip values (per-channel bounds applied before
+        # weighting on the rover; the server multiplies by w_* and sums).
         self._reward_clip = {
-            'coverage': (0.0, 0.5),
-            'frontier': (-0.1, 0.1),
-            'episodic': (0.0, 1.0),
+            'smoothness':   (-1.0, 0.0),
+            'progress':     (0.0, 0.5),
+            'turn_penalty': (-1.0, 0.0),
         }
         self._load_reward_clip()
 
@@ -552,12 +552,10 @@ class RLPDRemoteRunner(Node):
         self.SLIP_BACKUP_LIMIT = 0.15
         self._wall_stop_steps = 0
 
-        # Reward computation state
-        self.coverage_tracker = CoverageTracker(
-            grid_size=200, resolution=0.05, max_range=4.0,
-            coverage_alpha=0.01,
-        )
-        self._prev_phi: float | None = None
+        # Reward computation state. Style-learning reward needs no mapping
+        # state — only collision latching. The proprio frontier_angle slot is
+        # kept at 0.0 so the wire format / encoder layout stay unchanged
+        # (encoder will learn to ignore the dead dim).
         self._frontier_angle_pi = 0.0
         self._emergency_prev = False
         self._collision_latched = False
@@ -677,7 +675,7 @@ class RLPDRemoteRunner(Node):
             self.get_logger().warn(f'Could not read reward weights yaml: {e}')
             return
         clip = cfg.get('clip', {})
-        for ch in ('coverage', 'frontier', 'episodic'):
+        for ch in ('smoothness', 'progress', 'turn_penalty'):
             if ch in clip and isinstance(clip[ch], (list, tuple)) and len(clip[ch]) == 2:
                 self._reward_clip[ch] = (float(clip[ch][0]), float(clip[ch][1]))
 
@@ -790,65 +788,51 @@ class RLPDRemoteRunner(Node):
     # ========== Reward (multi-channel; 5 channels for RLPD) ==========
 
     def _reset_reward_state_on_episode(self):
-        self._prev_phi = None
         self._collision_latched = False
         self._collision_first = False
 
-    def _compute_reward_channels(self, robot_x, robot_y, robot_yaw, scan_msg,
-                                 angular_vel: float = 0.0, linear_vel: float = 0.0,
+    def _compute_reward_channels(self, action_now: np.ndarray, prev_action: np.ndarray,
+                                 linear_vel: float = 0.0, angular_vel: float = 0.0,
                                  intervention_now: bool = False):
-        """Return (reward_vec[5], cov_step, collision)."""
-        cov_step = self.coverage_tracker.step(
-            ranges=np.asarray(scan_msg.ranges, dtype=np.float32),
-            angle_min=scan_msg.angle_min,
-            angle_increment=scan_msg.angle_increment,
-            robot_x=robot_x, robot_y=robot_y, robot_yaw=robot_yaw,
-        )
+        """Style-learning reward. Returns (reward_vec[5], collision).
 
-        # Channel 0: coverage + forward-progress shaping
-        lo, hi = self._reward_clip['coverage']
-        r_coverage = float(cov_step.coverage_delta) + 0.05 * max(0.0, linear_vel)
-        r_coverage = float(np.clip(r_coverage, lo, hi))
+        Channel order matches RLPD_REWARD_CHANNELS:
+          0 smoothness   : -‖a_t - a_{t-1}‖² (action jerk penalty)
+          1 progress     : max(0, linear_vel)  (forward motion bonus)
+          2 turn_penalty : -|angular_vel|      (discourage spin-in-place)
+          3 collision    : -1.0 per tick /emergency_stop is held
+          4 intervention : -1.0 per tick the human held RB (HIL-SERL)
+        """
+        # Channel 0: action smoothness — quadratic in the per-track delta.
+        delta = action_now.astype(np.float32) - prev_action.astype(np.float32)
+        r_smoothness = -float(np.dot(delta, delta))
+        lo, hi = self._reward_clip['smoothness']
+        r_smoothness = float(np.clip(r_smoothness, lo, hi))
 
-        # Channel 1: frontier potential-based shaping
-        if cov_step.has_frontier:
-            phi = cov_step.phi
-            r_frontier = 0.0 if self._prev_phi is None else (phi - self._prev_phi)
-            self._prev_phi = phi
-        else:
-            r_frontier = 0.0
-            self._prev_phi = None
-        lo, hi = self._reward_clip['frontier']
-        r_frontier = float(np.clip(r_frontier, lo, hi))
+        # Channel 1: forward progress.
+        r_progress = float(max(0.0, linear_vel))
+        lo, hi = self._reward_clip['progress']
+        r_progress = float(np.clip(r_progress, lo, hi))
 
-        # Channel 2: collision (sticky -1 every tick /emergency_stop asserted)
+        # Channel 2: turn-in-place penalty.
+        r_turn = -float(abs(angular_vel))
+        lo, hi = self._reward_clip['turn_penalty']
+        r_turn = float(np.clip(r_turn, lo, hi))
+
+        # Channel 3: collision (sticky -1 while /emergency_stop is asserted).
         penalty_active = self._collision_latched
         collision = self._collision_first
         self._collision_first = False
         r_collision = -1.0 if penalty_active else 0.0
 
-        # Channel 3: episodic novelty — rover-local approximation. The server's
-        # LifetimeSimHash modulator (computed on the trained encoder state) is
-        # the load-bearing novelty signal; the rover only emits 0 here so the
-        # wire format stays K=5. Leaving as zero is intentional and documented:
-        # the server gets all useful novelty info from the encoder embedding.
-        r_episodic = 0.0
-
-        # Channel 4 (HIL-SERL): intervention penalty. Policy learns to avoid
-        # needing correction.
+        # Channel 4 (HIL-SERL): intervention penalty.
         r_intervention = -1.0 if intervention_now else 0.0
 
-        # Frontier angle for proprio (rover-observable steering hint)
-        if cov_step.has_frontier:
-            self._frontier_angle_pi = float(np.clip(cov_step.frontier_angle / math.pi, -1.0, 1.0))
-        else:
-            self._frontier_angle_pi = 0.0
-
         reward_vec = np.array(
-            [r_coverage, r_frontier, r_collision, r_episodic, r_intervention],
+            [r_smoothness, r_progress, r_turn, r_collision, r_intervention],
             dtype=np.float32,
         )
-        return reward_vec, cov_step, collision
+        return reward_vec, collision
 
     # ========== Control Loop ==========
 
@@ -1029,20 +1013,18 @@ class RLPDRemoteRunner(Node):
             track_msg.data = [float(left_track), float(right_track)]
             self.track_cmd_pub.publish(track_msg)
 
-        # ---- Reward (5-channel) ----
-        robot_x = self._latest_odom[0] if self._latest_odom else 0.0
-        robot_y = self._latest_odom[1] if self._latest_odom else 0.0
-        reward_vec, _cov_step, collision = self._compute_reward_channels(
-            robot_x, robot_y, self._latest_fused_yaw,
-            self._latest_scan,
-            angular_vel=current_angular, linear_vel=current_linear,
+        # ---- Reward (5-channel, style-learning) ----
+        reward_vec, collision = self._compute_reward_channels(
+            action_now=actual_action, prev_action=self._prev_action,
+            linear_vel=current_linear, angular_vel=current_angular,
             intervention_now=intervention_now,
         )
         if np.isnan(reward_vec).any() or np.isinf(reward_vec).any():
             return
 
-        r_spin = -abs(current_angular) * 1.0
-        reward_scalar = float(reward_vec.sum()) + r_spin
+        # Rover-side scalar is a dashboard proxy only — the server recombines
+        # channels with its own w_* weights for training.
+        reward_scalar = float(reward_vec.sum())
 
         # ---- Episode boundary (only step cap; collision/intervention do not terminate) ----
         if self._post_reset_cooldown > 0:

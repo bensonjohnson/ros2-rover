@@ -1,27 +1,34 @@
-# Reward weights for the DreamerV3 indoor/outdoor exploration rover.
+# RLPD style-learning reward channels (5-channel wire format).
 #
-# Channels carried in the chunk wire format (rover-side computed, server-trained):
-#   - coverage  : new cells revealed in the per-session occupancy grid
-#   - frontier  : potential-based shaping toward the nearest unknown frontier
-#   - collision : sparse penalty on /emergency_stop rising edge
-#   - episodic  : k-NN Gaussian-kernel novelty over encoder embeddings (per-episode)
+# The 50/50 demo replay + critic ensemble in RLPD does the heavy lifting:
+# the policy learns to mimic your teleop driving in demo-covered states and
+# to avoid the human's `RB` corrections everywhere else. These five channels
+# are the *shaping* on top of that imitation signal so the trained policy is
+# smoother and more efficient than the human demos themselves.
 #
-# Server-only reward terms (added inside imagination, never shipped to rover):
-#   - p2e_intrinsic    : Plan2Explore ensemble disagreement on next-z prediction
-#   - lifetime_modulator: SimHash count over encoder embeddings, multiplies episodic
+# Channel order (must match REWARD_CHANNELS_RLPD on the server):
+#   - smoothness   : -‖a_t − a_{t-1}‖²        action-jerk penalty
+#   - progress     :  max(0, linear_vel)      forward-motion bonus
+#   - turn_penalty : -|angular_vel|           discourage spin-in-place
+#   - collision    : -1.0 per tick /emergency_stop is held (sticky)
+#   - intervention : -1.0 per tick the human held RB (HIL-SERL)
 #
-# All weights are linear: total = sum(w_i * channel_i). Tune in TensorBoard.
+# The trainer reads weights from CLI args (--w_smoothness, --w_progress,
+# --w_turn, --w_collision, --w_intervention). The values below are the source
+# of truth for the *rover-side clip bounds* and serve as documentation of the
+# defaults the trainer ships with — keep them in sync with the trainer CLI.
 
 weights:
-  coverage:           1.0
-  frontier:           0.5
-  collision:          1.0    # the channel emits −10 on hit, so weight stays at 1.0
-  episodic:           0.2
-  p2e_intrinsic:      0.3
-  lifetime_strength:  1.0    # multiplier `c` in `1 + c / sqrt(1 + count)`
+  smoothness:   0.02   # small — don't dominate, just discourage jerk
+  progress:     0.05   # small forward-motion pressure
+  turn_penalty: 0.01   # very small; full turning is fine when it makes progress
+  collision:    1.0    # channel is already -1, weight stays at 1
+  intervention: 1.0    # channel is already -1, weight stays at 1
 
-# Bounds applied per channel before weighting (rover side).
+# Rover-side per-channel bounds applied BEFORE weighting. Tight clips on the
+# shaping terms protect against reward-hacking (e.g. unbounded jerk penalty
+# pushing the actor to never move).
 clip:
-  coverage:   [0.0,  0.5]
-  frontier:   [-0.1, 0.1]
-  episodic:   [0.0,  1.0]
+  smoothness:   [-1.0, 0.0]
+  progress:     [ 0.0, 0.5]
+  turn_penalty: [-1.0, 0.0]

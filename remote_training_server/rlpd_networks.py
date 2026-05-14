@@ -28,7 +28,7 @@ import torchvision
 from torch.func import functional_call
 
 
-REWARD_CHANNELS_RLPD = ('coverage', 'frontier', 'collision', 'episodic', 'intervention')
+REWARD_CHANNELS_RLPD = ('smoothness', 'progress', 'turn_penalty', 'collision', 'intervention')
 
 # ImageNet normalization (constants — registered as buffers inside the encoder so
 # they travel with the module and end up baked into the exported ONNX graph).
