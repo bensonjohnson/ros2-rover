@@ -507,12 +507,17 @@ class NomadRknnRunner(Node):
 
         # (N, 8, 2) metric trajectories — the fan of candidate paths.
         all_waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)
-        # Drive the FIRST sample (upstream navigate.py: `naction = naction[0]`).
-        # NoMaD's diffusion output is intentionally multi-modal; averaging
-        # across samples collapses bimodal choices (e.g. "go left around" vs
-        # "go right around") into the mean, which can point straight at the
-        # obstacle. Per-tick EMA below handles jitter instead.
-        control_path = all_waypoints[0]  # (8, 2)
+        # Pick the sample whose steering at the lookahead index is closest to
+        # the median across all samples. This keeps NoMaD's multi-modal output
+        # (one mode dominates -> follow it) without the random-draw failure
+        # mode of upstream's naction[0] (where a minority outlier can drive
+        # the rover the opposite direction from what the visible fan suggests).
+        sel_idx = min(self.waypoint_index, all_waypoints.shape[1] - 1)
+        sel_pts = all_waypoints[:, sel_idx, :]  # (N, 2)
+        sample_omegas = np.arctan2(sel_pts[:, 1], sel_pts[:, 0])
+        median_omega = np.median(sample_omegas)
+        chosen = int(np.argmin(np.abs(sample_omegas - median_omega)))
+        control_path = all_waypoints[chosen]  # (8, 2)
 
         # EMA smoothing across ticks on the control path. The robot frame
         # shifts slightly between ticks, but at this rate/speed the shift is
@@ -540,10 +545,15 @@ class NomadRknnRunner(Node):
         # then be L < R. If any of those disagree with what the rover does,
         # that pins down where the sign breaks.
         cw = control_path[lookahead_idx]
+        # Fan-spread diagnostic: if std(sample_omegas) is large, the policy is
+        # uncertain (samples disagree on direction). Helps tell "model is sure
+        # and acting" from "model is flailing, controller chasing random mode".
+        fan_std = float(np.std(sample_omegas))
         self.get_logger().info(
             f'inference {dt_ms:.0f}ms  wp[{lookahead_idx}] '
             f'dx={cw[0]:+.2f} dy={cw[1]:+.2f}  ->  v={v:+.2f} w={omega:+.2f}  '
-            f'tracks L={left:+.2f} R={right:+.2f}',
+            f'tracks L={left:+.2f} R={right:+.2f}  '
+            f'fan_std={fan_std:.2f} chose={chosen}',
             throttle_duration_sec=1.0,
         )
 
