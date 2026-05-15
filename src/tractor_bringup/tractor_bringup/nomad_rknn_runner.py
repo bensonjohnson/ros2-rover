@@ -157,11 +157,13 @@ class NomadRknnRunner(Node):
         self.declare_parameter('inference_rate_hz', 7.0)
         self.declare_parameter('nominal_speed', 0.20)
         self.declare_parameter('max_angular_speed', 1.0)
-        self.declare_parameter('lookahead_dist', 0.30)
-        # Metres per normalized waypoint unit. Reference NoMaD uses
-        # max_v / frame_rate (0.2 / 4 = 0.05). Sets the absolute scale of the
-        # predicted trajectory — affects lookahead selection and the overlay.
-        self.declare_parameter('waypoint_scale', 0.05)
+        self.declare_parameter('lookahead_dist', 0.50)
+        # Metres per normalized waypoint unit. NoMaD's reference uses
+        # max_v / frame_rate (0.2 / 4 = 0.05), but that makes the predicted
+        # path span only ~0.5 m — too short for smooth pure pursuit and below
+        # the FOV of this rover's level-mounted camera. 0.20 stretches the
+        # trajectory to ~2 m so it both steers smoothly and is visible.
+        self.declare_parameter('waypoint_scale', 0.20)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
@@ -493,8 +495,11 @@ class NomadRknnRunner(Node):
         L2 = x * x + y * y
         if L2 < 1e-6:
             return 0.0, 0.0, idx
-        omega = float(np.clip(2.0 * y / L2, -self.max_angular_speed, self.max_angular_speed))
+        # Pure pursuit: path curvature gamma = 2y / L^2 (units 1/m); angular
+        # velocity is v * gamma, not gamma alone.
         v = float(self.nominal_speed)
+        curvature = 2.0 * y / L2
+        omega = float(np.clip(v * curvature, -self.max_angular_speed, self.max_angular_speed))
         return v, omega, idx
 
     def _get_extrinsics(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
@@ -550,21 +555,40 @@ class NomadRknnRunner(Node):
             )
             canvas = bgr.copy()
             h, w = canvas.shape[:2]
-            prev = None
+            prev = None          # previous point in pixel coords (may be off-frame)
+            n_visible = 0        # points in front of the camera (z > 0)
+            n_in_frame = 0       # points that also land inside the image
             for i in range(PRED_HORIZON):
                 if pix[i, 2] < 0.5:
-                    prev = None
+                    prev = None  # behind camera — break the polyline
                     continue
+                n_visible += 1
                 u, v = int(round(pix[i, 0])), int(round(pix[i, 1]))
-                if not (0 <= u < w and 0 <= v < h):
-                    prev = None
-                    continue
+                in_frame = (0 <= u < w and 0 <= v < h)
+                if in_frame:
+                    n_in_frame += 1
+                # cv2.line clips to the image, so draw the segment even when an
+                # endpoint is off-frame — keeps the path continuous.
                 if prev is not None:
                     cv2.line(canvas, prev, (u, v), (20, 255, 20), 2, cv2.LINE_AA)
-                radius = 7 if i == lookahead_idx else 4
-                color = (59, 59, 255) if i == lookahead_idx else (20, 255, 20)
-                cv2.circle(canvas, (u, v), radius, color, -1, cv2.LINE_AA)
+                if in_frame:
+                    radius = 7 if i == lookahead_idx else 4
+                    color = (59, 59, 255) if i == lookahead_idx else (20, 255, 20)
+                    cv2.circle(canvas, (u, v), radius, color, -1, cv2.LINE_AA)
                 prev = (u, v)
+            # Throttled diagnostic — tells us whether the overlay is missing
+            # because of TF/projection (n_visible low) or because the path
+            # falls outside the camera FOV (n_visible high, n_in_frame 0).
+            vs = pix[pix[:, 2] > 0.5]
+            vrange = (
+                f'{vs[:, 1].min():.0f}..{vs[:, 1].max():.0f}'
+                if len(vs) else 'n/a'
+            )
+            self.get_logger().info(
+                f'overlay: {n_visible}/{PRED_HORIZON} in front of camera, '
+                f'{n_in_frame} in frame (image {w}x{h}, v-range {vrange})',
+                throttle_duration_sec=3.0,
+            )
             ok, buf = cv2.imencode('.jpg', canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
                 self._dashboard.set_frame(buf.tobytes())
