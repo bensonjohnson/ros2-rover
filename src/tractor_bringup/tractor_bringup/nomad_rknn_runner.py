@@ -175,6 +175,9 @@ class NomadRknnRunner(Node):
         self.declare_parameter('waypoint_smoothing', 0.5)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
+        # Static-friction floor: nonzero track commands are lifted to at least
+        # this magnitude. Matches MIN_TRACK in the RLPD runner.
+        self.declare_parameter('min_track', 0.25)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('goal_image_topic', '/nomad/goal_image')
         # Dashboard + camera projection. Intrinsics (fx/fy/cx/cy) come from
@@ -205,6 +208,7 @@ class NomadRknnRunner(Node):
         self._prev_waypoints: Optional[np.ndarray] = None
         self.track_width = float(self.get_parameter('track_width').value)
         self.max_track_speed = float(self.get_parameter('max_track_speed').value)
+        self.min_track = float(self.get_parameter('min_track').value)
         rgb_topic = str(self.get_parameter('rgb_topic').value)
         goal_topic = str(self.get_parameter('goal_image_topic').value)
         self.dashboard_port = int(self.get_parameter('dashboard_port').value)
@@ -624,15 +628,25 @@ class NomadRknnRunner(Node):
         except Exception as exc:
             self.get_logger().debug(f'dashboard render skipped: {exc}')
 
+    def _soft_deadzone(self, x: float) -> float:
+        """Lift a nonzero track command into [min_track, 1.0] so it clears the
+        tracks' static-friction threshold. Mirrors soft_deadzone() in the RLPD
+        runner — PWM magnitudes below ~0.25 produce no motion on this rover."""
+        if abs(x) < 1e-3:
+            return 0.0
+        m = self.min_track
+        return math.copysign(m + (1.0 - m) * abs(x), x)
+
     def _vw_to_tracks(self, v: float, omega: float) -> tuple[float, float]:
-        """Differential-drive kinematics -> normalized track speeds in [-1, 1]."""
+        """Differential-drive kinematics -> normalized track speeds in [-1, 1],
+        with static-friction compensation."""
         half = 0.5 * self.track_width
         left_mps = v - omega * half
         right_mps = v + omega * half
         scale = max(self.max_track_speed, 1e-6)
         left = float(np.clip(left_mps / scale, -1.0, 1.0))
         right = float(np.clip(right_mps / scale, -1.0, 1.0))
-        return left, right
+        return self._soft_deadzone(left), self._soft_deadzone(right)
 
     def _publish_track(self, left: float, right: float) -> None:
         msg = Float32MultiArray()
