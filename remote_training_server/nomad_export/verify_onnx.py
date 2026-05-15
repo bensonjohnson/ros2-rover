@@ -19,6 +19,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
 
 CONTEXT_SIZE = 3
+NUM_OBS_FRAMES = CONTEXT_SIZE + 1  # obs_img stacks context + current -> 12 channels
 IMAGE_SIZE = 96
 PRED_HORIZON = 8
 ACTION_DIM = 2
@@ -104,7 +105,7 @@ def main():
     max_mse = 0.0
     for trial in range(NUM_TRIALS):
         obs_img = rng.standard_normal(
-            (1, 3 * CONTEXT_SIZE, IMAGE_SIZE, IMAGE_SIZE)
+            (1, 3 * NUM_OBS_FRAMES, IMAGE_SIZE, IMAGE_SIZE)
         ).astype(np.float32)
         goal_img = rng.standard_normal((1, 3, IMAGE_SIZE, IMAGE_SIZE)).astype(np.float32)
         mask = np.zeros(1, dtype=np.int64)

@@ -43,8 +43,8 @@ python verify_onnx.py
 Two ONNX files, each static-shape, opset 12:
 
 - `vision_encoder.onnx`
-  - inputs: `obs_img (1, 9, 96, 96) f32`, `goal_img (1, 3, 96, 96) f32`,
-    `input_goal_mask (1,) i64`
+  - inputs: `obs_img (1, 12, 96, 96) f32` (context_size+1 = 4 frames stacked),
+    `goal_img (1, 3, 96, 96) f32`, `input_goal_mask (1,) i64`
   - output: `obs_cond (1, 256) f32`
 - `noise_pred_net.onnx`
   - inputs: `sample (1, 8, 2) f32`, `timestep (1,) i64`,

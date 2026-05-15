@@ -26,7 +26,9 @@ import torch
 import torch.nn as nn
 
 
+# context_size=3 past frames; obs_img stacks those + the current frame.
 CONTEXT_SIZE = 3
+NUM_OBS_FRAMES = CONTEXT_SIZE + 1  # -> obs_img has 3 * 4 = 12 channels
 IMAGE_SIZE = 96
 PRED_HORIZON = 8
 ACTION_DIM = 2
@@ -42,8 +44,8 @@ class VisionEncoderWrapper(nn.Module):
     op graph is fully static.
 
     Inputs:
-        obs_img         (1, 3 * context_size, H, W) float32  — context stack
-        goal_img        (1, 3, H, W)                 float32  — goal RGB (zeros in exploration)
+        obs_img         (1, 3 * (context_size+1), H, W) float32  — context + current frame
+        goal_img        (1, 3, H, W)                    float32  — goal RGB (zeros in exploration)
         input_goal_mask (1,)                         int64    — 0=use goal, 1=masked (exploration)
     Output:
         obs_cond        (1, encoding_size)           float32
@@ -124,7 +126,7 @@ def export_vision_encoder(model, output_path: str):
     print(f"Exporting vision_encoder -> {output_path}")
     wrapper = VisionEncoderWrapper(model.vision_encoder).eval()
 
-    obs_img = torch.randn(1, 3 * CONTEXT_SIZE, IMAGE_SIZE, IMAGE_SIZE)
+    obs_img = torch.randn(1, 3 * NUM_OBS_FRAMES, IMAGE_SIZE, IMAGE_SIZE)
     goal_img = torch.randn(1, 3, IMAGE_SIZE, IMAGE_SIZE)
     input_goal_mask = torch.zeros(1, dtype=torch.long)
 

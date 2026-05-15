@@ -52,7 +52,11 @@ from tractor_bringup.nomad_scheduler import NoMaDDDPMScheduler
 from tractor_bringup.nomad_dashboard import DashboardState, start_dashboard_server
 
 
+# NoMaD config: context_size=3 PAST frames. The vision encoder input stacks
+# those plus the current observation -> context_size + 1 = 4 frames, i.e. a
+# 12-channel obs_img tensor.
 CONTEXT_SIZE = 3
+NUM_OBS_FRAMES = CONTEXT_SIZE + 1
 IMAGE_SIZE = 96
 PRED_HORIZON = 8
 ACTION_DIM = 2
@@ -195,7 +199,7 @@ class NomadRknnRunner(Node):
 
         # Context buffer of preprocessed RGB frames (CHW float32).
         self._rgb_context = FrameStacker(
-            k=CONTEXT_SIZE, shape=(3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32
+            k=NUM_OBS_FRAMES, shape=(3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32
         )
         self._have_first_frame = False
         self._frame_lock = threading.Lock()
@@ -337,7 +341,7 @@ class NomadRknnRunner(Node):
             if not self._have_first_frame:
                 # Bootstrap: fill the context buffer with the first frame so
                 # the policy never sees a zero-padded warmup.
-                for _ in range(CONTEXT_SIZE):
+                for _ in range(NUM_OBS_FRAMES):
                     self._rgb_context.push(frame)
                 self._have_first_frame = True
             else:
@@ -391,7 +395,7 @@ class NomadRknnRunner(Node):
             return
 
         with self._frame_lock:
-            context = self._rgb_context.get_stacked()  # (9, 96, 96) float32
+            context = self._rgb_context.get_stacked()  # (12, 96, 96) float32
             latest_bgr = None if self._latest_bgr is None else self._latest_bgr.copy()
         obs_img = context[None, ...]
         goal_img = self._goal_image[None, ...]
