@@ -173,6 +173,10 @@ class NomadRknnRunner(Node):
         # lower = smoother but laggier) — damps residual frame-to-frame jitter.
         self.declare_parameter('deterministic_sampling', True)
         self.declare_parameter('waypoint_smoothing', 0.5)
+        # How many of the 8 predicted waypoints to actually use. The cumsum
+        # tail accumulates the most variance, so trimming to the first ~6
+        # gives a cleaner path for both control and the overlay.
+        self.declare_parameter('num_active_waypoints', 6)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
         # Static-friction floor: nonzero track commands are lifted to at least
@@ -204,6 +208,8 @@ class NomadRknnRunner(Node):
         self.waypoint_scale = float(self.get_parameter('waypoint_scale').value)
         self.deterministic_sampling = bool(self.get_parameter('deterministic_sampling').value)
         self.waypoint_smoothing = float(self.get_parameter('waypoint_smoothing').value)
+        self.num_active_waypoints = max(
+            1, min(PRED_HORIZON, int(self.get_parameter('num_active_waypoints').value)))
         # EMA state — previous tick's smoothed trajectory (robot frame).
         self._prev_waypoints: Optional[np.ndarray] = None
         self.track_width = float(self.get_parameter('track_width').value)
@@ -483,6 +489,12 @@ class NomadRknnRunner(Node):
             waypoints = a * waypoints + (1.0 - a) * self._prev_waypoints
         self._prev_waypoints = waypoints
 
+        # Trim the noisy tail. Waypoints are a cumsum of 8 predicted deltas, so
+        # the last points accumulate the most variance and also project into
+        # the compressed near-horizon band. Keeping the first N gives a clean,
+        # reliable path for both control and the overlay.
+        waypoints = waypoints[:self.num_active_waypoints]
+
         v, omega, lookahead_idx = self._waypoints_to_vw(waypoints)
         left, right = self._vw_to_tracks(v, omega)
         self._publish_track(left, right)
@@ -498,7 +510,7 @@ class NomadRknnRunner(Node):
 
     # ------------------------------------------------------------------ control
     def _waypoints_to_vw(self, waypoints: np.ndarray) -> tuple[float, float, int]:
-        """Pure pursuit on the 8-step waypoint trajectory.
+        """Pure pursuit on the predicted waypoint trajectory.
 
         Waypoints are in the robot's local frame: +x forward, +y left.
         Pick the first waypoint past `lookahead_dist` along the path; if all
@@ -507,8 +519,9 @@ class NomadRknnRunner(Node):
         Returns (v, omega, lookahead_idx) — the index is reported so the
         dashboard can highlight the selected target waypoint.
         """
-        if waypoints.shape != (PRED_HORIZON, 2):
+        if waypoints.ndim != 2 or waypoints.shape[1] != 2 or waypoints.shape[0] < 1:
             return 0.0, 0.0, 0
+        n = waypoints.shape[0]
 
         # Cumulative arc length along the predicted trajectory.
         deltas = np.diff(np.vstack([[0.0, 0.0], waypoints]), axis=0)
@@ -516,8 +529,8 @@ class NomadRknnRunner(Node):
         cum = np.cumsum(seg_lens)
 
         idx = int(np.searchsorted(cum, self.lookahead_dist))
-        if idx >= PRED_HORIZON:
-            idx = PRED_HORIZON - 1
+        if idx >= n:
+            idx = n - 1
         target = waypoints[idx]
         x, y = float(target[0]), float(target[1])
 
@@ -591,7 +604,7 @@ class NomadRknnRunner(Node):
             prev = None          # previous point in pixel coords (may be off-frame)
             n_visible = 0        # points in front of the camera (z > 0)
             n_in_frame = 0       # points that also land inside the image
-            for i in range(PRED_HORIZON):
+            for i in range(pix.shape[0]):
                 if pix[i, 2] < 0.5:
                     prev = None  # behind camera — break the polyline
                     continue
@@ -618,7 +631,7 @@ class NomadRknnRunner(Node):
                 if len(vs) else 'n/a'
             )
             self.get_logger().info(
-                f'overlay: {n_visible}/{PRED_HORIZON} in front of camera, '
+                f'overlay: {n_visible}/{pix.shape[0]} in front of camera, '
                 f'{n_in_frame} in frame (image {w}x{h}, v-range {vrange})',
                 throttle_duration_sec=3.0,
             )
