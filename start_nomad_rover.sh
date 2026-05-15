@@ -25,7 +25,7 @@ echo "  Goal mode:        ${GOAL_MODE}"
 echo "  Nominal speed:    ${NOMINAL_SPEED} m/s"
 echo "  Inference rate:   ${INFERENCE_RATE} Hz"
 echo "  Goal image path:  ${GOAL_IMAGE_PATH:-<none>}"
-echo "  Models dir:       ~/Documents/ros2-rover/models/nomad/"
+echo "  Models dir:       $(pwd)/models/nomad/"
 echo ""
 
 echo "WARNING: Rover will drive AUTONOMOUSLY!"
@@ -75,10 +75,16 @@ echo "Launching NoMaD autonomous..."
 mkdir -p log
 LOG_FILE="log/nomad_rover_$(date +%Y%m%d_%H%M%S).log"
 
+# Resolve model paths against the actual checkout location so this works
+# regardless of where ros2-rover lives.
+MODELS_DIR="$(pwd)/models/nomad"
+
 LAUNCH_ARGS=(
   "goal_mode:=${GOAL_MODE}"
   "nominal_speed:=${NOMINAL_SPEED}"
   "inference_rate_hz:=${INFERENCE_RATE}"
+  "vision_encoder_rknn:=${MODELS_DIR}/vision_encoder.rknn"
+  "noise_pred_net_rknn:=${MODELS_DIR}/noise_pred_net.rknn"
 )
 if [ -n "$GOAL_IMAGE_PATH" ]; then
   LAUNCH_ARGS+=("goal_image_path:=${GOAL_IMAGE_PATH}")

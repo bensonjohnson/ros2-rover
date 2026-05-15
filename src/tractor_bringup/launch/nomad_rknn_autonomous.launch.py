@@ -35,8 +35,10 @@ def generate_launch_description():
     realsense_dir = get_package_share_directory('realsense2_camera')
     tractor_sensors_dir = get_package_share_directory('tractor_sensors')
 
+    # Fallback model location for direct `ros2 launch` use. start_nomad_rover.sh
+    # overrides these with paths resolved against the actual checkout.
     default_models_dir = os.path.join(
-        os.path.expanduser('~'), 'Documents', 'ros2-rover', 'models', 'nomad'
+        os.path.expanduser('~'), 'ros2-rover', 'models', 'nomad'
     )
 
     goal_mode_arg = DeclareLaunchArgument(

@@ -15,7 +15,7 @@ echo "=================================================="
 ROVER_IP=${1:-"192.168.1.50"}
 ROVER_USER=${2:-"benson"}
 ONNX_DIR=${3:-"./nomad_export/onnx"}
-REMOTE_DIR=${4:-"~/Documents/ros2-rover/models/nomad"}
+REMOTE_DIR=${4:-"~/ros2-rover/models/nomad"}
 
 VISION_ENCODER="${ONNX_DIR}/vision_encoder.onnx"
 NOISE_PRED_NET="${ONNX_DIR}/noise_pred_net.onnx"
@@ -40,7 +40,7 @@ if ! ssh -o ConnectTimeout=5 ${ROVER_USER}@${ROVER_IP} "echo connected" 2>/dev/n
   echo "Manual deployment:"
   echo "  scp ${VISION_ENCODER} ${NOISE_PRED_NET} ${ROVER_USER}@${ROVER_IP}:${REMOTE_DIR}/"
   echo "  ssh ${ROVER_USER}@${ROVER_IP}"
-  echo "  cd ~/Documents/ros2-rover"
+  echo "  cd ~/ros2-rover"
   echo "  ./convert_onnx_to_rknn.sh models/nomad/vision_encoder.onnx"
   echo "  ./convert_onnx_to_rknn.sh models/nomad/noise_pred_net.onnx"
   exit 1
@@ -57,7 +57,7 @@ echo "convert_onnx_to_rknn.sh wrapper around RKNN-Toolkit2 on RK3588)..."
 
 ssh ${ROVER_USER}@${ROVER_IP} bash <<EOF
 set -e
-cd ~/Documents/ros2-rover
+cd ~/ros2-rover
 ./convert_onnx_to_rknn.sh ${REMOTE_DIR}/vision_encoder.onnx
 ./convert_onnx_to_rknn.sh ${REMOTE_DIR}/noise_pred_net.onnx
 ls -lh ${REMOTE_DIR}/
@@ -69,5 +69,5 @@ echo "Deployment complete."
 echo "=================================================="
 echo ""
 echo "On the rover:"
-echo "  cd ~/Documents/ros2-rover"
+echo "  cd ~/ros2-rover"
 echo "  ./start_nomad_rover.sh"
