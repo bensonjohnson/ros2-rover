@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 
 _PAGE = """<!doctype html>
@@ -114,8 +114,25 @@ def _make_handler(state: DashboardState):
     return Handler
 
 
-def start_dashboard_server(state: DashboardState, port: int = 8081) -> HTTPServer:
-    server = HTTPServer(('0.0.0.0', port), _make_handler(state))
+def start_dashboard_server(state: DashboardState, port: int = 8081) -> ThreadingHTTPServer:
+    """Start the dashboard HTTP server.
+
+    Uses ThreadingHTTPServer so the blocking MJPEG /stream handler doesn't
+    starve other requests (page reloads, extra tabs). On a fast stop/restart
+    the previous process may still be releasing the port, so bind is retried
+    for a few seconds before giving up.
+    """
+    handler = _make_handler(state)
+    last_err: OSError | None = None
+    for _ in range(12):
+        try:
+            server = ThreadingHTTPServer(('0.0.0.0', port), handler)
+            break
+        except OSError as exc:  # port still held by the previous run
+            last_err = exc
+            time.sleep(0.5)
+    else:
+        raise last_err if last_err else OSError(f'could not bind port {port}')
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

@@ -701,7 +701,10 @@ class NomadRknnRunner(Node):
     def destroy_node(self):
         try:
             if self._dashboard_server is not None:
+                # shutdown() stops the serve loop; server_close() releases the
+                # listening socket so a restart can rebind the port.
                 self._dashboard_server.shutdown()
+                self._dashboard_server.server_close()
         except Exception:
             pass
         try:
