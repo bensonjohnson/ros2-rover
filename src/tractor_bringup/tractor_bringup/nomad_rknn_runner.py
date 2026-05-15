@@ -164,19 +164,18 @@ class NomadRknnRunner(Node):
         # Metres per normalized waypoint unit. NoMaD's reference uses
         # max_v / frame_rate (0.2 / 4 = 0.05), but that makes the predicted
         # path span only ~0.5 m — too short for smooth pure pursuit and below
-        # the FOV of this rover's level-mounted camera. 0.20 stretches the
-        # trajectory to ~2 m so it both steers smoothly and is visible.
-        self.declare_parameter('waypoint_scale', 0.20)
+        # the FOV of this rover's level-mounted camera. 0.40 spreads the 8
+        # waypoints well apart so the path reaches far ahead in the image.
+        self.declare_parameter('waypoint_scale', 0.40)
         # Diffusion is stochastic; deterministic_sampling reseeds per tick so
         # the output tracks the image rather than the RNG. waypoint_smoothing
         # is the EMA weight on each NEW prediction (1.0 = no smoothing,
         # lower = smoother but laggier) — damps residual frame-to-frame jitter.
         self.declare_parameter('deterministic_sampling', True)
         self.declare_parameter('waypoint_smoothing', 0.5)
-        # How many of the 8 predicted waypoints to actually use. The cumsum
-        # tail accumulates the most variance, so trimming to the first ~6
-        # gives a cleaner path for both control and the overlay.
-        self.declare_parameter('num_active_waypoints', 6)
+        # How many of the 8 predicted waypoints to actually use. Default keeps
+        # the full trajectory; lower it only if the cumsum tail gets too noisy.
+        self.declare_parameter('num_active_waypoints', 8)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
         # Static-friction floor: nonzero track commands are lifted to at least
