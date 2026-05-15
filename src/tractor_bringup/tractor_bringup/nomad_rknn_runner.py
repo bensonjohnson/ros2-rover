@@ -167,8 +167,9 @@ class NomadRknnRunner(Node):
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lookahead_dist', 0.50)
         # Which predicted waypoint the PD controller chases. NoMaD's reference
-        # deployment uses index 2 (the 3rd of 8).
-        self.declare_parameter('waypoint_index', 2)
+        # deployment uses index 2; a further point (index 5, the 6th of 8)
+        # gives a longer lookahead and smoother, less twitchy steering.
+        self.declare_parameter('waypoint_index', 5)
         # Metres per normalized waypoint unit. NoMaD's reference uses
         # max_v / frame_rate (0.2 / 4 = 0.05), but that makes the predicted
         # path span only ~0.5 m — too short for smooth pure pursuit and below
