@@ -162,25 +162,27 @@ class NomadRknnRunner(Node):
         self.declare_parameter('noise_pred_net_rknn', '')
         self.declare_parameter('goal_mode', 'exploration')
         self.declare_parameter('goal_image_path', '')
-        self.declare_parameter('inference_rate_hz', 7.0)
+        # Upstream NoMaD trains waypoints at frame_rate=4 Hz, so the PD
+        # controller's DT = 1/rate must match that. Running faster than 4 Hz
+        # misinterprets the predicted waypoint spacing and over-drives v/omega.
+        self.declare_parameter('inference_rate_hz', 4.0)
         self.declare_parameter('nominal_speed', 0.20)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lookahead_dist', 0.50)
-        # Which predicted waypoint the PD controller chases. NoMaD's reference
-        # deployment uses index 2; a further point (index 5, the 6th of 8)
-        # gives a longer lookahead and smoother, less twitchy steering.
-        self.declare_parameter('waypoint_index', 5)
-        # Metres per normalized waypoint unit. NoMaD's reference uses
-        # max_v / frame_rate (0.2 / 4 = 0.05), but that makes the predicted
-        # path span only ~0.5 m — too short for smooth pure pursuit and below
-        # the FOV of this rover's level-mounted camera. 0.40 spreads the 8
-        # waypoints well apart so the path reaches far ahead in the image.
-        self.declare_parameter('waypoint_scale', 0.40)
-        # Diffusion is stochastic; deterministic_sampling reseeds per tick so
-        # the output tracks the image rather than the RNG. waypoint_smoothing
-        # is the EMA weight on each NEW prediction (1.0 = no smoothing,
-        # lower = smoother but laggier) — damps residual frame-to-frame jitter.
-        self.declare_parameter('deterministic_sampling', True)
+        # Which predicted waypoint the PD controller chases. Matches upstream
+        # NoMaD navigate.py default (index 2). Later indices amplify cumsum
+        # error in the diffusion output.
+        self.declare_parameter('waypoint_index', 2)
+        # Metres per normalized waypoint unit. Upstream NoMaD uses
+        # max_v / frame_rate = 0.20 / 4 = 0.05. Any larger value saturates v
+        # to nominal_speed every tick, leaving only omega to drive behavior.
+        self.declare_parameter('waypoint_scale', 0.05)
+        # Upstream NoMaD does NOT reseed the RNG; per-tick noise variation is
+        # part of the diffusion sampling. Reseeding collapses the multi-modal
+        # output to one repeatable trajectory and pairs badly with mean-of-N
+        # selection. Leave False to match upstream; waypoint_smoothing below
+        # handles frame-to-frame jitter via an EMA on the chosen trajectory.
+        self.declare_parameter('deterministic_sampling', False)
         self.declare_parameter('waypoint_smoothing', 0.5)
         # How many of the 8 predicted waypoints to actually use. Default keeps
         # the full trajectory; lower it only if the cumsum tail gets too noisy.
@@ -498,9 +500,12 @@ class NomadRknnRunner(Node):
 
         # (N, 8, 2) metric trajectories — the fan of candidate paths.
         all_waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)
-        # Drive the MEAN of the N samples. Averaging diffusion samples both
-        # follows standard practice and damps per-sample noise.
-        control_path = all_waypoints.mean(axis=0)  # (8, 2)
+        # Drive the FIRST sample (upstream navigate.py: `naction = naction[0]`).
+        # NoMaD's diffusion output is intentionally multi-modal; averaging
+        # across samples collapses bimodal choices (e.g. "go left around" vs
+        # "go right around") into the mean, which can point straight at the
+        # obstacle. Per-tick EMA below handles jitter instead.
+        control_path = all_waypoints[0]  # (8, 2)
 
         # EMA smoothing across ticks on the control path. The robot frame
         # shifts slightly between ticks, but at this rate/speed the shift is

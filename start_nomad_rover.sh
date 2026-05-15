@@ -17,7 +17,7 @@ fi
 
 GOAL_MODE=${1:-"exploration"}
 NOMINAL_SPEED=${2:-"0.20"}
-INFERENCE_RATE=${3:-"7.0"}
+INFERENCE_RATE=${3:-"4.0"}
 GOAL_IMAGE_PATH=${4:-""}
 
 echo "Configuration:"
