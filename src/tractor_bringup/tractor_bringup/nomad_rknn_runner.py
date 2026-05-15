@@ -194,7 +194,7 @@ class NomadRknnRunner(Node):
             self.get_logger().error('RKNNLite not available — node will idle')
 
         # Context buffer of preprocessed RGB frames (CHW float32).
-        self._context = FrameStacker(
+        self._rgb_context = FrameStacker(
             k=CONTEXT_SIZE, shape=(3, IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32
         )
         self._have_first_frame = False
@@ -338,10 +338,10 @@ class NomadRknnRunner(Node):
                 # Bootstrap: fill the context buffer with the first frame so
                 # the policy never sees a zero-padded warmup.
                 for _ in range(CONTEXT_SIZE):
-                    self._context.push(frame)
+                    self._rgb_context.push(frame)
                 self._have_first_frame = True
             else:
-                self._context.push(frame)
+                self._rgb_context.push(frame)
 
     def _joy_cb(self, msg: Joy) -> None:
         try:
@@ -391,7 +391,7 @@ class NomadRknnRunner(Node):
             return
 
         with self._frame_lock:
-            context = self._context.get_stacked()  # (9, 96, 96) float32
+            context = self._rgb_context.get_stacked()  # (9, 96, 96) float32
             latest_bgr = None if self._latest_bgr is None else self._latest_bgr.copy()
         obs_img = context[None, ...]
         goal_img = self._goal_image[None, ...]
