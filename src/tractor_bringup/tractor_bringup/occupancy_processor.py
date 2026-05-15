@@ -73,7 +73,7 @@ class DepthToOccupancy:
                  fy=386.0,
                  cx=212.0,
                  cy=120.0,
-                 camera_height=0.187,
+                 camera_height=0.362,
                  camera_tilt_deg=0.0,
                  grid_size=64,
                  grid_range=3.0,
@@ -349,7 +349,7 @@ class MultiChannelOccupancy:
                  fy=386.0,
                  cx=212.0,
                  cy=120.0,
-                 camera_height=0.187, # 174mm (bottom) + 12.5mm (to optical center)
+                 camera_height=0.362, # 174mm (bottom) + 12.5mm (to optical center) + 175mm (raised tower)
                  camera_tilt_deg=2.0,  # Slight downward tilt (adjust if needed)
                  # Thresholds - INCREASED to avoid ground plane false positives
                  # Only consider objects > 15cm above ground as obstacles
@@ -1178,7 +1178,7 @@ class UnifiedBEVProcessor:
                  fy=421.0,
                  cx=424.0,   # Center x (848/2)
                  cy=50.0,    # Center y (100/2)
-                 camera_height=0.187,      # Camera height above ground
+                 camera_height=0.362,      # Camera height above ground
                  camera_tilt_deg=0.0,      # Camera tilt angle
                  obstacle_height_thresh=0.10,  # Min height to be obstacle (10cm)
                  scan_decay_rate=0.85):
