@@ -75,11 +75,17 @@ echo "Launching NoMaD autonomous..."
 mkdir -p log
 LOG_FILE="log/nomad_rover_$(date +%Y%m%d_%H%M%S).log"
 
+LAUNCH_ARGS=(
+  "goal_mode:=${GOAL_MODE}"
+  "nominal_speed:=${NOMINAL_SPEED}"
+  "inference_rate_hz:=${INFERENCE_RATE}"
+)
+if [ -n "$GOAL_IMAGE_PATH" ]; then
+  LAUNCH_ARGS+=("goal_image_path:=${GOAL_IMAGE_PATH}")
+fi
+
 ros2 launch tractor_bringup nomad_rknn_autonomous.launch.py \
-  goal_mode:=${GOAL_MODE} \
-  nominal_speed:=${NOMINAL_SPEED} \
-  inference_rate_hz:=${INFERENCE_RATE} \
-  goal_image_path:=${GOAL_IMAGE_PATH} \
+  "${LAUNCH_ARGS[@]}" \
   2>&1 | tee "$LOG_FILE" &
 
 LAUNCH_PID=$!
