@@ -26,6 +26,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Time
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -173,11 +174,16 @@ def generate_launch_description():
             'noise_pred_net_rknn': LaunchConfiguration('noise_pred_net_rknn'),
             'goal_mode': LaunchConfiguration('goal_mode'),
             'goal_image_path': LaunchConfiguration('goal_image_path'),
-            'inference_rate_hz': LaunchConfiguration('inference_rate_hz'),
-            'nominal_speed': LaunchConfiguration('nominal_speed'),
-            'lookahead_dist': LaunchConfiguration('lookahead_dist'),
-            'track_width': LaunchConfiguration('track_width'),
-            'max_track_speed': LaunchConfiguration('max_track_speed'),
+            'inference_rate_hz': ParameterValue(
+                LaunchConfiguration('inference_rate_hz'), value_type=float),
+            'nominal_speed': ParameterValue(
+                LaunchConfiguration('nominal_speed'), value_type=float),
+            'lookahead_dist': ParameterValue(
+                LaunchConfiguration('lookahead_dist'), value_type=float),
+            'track_width': ParameterValue(
+                LaunchConfiguration('track_width'), value_type=float),
+            'max_track_speed': ParameterValue(
+                LaunchConfiguration('max_track_speed'), value_type=float),
         }])
 
     return LaunchDescription([
