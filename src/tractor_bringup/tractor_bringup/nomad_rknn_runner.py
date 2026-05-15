@@ -85,16 +85,21 @@ ACTION_DELTA_MAX = np.array([5.0, 4.0], dtype=np.float32)    # [max_dx, max_dy]
 # Fixed seed for deterministic diffusion sampling (see _tick).
 DIFFUSION_SEED = 12345
 
+# Number of candidate trajectories sampled per inference (the fan of paths in
+# the NoMaD demo). MUST match --num_samples passed to export_nomad_onnx.py —
+# noise_pred_net.rknn is compiled with this as a fixed batch size.
+NUM_SAMPLES = 8
+
 
 def _diffusion_to_waypoints(naction: np.ndarray, scale: float) -> np.ndarray:
-    """(1, 8, 2) normalized diffusion output -> (8, 2) metric waypoints.
+    """(N, 8, 2) normalized diffusion output -> (N, 8, 2) metric waypoints.
 
     Mirrors get_action() from visualnav-transformer: unnormalize the deltas,
     cumulative-sum into a trajectory, scale to meters. Waypoints are in the
     robot frame (+x forward, +y left)."""
-    ndeltas = naction[0].astype(np.float32)  # (8, 2) in [-1, 1]
+    ndeltas = naction.astype(np.float32)  # (N, 8, 2) in [-1, 1]
     deltas = (ndeltas + 1.0) * 0.5 * (ACTION_DELTA_MAX - ACTION_DELTA_MIN) + ACTION_DELTA_MIN
-    return np.cumsum(deltas, axis=0) * float(scale)
+    return np.cumsum(deltas, axis=1) * float(scale)  # cumsum along the 8-step axis
 
 
 def _quat_to_rotation(x: float, y: float, z: float, w: float) -> np.ndarray:
@@ -462,10 +467,14 @@ class NomadRknnRunner(Node):
             if self.deterministic_sampling:
                 np.random.seed(DIFFUSION_SEED)
             cond_out = self._vision_encoder.inference(inputs=[obs_img, goal_img, mask])
-            obs_cond = cond_out[0]
-            naction = np.random.randn(1, PRED_HORIZON, ACTION_DIM).astype(np.float32)
+            # vision_encoder is batch-1; tile its 256-d output to the diffusion
+            # batch so the rover samples NUM_SAMPLES candidate trajectories.
+            obs_cond = np.repeat(
+                cond_out[0].astype(np.float32), NUM_SAMPLES, axis=0)  # (N, 256)
+            naction = np.random.randn(
+                NUM_SAMPLES, PRED_HORIZON, ACTION_DIM).astype(np.float32)
             for k in self._scheduler.timesteps:
-                timestep = np.array([int(k)], dtype=np.int64)
+                timestep = np.full(NUM_SAMPLES, int(k), dtype=np.int64)
                 noise_pred = self._noise_pred_net.inference(
                     inputs=[naction, timestep, obs_cond]
                 )[0]
@@ -478,28 +487,32 @@ class NomadRknnRunner(Node):
             self._publish_track(0.0, 0.0)
             return
 
-        waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)  # (8, 2) metres
-        # EMA smoothing across ticks. The robot frame shifts slightly between
-        # ticks, but at this rate/speed the shift is small enough that blending
-        # is a good jitter damper. Reset cleanly if the shape ever changes.
+        # (N, 8, 2) metric trajectories — the fan of candidate paths.
+        all_waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)
+        # Drive the MEAN of the N samples. Averaging diffusion samples both
+        # follows standard practice and damps per-sample noise.
+        control_path = all_waypoints.mean(axis=0)  # (8, 2)
+
+        # EMA smoothing across ticks on the control path. The robot frame
+        # shifts slightly between ticks, but at this rate/speed the shift is
+        # small enough that blending is a good jitter damper.
         a = self.waypoint_smoothing
         if (self._prev_waypoints is not None
-                and self._prev_waypoints.shape == waypoints.shape and a < 1.0):
-            waypoints = a * waypoints + (1.0 - a) * self._prev_waypoints
-        self._prev_waypoints = waypoints
+                and self._prev_waypoints.shape == control_path.shape and a < 1.0):
+            control_path = a * control_path + (1.0 - a) * self._prev_waypoints
+        self._prev_waypoints = control_path
 
-        # Trim the noisy tail. Waypoints are a cumsum of 8 predicted deltas, so
-        # the last points accumulate the most variance and also project into
-        # the compressed near-horizon band. Keeping the first N gives a clean,
-        # reliable path for both control and the overlay.
-        waypoints = waypoints[:self.num_active_waypoints]
+        # Trim the noisy cumsum tail for control (overlay still draws the full
+        # fan so the operator sees the raw distribution).
+        control_path = control_path[:self.num_active_waypoints]
 
-        v, omega, lookahead_idx = self._waypoints_to_vw(waypoints)
+        v, omega, lookahead_idx = self._waypoints_to_vw(control_path)
         left, right = self._vw_to_tracks(v, omega)
         self._publish_track(left, right)
 
         if latest_bgr is not None:
-            self._update_dashboard(latest_bgr, waypoints, lookahead_idx)
+            self._update_dashboard(
+                latest_bgr, all_waypoints, control_path, lookahead_idx)
 
         # Light per-tick telemetry — useful while tuning the planner.
         self.get_logger().debug(
@@ -580,11 +593,40 @@ class NomadRknnRunner(Node):
         )
         return self._extrinsics
 
+    def _draw_path(self, canvas, pix, color, thickness, lookahead_idx=-1):
+        """Draw one projected path on `canvas`. Returns (n_visible, n_in_frame).
+
+        cv2.line clips to the image, so segments are drawn even when an
+        endpoint is off-frame — that keeps the polyline continuous.
+        """
+        h, w = canvas.shape[:2]
+        prev = None
+        n_visible = 0
+        n_in_frame = 0
+        for i in range(pix.shape[0]):
+            if pix[i, 2] < 0.5:
+                prev = None  # behind camera — break the polyline
+                continue
+            n_visible += 1
+            u, v = int(round(pix[i, 0])), int(round(pix[i, 1]))
+            in_frame = (0 <= u < w and 0 <= v < h)
+            if in_frame:
+                n_in_frame += 1
+            if prev is not None:
+                cv2.line(canvas, prev, (u, v), color, thickness, cv2.LINE_AA)
+            if in_frame and lookahead_idx >= 0:
+                radius = 7 if i == lookahead_idx else 4
+                dot = (59, 59, 255) if i == lookahead_idx else color
+                cv2.circle(canvas, (u, v), radius, dot, -1, cv2.LINE_AA)
+            prev = (u, v)
+        return n_visible, n_in_frame
+
     def _update_dashboard(
-        self, bgr: np.ndarray, waypoints: np.ndarray, lookahead_idx: int
+        self, bgr: np.ndarray, all_waypoints: np.ndarray,
+        control_path: np.ndarray, lookahead_idx: int
     ) -> None:
-        """Draw the predicted path onto the live frame and push it to the
-        dashboard MJPEG stream."""
+        """Draw the fan of N sampled paths plus the bold control path onto the
+        live frame and push it to the dashboard MJPEG stream."""
         try:
             extrinsics = self._get_extrinsics()
             if extrinsics is None:
@@ -594,44 +636,34 @@ class NomadRknnRunner(Node):
                     self._dashboard.set_frame(buf.tobytes())
                 return
             rotation, translation = extrinsics
-            pix = _project_ground_points(
-                waypoints, self.cam_fx, self.cam_fy, self.cam_cx, self.cam_cy,
-                rotation, translation,
-            )
+            fx, fy, cx, cy = self.cam_fx, self.cam_fy, self.cam_cx, self.cam_cy
             canvas = bgr.copy()
+
+            # Faint fan: every sampled candidate trajectory (thin, dim).
+            for s in range(all_waypoints.shape[0]):
+                pix_s = _project_ground_points(
+                    all_waypoints[s], fx, fy, cx, cy, rotation, translation)
+                self._draw_path(canvas, pix_s, (120, 200, 90), 1)
+
+            # Bold control path (the executed mean) + lookahead marker.
+            pix_c = _project_ground_points(
+                control_path, fx, fy, cx, cy, rotation, translation)
+            n_visible, n_in_frame = self._draw_path(
+                canvas, pix_c, (20, 255, 20), 3, lookahead_idx)
+
+            # Throttled diagnostic — distinguishes "TF/projection broken"
+            # (n_visible low) from "path outside camera FOV" (n_visible high,
+            # n_in_frame 0).
             h, w = canvas.shape[:2]
-            prev = None          # previous point in pixel coords (may be off-frame)
-            n_visible = 0        # points in front of the camera (z > 0)
-            n_in_frame = 0       # points that also land inside the image
-            for i in range(pix.shape[0]):
-                if pix[i, 2] < 0.5:
-                    prev = None  # behind camera — break the polyline
-                    continue
-                n_visible += 1
-                u, v = int(round(pix[i, 0])), int(round(pix[i, 1]))
-                in_frame = (0 <= u < w and 0 <= v < h)
-                if in_frame:
-                    n_in_frame += 1
-                # cv2.line clips to the image, so draw the segment even when an
-                # endpoint is off-frame — keeps the path continuous.
-                if prev is not None:
-                    cv2.line(canvas, prev, (u, v), (20, 255, 20), 2, cv2.LINE_AA)
-                if in_frame:
-                    radius = 7 if i == lookahead_idx else 4
-                    color = (59, 59, 255) if i == lookahead_idx else (20, 255, 20)
-                    cv2.circle(canvas, (u, v), radius, color, -1, cv2.LINE_AA)
-                prev = (u, v)
-            # Throttled diagnostic — tells us whether the overlay is missing
-            # because of TF/projection (n_visible low) or because the path
-            # falls outside the camera FOV (n_visible high, n_in_frame 0).
-            vs = pix[pix[:, 2] > 0.5]
+            vs = pix_c[pix_c[:, 2] > 0.5]
             vrange = (
                 f'{vs[:, 1].min():.0f}..{vs[:, 1].max():.0f}'
                 if len(vs) else 'n/a'
             )
             self.get_logger().info(
-                f'overlay: {n_visible}/{pix.shape[0]} in front of camera, '
-                f'{n_in_frame} in frame (image {w}x{h}, v-range {vrange})',
+                f'overlay: control {n_visible}/{pix_c.shape[0]} in front, '
+                f'{n_in_frame} in frame; fan={all_waypoints.shape[0]} paths '
+                f'(image {w}x{h}, v-range {vrange})',
                 throttle_duration_sec=3.0,
             )
             ok, buf = cv2.imencode('.jpg', canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])

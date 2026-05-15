@@ -27,6 +27,8 @@ ENCODING_SIZE = 256
 NUM_DIFFUSION_ITERS = 10
 NUM_TRIALS = 5
 MSE_THRESHOLD = 0.05
+# Must match --num_samples passed to export_nomad_onnx.py.
+NUM_SAMPLES = 8
 
 
 def run_pytorch(model, obs_img, goal_img, mask, init_noise):
@@ -42,6 +44,8 @@ def run_pytorch(model, obs_img, goal_img, mask, init_noise):
             goal_img=torch.from_numpy(goal_img),
             input_goal_mask=torch.from_numpy(mask),
         )
+        # Tile the batch-1 conditioning to the diffusion batch size.
+        cond = cond.repeat(NUM_SAMPLES, 1)
         naction = torch.from_numpy(init_noise)
         for k in scheduler.timesteps:
             noise_pred = model.noise_pred_net(
@@ -66,9 +70,12 @@ def run_onnx(vis_sess, noise_sess, obs_img, goal_img, mask, init_noise):
         ["obs_cond"],
         {"obs_img": obs_img, "goal_img": goal_img, "input_goal_mask": mask},
     )[0]
+    # noise_pred_net is exported with a fixed batch of NUM_SAMPLES; tile the
+    # batch-1 conditioning vector to match.
+    cond = np.repeat(cond, NUM_SAMPLES, axis=0)
     naction = init_noise.copy()
     for k in scheduler.timesteps:
-        timestep = np.array([int(k)], dtype=np.int64)
+        timestep = np.full(NUM_SAMPLES, int(k), dtype=np.int64)
         noise_pred = noise_sess.run(
             ["noise_pred"],
             {"sample": naction, "timestep": timestep, "global_cond": cond},
@@ -109,7 +116,8 @@ def main():
         ).astype(np.float32)
         goal_img = rng.standard_normal((1, 3, IMAGE_SIZE, IMAGE_SIZE)).astype(np.float32)
         mask = np.zeros(1, dtype=np.int64)
-        init_noise = rng.standard_normal((1, PRED_HORIZON, ACTION_DIM)).astype(np.float32)
+        init_noise = rng.standard_normal(
+            (NUM_SAMPLES, PRED_HORIZON, ACTION_DIM)).astype(np.float32)
 
         torch_out = run_pytorch(model, obs_img, goal_img, mask, init_noise)
         onnx_out = run_onnx(vis_sess, noise_sess, obs_img, goal_img, mask, init_noise)

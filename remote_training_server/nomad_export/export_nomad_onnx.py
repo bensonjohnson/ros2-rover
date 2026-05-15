@@ -66,12 +66,12 @@ class VisionEncoderWrapper(nn.Module):
 class NoisePredWrapper(nn.Module):
     """Standalone wrapper around NoMaD's noise_pred_net (ConditionalUnet1D).
 
-    Inputs:
-        sample      (1, pred_horizon, action_dim) float32  — current noisy waypoints
-        timestep    (1,)                          int64    — current diffusion step
-        global_cond (1, encoding_size)            float32  — output of vision_encoder
+    Inputs (N = num_samples, the diffusion batch):
+        sample      (N, pred_horizon, action_dim) float32  — current noisy waypoints
+        timestep    (N,)                          int64    — current diffusion step
+        global_cond (N, encoding_size)            float32  — vision_encoder output, tiled
     Output:
-        noise_pred  (1, pred_horizon, action_dim) float32
+        noise_pred  (N, pred_horizon, action_dim) float32
     """
 
     def __init__(self, noise_pred_net):
@@ -151,19 +151,25 @@ def export_vision_encoder(model, output_path: str):
     print(f"  wrote {output_path} ({os.path.getsize(output_path) / 1024 / 1024:.1f} MB)")
 
 
-def export_noise_pred_net(model, output_path: str):
-    print(f"Exporting noise_pred_net -> {output_path}")
+def export_noise_pred_net(model, output_path: str, num_samples: int):
+    """Export noise_pred_net with a fixed batch of `num_samples`.
+
+    The rover samples `num_samples` candidate trajectories per inference by
+    running this batched U-Net once per diffusion step. vision_encoder still
+    runs batch-1; its 256-d conditioning vector is tiled to num_samples rows
+    on the rover."""
+    print(f"Exporting noise_pred_net (batch={num_samples}) -> {output_path}")
     wrapper = NoisePredWrapper(model.noise_pred_net).eval()
 
-    sample = torch.randn(1, PRED_HORIZON, ACTION_DIM)
-    timestep = torch.zeros(1, dtype=torch.long)
-    global_cond = torch.randn(1, ENCODING_SIZE)
+    sample = torch.randn(num_samples, PRED_HORIZON, ACTION_DIM)
+    timestep = torch.zeros(num_samples, dtype=torch.long)
+    global_cond = torch.randn(num_samples, ENCODING_SIZE)
 
     with torch.no_grad():
         out = wrapper(sample, timestep, global_cond)
     print(f"  sanity: noise_pred_net output shape = {tuple(out.shape)}")
-    assert out.shape == (1, PRED_HORIZON, ACTION_DIM), (
-        f"Expected (1, {PRED_HORIZON}, {ACTION_DIM}), got {tuple(out.shape)}."
+    assert out.shape == (num_samples, PRED_HORIZON, ACTION_DIM), (
+        f"Expected ({num_samples}, {PRED_HORIZON}, {ACTION_DIM}), got {tuple(out.shape)}."
     )
 
     torch.onnx.export(
@@ -190,6 +196,12 @@ def main():
         "--output_dir", default=None,
         help="Where to write the two ONNX files (default: ./onnx/ next to this script)",
     )
+    parser.add_argument(
+        "--num_samples", type=int, default=8,
+        help="Batch size for noise_pred_net — number of candidate trajectories "
+             "the rover samples per inference (default: 8). Must match "
+             "NUM_SAMPLES in nomad_rknn_runner.py.",
+    )
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
@@ -204,7 +216,8 @@ def main():
             print(f"  {k}: {params[k]}")
 
     export_vision_encoder(model, str(output_dir / "vision_encoder.onnx"))
-    export_noise_pred_net(model, str(output_dir / "noise_pred_net.onnx"))
+    export_noise_pred_net(
+        model, str(output_dir / "noise_pred_net.onnx"), args.num_samples)
 
     print("\nDone. Next step: deploy_nomad_model.sh <rover_ip> <rover_user>")
 
