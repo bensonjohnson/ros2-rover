@@ -71,6 +71,28 @@ IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1
 
 JOY_RB_BUTTON_IDX = 5  # matches RLPD runner — Xbox RB is the intervention switch
 
+# NoMaD diffusion output post-processing (the reference repo's `get_action`).
+# The model emits NORMALIZED per-step DELTAS in [-1, 1] — NOT absolute
+# waypoints. Recover a metric trajectory by:
+#   1. unnormalize each delta with the training action stats below,
+#   2. cumulative-sum the deltas into a trajectory,
+#   3. scale to meters (waypoint_scale param; reference uses max_v / frame_rate).
+# Skipping this leaves the "waypoints" as tiny scattered [-1,1] values, which
+# makes pure pursuit pivot erratically (spin) and projects nothing on-screen.
+ACTION_DELTA_MIN = np.array([-2.5, -4.0], dtype=np.float32)  # [min_dx, min_dy]
+ACTION_DELTA_MAX = np.array([5.0, 4.0], dtype=np.float32)    # [max_dx, max_dy]
+
+
+def _diffusion_to_waypoints(naction: np.ndarray, scale: float) -> np.ndarray:
+    """(1, 8, 2) normalized diffusion output -> (8, 2) metric waypoints.
+
+    Mirrors get_action() from visualnav-transformer: unnormalize the deltas,
+    cumulative-sum into a trajectory, scale to meters. Waypoints are in the
+    robot frame (+x forward, +y left)."""
+    ndeltas = naction[0].astype(np.float32)  # (8, 2) in [-1, 1]
+    deltas = (ndeltas + 1.0) * 0.5 * (ACTION_DELTA_MAX - ACTION_DELTA_MIN) + ACTION_DELTA_MIN
+    return np.cumsum(deltas, axis=0) * float(scale)
+
 
 def _quat_to_rotation(x: float, y: float, z: float, w: float) -> np.ndarray:
     """Unit quaternion -> 3x3 rotation matrix."""
@@ -136,6 +158,10 @@ class NomadRknnRunner(Node):
         self.declare_parameter('nominal_speed', 0.20)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lookahead_dist', 0.30)
+        # Metres per normalized waypoint unit. Reference NoMaD uses
+        # max_v / frame_rate (0.2 / 4 = 0.05). Sets the absolute scale of the
+        # predicted trajectory — affects lookahead selection and the overlay.
+        self.declare_parameter('waypoint_scale', 0.05)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
@@ -161,6 +187,7 @@ class NomadRknnRunner(Node):
         self.nominal_speed = float(self.get_parameter('nominal_speed').value)
         self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
         self.lookahead_dist = float(self.get_parameter('lookahead_dist').value)
+        self.waypoint_scale = float(self.get_parameter('waypoint_scale').value)
         self.track_width = float(self.get_parameter('track_width').value)
         self.max_track_speed = float(self.get_parameter('max_track_speed').value)
         rgb_topic = str(self.get_parameter('rgb_topic').value)
@@ -420,7 +447,7 @@ class NomadRknnRunner(Node):
             self._publish_track(0.0, 0.0)
             return
 
-        waypoints = naction[0]  # (8, 2)
+        waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)  # (8, 2) metres
         v, omega, lookahead_idx = self._waypoints_to_vw(waypoints)
         left, right = self._vw_to_tracks(v, omega)
         self._publish_track(left, right)
