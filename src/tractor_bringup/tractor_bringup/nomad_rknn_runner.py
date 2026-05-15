@@ -35,9 +35,11 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Bool, Float32MultiArray
 from sensor_msgs.msg import Joy
+import tf2_ros
 
 try:
     from rknnlite.api import RKNNLite
@@ -66,39 +68,44 @@ IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1
 JOY_RB_BUTTON_IDX = 5  # matches RLPD runner — Xbox RB is the intervention switch
 
 
+def _quat_to_rotation(x: float, y: float, z: float, w: float) -> np.ndarray:
+    """Unit quaternion -> 3x3 rotation matrix."""
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+        [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)],
+    ], dtype=np.float64)
+
+
 def _project_ground_points(
     points_xy: np.ndarray,
     fx: float, fy: float, cx: float, cy: float,
-    cam_height: float, cam_pitch: float,
+    rotation: np.ndarray, translation: np.ndarray,
 ) -> np.ndarray:
-    """Project robot-frame ground points to image pixels (pinhole + ground plane).
+    """Project base-frame ground points to image pixels via a pinhole camera.
 
-    Robot frame: +x forward, +y left, ground at z=0. The camera sits at
-    `cam_height` above the ground, tilted down by `cam_pitch` radians.
+    `rotation` (3x3) and `translation` (3,) map a point from the base frame
+    into the camera optical frame (x=right, y=down, z=forward), i.e.
+    p_cam = rotation @ p_base + translation. These come straight from the
+    base_footprint -> camera_color_optical_frame TF, so camera height, pitch,
+    roll and lateral offset are all handled — no manual extrinsics.
 
     Args:
-        points_xy:  (N, 2) array of (x, y) waypoints in meters.
+        points_xy: (N, 2) array of (x, y) waypoints in meters, ground plane.
     Returns:
-        (N, 3) array of (u, v, visible) — pixel coords and a 0/1 visibility
-        flag (0 when the point is behind the camera).
+        (N, 3) array of (u, v, visible); visible is 0 when the point is
+        behind the image plane.
     """
     n = points_xy.shape[0]
     out = np.zeros((n, 3), dtype=np.float32)
-    cp, sp = math.cos(cam_pitch), math.sin(cam_pitch)
     for i in range(n):
-        x, y = float(points_xy[i, 0]), float(points_xy[i, 1])
-        # Camera optical frame, level: x=right, y=down, z=forward.
-        cam0_x = -y
-        cam0_y = cam_height
-        cam0_z = x
-        # Apply downward pitch (rotation about the camera's right axis).
-        x_c = cam0_x
-        y_c = cam0_y * cp - cam0_z * sp
-        z_c = cam0_y * sp + cam0_z * cp
+        p_base = np.array([points_xy[i, 0], points_xy[i, 1], 0.0], dtype=np.float64)
+        p_cam = rotation @ p_base + translation
+        z_c = p_cam[2]
         if z_c <= 1e-3:
             continue
-        u = cx + fx * x_c / z_c
-        v = cy + fy * y_c / z_c
+        u = cx + fx * p_cam[0] / z_c
+        v = cy + fy * p_cam[1] / z_c
         out[i] = (u, v, 1.0)
     return out
 
@@ -129,19 +136,18 @@ class NomadRknnRunner(Node):
         self.declare_parameter('max_track_speed', 0.45)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('goal_image_topic', '/nomad/goal_image')
-        # Dashboard + camera projection. fx/fy/cx/cy here are only fallback
-        # defaults (D435i color at 640x480) — they are overwritten as soon as
-        # a CameraInfo message arrives on `camera_info_topic`. cam_height and
-        # cam_pitch_deg are extrinsics that still need calibrating to the
-        # actual rover mount for the path overlay to sit correctly.
+        # Dashboard + camera projection. Intrinsics (fx/fy/cx/cy) come from
+        # CameraInfo; extrinsics come from the base_frame -> camera_optical_frame
+        # TF. The fx/fy/cx/cy values here are only fallback defaults (D435i
+        # color at 640x480) used until the first CameraInfo arrives.
         self.declare_parameter('dashboard_port', 8081)
         self.declare_parameter('camera_info_topic', '/camera/camera/color/camera_info')
+        self.declare_parameter('base_frame', 'base_footprint')
+        self.declare_parameter('camera_optical_frame', 'camera_color_optical_frame')
         self.declare_parameter('cam_fx', 460.0)
         self.declare_parameter('cam_fy', 460.0)
         self.declare_parameter('cam_cx', 320.0)
         self.declare_parameter('cam_cy', 240.0)
-        self.declare_parameter('cam_height', 0.20)
-        self.declare_parameter('cam_pitch_deg', 0.0)
 
         self.vision_encoder_path = str(self.get_parameter('vision_encoder_rknn').value)
         self.noise_pred_net_path = str(self.get_parameter('noise_pred_net_rknn').value)
@@ -157,14 +163,19 @@ class NomadRknnRunner(Node):
         goal_topic = str(self.get_parameter('goal_image_topic').value)
         self.dashboard_port = int(self.get_parameter('dashboard_port').value)
         camera_info_topic = str(self.get_parameter('camera_info_topic').value)
+        self.base_frame = str(self.get_parameter('base_frame').value)
+        self.camera_optical_frame = str(self.get_parameter('camera_optical_frame').value)
         self.cam_fx = float(self.get_parameter('cam_fx').value)
         self.cam_fy = float(self.get_parameter('cam_fy').value)
         self.cam_cx = float(self.get_parameter('cam_cx').value)
         self.cam_cy = float(self.get_parameter('cam_cy').value)
-        self.cam_height = float(self.get_parameter('cam_height').value)
-        self.cam_pitch = math.radians(float(self.get_parameter('cam_pitch_deg').value))
         # True once intrinsics have been adopted from a CameraInfo message.
         self._intrinsics_from_camera_info = False
+        # Cached base_frame -> camera_optical_frame extrinsics (rotation 3x3,
+        # translation 3,). Populated from TF; the camera mount is fixed so a
+        # single successful lookup is reused for the life of the node.
+        self._extrinsics: Optional[tuple[np.ndarray, np.ndarray]] = None
+        self._extrinsics_warned = False
 
         if self.goal_mode not in ('exploration', 'image_goal'):
             self.get_logger().warn(
@@ -219,6 +230,10 @@ class NomadRknnRunner(Node):
         self.create_subscription(
             CameraInfo, camera_info_topic, self._camera_info_cb, 10
         )
+
+        # TF — supplies the camera extrinsics for the dashboard path overlay.
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
         # Dashboard: rover-hosted live view with the predicted path overlaid.
         self._dashboard = DashboardState()
@@ -451,15 +466,56 @@ class NomadRknnRunner(Node):
         v = float(self.nominal_speed)
         return v, omega, idx
 
+    def _get_extrinsics(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """base_frame -> camera_optical_frame transform as (rotation, translation).
+
+        The camera mount is rigid, so the first successful lookup is cached
+        and reused. Returns None until TF can resolve the chain (the RealSense
+        driver publishes the optical frame, so this needs the camera up).
+        """
+        if self._extrinsics is not None:
+            return self._extrinsics
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self.camera_optical_frame, self.base_frame, Time()
+            )
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as exc:
+            if not self._extrinsics_warned:
+                self.get_logger().warn(
+                    f'camera extrinsics TF not available yet '
+                    f'({self.base_frame} -> {self.camera_optical_frame}): {exc}'
+                )
+                self._extrinsics_warned = True
+            return None
+        t = tf.transform.translation
+        q = tf.transform.rotation
+        rotation = _quat_to_rotation(q.x, q.y, q.z, q.w)
+        translation = np.array([t.x, t.y, t.z], dtype=np.float64)
+        self._extrinsics = (rotation, translation)
+        self.get_logger().info(
+            f'camera extrinsics adopted from TF '
+            f'({self.base_frame} -> {self.camera_optical_frame})'
+        )
+        return self._extrinsics
+
     def _update_dashboard(
         self, bgr: np.ndarray, waypoints: np.ndarray, lookahead_idx: int
     ) -> None:
         """Draw the predicted path onto the live frame and push it to the
         dashboard MJPEG stream."""
         try:
+            extrinsics = self._get_extrinsics()
+            if extrinsics is None:
+                # No TF yet — stream the raw frame so the page is still live.
+                ok, buf = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    self._dashboard.set_frame(buf.tobytes())
+                return
+            rotation, translation = extrinsics
             pix = _project_ground_points(
                 waypoints, self.cam_fx, self.cam_fy, self.cam_cx, self.cam_cy,
-                self.cam_height, self.cam_pitch,
+                rotation, translation,
             )
             canvas = bgr.copy()
             h, w = canvas.shape[:2]
