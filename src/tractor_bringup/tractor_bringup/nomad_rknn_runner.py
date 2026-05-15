@@ -173,10 +173,17 @@ class NomadRknnRunner(Node):
         # NoMaD navigate.py default (index 2). Later indices amplify cumsum
         # error in the diffusion output.
         self.declare_parameter('waypoint_index', 2)
-        # Metres per normalized waypoint unit. Upstream NoMaD uses
-        # max_v / frame_rate = 0.20 / 4 = 0.05. Any larger value saturates v
-        # to nominal_speed every tick, leaving only omega to drive behavior.
-        self.declare_parameter('waypoint_scale', 0.05)
+        # Metres per dimensionless waypoint unit. NoMaD's output is unitless
+        # (training normalizes by per-dataset metric_waypoint_spacing, mixed
+        # 0.12–0.72 m). Upstream `navigate.py` uses MAX_V/RATE = 0.05 as a
+        # safety clamp — it makes v naturally saturate at MAX_V, not because
+        # 0.05 is the inverse of training normalization. A more physically
+        # honest scale (matching the recon-style data the model mostly trained
+        # on) is ~0.25 m/unit; this lengthens the visualized path so it falls
+        # inside the camera FOV. omega = atan2(dy,dx)/DT is scale-invariant,
+        # and v is clipped to nominal_speed regardless, so increasing scale
+        # affects visualization more than control.
+        self.declare_parameter('waypoint_scale', 0.25)
         # Upstream NoMaD does NOT reseed the RNG; per-tick noise variation is
         # part of the diffusion sampling. Reseeding collapses the multi-modal
         # output to one repeatable trajectory and pairs badly with mean-of-N
