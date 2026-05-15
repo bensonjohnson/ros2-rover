@@ -82,6 +82,9 @@ JOY_RB_BUTTON_IDX = 5  # matches RLPD runner — Xbox RB is the intervention swi
 ACTION_DELTA_MIN = np.array([-2.5, -4.0], dtype=np.float32)  # [min_dx, min_dy]
 ACTION_DELTA_MAX = np.array([5.0, 4.0], dtype=np.float32)    # [max_dx, max_dy]
 
+# Fixed seed for deterministic diffusion sampling (see _tick).
+DIFFUSION_SEED = 12345
+
 
 def _diffusion_to_waypoints(naction: np.ndarray, scale: float) -> np.ndarray:
     """(1, 8, 2) normalized diffusion output -> (8, 2) metric waypoints.
@@ -164,6 +167,12 @@ class NomadRknnRunner(Node):
         # the FOV of this rover's level-mounted camera. 0.20 stretches the
         # trajectory to ~2 m so it both steers smoothly and is visible.
         self.declare_parameter('waypoint_scale', 0.20)
+        # Diffusion is stochastic; deterministic_sampling reseeds per tick so
+        # the output tracks the image rather than the RNG. waypoint_smoothing
+        # is the EMA weight on each NEW prediction (1.0 = no smoothing,
+        # lower = smoother but laggier) — damps residual frame-to-frame jitter.
+        self.declare_parameter('deterministic_sampling', True)
+        self.declare_parameter('waypoint_smoothing', 0.5)
         self.declare_parameter('track_width', 0.30)
         self.declare_parameter('max_track_speed', 0.45)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
@@ -190,6 +199,10 @@ class NomadRknnRunner(Node):
         self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
         self.lookahead_dist = float(self.get_parameter('lookahead_dist').value)
         self.waypoint_scale = float(self.get_parameter('waypoint_scale').value)
+        self.deterministic_sampling = bool(self.get_parameter('deterministic_sampling').value)
+        self.waypoint_smoothing = float(self.get_parameter('waypoint_smoothing').value)
+        # EMA state — previous tick's smoothed trajectory (robot frame).
+        self._prev_waypoints: Optional[np.ndarray] = None
         self.track_width = float(self.get_parameter('track_width').value)
         self.max_track_speed = float(self.get_parameter('max_track_speed').value)
         rgb_topic = str(self.get_parameter('rgb_topic').value)
@@ -432,6 +445,13 @@ class NomadRknnRunner(Node):
 
         try:
             t0 = time.monotonic()
+            # Deterministic sampling: reseed the RNG identically every tick so
+            # the diffusion output is a (near) deterministic function of the
+            # input image. Without this, the random init noise + per-step noise
+            # make consecutive inferences on near-identical frames diverge,
+            # which is the dominant source of command jitter.
+            if self.deterministic_sampling:
+                np.random.seed(DIFFUSION_SEED)
             cond_out = self._vision_encoder.inference(inputs=[obs_img, goal_img, mask])
             obs_cond = cond_out[0]
             naction = np.random.randn(1, PRED_HORIZON, ACTION_DIM).astype(np.float32)
@@ -450,6 +470,15 @@ class NomadRknnRunner(Node):
             return
 
         waypoints = _diffusion_to_waypoints(naction, self.waypoint_scale)  # (8, 2) metres
+        # EMA smoothing across ticks. The robot frame shifts slightly between
+        # ticks, but at this rate/speed the shift is small enough that blending
+        # is a good jitter damper. Reset cleanly if the shape ever changes.
+        a = self.waypoint_smoothing
+        if (self._prev_waypoints is not None
+                and self._prev_waypoints.shape == waypoints.shape and a < 1.0):
+            waypoints = a * waypoints + (1.0 - a) * self._prev_waypoints
+        self._prev_waypoints = waypoints
+
         v, omega, lookahead_idx = self._waypoints_to_vw(waypoints)
         left, right = self._vw_to_tracks(v, omega)
         self._publish_track(left, right)
