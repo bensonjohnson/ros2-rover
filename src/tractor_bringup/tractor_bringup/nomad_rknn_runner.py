@@ -166,6 +166,9 @@ class NomadRknnRunner(Node):
         self.declare_parameter('nominal_speed', 0.20)
         self.declare_parameter('max_angular_speed', 1.0)
         self.declare_parameter('lookahead_dist', 0.50)
+        # Which predicted waypoint the PD controller chases. NoMaD's reference
+        # deployment uses index 2 (the 3rd of 8).
+        self.declare_parameter('waypoint_index', 2)
         # Metres per normalized waypoint unit. NoMaD's reference uses
         # max_v / frame_rate (0.2 / 4 = 0.05), but that makes the predicted
         # path span only ~0.5 m — too short for smooth pure pursuit and below
@@ -186,6 +189,9 @@ class NomadRknnRunner(Node):
         # Static-friction floor: nonzero track commands are lifted to at least
         # this magnitude. Matches MIN_TRACK in the RLPD runner.
         self.declare_parameter('min_track', 0.25)
+        # Flip turn direction if the rover steers opposite the overlay path
+        # (mirrored track polarity on this hardware).
+        self.declare_parameter('invert_steering', False)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('goal_image_topic', '/nomad/goal_image')
         # Dashboard + camera projection. Intrinsics (fx/fy/cx/cy) come from
@@ -209,6 +215,7 @@ class NomadRknnRunner(Node):
         self.nominal_speed = float(self.get_parameter('nominal_speed').value)
         self.max_angular_speed = float(self.get_parameter('max_angular_speed').value)
         self.lookahead_dist = float(self.get_parameter('lookahead_dist').value)
+        self.waypoint_index = max(0, int(self.get_parameter('waypoint_index').value))
         self.waypoint_scale = float(self.get_parameter('waypoint_scale').value)
         self.deterministic_sampling = bool(self.get_parameter('deterministic_sampling').value)
         self.waypoint_smoothing = float(self.get_parameter('waypoint_smoothing').value)
@@ -219,6 +226,7 @@ class NomadRknnRunner(Node):
         self.track_width = float(self.get_parameter('track_width').value)
         self.max_track_speed = float(self.get_parameter('max_track_speed').value)
         self.min_track = float(self.get_parameter('min_track').value)
+        self.invert_steering = bool(self.get_parameter('invert_steering').value)
         rgb_topic = str(self.get_parameter('rgb_topic').value)
         goal_topic = str(self.get_parameter('goal_image_topic').value)
         self.dashboard_port = int(self.get_parameter('dashboard_port').value)
@@ -514,51 +522,48 @@ class NomadRknnRunner(Node):
             self._update_dashboard(
                 latest_bgr, all_waypoints, control_path, lookahead_idx)
 
-        # Light per-tick telemetry — useful while tuning the planner.
-        self.get_logger().debug(
-            f'inference {dt_ms:.0f}ms  v={v:+.2f}  omega={omega:+.2f}  '
-            f'tracks=[{left:+.2f}, {right:+.2f}]'
+        # Steering diagnostic. Correlate against the dashboard: when the drawn
+        # path curves LEFT, dy should be POSITIVE and w positive; tracks should
+        # then be L < R. If any of those disagree with what the rover does,
+        # that pins down where the sign breaks.
+        cw = control_path[lookahead_idx]
+        self.get_logger().info(
+            f'inference {dt_ms:.0f}ms  wp[{lookahead_idx}] '
+            f'dx={cw[0]:+.2f} dy={cw[1]:+.2f}  ->  v={v:+.2f} w={omega:+.2f}  '
+            f'tracks L={left:+.2f} R={right:+.2f}',
+            throttle_duration_sec=1.0,
         )
 
     # ------------------------------------------------------------------ control
     def _waypoints_to_vw(self, waypoints: np.ndarray) -> tuple[float, float, int]:
-        """Pure pursuit on the predicted waypoint trajectory.
+        """NoMaD reference PD controller — steers toward one chosen waypoint.
 
-        Waypoints are in the robot's local frame: +x forward, +y left.
-        Pick the first waypoint past `lookahead_dist` along the path; if all
-        are behind us, pivot in place toward the closest one.
+        Ported from visualnav-transformer deployment/src/pd_controller.py:
+            |dx| < EPS:  v = 0;  w = sign(dy) * pi / (2 * DT)
+            else:        v = dx / DT;  w = atan2(dy, dx) / DT
+        Waypoints are in the robot frame (+x forward, +y left), so dy > 0 ->
+        w > 0 -> left turn (ROS convention). `waypoint_index` selects which
+        of the predicted points to chase (reference default: 2).
 
-        Returns (v, omega, lookahead_idx) — the index is reported so the
-        dashboard can highlight the selected target waypoint.
+        Returns (v, omega, chosen_idx).
         """
         if waypoints.ndim != 2 or waypoints.shape[1] != 2 or waypoints.shape[0] < 1:
             return 0.0, 0.0, 0
-        n = waypoints.shape[0]
+        idx = min(self.waypoint_index, waypoints.shape[0] - 1)
+        dx, dy = float(waypoints[idx, 0]), float(waypoints[idx, 1])
 
-        # Cumulative arc length along the predicted trajectory.
-        deltas = np.diff(np.vstack([[0.0, 0.0], waypoints]), axis=0)
-        seg_lens = np.linalg.norm(deltas, axis=1)
-        cum = np.cumsum(seg_lens)
-
-        idx = int(np.searchsorted(cum, self.lookahead_dist))
-        if idx >= n:
-            idx = n - 1
-        target = waypoints[idx]
-        x, y = float(target[0]), float(target[1])
-
-        if x <= 0.0:
-            # Lookahead behind the robot — pivot in place.
-            return 0.0, math.copysign(self.max_angular_speed, y if y != 0.0 else 1.0), idx
-
-        L2 = x * x + y * y
-        if L2 < 1e-6:
-            return 0.0, 0.0, idx
-        # Pure pursuit: path curvature gamma = 2y / L^2 (units 1/m); angular
-        # velocity is v * gamma, not gamma alone.
-        v = float(self.nominal_speed)
-        curvature = 2.0 * y / L2
-        omega = float(np.clip(v * curvature, -self.max_angular_speed, self.max_angular_speed))
-        return v, omega, idx
+        dt = 1.0 / max(self.inference_rate_hz, 0.1)
+        if abs(dx) < 1e-6:
+            v = 0.0
+            w = math.copysign(math.pi / (2.0 * dt), dy if dy != 0.0 else 1.0)
+        else:
+            v = dx / dt
+            # atan2 (vs the reference's atan(dy/dx)) keeps the correct sign
+            # and quadrant when the chosen waypoint is off to the side.
+            w = math.atan2(dy, dx) / dt
+        v = float(np.clip(v, 0.0, self.nominal_speed))
+        w = float(np.clip(w, -self.max_angular_speed, self.max_angular_speed))
+        return v, w, idx
 
     def _get_extrinsics(self) -> Optional[tuple[np.ndarray, np.ndarray]]:
         """base_frame -> camera_optical_frame transform as (rotation, translation).
@@ -683,7 +688,13 @@ class NomadRknnRunner(Node):
 
     def _vw_to_tracks(self, v: float, omega: float) -> tuple[float, float]:
         """Differential-drive kinematics -> normalized track speeds in [-1, 1],
-        with static-friction compensation."""
+        with static-friction compensation.
+
+        `invert_steering` flips the turn direction for hardware whose track
+        polarity is mirrored relative to the ROS convention (a learned policy
+        like RLPD hides this; hand-coded kinematics do not)."""
+        if self.invert_steering:
+            omega = -omega
         half = 0.5 * self.track_width
         left_mps = v - omega * half
         right_mps = v + omega * half

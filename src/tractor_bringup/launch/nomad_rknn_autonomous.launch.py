@@ -62,6 +62,9 @@ def generate_launch_description():
     max_track_speed_arg = DeclareLaunchArgument(
         'max_track_speed', default_value='0.45',
         description='Track speed at which the normalized [-1,1] command equals +/-1')
+    invert_steering_arg = DeclareLaunchArgument(
+        'invert_steering', default_value='false',
+        description='Flip turn direction if the rover steers opposite the overlay path')
     vision_encoder_rknn_arg = DeclareLaunchArgument(
         'vision_encoder_rknn',
         default_value=os.path.join(default_models_dir, 'vision_encoder.rknn'),
@@ -186,6 +189,8 @@ def generate_launch_description():
                 LaunchConfiguration('track_width'), value_type=float),
             'max_track_speed': ParameterValue(
                 LaunchConfiguration('max_track_speed'), value_type=float),
+            'invert_steering': ParameterValue(
+                LaunchConfiguration('invert_steering'), value_type=bool),
         }])
 
     return LaunchDescription([
@@ -196,6 +201,7 @@ def generate_launch_description():
         lookahead_dist_arg,
         track_width_arg,
         max_track_speed_arg,
+        invert_steering_arg,
         vision_encoder_rknn_arg,
         noise_pred_net_rknn_arg,
 
