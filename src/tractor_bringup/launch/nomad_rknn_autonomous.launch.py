@@ -32,7 +32,6 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     tractor_bringup_dir = get_package_share_directory('tractor_bringup')
-    realsense_dir = get_package_share_directory('realsense2_camera')
     tractor_sensors_dir = get_package_share_directory('tractor_sensors')
 
     # Fallback model location for direct `ros2 launch` use. start_nomad_rover.sh
@@ -88,25 +87,29 @@ def generate_launch_description():
             {'publish_tf': False},
         ])
 
-    # NoMaD needs RGB at full resolution (the node resizes to 96x96). Depth
-    # stays on because robot_localization uses it indirectly via the IMU
-    # pipeline and the safety monitor benefits from a populated camera stack.
-    realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(realsense_dir, 'launch', 'rs_launch.py')),
-        launch_arguments={
-            'pointcloud.enable': 'false',
-            'align_depth.enable': 'false',
-            'enable_color': 'true',
-            'enable_depth': 'true',
-            'enable_sync': 'false',
-            'device_type': '435i',
-            'depth_module.depth_profile': '640x480x30',
-            'rgb_camera.color_profile': '640x480x30',
-            'enable_gyro': 'false',
-            'enable_accel': 'false',
-            'enable_imu': 'false',
-        }.items())
+    # Arducam 1080P USB camera (v4l2_camera). NoMaD only needs RGB — the node
+    # resizes to 96x96. Publish raw YUYV (output_encoding == capture format)
+    # so v4l2_camera does no per-frame CPU conversion: converting to rgb8 in
+    # the node throttles the stream to ~6 Hz, while raw YUYV keeps the camera's
+    # full ~28 fps. The runner decodes YUYV itself, only at its tick rate.
+    # Output topics are remapped to the RealSense names so the runner and
+    # monitoring scripts need no changes.
+    camera_node = Node(
+        package='v4l2_camera',
+        executable='v4l2_camera_node',
+        name='v4l2_camera',
+        output='screen',
+        parameters=[{
+            'video_device': '/dev/video0',
+            'pixel_format': 'YUYV',
+            'image_size': [640, 480],
+            'output_encoding': 'yuv422_yuy2',
+            'camera_frame_id': 'camera_color_optical_frame',
+        }],
+        remappings=[
+            ('/image_raw', '/camera/camera/color/image_raw'),
+            ('/camera_info', '/camera/camera/color/camera_info'),
+        ])
 
     lsm9ds1_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -213,7 +216,7 @@ def generate_launch_description():
 
         TimerAction(period=2.0, actions=[lidar_launch]),
         TimerAction(period=4.0, actions=[rf2o_launch]),
-        TimerAction(period=5.0, actions=[realsense_launch]),
+        TimerAction(period=5.0, actions=[camera_node]),
         TimerAction(period=6.0, actions=[lsm9ds1_launch]),
 
         TimerAction(period=7.0, actions=[robot_localization_launch]),

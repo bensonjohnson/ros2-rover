@@ -50,20 +50,8 @@ echo "Sourcing ROS2 environment..."
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 
-echo "Configuring USB power management for RealSense..."
-USB_DEVICE_PATH=""
-for device in /sys/bus/usb/devices/*/idProduct; do
-  if [ -f "$device" ] && [ "$(cat $device 2>/dev/null)" = "0b3a" ]; then
-    USB_DEVICE_PATH=$(dirname $device)
-    echo "Found D435i at USB path: $USB_DEVICE_PATH"
-    break
-  fi
-done
-
-if [ -n "$USB_DEVICE_PATH" ]; then
-  echo "on" | sudo tee $USB_DEVICE_PATH/power/control > /dev/null 2>&1
-  echo "-1" | sudo tee $USB_DEVICE_PATH/power/autosuspend > /dev/null 2>&1
-  echo "USB power management configured"
+if [ ! -e /dev/video0 ]; then
+  echo "Warning: /dev/video0 not found - is the Arducam connected?"
 fi
 
 if [ ! -f "models/nomad/vision_encoder.rknn" ] || [ ! -f "models/nomad/noise_pred_net.rknn" ]; then

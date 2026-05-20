@@ -401,6 +401,9 @@ class NomadRknnRunner(Node):
         if encoding in ('bgra8', 'rgba8'):
             arr = buf.reshape(h, w, 4)
             return cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR if encoding == 'bgra8' else cv2.COLOR_RGBA2BGR)
+        if encoding == 'yuv422_yuy2':
+            # Packed YUYV 4:2:2, 2 bytes/pixel — what v4l2_camera publishes raw.
+            return cv2.cvtColor(buf.reshape(h, w, 2), cv2.COLOR_YUV2BGR_YUYV)
         raise ValueError(f'unsupported image encoding: {encoding}')
 
     def _rgb_cb(self, msg: Image) -> None:
