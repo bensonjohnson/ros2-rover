@@ -22,7 +22,8 @@
       "Bash(ros2 node list:*)",
       "Bash(python3:*)",
       "Bash(python3.12:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(./start_isaac_train.sh Isaac-Tractor-Nav-v0 4 2 42)"
     ],
     "deny": [],
     "ask": []

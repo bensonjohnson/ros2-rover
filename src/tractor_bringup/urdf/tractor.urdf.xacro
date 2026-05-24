@@ -19,6 +19,12 @@
   <xacro:property name="platform_height" value="0.0025"/> <!-- 2.5mm -->
   <xacro:property name="platform_offset_z" value="0.05"/>  <!-- 50mm -->
 
+  <!-- Downward pitch of the RealSense (radians, +ve tilts the lens toward the
+       ground). Keep this matched to the PHYSICAL mount. 0 = level. A small
+       downward tilt (~0.087-0.17 rad = 5-10deg) lets the depth camera see the
+       near ground plane and low obstacles for the costmap. -->
+  <xacro:property name="camera_pitch" value="0.0"/>
+
   <!-- Materials -->
   <material name="red">
     <color rgba="0.8 0.0 0.0 1.0"/>
@@ -337,7 +343,8 @@
     <!-- Camera center at: 133.35 - 12.5 = 120.85mm = 0.12085m from base_link center -->
     <!-- Camera mount tower raised 175mm: optical center now 186.5 + 175 = 361.5mm from ground -->
     <!-- Platform at 109.25mm, so offset = 361.5 - 109.25 = 252.25mm -->
-    <origin xyz="0.12085 0 0.25225" rpy="0 0 0"/>
+    <!-- camera_pitch tilts the lens down; keep matched to the physical mount. -->
+    <origin xyz="0.12085 0 0.25225" rpy="0 ${camera_pitch} 0"/>
   </joint>
 
   <!-- GPS Joint REMOVED -->

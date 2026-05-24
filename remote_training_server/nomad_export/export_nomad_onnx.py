@@ -48,7 +48,7 @@ class VisionEncoderWrapper(nn.Module):
         goal_img        (1, 3, H, W)                    float32  — goal RGB (zeros in exploration)
         input_goal_mask (1,)                         int64    — 0=use goal, 1=masked (exploration)
     Output:
-        obs_cond        (1, encoding_size)           float32
+        obs_cond        (1, encoding_size)            float32
     """
 
     def __init__(self, vision_encoder):
@@ -89,17 +89,10 @@ class NoisePredWrapper(nn.Module):
 def load_nomad(checkpoint_path: str, vint_repo: str):
     """Build a NoMaD model and load the pretrained weights.
 
-    Uses the model construction helpers from `vint_train`. The exact API
-    surface tracks the upstream repo; if visualnav-transformer changes the
-    constructor signature, adjust here.
+    Builds the model directly from vint_train to avoid the ROS imports in
+    deployment/src/utils.py (sensor_msgs is not available on the DGX).
     """
     sys.path.insert(0, os.path.join(vint_repo, "train"))
-    sys.path.insert(0, os.path.join(vint_repo, "deployment", "src"))
-
-    # visualnav-transformer exposes a `load_model` helper in deployment/src/utils.py
-    # that reconstructs the model from a yaml config and loads weights. The
-    # pretrained checkpoint ships alongside a config file (nomad.yaml).
-    from utils import load_model  # noqa: E402  (path injected above)
 
     config_path = os.path.join(vint_repo, "train", "config", "nomad.yaml")
     if not os.path.exists(config_path):
@@ -112,12 +105,56 @@ def load_nomad(checkpoint_path: str, vint_repo: str):
     with open(config_path) as f:
         params = yaml.safe_load(f)
 
-    device = torch.device("cpu")
-    model = load_model(
-        model_path=checkpoint_path,
-        config=params,
-        device=device,
+    from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
+    from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
+    from vint_train.models.vint.vit import ViT
+    from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+
+    vision_enc_type = params["vision_encoder"]
+    if vision_enc_type == "nomad_vint":
+        vision_encoder = NoMaD_ViNT(
+            obs_encoding_size=params["encoding_size"],
+            context_size=params["context_size"],
+            mha_num_attention_heads=params["mha_num_attention_heads"],
+            mha_num_attention_layers=params["mha_num_attention_layers"],
+            mha_ff_dim_factor=params["mha_ff_dim_factor"],
+        )
+        vision_encoder = replace_bn_with_gn(vision_encoder)
+    elif vision_enc_type == "vit":
+        vision_encoder = ViT(
+            obs_encoding_size=params["encoding_size"],
+            context_size=params["context_size"],
+            image_size=params["image_size"],
+            patch_size=params["patch_size"],
+            mha_num_attention_heads=params["mha_num_attention_heads"],
+            mha_num_attention_layers=params["mha_num_attention_layers"],
+        )
+        vision_encoder = replace_bn_with_gn(vision_encoder)
+    else:
+        raise ValueError(f"Unsupported vision_encoder: {vision_enc_type}")
+
+    noise_pred_net = ConditionalUnet1D(
+        input_dim=2,
+        global_cond_dim=params["encoding_size"],
+        down_dims=params["down_dims"],
+        cond_predict_scale=params["cond_predict_scale"],
     )
+    dist_pred_net = DenseNetwork(embedding_dim=params["encoding_size"])
+
+    model = NoMaD(
+        vision_encoder=vision_encoder,
+        noise_pred_net=noise_pred_net,
+        dist_pred_net=dist_pred_net,
+    )
+
+    device = torch.device("cpu")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model" in checkpoint:
+        loaded = checkpoint["model"]
+        state_dict = loaded.module.state_dict() if hasattr(loaded, "module") else loaded.state_dict()
+    else:
+        state_dict = checkpoint
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model, params
 

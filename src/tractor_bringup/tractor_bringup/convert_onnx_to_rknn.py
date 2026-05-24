@@ -330,8 +330,8 @@ def convert_onnx_to_rknn(
                 shape = [1 if d == 0 else d for d in shape]
                 input_names.append(name)
                 input_sizes.append(shape)
-                # Channels/dims for mean/std (second dim for 4D, first dim for 2D)
-                n_channels = shape[1] if len(shape) == 4 else shape[-1]
+                # RKNN mean/std length must match dim 1 (channels), or 1 for 1D inputs
+                n_channels = shape[1] if len(shape) >= 2 else 1
                 mean_values.append([0] * n_channels)
                 std_values.append([1] * n_channels)
                 print(f"  {name}: {shape}")
@@ -358,7 +358,8 @@ def convert_onnx_to_rknn(
             'mean_values': mean_values if mean_values else [[0, 0], [0] * 6],
             'std_values': std_values if std_values else [[1, 1], [1] * 6],
             'target_platform': target_platform,
-            'optimization_level': 3
+            'optimization_level': 0,
+            'disable_rules': ['fuse_mul_into_sdpa', 'remove_parallel_gather'],
         }
 
         if quantize:

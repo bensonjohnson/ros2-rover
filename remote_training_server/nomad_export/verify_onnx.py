@@ -50,7 +50,7 @@ def run_pytorch(model, obs_img, goal_img, mask, init_noise):
         for k in scheduler.timesteps:
             noise_pred = model.noise_pred_net(
                 sample=naction,
-                timestep=k.unsqueeze(0) if k.ndim == 0 else k,
+                timestep=k.unsqueeze(0).repeat(NUM_SAMPLES) if k.ndim == 0 else k,
                 global_cond=cond,
             )
             naction = scheduler.step(

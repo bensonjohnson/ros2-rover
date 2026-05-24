@@ -1,21 +1,23 @@
-"""Tractor navigation task — pure exploration with RGB camera + proprio.
+"""Tractor navigation task — RGB + proprio exploration with skrl PPO.
 
-Registers `Isaac-Tractor-Nav-v0` with gymnasium so Isaac Lab's
-train.py can pick it up via --task.
+Registers `Isaac-Tractor-Nav-v0` with gymnasium. All entry points are
+strings so this module can be imported BEFORE Isaac Sim's AppLauncher
+boots — concrete env/cfg classes pull in USD (`pxr`), which isn't
+available until the sim app is running.
 """
+
+import os
 
 import gymnasium as gym
 
-from . import agents
-from .tractor_env import TractorNavEnv
-from .tractor_env_cfg import TractorNavEnvCfg
+_AGENTS_DIR = os.path.join(os.path.dirname(__file__), "agents")
 
 gym.register(
     id="Isaac-Tractor-Nav-v0",
     entry_point=f"{__name__}.tractor_env:TractorNavEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": TractorNavEnvCfg,
-        "rsl_rl_cfg_entry_point": f"{__name__}.agents.rsl_rl_ppo_cfg:TractorNavPPORunnerCfg",
+        "env_cfg_entry_point": f"{__name__}.tractor_env_cfg:TractorNavEnvCfg",
+        "skrl_cfg_entry_point": os.path.join(_AGENTS_DIR, "skrl_ppo_cfg.yaml"),
     },
 )

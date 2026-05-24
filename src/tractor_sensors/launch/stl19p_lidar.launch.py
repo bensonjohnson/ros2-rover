@@ -41,18 +41,10 @@ def generate_launch_description():
                 {'angle_crop_max': 225.0}
             ]
         ),
-        
-        # Static Transform (Base -> Laser)
-        # LiDAR mounted flat above RealSense camera
-        # - 38mm BEHIND RealSense front (camera front at 133.35mm, LiDAR front at 95.35mm)
-        # - 200mm from ground to LiDAR bottom
-        # - Arrow points FORWARD (standard orientation)
-        # - Counterclockwise scan with no rotation for correct orientation
-        # x=0.07635m, y=0m, z=0.1915m, roll=0, pitch=0, yaw=0
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='base_to_laser_tf',
-            arguments=['0.07635', '0.0', '0.1915', '0.0', '0.0', '0.0', 'base_link', 'laser_link']
-        )
+
+        # NOTE: base_link -> laser_link is published by robot_state_publisher from
+        # the URDF (laser_joint, z=0.3655 after the raised mount). Do NOT publish a
+        # static transform for the same frame here — two publishers for one transform
+        # makes the laser pose jump and corrupts SLAM. The URDF is the single source
+        # of truth for sensor extrinsics.
     ])

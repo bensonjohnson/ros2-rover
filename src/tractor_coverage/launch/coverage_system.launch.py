@@ -24,20 +24,21 @@ def generate_launch_description():
         description="Enable coverage visualizer",
     )
 
-    # Coverage action server
+    # Coverage orchestrator: map -> boustrophedon plan -> NavigateThroughPoses
     coverage_server_node = Node(
         package="tractor_coverage",
-        executable="coverage_action_server",
-        name="coverage_action_server",
+        executable="coverage_orchestrator",
+        name="coverage_orchestrator",
         output="screen",
         parameters=[
             {
                 "use_sim_time": use_sim_time,
-                "default_tool_width": 1.0,
-                "default_overlap": 0.1,
-                "default_work_speed": 0.5,
-                "waypoint_tolerance": 0.25,
-                "max_nav_timeout": 30.0,
+                "tool_width": 0.30,
+                "overlap": 0.10,
+                "border_offset": 0.25,
+                "turn_radius": 0.30,
+                "auto_start_on_complete": True,
+                "optimize_path": True,
             }
         ],
     )

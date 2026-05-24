@@ -20,6 +20,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
+            "coverage_orchestrator = tractor_coverage.coverage_orchestrator:main",
             "coverage_action_server = tractor_coverage.coverage_action_server:main",
             "coverage_client = tractor_coverage.coverage_client:main",
             "coverage_visualizer = tractor_coverage.coverage_visualizer:main",
