@@ -193,8 +193,8 @@ class PCActiveInferenceRunner(Node):
             except Exception as e:  # noqa: BLE001
                 self.get_logger().warn(f"Could not load brain: {e}")
 
-    def _maybe_save(self):
-        if time.time() - self._last_save < self.save_interval_s:
+    def _maybe_save(self, force: bool = False):
+        if not force and time.time() - self._last_save < self.save_interval_s:
             return
         self._last_save = time.time()
         try:
@@ -213,7 +213,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node._maybe_save()
+        node._maybe_save(force=True)   # always persist the brain on shutdown
         node.destroy_node()
         rclpy.shutdown()
 

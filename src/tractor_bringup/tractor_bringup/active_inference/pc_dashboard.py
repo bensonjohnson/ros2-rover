@@ -67,7 +67,9 @@ function drawRing(ctx,cx,cy,R,arr,color){
   if(!arr||!arr.length)return;
   ctx.beginPath();
   for(let i=0;i<arr.length;i++){
-    const a=(i/arr.length)*2*Math.PI - Math.PI/2;
+    // Top-down view: forward (scan 0deg) = up; angle increases CCW so the
+    // rover's left renders on the left. (negate to undo canvas Y-down mirror)
+    const a=-(i/arr.length)*2*Math.PI - Math.PI/2;
     const [x,y]=polar(cx,cy,arr[i]*R,a);
     i?ctx.lineTo(x,y):ctx.moveTo(x,y);
   }
@@ -81,6 +83,13 @@ function radar(s){
   drawRing(ctx,cx,cy,R,s.pred,'#ff9d3b');
   drawRing(ctx,cx,cy,R,s.obs,'#39ff14');
   ctx.fillStyle='#cdd3da';ctx.beginPath();ctx.arc(cx,cy,4,0,2*Math.PI);ctx.fill();
+  // forward marker (rover faces up)
+  ctx.strokeStyle='#5bc0ff';ctx.lineWidth=2;ctx.beginPath();
+  ctx.moveTo(cx,cy);ctx.lineTo(cx,cy-18);ctx.stroke();
+  ctx.fillStyle='#5bc0ff';ctx.beginPath();
+  ctx.moveTo(cx,cy-22);ctx.lineTo(cx-4,cy-14);ctx.lineTo(cx+4,cy-14);ctx.closePath();ctx.fill();
+  ctx.font='10px system-ui';ctx.fillStyle='#7c8694';ctx.textAlign='center';
+  ctx.fillText('FWD',cx,cy-26);ctx.textAlign='left';
 }
 function tracks(s){
   const c=$('tracks'),ctx=c.getContext('2d'),W=c.width,H=c.height,mid=H/2;
