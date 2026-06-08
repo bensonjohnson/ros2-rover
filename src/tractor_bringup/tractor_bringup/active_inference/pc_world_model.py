@@ -48,12 +48,12 @@ class PCConfig:
     ensemble_size: int = 5
 
     # Inference (state settling)
-    n_infer_iters: int = 16
-    infer_lr: float = 0.1
+    n_infer_iters: int = 24
+    infer_lr: float = 0.3
 
     # Learning (local weight updates)
-    lr_obs: float = 2e-3
-    lr_trans: float = 2e-3
+    lr_obs: float = 0.05
+    lr_trans: float = 0.02
 
     # Precisions (inverse variances) weighting the two error streams.
     precision_obs: float = 1.0

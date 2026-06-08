@@ -55,7 +55,7 @@ class PCActiveInferenceRunner(Node):
         p("max_range", 5.0)
         p("latent_dim", 64)
         p("ensemble_size", 5)
-        p("n_infer_iters", 16)
+        p("n_infer_iters", 24)
         # Sequence replay: extra learning passes squeezed from past experience.
         p("replay_capacity", 4000)    # ~4-5 min of stream at 15 Hz
         p("replay_passes", 1)         # replayed windows per control tick (0 = off)
