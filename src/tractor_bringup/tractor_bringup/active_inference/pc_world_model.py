@@ -43,7 +43,7 @@ import torch
 @dataclass
 class PCConfig:
     obs_dim: int = 72
-    latent_dim: int = 32
+    latent_dim: int = 64
     action_dim: int = 2
     ensemble_size: int = 5
 
@@ -119,12 +119,15 @@ class PCWorldModel:
     # ---- inference: settle z_t given observation and prior -----------------
 
     @torch.no_grad()
-    def infer(self, o_t: torch.Tensor, action_prev: torch.Tensor):
+    def infer(self, o_t: torch.Tensor, action_prev: torch.Tensor,
+              z_prev: torch.Tensor | None = None):
         """Settle the current latent state by minimizing free energy.
 
-        Returns (z_settled, free_energy, obs_err_norm) for monitoring.
+        `z_prev` overrides the recurrent context (used by sequence replay so it
+        doesn't disturb the live state). Returns (z_settled, F, obs_err_norm).
         """
-        s_in = self._trans_input(self.z_prev, action_prev)
+        zp = self.z_prev if z_prev is None else z_prev
+        s_in = self._trans_input(zp, action_prev)
         z_hat = self._prior_mean(s_in)            # temporal prior
         z = z_hat.clone()
 
@@ -148,9 +151,15 @@ class PCWorldModel:
 
     @torch.no_grad()
     def learn(self, z_settled: torch.Tensor, action_prev: torch.Tensor,
-              o_t: torch.Tensor):
-        """Apply local predictive-coding updates, then advance recurrent state."""
+              o_t: torch.Tensor, z_prev: torch.Tensor | None = None,
+              advance: bool = True):
+        """Apply local predictive-coding updates.
+
+        `z_prev` overrides the transition context; `advance=False` leaves the
+        live recurrent state untouched (both used by replay).
+        """
         cfg = self.cfg
+        zp = self.z_prev if z_prev is None else z_prev
 
         # Observation weights: ΔW_o = -lr ∂F/∂W_o = -lr (dF_du) sᵀ
         o_hat, s = self._decode(z_settled)
@@ -161,7 +170,7 @@ class PCWorldModel:
 
         # Transition ensemble: each member regresses toward the settled z_t,
         # on a bootstrap subset of steps for diversity.
-        s_in = self._trans_input(self.z_prev, action_prev)
+        s_in = self._trans_input(zp, action_prev)
         for m in range(cfg.ensemble_size):
             if torch.rand((), generator=self._g).item() > cfg.bootstrap_prob:
                 continue
@@ -171,7 +180,8 @@ class PCWorldModel:
             self.b_z[m] += cfg.lr_trans * self.pi_z * e_zm
 
         # Advance recurrent state.
-        self.z_prev = z_settled.detach().clone()
+        if advance:
+            self.z_prev = z_settled.detach().clone()
 
     # ---- epistemic value (expected information gain) -----------------------
 

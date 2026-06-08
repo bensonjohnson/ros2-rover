@@ -37,6 +37,7 @@ from std_msgs.msg import Float32MultiArray
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
+from tractor_bringup.active_inference.replay import SequenceReplay
 from tractor_bringup.active_inference.pc_dashboard import (
     PCDashboardState, start_dashboard_server)
 
@@ -52,9 +53,15 @@ class PCActiveInferenceRunner(Node):
         p("control_rate_hz", 15.0)
         p("num_bins", 72)
         p("max_range", 5.0)
-        p("latent_dim", 32)
+        p("latent_dim", 64)
         p("ensemble_size", 5)
         p("n_infer_iters", 16)
+        # Sequence replay: extra learning passes squeezed from past experience.
+        p("replay_capacity", 4000)    # ~4-5 min of stream at 15 Hz
+        p("replay_passes", 1)         # replayed windows per control tick (0 = off)
+        p("replay_seq_len", 16)       # window length
+        p("replay_burn_in", 4)        # lead-in steps that settle but don't learn
+        p("replay_min", 256)          # min buffer fill before replay starts
         p("action_scale", 0.6)        # scales [-1,1] output (gentler early on)
         p("action_smoothing", 0.4)    # low-pass on executed action [0=frozen,1=raw]
         p("torch_threads", 4)
@@ -84,6 +91,15 @@ class PCActiveInferenceRunner(Node):
         ))
         self.actor = EFEActor(ActorConfig(action_dim=2))
         self._maybe_load()
+
+        # --- replay ---
+        self.replay = SequenceReplay(
+            capacity=int(g("replay_capacity").value),
+            obs_dim=self.num_bins, action_dim=2)
+        self.replay_passes = int(g("replay_passes").value)
+        self.replay_seq_len = int(g("replay_seq_len").value)
+        self.replay_burn_in = int(g("replay_burn_in").value)
+        self.replay_min = int(g("replay_min").value)
 
         # --- state ---
         self.latest_scan = None       # preprocessed obs vector (np)
@@ -133,6 +149,7 @@ class PCActiveInferenceRunner(Node):
             return
 
         o_t = torch.from_numpy(self.latest_scan)
+        action_prev_np = self.last_action.numpy().copy()   # led into this o_t
 
         # 1. Infer current latent from observation + previous action.
         z, free_energy, obs_err = self.model.infer(o_t, self.last_action)
@@ -153,6 +170,12 @@ class PCActiveInferenceRunner(Node):
 
         # Remember the action actually executed for the next temporal prior.
         self.last_action = torch.from_numpy(a.astype(np.float32))
+
+        # Store this transition, then squeeze extra learning from past windows.
+        # Done after publishing so replay compute never delays the motor command.
+        self.replay.append(self.latest_scan, action_prev_np)
+        if self.do_learn and self.replay_passes > 0 and len(self.replay) >= self.replay_min:
+            self._replay_step()
 
         # 5. Diagnostics.
         self._step += 1
@@ -176,6 +199,29 @@ class PCActiveInferenceRunner(Node):
                 f"L={out[0]:+.2f} R={out[1]:+.2f}")
 
         self._maybe_save()
+
+    def _replay_step(self):
+        """Replay contiguous windows, re-deriving latents with current weights.
+
+        A short burn-in settles the recurrent state before any learning so the
+        cold start (zero initial latent) doesn't poison the updates. The live
+        recurrent state (model.z_prev) is left untouched (advance=False).
+        """
+        L = self.replay_seq_len
+        D = self.model.cfg.latent_dim
+        for _ in range(self.replay_passes):
+            sample = self.replay.sample_sequence(L)
+            if sample is None:
+                return
+            obs_seq, act_seq = sample
+            zp = torch.zeros(D)
+            for t in range(L):
+                o = torch.from_numpy(obs_seq[t])
+                a = torch.from_numpy(act_seq[t])
+                z, _, _ = self.model.infer(o, a, z_prev=zp)
+                if t >= self.replay_burn_in:
+                    self.model.learn(z, a, o, z_prev=zp, advance=False)
+                zp = z
 
     def _publish_track(self, left: float, right: float):
         msg = Float32MultiArray()

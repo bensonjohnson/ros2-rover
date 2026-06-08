@@ -95,7 +95,7 @@ def generate_launch_description():
             "learn": LaunchConfiguration("learn"),
             "num_bins": 72,
             "max_range": 5.0,
-            "latent_dim": 32,
+            "latent_dim": 64,
             "ensemble_size": 5,
             "torch_threads": 4,
             "dashboard_port": 8082,
