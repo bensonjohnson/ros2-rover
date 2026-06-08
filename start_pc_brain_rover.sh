@@ -19,7 +19,7 @@ fi
 
 # Configuration (all optional positional args)
 ACTION_SCALE=${1:-"0.6"}     # scales track output [-1,1] (gentler while young)
-CONTROL_RATE=${2:-"10.0"}    # brain inference/control rate (Hz)
+CONTROL_RATE=${2:-"15.0"}    # brain inference/control rate (Hz) — match lidar scan rate
 LIDAR_PORT=${3:-"/dev/ttyUSB0"}
 DASHBOARD_PORT=${4:-"8082"}
 

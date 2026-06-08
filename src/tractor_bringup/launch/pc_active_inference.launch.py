@@ -28,8 +28,9 @@ def generate_launch_description():
         "action_scale", default_value="0.6",
         description="Scales track output [-1,1] (gentler while the brain is young)")
     control_rate_arg = DeclareLaunchArgument(
-        "control_rate_hz", default_value="10.0",
-        description="Brain inference/control rate")
+        "control_rate_hz", default_value="15.0",
+        description="Brain inference/control rate (match the lidar scan rate so "
+                    "each fresh scan drives exactly one infer/learn step)")
     learn_arg = DeclareLaunchArgument(
         "learn", default_value="true",
         description="Set false to freeze the brain and evaluate")

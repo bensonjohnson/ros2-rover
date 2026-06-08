@@ -49,7 +49,7 @@ class PCActiveInferenceRunner(Node):
         p = self.declare_parameter
         p("scan_topic", "/scan")
         p("track_cmd_topic", "/track_cmd_ai")
-        p("control_rate_hz", 10.0)
+        p("control_rate_hz", 15.0)
         p("num_bins", 72)
         p("max_range", 5.0)
         p("latent_dim", 32)
