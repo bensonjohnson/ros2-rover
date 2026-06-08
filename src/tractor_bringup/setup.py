@@ -51,6 +51,7 @@ setup(
             "rlpd_remote_runner = tractor_bringup.rlpd_remote_runner:main",
             "nomad_rknn_runner = tractor_bringup.nomad_rknn_runner:main",
             "es_episode_runner.py = tractor_bringup.es_episode_runner:main",
+            "pc_active_inference_runner = tractor_bringup.pc_active_inference_runner:main",
         ],
     },
 )
