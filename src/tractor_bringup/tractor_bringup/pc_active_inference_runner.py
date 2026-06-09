@@ -25,6 +25,8 @@ since pure PC has no conventional loss curve.
 
 import os
 import time
+import queue
+import threading
 
 import numpy as np
 import torch
@@ -87,6 +89,8 @@ class PCActiveInferenceRunner(Node):
         p("save_interval_s", 60.0)
         p("learn", True)              # set False to freeze the brain (eval)
         p("dashboard_port", 8082)     # 0 disables the web dashboard
+        p("log_experience", True)
+        p("experience_log_path", os.path.expanduser("~/.ros/pnn_experience.jsonl"))
 
         g = self.get_parameter
         self.scan_topic = g("scan_topic").value
@@ -104,6 +108,8 @@ class PCActiveInferenceRunner(Node):
         self.do_learn = bool(g("learn").value)
         self.model_path = g("model_path").value
         self.save_interval_s = float(g("save_interval_s").value)
+        self.log_experience = bool(g("log_experience").value)
+        self.experience_log_path = g("experience_log_path").value
 
         # Proprio config
         self.use_proprio = bool(g("use_proprio").value)
@@ -153,6 +159,16 @@ class PCActiveInferenceRunner(Node):
         self.exec_action = np.zeros(2)
         self._last_save = time.time()
         self._step = 0
+
+        # --- background logger ---
+        self.log_queue = None
+        self.logger_thread = None
+        self.logger_active = False
+        if self.log_experience:
+            self.log_queue = queue.Queue()
+            self.logger_active = True
+            self.logger_thread = threading.Thread(target=self._experience_logger_loop, daemon=True)
+            self.logger_thread.start()
 
         # --- ROS I/O ---
         self.scan_sub = self.create_subscription(
@@ -224,6 +240,10 @@ class PCActiveInferenceRunner(Node):
         obs_np = self._build_obs()
         o_t = torch.from_numpy(obs_np)
         action_prev_np = self.last_action.numpy().copy()   # led into this o_t
+
+        # Queue for background logging
+        if self.logger_active and self.log_queue is not None:
+            self.log_queue.put((obs_np, action_prev_np))
 
         # 1. Infer current latent from observation + previous action.
         z, free_energy, obs_err = self.model.infer(o_t, self.last_action)
@@ -357,6 +377,50 @@ class PCActiveInferenceRunner(Node):
             self.get_logger().info(f"Saved brain to {self.model_path}")
         except Exception as e:  # noqa: BLE001
             self.get_logger().warn(f"Could not save brain: {e}")
+
+    def destroy_node(self):
+        if self.logger_active:
+            self.get_logger().info("Stopping experience logger and flushing queue...")
+            self.logger_active = False
+            if self.log_queue is not None:
+                self.log_queue.put(None)
+            if self.logger_thread is not None:
+                self.logger_thread.join(timeout=2.0)
+            self.get_logger().info("Experience logger stopped")
+        super().destroy_node()
+
+    def _experience_logger_loop(self):
+        import json
+        try:
+            os.makedirs(os.path.dirname(self.experience_log_path), exist_ok=True)
+        except Exception as e:
+            self.get_logger().error(f"Could not create experience log directory: {e}")
+            self.logger_active = False
+            return
+
+        self.get_logger().info(f"Experience logger thread active. Logging to {self.experience_log_path}")
+        
+        while self.logger_active or (self.log_queue is not None and not self.log_queue.empty()):
+            try:
+                item = self.log_queue.get(timeout=0.5)
+                if item is None:
+                    break
+                
+                obs_np, action_prev_np = item
+                line_dict = {
+                    "obs": [round(float(x), 5) for x in obs_np.tolist()],
+                    "act": [round(float(x), 5) for x in action_prev_np.tolist()]
+                }
+                
+                with open(self.experience_log_path, "a") as f:
+                    f.write(json.dumps(line_dict) + "\n")
+                    
+                self.log_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                self.get_logger().error(f"Error writing to experience log: {e}")
+                time.sleep(1.0)
 
 
 def main(args=None):
