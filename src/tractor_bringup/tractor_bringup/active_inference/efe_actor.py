@@ -37,7 +37,12 @@ class ActorConfig:
     n_random: int = 48          # random candidates per step
     temperature: float = 0.5    # softmax temperature over the blended score
     deterministic: bool = False # if True, argmax instead of sampling
-    forward_bias: float = 0.3   # 0 = pure epistemic, 1 = pure forward translation
+    forward_bias: float = 0.3   # (deprecated, kept for configuration compatibility)
+    pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
+    target_wl: float = 0.65     # target left wheel speed in [0,1] (0.5 is stationary)
+    target_wr: float = 0.65     # target right wheel speed in [0,1]
+    target_yaw: float = 0.5     # target yaw rate in [0,1] (0.5 is straight, no spin)
+    horizon: int = 8            # planning horizon length
     seed: int = 0
     structured: list = field(default_factory=lambda: list(_STRUCTURED))
 
@@ -50,32 +55,89 @@ class EFEActor:
                                         device=self.device)
         self._g = torch.Generator(device="cpu").manual_seed(cfg.seed)
 
-    def _candidates(self) -> torch.Tensor:
-        rand = (torch.rand(self.cfg.n_random, self.cfg.action_dim,
-                           generator=self._g) * 2.0 - 1.0).to(self.device)
-        return torch.cat([self._structured, rand], dim=0)
+    def _candidates(self, H: int) -> torch.Tensor:
+        # Repeat structured candidates over the horizon H: [S, H, 2]
+        struct_seq = self._structured.unsqueeze(1).repeat(1, H, 1)
+
+        # Generate random base actions: [n_random, 2]
+        rand_base = (torch.rand(self.cfg.n_random, self.cfg.action_dim,
+                               generator=self._g) * 2.0 - 1.0).to(self.device)
+        # Repeat random candidates over the horizon H: [n_random, H, 2]
+        rand_seq = rand_base.unsqueeze(1).repeat(1, H, 1)
+
+        # Concatenate along batch dimension: [N, H, 2]
+        return torch.cat([struct_seq, rand_seq], dim=0)
 
     @torch.no_grad()
     def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None):
         """Return (action[2], info) for the current latent state.
 
-        Score blends normalized epistemic value with a forward-translation
-        preference: `score = (1-fb)*epi_norm + fb*fwd_norm`. The translation
-        term breaks pure epistemic's rotational degeneracy (spinning in place is
-        the most 'informative' move per unit motion) so the rover commits to
-        roaming instead of pirouetting.
+        Performs multi-step trajectory rollouts over the world model ensemble,
+        accumulating epistemic value (ensemble disagreement) and pragmatic
+        value (proprioceptive prior preference matching: moving forward, no spin).
         """
-        fb = self.cfg.forward_bias if forward_bias is None else forward_bias
-        cands = self._candidates()
-        epi = model.epistemic_value(z_from, cands)        # [N], higher = better
+        H = self.cfg.horizon
+        cands = self._candidates(H)  # [N, H, 2]
+        N = cands.shape[0]
 
-        if fb > 0.0:
-            epi_n = (epi - epi.min()) / (epi.max() - epi.min() + 1e-6)
-            fwd = (cands[:, 0] + cands[:, 1]) * 0.5        # net translation [-1,1]
-            fwd_n = (fwd + 1.0) * 0.5                      # [0,1]
-            score = (1.0 - fb) * epi_n + fb * fwd_n
-        else:
-            score = epi
+        # Initialize rollout states
+        z = z_from.unsqueeze(0).expand(N, -1)  # [N, D]
+        total_epistemic = torch.zeros(N, device=self.device)
+        total_pragmatic = torch.zeros(N, device=self.device)
+
+        # Target proprioceptives
+        t_wl = self.cfg.target_wl
+        t_wr = self.cfg.target_wr
+        t_yaw = self.cfg.target_yaw
+
+        for h in range(H):
+            a_h = cands[:, h, :]  # [N, 2]
+
+            # 1. State transition step: s_in = tanh([z; a_h]) -> [N, D+A]
+            s_in = torch.tanh(torch.cat([z, a_h], dim=1))
+
+            # Project next state for each ensemble member: [M, N, D]
+            preds = torch.stack([s_in @ model.W_z[m].t() + model.b_z[m]
+                                 for m in range(model.cfg.ensemble_size)])
+
+            # Epistemic value: ensemble variance summed over latent dims -> [N]
+            disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)
+            total_epistemic += disagreement
+
+            # Next mean latent state: [N, D]
+            z_next = preds.mean(dim=0)
+
+            # 2. Decode the next mean state to check proprioception alignment:
+            # o_hat = sigmoid(W_o @ tanh(z_next) + b_o)
+            s_latent = torch.tanh(z_next)
+            u = s_latent @ model.W_o.t() + model.b_o
+            o_hat = torch.sigmoid(u)  # [N, obs_dim]
+
+            # Proprio channels are at the end: [wl, wr, yaw]
+            if o_hat.shape[1] >= 3:
+                wl = o_hat[:, -3]
+                wr = o_hat[:, -2]
+                yaw = o_hat[:, -1]
+                # Pragmatic cost is squared error from target proprio
+                cost = (wl - t_wl).pow(2) + (wr - t_wr).pow(2) + (yaw - t_yaw).pow(2)
+                total_pragmatic -= cost
+
+            # Advance recurrent state for next step of rollout
+            z = z_next
+
+        # Normalize score components to [0,1]
+        epi_min, epi_max = total_epistemic.min(), total_epistemic.max()
+        epi_norm = (total_epistemic - epi_min) / (epi_max - epi_min + 1e-6)
+
+        prag_min, prag_max = total_pragmatic.min(), total_pragmatic.max()
+        prag_norm = (total_pragmatic - prag_min) / (prag_max - prag_min + 1e-6)
+
+        # Fallback to config value, or blend with custom forward_bias if passed
+        beta = self.cfg.pragmatic_weight
+        if forward_bias is not None:
+            beta = forward_bias
+
+        score = (1.0 - beta) * epi_norm + beta * prag_norm
 
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))
@@ -85,10 +147,12 @@ class EFEActor:
             probs = torch.softmax(logits, dim=0)
             idx = int(torch.multinomial(probs, 1, generator=self._g))
 
-        action = cands[idx]
+        # MPC: select the FIRST action of the chosen sequence
+        action = cands[idx, 0, :]
         info = {
-            "epistemic": float(epi[idx]),
-            "epistemic_max": float(epi.max()),
-            "epistemic_mean": float(epi.mean()),
+            "epistemic": float(total_epistemic[idx]),
+            "epistemic_max": float(total_epistemic.max()),
+            "epistemic_mean": float(total_epistemic.mean()),
+            "pragmatic": float(total_pragmatic[idx]),
         }
         return action, info

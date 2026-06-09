@@ -76,6 +76,11 @@ class PCActiveInferenceRunner(Node):
         p("action_scale", 0.6)        # scales [-1,1] output (gentler early on)
         p("action_smoothing", 0.4)    # low-pass on executed action [0=frozen,1=raw]
         p("forward_bias", 0.3)        # 0 = pure epistemic, 1 = pure forward translation
+        p("pragmatic_weight", 0.4)
+        p("target_wl", 0.65)
+        p("target_wr", 0.65)
+        p("target_yaw", 0.5)
+        p("horizon", 8)
         p("action_persist", 5)        # hold a chosen action this many ticks (anti-twitch)
         p("torch_threads", 4)
         p("model_path", os.path.expanduser("~/.ros/pnn_brain.pt"))
@@ -90,6 +95,11 @@ class PCActiveInferenceRunner(Node):
         self.action_scale = float(g("action_scale").value)
         self.action_smoothing = float(g("action_smoothing").value)
         self.forward_bias = float(g("forward_bias").value)
+        self.pragmatic_weight = float(g("pragmatic_weight").value)
+        self.target_wl = float(g("target_wl").value)
+        self.target_wr = float(g("target_wr").value)
+        self.target_yaw = float(g("target_yaw").value)
+        self.horizon = int(g("horizon").value)
         self.action_persist = int(g("action_persist").value)
         self.do_learn = bool(g("learn").value)
         self.model_path = g("model_path").value
@@ -114,7 +124,15 @@ class PCActiveInferenceRunner(Node):
             ensemble_size=int(g("ensemble_size").value),
             n_infer_iters=int(g("n_infer_iters").value),
         ))
-        self.actor = EFEActor(ActorConfig(action_dim=2, forward_bias=self.forward_bias))
+        # Use forward_bias as the default pragmatic_weight for backward compatibility with launch files.
+        self.actor = EFEActor(ActorConfig(
+            action_dim=2,
+            pragmatic_weight=self.forward_bias if self.forward_bias > 0.0 else self.pragmatic_weight,
+            target_wl=self.target_wl,
+            target_wr=self.target_wr,
+            target_yaw=self.target_yaw,
+            horizon=self.horizon
+        ))
         self._maybe_load()
         self._persist_ctr = 0
         self._held_raw = np.zeros(2, dtype=np.float32)
@@ -269,6 +287,7 @@ class PCActiveInferenceRunner(Node):
                 pred=self.model.reconstruct(z).numpy()[:self.num_bins],
                 F=free_energy, err=obs_err,
                 epi=info["epistemic"], epi_max=info["epistemic_max"],
+                prag=info["pragmatic"],
                 L=float(out[0]), R=float(out[1]), step=self._step,
                 # Neural net internals for the brain visualizer.
                 z=z.numpy(),                    # raw latent (64,)
@@ -284,6 +303,7 @@ class PCActiveInferenceRunner(Node):
             self.get_logger().info(
                 f"step={self._step} F={free_energy:.3f} obs_err={obs_err:.3f} "
                 f"epi={info['epistemic']:.4f}/{info['epistemic_max']:.4f} "
+                f"prag={info['pragmatic']:.4f} "
                 f"L={out[0]:+.2f} R={out[1]:+.2f}")
 
         self._maybe_save()

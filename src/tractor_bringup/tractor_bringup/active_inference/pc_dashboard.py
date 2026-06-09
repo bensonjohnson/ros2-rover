@@ -131,6 +131,7 @@ _PAGE = """<!doctype html>
   .stat-card.color-blue .stat-value { color: #5bc0ff; }
   .stat-card.color-orange .stat-value { color: #ff9d3b; }
   .stat-card.color-gold .stat-value { color: #ffd043; }
+  .stat-card.color-red .stat-value { color: #ff5b5b; }
   
   /* Track Controls */
   .tracks-panel {
@@ -325,6 +326,10 @@ _PAGE = """<!doctype html>
       <div class="stat-card color-gold">
         <div class="stat-label">EPI MAX</div>
         <div class="stat-value" id="epimax">-</div>
+      </div>
+      <div class="stat-card color-red">
+        <div class="stat-label">PRAGMATIC</div>
+        <div class="stat-value" id="prag">-</div>
       </div>
     </div>
     
@@ -669,6 +674,7 @@ async function tick(){
     $('step').textContent=s.step??'-';
     $('F').textContent=fix(s.F);$('err').textContent=fix(s.err);
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
+    $('prag').textContent=fix(s.prag,4);
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
     const age=s.age??99;
     const badge = $('status_badge');
@@ -705,7 +711,7 @@ class PCDashboardState:
 
     def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step,
                 z=None, s=None, e_o=None, e_z=None, W_o=None,
-                trans_errors=None, z_abs=None, e_z_abs=None) -> None:
+                trans_errors=None, z_abs=None, e_z_abs=None, prag=None) -> None:
         with self._lock:
             self._F.append(round(float(F), 4))
             self._err.append(round(float(err), 4))
@@ -714,6 +720,7 @@ class PCDashboardState:
                 "pred": [round(float(x), 3) for x in pred],
                 "F": float(F), "err": float(err),
                 "epi": float(epi), "epi_max": float(epi_max),
+                "prag": float(prag) if prag is not None else 0.0,
                 "L": float(L), "R": float(R), "step": int(step),
             }
             # Neural net activations & weights for the brain visualizer.
