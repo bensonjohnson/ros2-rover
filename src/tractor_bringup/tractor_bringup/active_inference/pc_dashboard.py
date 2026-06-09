@@ -26,29 +26,246 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 _PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>PNN Brain</title>
 <style>
-  body{background:#0d0f12;color:#cdd3da;font-family:system-ui,sans-serif;margin:0;
-       display:flex;flex-direction:column;align-items:center;}
-  h1{font-size:15px;font-weight:600;margin:12px 0 2px;letter-spacing:.06em;}
-  .sub{font-size:12px;color:#7c8694;margin-bottom:10px;}
-  .brain-row{display:flex;justify-content:center;margin-bottom:14px;}
-  .brain-panel{background:#15181d;border:1px solid #232830;border-radius:10px;padding:12px 16px;}
-  .brain-title{font-size:12px;font-weight:700;color:#7c8a9a;letter-spacing:.12em;text-transform:uppercase;
-               text-align:center;margin-bottom:8px;}
-  .brain-sub{font-size:10px;color:#5a6370;text-align:center;margin-bottom:6px;}
-  .wrap{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;align-items:flex-start;}
-  .panel{background:#15181d;border:1px solid #232830;border-radius:8px;padding:10px;}
-  canvas{display:block;}
-  .stats{font-size:12px;line-height:1.8;min-width:150px;}
-  .k{color:#7c8694;} .v{color:#e8edf2;font-variant-numeric:tabular-nums;}
-  .legend{font-size:11px;color:#9aa4b1;margin-top:6px;}
-  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 4px 0 10px;vertical-align:middle;}
-  .stale{color:#ff5b5b;}
-  .nn-row{display:flex;gap:18px;font-size:11px;color:#7a8697;margin-top:6px;flex-wrap:wrap;}
-  .nn-stat{display:flex;gap:6px;align-items:center;}
-  .nn-stat-val{color:#b8c4d0;font-variant-numeric:tabular-nums;}
-  .bar-wrap{display:inline-flex;align-items:center;gap:4px;}
-  .bar-bg{background:#1e2530;border-radius:3px;display:inline-block;}
-  .err-bar{height:6px;border-radius:3px;}
+  body{
+    background: radial-gradient(circle at center, #141923 0%, #0d0f12 100%);
+    color:#cdd3da;
+    font-family: 'Outfit', system-ui, sans-serif;
+    margin:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    min-height: 100vh;
+    padding-bottom: 30px;
+  }
+  h1{
+    font-size:22px;
+    font-weight:700;
+    margin:24px 0 4px;
+    letter-spacing:.04em;
+    background: linear-gradient(90deg, #00f2fe 0%, #4facfe 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .sub{
+    font-size:13px;
+    color:#7c8694;
+    margin-bottom:20px;
+    font-weight: 300;
+  }
+  .brain-row{display:flex;justify-content:center;margin-bottom:20px;}
+  .brain-panel{
+    background: rgba(21, 24, 29, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius:14px;
+    padding:16px 20px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .brain-title{
+    font-size:12px;
+    font-weight:700;
+    color:#7c8a9a;
+    letter-spacing:.15em;
+    text-transform:uppercase;
+    text-align:center;
+    margin-bottom:8px;
+  }
+  .brain-sub{font-size:11px;color:#5a6370;text-align:center;margin-bottom:12px;}
+  .wrap{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:stretch;}
+  .panel{
+    background: rgba(21, 24, 29, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius:14px;
+    padding:16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+  }
+  canvas{display:block; border-radius: 8px;}
+  
+  /* Telemetry Panel */
+  .stats-panel {
+    min-width: 280px;
+    justify-content: space-between;
+  }
+  .stats-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+  }
+  .stats-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: #7c8694;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .stat-card {
+    background: rgba(30, 34, 43, 0.5);
+    border: 1px solid rgba(255,255,255,0.03);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .stat-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: #5a6370;
+    letter-spacing: 0.05em;
+  }
+  .stat-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #e8edf2;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-card.color-blue .stat-value { color: #5bc0ff; }
+  .stat-card.color-orange .stat-value { color: #ff9d3b; }
+  .stat-card.color-gold .stat-value { color: #ffd043; }
+  
+  /* Track Controls */
+  .tracks-panel {
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 12px;
+  }
+  .track-bar-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .track-bar-wrapper .k {
+    font-size: 10px;
+    font-weight: 700;
+    color: #7c8694;
+    width: 60px;
+  }
+  .track-gauge {
+    position: relative;
+    flex-grow: 1;
+    height: 12px;
+    background: #15181d;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.04);
+    overflow: hidden;
+  }
+  .track-center {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    background: rgba(255,255,255,0.25);
+    z-index: 2;
+  }
+  .track-fill {
+    height: 100%;
+    width: 0%;
+    transition: width 0.05s ease;
+  }
+  .fill-neg {
+    position: absolute;
+    right: 50%;
+    background: linear-gradient(90deg, #ff5b5b, #ff8c8c);
+    border-radius: 6px 0 0 6px;
+  }
+  .fill-pos {
+    position: absolute;
+    left: 50%;
+    background: linear-gradient(90deg, #00c88c, #39ff14);
+    border-radius: 0 6px 6px 0;
+  }
+  .track-bar-wrapper .v {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e8edf2;
+    width: 40px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  
+  /* Status Badge */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .status-badge.live {
+    background: rgba(0, 200, 140, 0.1);
+    border: 1px solid rgba(0, 200, 140, 0.25);
+    color: #00c88c;
+  }
+  .status-badge.stale {
+    background: rgba(255, 91, 91, 0.1);
+    border: 1px solid rgba(255, 91, 91, 0.25);
+    color: #ff5b5b;
+  }
+  .status-badge.disconnected {
+    background: rgba(124, 134, 148, 0.1);
+    border: 1px solid rgba(124, 134, 148, 0.25);
+    color: #7c8694;
+  }
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+  }
+  .status-badge.live .status-dot {
+    animation: pulse 1.6s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0% { transform: scale(0.9); opacity: 0.5; }
+    50% { transform: scale(1.3); opacity: 1; }
+    100% { transform: scale(0.9); opacity: 0.5; }
+  }
+
+  .legend {
+    font-size: 11px;
+    color: #8c97a5;
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin: 0 4px 0 10px;
+    vertical-align: middle;
+  }
+  .nn-row {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: #6a7482;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 10px;
+  }
+  .nn-stat { display: flex; gap: 4px; align-items: center; }
+  .nn-stat-val { color: #b0bac5; font-variant-numeric: tabular-nums; }
+  .bar-wrap { display: inline-flex; align-items: center; gap: 6px; }
+  .bar-bg { background: #15181d; border-radius: 3px; display: inline-block; width: 80px; height: 6px; overflow: hidden; }
+  .err-bar { height: 100%; border-radius: 3px; display: block; }
 </style></head><body>
 <h1>PREDICTIVE-CODING ROVER BRAIN</h1>
 <div class="sub">observed vs. predicted lidar &mdash; pure epistemic active inference</div>
@@ -61,6 +278,8 @@ _PAGE = """<!doctype html>
       <span class="dot" style="background:#5bc0ff"></span>latent active
       <span class="dot" style="background:#3060d0"></span>latent suppressed
       <span class="dot" style="background:#ff9d3b"></span>pred error (bright=wrong)
+      <span class="dot" style="background:#00c88c"></span>positive flow
+      <span class="dot" style="background:#ff6432"></span>negative flow
     </div>
     <div class="nn-row">
       <div class="nn-stat">step: <span class="nn-stat-val" id="nn_step">-</span></div>
@@ -76,17 +295,61 @@ _PAGE = """<!doctype html>
   <div class="panel"><canvas id="radar" width="340" height="340"></canvas>
     <div class="legend"><span class="dot" style="background:#39ff14"></span>observed
       <span class="dot" style="background:#ff9d3b"></span>predicted</div></div>
-  <div class="panel stats">
-    <div><span class="k">step</span> <span class="v" id="step">-</span></div>
-    <div><span class="k">free energy</span> <span class="v" id="F">-</span></div>
-    <div><span class="k">sensory err</span> <span class="v" id="err">-</span></div>
-    <div><span class="k">epistemic</span> <span class="v" id="epi">-</span></div>
-    <div><span class="k">epi max</span> <span class="v" id="epimax">-</span></div>
-    <div style="margin-top:8px"><span class="k">track L</span> <span class="v" id="L">-</span>
-       &nbsp; <span class="k">R</span> <span class="v" id="R">-</span></div>
-    <canvas id="tracks" width="140" height="56" style="margin-top:6px"></canvas>
-    <div id="status" class="legend"></div>
+      
+  <div class="panel stats-panel">
+    <div class="stats-header">
+      <div class="stats-title">TELEMETRY</div>
+      <div class="status-badge live" id="status_badge">
+        <span class="status-dot"></span>
+        <span id="status">live</span>
+      </div>
+    </div>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">STEP</div>
+        <div class="stat-value" id="step">-</div>
+      </div>
+      <div class="stat-card color-blue">
+        <div class="stat-label">FREE ENERGY</div>
+        <div class="stat-value" id="F">-</div>
+      </div>
+      <div class="stat-card color-orange">
+        <div class="stat-label">SENSORY ERR</div>
+        <div class="stat-value" id="err">-</div>
+      </div>
+      <div class="stat-card color-gold">
+        <div class="stat-label">EPISTEMIC</div>
+        <div class="stat-value" id="epi">-</div>
+      </div>
+      <div class="stat-card color-gold">
+        <div class="stat-label">EPI MAX</div>
+        <div class="stat-value" id="epimax">-</div>
+      </div>
+    </div>
+    
+    <div class="tracks-panel">
+      <div class="track-bar-wrapper">
+        <span class="k">TRACK L</span>
+        <div class="track-gauge">
+          <div class="track-fill fill-neg" id="l_neg"></div>
+          <div class="track-center"></div>
+          <div class="track-fill fill-pos" id="l_pos"></div>
+        </div>
+        <span class="v" id="L">-</span>
+      </div>
+      <div class="track-bar-wrapper">
+        <span class="k">TRACK R</span>
+        <div class="track-gauge">
+          <div class="track-fill fill-neg" id="r_neg"></div>
+          <div class="track-center"></div>
+          <div class="track-fill fill-pos" id="r_pos"></div>
+        </div>
+        <span class="v" id="R">-</span>
+      </div>
+    </div>
   </div>
+  
   <div class="panel"><canvas id="trace" width="300" height="200"></canvas>
     <div class="legend"><span class="dot" style="background:#5bc0ff"></span>free energy
       <span class="dot" style="background:#ff9d3b"></span>sensory err</div></div>
@@ -123,13 +386,28 @@ function radar(s){
   ctx.fillText('FWD',cx,cy-26);ctx.textAlign='left';
 }
 function tracks(s){
-  const c=$('tracks'),ctx=c.getContext('2d'),W=c.width,H=c.height,mid=H/2;
-  ctx.clearRect(0,0,W,H);ctx.strokeStyle='#2a3038';ctx.beginPath();
-  ctx.moveTo(0,mid);ctx.lineTo(W,mid);ctx.stroke();
-  const bar=(x,v)=>{ctx.fillStyle=v>=0?'#39ff14':'#ff5b5b';
-    const h=v*(mid-4);ctx.fillRect(x,mid,40,-h);};
-  ctx.font='10px system-ui';ctx.fillStyle='#7c8694';
-  bar(25,s.L||0);bar(85,s.R||0);
+  const L = s.L || 0;
+  const R = s.R || 0;
+  const lNeg = $('l_neg'), lPos = $('l_pos');
+  const rNeg = $('r_neg'), rPos = $('r_pos');
+  if (lNeg && lPos) {
+    if (L >= 0) {
+      lPos.style.width = (L * 50) + '%';
+      lNeg.style.width = '0%';
+    } else {
+      lNeg.style.width = (Math.abs(L) * 50) + '%';
+      lPos.style.width = '0%';
+    }
+  }
+  if (rNeg && rPos) {
+    if (R >= 0) {
+      rPos.style.width = (R * 50) + '%';
+      rNeg.style.width = '0%';
+    } else {
+      rNeg.style.width = (Math.abs(R) * 50) + '%';
+      rPos.style.width = '0%';
+    }
+  }
 }
 let Fh=[],Eh=[];
 function trace(s){
@@ -222,26 +500,37 @@ function brainViz(s){
   }
 
   // ── 3. Connections: latent (center) → prediction (right) ───────────
-  // Draw top-K strongest paths, colored by prediction error magnitude.
-  const mxE=Math.max(...eO.map(Math.abs),0.001);
-  const conns=[];
-  for(let zi=0;zi<zX.length;zi++){
-    for(let pi=0;pi<predY.length;pi++){
-      const err=Math.abs(eO[Math.min(pi*predStep,eO.length-1)]||0);
-      conns.push({zi,pi,err,t:mxE>0?err/mxE:0});
+  // Draw top-K strongest actual activation flows: weight * latent_activation.
+  const W_o = s.W_o || [];
+  const conns = [];
+  let maxFlow = 0.001;
+  if (W_o.length && sAct.length) {
+    for (let zi = 0; zi < zX.length; zi++) {
+      const act = sAct[zi] || 0;
+      for (let pi = 0; pi < predY.length; pi++) {
+        const bin_idx = Math.min(pi * predStep, W_o.length - 1);
+        const weight = W_o[bin_idx][zi] || 0;
+        const flow = weight * act;
+        const absFlow = Math.abs(flow);
+        if (absFlow > maxFlow) {
+          maxFlow = absFlow;
+        }
+        conns.push({ zi, pi, flow, absFlow });
+      }
     }
   }
-  conns.sort((a,b)=>b.t-a.t);
-  const connK=Math.min(200,conns.length);
-  for(let i=0;i<connK;i++){
-    const{zi,pi,t}=conns[i];
-    const errVal=eO[Math.min(pi*predStep,eO.length-1)]||0;
-    const[er,eg,eb]=errColor(errVal,mxE);
+  conns.sort((a, b) => b.absFlow - a.absFlow);
+  const connK = Math.min(250, conns.length);
+  for (let i = 0; i < connK; i++) {
+    const { zi, pi, flow, absFlow } = conns[i];
+    const t = absFlow / maxFlow;
+    // Positive flow (excitation) = cyan/green; negative flow (inhibition) = orange/red
+    const color = flow >= 0 ? `rgba(0,200,140,${0.04+t*0.65})` : `rgba(255,100,50,${0.04+t*0.65})`;
     ctx.beginPath();
-    ctx.moveTo(zX[zi]+6,zY[zi]);
-    ctx.lineTo(c3X-12,predY[pi]);
-    ctx.strokeStyle=`rgba(${er},${eg},${eb},${0.04+t*0.65})`;
-    ctx.lineWidth=0.4+t*2.8;
+    ctx.moveTo(zX[zi] + 6, zY[zi]);
+    ctx.lineTo(c3X - 12, predY[pi]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.4 + t * 2.8;
     ctx.stroke();
   }
 
@@ -382,10 +671,22 @@ async function tick(){
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
     const age=s.age??99;
-    $('status').textContent=age>1.5?'⚠ stale ('+age.toFixed(1)+'s)':'live';
-    $('status').className='legend'+(age>1.5?' stale':'');
+    const badge = $('status_badge');
+    const statusText = $('status');
+    if (age > 1.5) {
+      badge.className = 'status-badge stale';
+      statusText.textContent = 'stale (' + age.toFixed(1) + 's)';
+    } else {
+      badge.className = 'status-badge live';
+      statusText.textContent = 'live';
+    }
     radar(s);tracks(s);trace(s);brainViz(s);nnStatus(s);
-  }catch(e){$('status').textContent='disconnected';}
+  }catch(e){
+    const badge = $('status_badge');
+    const statusText = $('status');
+    if (badge) badge.className = 'status-badge disconnected';
+    if (statusText) statusText.textContent = 'disconnected';
+  }
 }
 setInterval(tick,100);tick();
 </script></body></html>
@@ -427,6 +728,7 @@ class PCDashboardState:
             if W_o is not None:
                 state["W_o_grid"] = [round(float(x), 4)
                                       for x in W_o.flatten()[::4].tolist()]  # every 4th
+                state["W_o"] = [[round(float(val), 3) for val in row] for row in W_o.tolist()]
             if z is not None and s is not None:
                 # |tanh activation| per latent node: drives node size in the diagram.
                 state["z_abs"] = [round(float(abs(x)), 4) for x in s]
