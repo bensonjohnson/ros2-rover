@@ -36,6 +36,12 @@ def generate_launch_description():
         description="Set false to freeze the brain and evaluate")
     lidar_port_arg = DeclareLaunchArgument(
         "lidar_port", default_value="/dev/ttyUSB0")
+    forward_bias_arg = DeclareLaunchArgument(
+        "forward_bias", default_value="0.3",
+        description="0 = pure epistemic, 1 = pure forward translation (anti-spin)")
+    action_persist_arg = DeclareLaunchArgument(
+        "action_persist", default_value="5",
+        description="Hold a chosen action this many ticks (anti-twitch)")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -92,6 +98,8 @@ def generate_launch_description():
             "track_cmd_topic": "/track_cmd_ai",
             "control_rate_hz": LaunchConfiguration("control_rate_hz"),
             "action_scale": LaunchConfiguration("action_scale"),
+            "forward_bias": LaunchConfiguration("forward_bias"),
+            "action_persist": LaunchConfiguration("action_persist"),
             "learn": LaunchConfiguration("learn"),
             "num_bins": 72,
             "max_range": 5.0,
@@ -106,6 +114,8 @@ def generate_launch_description():
         control_rate_arg,
         learn_arg,
         lidar_port_arg,
+        forward_bias_arg,
+        action_persist_arg,
 
         robot_description_launch,
         hiwonder_motor_node,

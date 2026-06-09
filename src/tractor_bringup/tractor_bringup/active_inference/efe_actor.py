@@ -35,8 +35,9 @@ _STRUCTURED = [
 class ActorConfig:
     action_dim: int = 2
     n_random: int = 48          # random candidates per step
-    temperature: float = 0.5    # softmax temperature over epistemic value
+    temperature: float = 0.5    # softmax temperature over the blended score
     deterministic: bool = False # if True, argmax instead of sampling
+    forward_bias: float = 0.3   # 0 = pure epistemic, 1 = pure forward translation
     seed: int = 0
     structured: list = field(default_factory=lambda: list(_STRUCTURED))
 
@@ -55,15 +56,31 @@ class EFEActor:
         return torch.cat([self._structured, rand], dim=0)
 
     @torch.no_grad()
-    def select(self, model, z_from: torch.Tensor):
-        """Return (action[2], info) for the current latent state."""
+    def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None):
+        """Return (action[2], info) for the current latent state.
+
+        Score blends normalized epistemic value with a forward-translation
+        preference: `score = (1-fb)*epi_norm + fb*fwd_norm`. The translation
+        term breaks pure epistemic's rotational degeneracy (spinning in place is
+        the most 'informative' move per unit motion) so the rover commits to
+        roaming instead of pirouetting.
+        """
+        fb = self.cfg.forward_bias if forward_bias is None else forward_bias
         cands = self._candidates()
         epi = model.epistemic_value(z_from, cands)        # [N], higher = better
 
-        if self.cfg.deterministic:
-            idx = int(torch.argmax(epi))
+        if fb > 0.0:
+            epi_n = (epi - epi.min()) / (epi.max() - epi.min() + 1e-6)
+            fwd = (cands[:, 0] + cands[:, 1]) * 0.5        # net translation [-1,1]
+            fwd_n = (fwd + 1.0) * 0.5                      # [0,1]
+            score = (1.0 - fb) * epi_n + fb * fwd_n
         else:
-            logits = epi / max(self.cfg.temperature, 1e-6)
+            score = epi
+
+        if self.cfg.deterministic:
+            idx = int(torch.argmax(score))
+        else:
+            logits = score / max(self.cfg.temperature, 1e-6)
             logits = logits - logits.max()
             probs = torch.softmax(logits, dim=0)
             idx = int(torch.multinomial(probs, 1, generator=self._g))

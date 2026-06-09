@@ -64,6 +64,8 @@ class PCActiveInferenceRunner(Node):
         p("replay_min", 256)          # min buffer fill before replay starts
         p("action_scale", 0.6)        # scales [-1,1] output (gentler early on)
         p("action_smoothing", 0.4)    # low-pass on executed action [0=frozen,1=raw]
+        p("forward_bias", 0.3)        # 0 = pure epistemic, 1 = pure forward translation
+        p("action_persist", 5)        # hold a chosen action this many ticks (anti-twitch)
         p("torch_threads", 4)
         p("model_path", os.path.expanduser("~/.ros/pnn_brain.pt"))
         p("save_interval_s", 60.0)
@@ -76,6 +78,8 @@ class PCActiveInferenceRunner(Node):
         self.max_range = float(g("max_range").value)
         self.action_scale = float(g("action_scale").value)
         self.action_smoothing = float(g("action_smoothing").value)
+        self.forward_bias = float(g("forward_bias").value)
+        self.action_persist = int(g("action_persist").value)
         self.do_learn = bool(g("learn").value)
         self.model_path = g("model_path").value
         self.save_interval_s = float(g("save_interval_s").value)
@@ -89,8 +93,11 @@ class PCActiveInferenceRunner(Node):
             ensemble_size=int(g("ensemble_size").value),
             n_infer_iters=int(g("n_infer_iters").value),
         ))
-        self.actor = EFEActor(ActorConfig(action_dim=2))
+        self.actor = EFEActor(ActorConfig(action_dim=2, forward_bias=self.forward_bias))
         self._maybe_load()
+        self._persist_ctr = 0
+        self._held_raw = np.zeros(2, dtype=np.float32)
+        self._held_info = {"epistemic": 0.0, "epistemic_max": 0.0}
 
         # --- replay ---
         self.replay = SequenceReplay(
@@ -158,9 +165,17 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
 
-        # 3. Choose the most informative next action (pure epistemic).
-        action, info = self.actor.select(self.model, z)
-        raw = action.numpy()
+        # 3. Choose an action, but HOLD it for action_persist ticks so the rover
+        #    commits to a move instead of re-deciding (and twitching) every tick.
+        #    Inference + learning above still run every tick regardless.
+        if self._persist_ctr <= 0:
+            action, info = self.actor.select(self.model, z)
+            self._held_raw = action.numpy()
+            self._held_info = info
+            self._persist_ctr = max(1, self.action_persist)
+        self._persist_ctr -= 1
+        raw = self._held_raw
+        info = self._held_info
 
         # 4. Smooth + scale, then publish track command.
         a = self.action_smoothing * raw + (1.0 - self.action_smoothing) * self.exec_action
