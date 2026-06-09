@@ -261,6 +261,9 @@ class PCActiveInferenceRunner(Node):
         ])
 
         if self.dash is not None:
+            # Abs-activation of each latent node (for node size in the diagram).
+            z_abs = np.abs(s_latent.numpy())
+            e_z_abs = np.abs(e_z)
             self.dash.update(
                 obs=self.latest_scan,
                 pred=self.model.reconstruct(z).numpy()[:self.num_bins],
@@ -274,6 +277,8 @@ class PCActiveInferenceRunner(Node):
                 e_z=e_z,                        # state prediction error (64,)
                 W_o=self.model.W_o.detach().cpu().numpy(),  # decoder weights (72,64)
                 trans_errors=trans_errors,       # per-ensemble-member error (5,)
+                z_abs=z_abs,                    # |activation| per latent node
+                e_z_abs=e_z_abs,                # |state error| per latent node
             )
         if self._step % 20 == 0:
             self.get_logger().info(
