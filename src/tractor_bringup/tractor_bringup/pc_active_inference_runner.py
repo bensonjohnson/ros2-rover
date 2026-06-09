@@ -249,13 +249,32 @@ class PCActiveInferenceRunner(Node):
                      float(out[0]), float(out[1])]
         self.diag_pub.publish(diag)
 
+        # Capture network internals for the brain visualizer.
+        o_hat, s_latent = self.model._decode(z)
+        z_prev_in = self.model._trans_input(self.model.z_prev, self.last_action)
+        e_o = (o_t - o_hat).numpy()
+        e_z = (z - self.model._prior_mean(z_prev_in)).numpy()
+        # Per-ensemble-member prediction errors for diversity display.
+        trans_errors = np.array([
+            float((z - self.model._predict_member(m, z_prev_in)).pow(2).mean())
+            for m in range(self.model.cfg.ensemble_size)
+        ])
+
         if self.dash is not None:
             self.dash.update(
                 obs=self.latest_scan,
                 pred=self.model.reconstruct(z).numpy()[:self.num_bins],
                 F=free_energy, err=obs_err,
                 epi=info["epistemic"], epi_max=info["epistemic_max"],
-                L=float(out[0]), R=float(out[1]), step=self._step)
+                L=float(out[0]), R=float(out[1]), step=self._step,
+                # Neural net internals for the brain visualizer.
+                z=z.numpy(),                    # raw latent (64,)
+                s=s_latent.numpy(),             # tanh-activated latent (64,)
+                e_o=e_o,                        # sensory prediction error (72,)
+                e_z=e_z,                        # state prediction error (64,)
+                W_o=self.model.W_o.detach().cpu().numpy(),  # decoder weights (72,64)
+                trans_errors=trans_errors,       # per-ensemble-member error (5,)
+            )
         if self._step % 20 == 0:
             self.get_logger().info(
                 f"step={self._step} F={free_energy:.3f} obs_err={obs_err:.3f} "

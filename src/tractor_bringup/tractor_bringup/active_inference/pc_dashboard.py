@@ -45,6 +45,20 @@ _PAGE = """<!doctype html>
   <div class="panel"><canvas id="radar" width="360" height="360"></canvas>
     <div class="legend"><span class="dot" style="background:#39ff14"></span>observed
       <span class="dot" style="background:#ff9d3b"></span>predicted</div></div>
+  <div class="panel">
+    <div style="font-size:12px;color:#7c8694;margin-bottom:6px;text-align:center">NEURAL NET ACTIVITY</div>
+    <canvas id="brain" width="440" height="300"></canvas>
+    <canvas id="heatmap" width="440" height="52" style="margin-top:4px"></canvas>
+    <div class="legend">
+      <span class="dot" style="background:#5bc0ff"></span>latent tanh
+      <span class="dot" style="background:#ff5b5b"></span>state error
+      <span class="dot" style="background:#9b59b6"></span>sensory error
+    </div>
+    <div style="display:flex;gap:16px;margin-top:5px;font-size:11px;color:#9aa4b1;">
+      <span id="nn_status">-</span>
+      <span>ensemble <span id="n_ens">5</span></span>
+    </div>
+  </div>
   <div class="panel stats">
     <div><span class="k">step</span> <span class="v" id="step">-</span></div>
     <div><span class="k">free energy</span> <span class="v" id="F">-</span></div>
@@ -113,6 +127,140 @@ function trace(s){
     ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();};
   plot(Fh,'#5bc0ff');plot(Eh,'#ff9d3b');
 }
+
+// ---- Neural Network Visualizer --------------------------------------------
+function lerp3(a,b,t){return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];}
+function heatColor(v){
+  // v in [-1,1]: negative=blue, zero=dark, positive=orange/white
+  if(v>0)return lerp3([30,20,10],[255,220,100],Math.min(1,v));
+  return lerp3([5,5,20],[30,80,220],Math.min(1,-v));
+}
+function nodeColor(activation,err){
+  // Nodes colored by tanh activation; ring glow by error magnitude.
+  const r=Math.round((activation*0.5+0.5)*200);
+  const g=Math.round((1-Math.abs(activation))*80);
+  const b=Math.round(60);
+  return[r,g,b];
+}
+
+function brainViz(s){
+  const c=$('brain'),ctx=c.getContext('2d'),W=c.width,H=c.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#1a1d23';ctx.fillRect(0,0,W,H);
+
+  const sAct=s.s||[],zErr=s.e_z||[],obsErr=s.e_o||[];
+  if(!sAct.length)return;
+
+  // Layout: Latent layer (left) -> Decoder output (right)
+  const lx=60,rx=W-60,cy=H/2;
+  const cols=Math.ceil(Math.sqrt(sAct.length));
+  const rows=Math.ceil(sAct.length/cols);
+  const nr=Math.min(rows,8);           // cap at 8 rows for clarity
+  const nc=Math.min(cols,Math.ceil(sAct.length/nr));
+  const stepX=(rx-lx)/(nc+1),stepY=H/(nr+1);
+
+  // Draw connection lines from latent to decoder (buses to observation bins).
+  // Each latent node fans out to a representative obs-bin connection.
+  const obsBins=Math.min(36,obsErr.length);
+  const stepObs=Math.max(1,Math.floor(obsErr.length/obsBins));
+  const connStep=Math.max(1,Math.floor(sAct.length/obsBins));
+  for(let i=0;i<obsBins;i++){
+    const li=Math.min(i*connStep,sAct.length-1);
+    const ri=Math.min(i*stepObs,obsErr.length-1);
+    const lnodex=lx+((li%nc)+1)*stepX;
+    const lnodey=((Math.floor(li/nc)%nr)+1)*stepY;
+    const rnodex=rx-Math.cos((ri/obsErr.length-0.5)*Math.PI)*(rx-lx)*0.35;
+    const rnodey=cy+Math.sin((ri/obsErr.length-0.5)*Math.PI)*(H*0.42);
+    const err=obsErr[ri];
+    const[er,eg,eb]=heatColor(err);
+    ctx.beginPath();ctx.moveTo(lnodex,lnodey);ctx.lineTo(rnodex,rnodey);
+    ctx.strokeStyle=`rgba(${er},${eg},${eb},${Math.min(0.7,Math.abs(err)*1.5)})`;
+    ctx.lineWidth=0.6;ctx.stroke();
+  }
+
+  // State prediction error arrows flowing into latent layer (left side).
+  // Larger error = brighter red glow.
+  if(zErr.length){
+    const mxErr=Math.max(...zErr.map(Math.abs),0.001);
+    for(let i=0;i<Math.min(sAct.length,nr*nc);i++){
+      const lx2=lx+((i%nc)+1)*stepX;
+      const ly2=((Math.floor(i/nc))+1)*stepY;
+      const[,,eb]=heatColor(zErr[i]/mxErr);
+      const rad=zErr[i]>0?4+Math.abs(zErr[i])*12:4;
+      ctx.beginPath();ctx.arc(lx2,ly2,rad,0,2*Math.PI);
+      ctx.fillStyle=`rgba(255,${Math.round(30-zErr[i]*40)},40,0.12)`;
+      ctx.fill();
+    }
+  }
+
+  // Draw latent nodes.
+  const mxAct=Math.max(...sAct.map(Math.abs),0.001);
+  for(let i=0;i<Math.min(sAct.length,nr*nc);i++){
+    const nx=lx+((i%nc)+1)*stepX;
+    const ny=((Math.floor(i/nc))+1)*stepY;
+    const act=sAct[i]/mxAct;
+    const[nr2,ng,nb]=nodeColor(act,0);
+    const glow=Math.abs(act)*8;
+    const[er2,eg2,eb2]=heatColor(zErr[i]||0);
+    ctx.beginPath();ctx.arc(nx,ny,glow+5,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${er2},${eg2},10,0.25)`;ctx.fill();
+    ctx.beginPath();ctx.arc(nx,ny,6,0,2*Math.PI);
+    const grad=ctx.createRadialGradient(nx-1.5,ny-1.5,0,nx,ny,7);
+    grad.addColorStop(0,`rgb(${Math.min(255,nr2+60)},${Math.min(255,ng+40)},${nb})`);
+    grad.addColorStop(1,`rgb(${nr2},${ng},${nb})`);
+    ctx.fillStyle=grad;ctx.fill();
+    if(Math.abs(act)>0.3){ctx.strokeStyle='#fff';ctx.lineWidth=0.8;ctx.stroke();}
+  }
+
+  // Draw observation error nodes on the right (binned).
+  for(let i=0;i<obsBins;i++){
+    const ri=Math.min(i*stepObs,obsErr.length-1);
+    const rx2=rx-Math.cos((ri/obsErr.length-0.5)*Math.PI)*(rx-lx)*0.35;
+    const ry2=cy+Math.sin((ri/obsErr.length-0.5)*Math.PI)*(H*0.42);
+    const[er3,eg3,eb3]=heatColor(obsErr[ri]);
+    ctx.beginPath();ctx.arc(rx2,ry2,5,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${er3},${Math.min(255,eg3+60)},${eb3},0.85)`;ctx.fill();
+    if(Math.abs(obsErr[ri])>0.15){ctx.strokeStyle='#fff';ctx.lineWidth=0.7;ctx.stroke();}
+  }
+
+  // Layer labels.
+  ctx.font='10px system-ui';ctx.fillStyle='#5a6370';ctx.textAlign='center';
+  ctx.fillText('z (latent)',lx,H-8);
+  ctx.fillText('decoded',rx,H-8);
+}
+
+function heatmapViz(s){
+  const c=$('heatmap'),ctx=c.getContext('2d'),W=c.width,H=c.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#1a1d23';ctx.fillRect(0,0,W,H);
+  const grid=s.W_o_grid||[];
+  if(!grid.length)return;
+  const n=grid.length;
+  const cols=Math.min(64,Math.ceil(Math.sqrt(n*W/H)));
+  const rows=Math.ceil(n/cols);
+  const cw=W/cols,ch=H/rows;
+  for(let i=0;i<n;i++){
+    const col=i%cols,row=Math.floor(i/cols);
+    const[er,eg,eb]=heatColor(grid[i]*3);   // scale weights for visibility
+    ctx.fillStyle=`rgb(${er},${eg},${eb})`;
+    ctx.fillRect(col*cw,row*ch,cw-0.4,ch-0.4);
+  }
+  ctx.font='9px system-ui';ctx.fillStyle='#5a6370';ctx.textAlign='left';
+  ctx.fillText('W_o decoder weights (binned)',3,H-2);
+}
+
+function nnStatus(s){
+  const n=s.n_ens||5;
+  const te=s.trans_errors||[];
+  const lx=60,rx=$('brain').width-60;
+  $('n_ens').textContent=n;
+  if(te.length){
+    const sum=te.reduce((a,b)=>a+b,0)/te.length;
+    const mx=Math.max(...te);const mn=Math.min(...te);
+    $('nn_status').textContent=`trans err mean:${sum.toFixed(3)} range:[${mn.toFixed(3)},${mx.toFixed(3)}]`;
+  }else{$('nn_status').textContent='waiting for data...';}
+}
+
 async function tick(){
   try{
     const s=await (await fetch('/state')).json();
@@ -124,7 +272,7 @@ async function tick(){
     const age=s.age??99;
     $('status').textContent=age>1.5?'⚠ stale ('+age.toFixed(1)+'s)':'live';
     $('status').className='legend'+(age>1.5?' stale':'');
-    radar(s);tracks(s);trace(s);
+    radar(s);tracks(s);trace(s);brainViz(s);heatmapViz(s);nnStatus(s);
   }catch(e){$('status').textContent='disconnected';}
 }
 setInterval(tick,100);tick();
@@ -142,17 +290,41 @@ class PCDashboardState:
         self._F = deque(maxlen=history)
         self._err = deque(maxlen=history)
 
-    def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step) -> None:
+    def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step,
+                z=None, s=None, e_o=None, e_z=None, W_o=None,
+                trans_errors=None) -> None:
         with self._lock:
             self._F.append(round(float(F), 4))
             self._err.append(round(float(err), 4))
-            self._state = {
+            state: dict = {
                 "obs": [round(float(x), 3) for x in obs],
                 "pred": [round(float(x), 3) for x in pred],
                 "F": float(F), "err": float(err),
                 "epi": float(epi), "epi_max": float(epi_max),
                 "L": float(L), "R": float(R), "step": int(step),
             }
+            # Neural net activations & weights for the brain visualizer.
+            if z is not None:
+                state["z"] = [round(float(x), 4) for x in z]
+            if s is not None:
+                state["s"] = [round(float(x), 4) for x in s]
+            if e_o is not None:
+                state["e_o"] = [round(float(x), 4) for x in e_o]
+            if e_z is not None:
+                state["e_z"] = [round(float(x), 4) for x in e_z]
+            if W_o is not None:
+                # Flatten and bin into a coarse grid for the weight heatmap.
+                # Show the top half of rows (most active decoder neurons).
+                half = W_o.shape[0] // 2
+                flat = W_o[:half].flatten()
+                n = len(flat)
+                bins = 256
+                step_bin = max(1, n // bins)
+                state["W_o_grid"] = [round(float(flat[i]), 4)
+                                      for i in range(0, n, step_bin)]
+            if trans_errors is not None:
+                state["trans_errors"] = [round(float(x), 4) for x in trans_errors]
+            self._state = state
             self._stamp = time.monotonic()
 
     def snapshot(self) -> dict:
