@@ -29,36 +29,53 @@ _PAGE = """<!doctype html>
   body{background:#0d0f12;color:#cdd3da;font-family:system-ui,sans-serif;margin:0;
        display:flex;flex-direction:column;align-items:center;}
   h1{font-size:15px;font-weight:600;margin:12px 0 2px;letter-spacing:.06em;}
-  .sub{font-size:12px;color:#7c8694;margin-bottom:8px;}
-  .wrap{display:flex;gap:18px;flex-wrap:wrap;justify-content:center;align-items:flex-start;}
+  .sub{font-size:12px;color:#7c8694;margin-bottom:10px;}
+  .brain-row{display:flex;justify-content:center;margin-bottom:14px;}
+  .brain-panel{background:#15181d;border:1px solid #232830;border-radius:10px;padding:12px 16px;}
+  .brain-title{font-size:12px;font-weight:700;color:#7c8a9a;letter-spacing:.12em;text-transform:uppercase;
+               text-align:center;margin-bottom:8px;}
+  .brain-sub{font-size:10px;color:#5a6370;text-align:center;margin-bottom:6px;}
+  .wrap{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;align-items:flex-start;}
   .panel{background:#15181d;border:1px solid #232830;border-radius:8px;padding:10px;}
   canvas{display:block;}
-  .stats{font-size:12px;line-height:1.7;min-width:150px;}
+  .stats{font-size:12px;line-height:1.8;min-width:150px;}
   .k{color:#7c8694;} .v{color:#e8edf2;font-variant-numeric:tabular-nums;}
   .legend{font-size:11px;color:#9aa4b1;margin-top:6px;}
   .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 4px 0 10px;vertical-align:middle;}
   .stale{color:#ff5b5b;}
+  .nn-row{display:flex;gap:18px;font-size:11px;color:#7a8697;margin-top:6px;flex-wrap:wrap;}
+  .nn-stat{display:flex;gap:6px;align-items:center;}
+  .nn-stat-val{color:#b8c4d0;font-variant-numeric:tabular-nums;}
+  .bar-wrap{display:inline-flex;align-items:center;gap:4px;}
+  .bar-bg{background:#1e2530;border-radius:3px;display:inline-block;}
+  .err-bar{height:6px;border-radius:3px;}
 </style></head><body>
 <h1>PREDICTIVE-CODING ROVER BRAIN</h1>
 <div class="sub">observed vs. predicted lidar &mdash; pure epistemic active inference</div>
-<div class="wrap">
-  <div class="panel"><canvas id="radar" width="360" height="360"></canvas>
-    <div class="legend"><span class="dot" style="background:#39ff14"></span>observed
-      <span class="dot" style="background:#ff9d3b"></span>predicted</div></div>
-  <div class="panel">
-    <div style="font-size:12px;color:#7c8694;margin-bottom:6px;text-align:center">NEURAL NET ACTIVITY</div>
-    <canvas id="brain" width="440" height="300"></canvas>
-    <canvas id="heatmap" width="440" height="52" style="margin-top:4px"></canvas>
-    <div class="legend">
-      <span class="dot" style="background:#5bc0ff"></span>latent tanh
-      <span class="dot" style="background:#ff5b5b"></span>state error
-      <span class="dot" style="background:#9b59b6"></span>sensory error
+<div class="brain-row">
+  <div class="brain-panel">
+    <div class="brain-title">NEURAL NET ACTIVITY</div>
+    <div class="brain-sub">forward pass: observation &rarr; latent z &rarr; prediction</div>
+    <canvas id="brain" width="920" height="380"></canvas>
+    <div class="legend" style="margin-top:6px;text-align:center;">
+      <span class="dot" style="background:#5bc0ff"></span>latent active
+      <span class="dot" style="background:#3060d0"></span>latent suppressed
+      <span class="dot" style="background:#ff9d3b"></span>pred error (bright=wrong)
     </div>
-    <div style="display:flex;gap:16px;margin-top:5px;font-size:11px;color:#9aa4b1;">
-      <span id="nn_status">-</span>
-      <span>ensemble <span id="n_ens">5</span></span>
+    <div class="nn-row">
+      <div class="nn-stat">step: <span class="nn-stat-val" id="nn_step">-</span></div>
+      <div class="nn-stat">z err: <span class="nn-stat-val" id="nn_zerr">-</span></div>
+      <div class="nn-stat">ensemble &mu;: <span class="nn-stat-val" id="nn_emu">-</span></div>
+      <div class="nn-stat">ensemble &sigma;: <span class="nn-stat-val" id="nn_esig">-</span></div>
+      <div class="bar-wrap">trans err: <span class="bar-bg"><span class="err-bar" id="nn_ebar" style="width:0px;background:#ff9d3b"></span></span></div>
     </div>
   </div>
+</div>
+
+<div class="wrap">
+  <div class="panel"><canvas id="radar" width="340" height="340"></canvas>
+    <div class="legend"><span class="dot" style="background:#39ff14"></span>observed
+      <span class="dot" style="background:#ff9d3b"></span>predicted</div></div>
   <div class="panel stats">
     <div><span class="k">step</span> <span class="v" id="step">-</span></div>
     <div><span class="k">free energy</span> <span class="v" id="F">-</span></div>
@@ -67,10 +84,10 @@ _PAGE = """<!doctype html>
     <div><span class="k">epi max</span> <span class="v" id="epimax">-</span></div>
     <div style="margin-top:8px"><span class="k">track L</span> <span class="v" id="L">-</span>
        &nbsp; <span class="k">R</span> <span class="v" id="R">-</span></div>
-    <canvas id="tracks" width="150" height="60" style="margin-top:6px"></canvas>
+    <canvas id="tracks" width="140" height="56" style="margin-top:6px"></canvas>
     <div id="status" class="legend"></div>
   </div>
-  <div class="panel"><canvas id="trace" width="320" height="200"></canvas>
+  <div class="panel"><canvas id="trace" width="300" height="200"></canvas>
     <div class="legend"><span class="dot" style="background:#5bc0ff"></span>free energy
       <span class="dot" style="background:#ff9d3b"></span>sensory err</div></div>
 </div>
@@ -160,138 +177,160 @@ function heatColor(v){
 function brainViz(s){
   const c=$('brain'),ctx=c.getContext('2d'),W=c.width,H=c.height;
   ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#14171d';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#0f1218';ctx.fillRect(0,0,W,H);
 
   const obs=s.obs||[],sAct=s.s||[],pred=s.pred||[],zAbs=s.z_abs||[];
-  const eZ=s.e_z_abs||[],eO=s.e_o||[],predErrArr=pred.map((v,i)=>Math.abs(eO[i]||0));
+  const eZ=s.e_z_abs||[],eO=s.e_o||[];
   if(!sAct.length)return;
 
-  const MARGIN=28,TOP=18,BOT=H-12,ly=MARGIN,ry=H-MARGIN;
-  const lCol=W*0.2,lMid=W*0.5,rCol=W*0.8;
+  // Layout: 920x380 canvas, three wide-spaced columns.
+  // c1X=observation (left), c2X=latent (center), c3X=prediction (right)
+  const PAD=28;
+  const TOP=26,BOT=H-PAD-12,ly=TOP,ry=BOT,CH=W-PAD*2;
+  const c1X=PAD+CH*0.13;   // observation column x
+  const c2X=PAD+CH*0.50;   // latent column x (centered)
+  const c3X=PAD+CH*0.87;   // prediction column x
+  const midY=(ly+ry)*0.5;
 
-  // ── 1. Column labels ────────────────────────────────────────────────
-  ctx.font='bold 11px system-ui';ctx.fillStyle='#8892a0';ctx.textAlign='center';
-  ctx.fillText('OBSERVATION',lCol,TOP+8);
-  ctx.fillText('LATENT  z',lMid,TOP+8);
-  ctx.fillText('PREDICTION',rCol,TOP+8);
+  // ── 1. Column labels at top ────────────────────────────────────────
+  ctx.font='bold 11px system-ui';ctx.fillStyle='#6a7888';ctx.textAlign='center';
+  ctx.fillText('OBSERVATION  (lidar)',c1X,TOP-6);
+  ctx.fillText('LATENT  z  (64 dims)',c2X,TOP-6);
+  ctx.fillText('PREDICTION  (what brain expects)',c3X,TOP-6);
 
-  // ── 2. Build node grids ─────────────────────────────────────────────
-  // Number of displayed nodes (space-constrained; sample from full arrays).
-  const N_DISP=Math.min(20,obs.length,pred.length);
-  const obsDispStep=Math.max(1,Math.floor(obs.length/N_DISP));
-  const predDispStep=Math.max(1,Math.floor(pred.length/N_DISP));
-
+  // ── 2. Build node Y positions ──────────────────────────────────────
+  const N_DISP=Math.min(24,obs.length,pred.length);
+  const obsStep=Math.max(1,Math.floor(obs.length/N_DISP));
+  const predStep=Math.max(1,Math.floor(pred.length/N_DISP));
   const obsY=[],predY=[];
   for(let i=0;i<N_DISP;i++){
     const t=(i+0.5)/N_DISP;
     obsY.push(ly+t*(ry-ly));
     predY.push(ly+t*(ry-ly));
   }
-
+  // Latent grid: 8 cols × 8 rows.
   const zNodes=Math.min(sAct.length,zAbs.length);
   const zCols=8,zRows=Math.ceil(zNodes/zCols);
   const zX=[],zY=[];
-  const zStepY=(ry-ly)/(zRows+1);
-  const zSpan=lMid-lCol-20;
+  const zSpan=CH*0.36;
   for(let r=0;r<zRows;r++){
-    for(let c2=0;c2<zCols;c2++){
-      const idx=r*zCols+c2;if(idx>=zNodes)break;
-      zX.push(lMid+(c2-(zCols-1)*0.5)*(zSpan/Math.max(1,zCols-1)));
-      zY.push(ly+(r+1)*zStepY);
+    for(let c3=0;c3<zCols;c3++){
+      const idx=r*zCols+c3;if(idx>=zNodes)break;
+      zX.push(c2X+(c3-(zCols-1)*0.5)*(zSpan/Math.max(1,zCols-1)));
+      zY.push(ly+(r+1)*(ry-ly)/(zRows+1));
     }
   }
 
-  // ── 3. Connections: latent (col 2) -> prediction (col 3) ───────────
-  // Sort all z->pred connections by pred error magnitude.
-  // Draw top-K so the canvas stays readable.
-  const connK=Math.min(120,zX.length*predY.length);
+  // ── 3. Connections: latent (center) → prediction (right) ───────────
+  // Draw top-K strongest paths, colored by prediction error magnitude.
+  const mxE=Math.max(...eO.map(Math.abs),0.001);
   const conns=[];
-  const mxPE=Math.max(...predErrArr,0.001);
   for(let zi=0;zi<zX.length;zi++){
     for(let pi=0;pi<predY.length;pi++){
-      conns.push({zi,pi,str:predErrArr[pi]/mxPE});
+      const err=Math.abs(eO[Math.min(pi*predStep,eO.length-1)]||0);
+      conns.push({zi,pi,err,t:mxE>0?err/mxE:0});
     }
   }
-  // Draw strongest connections first; weaker ones on top with lower alpha.
-  conns.sort((a,b)=>b.str-a.str);
+  conns.sort((a,b)=>b.t-a.t);
+  const connK=Math.min(200,conns.length);
   for(let i=0;i<connK;i++){
-    const{zi,pi,str}=conns[i];
-    const[er,eg,eb]=errColor(predErrArr[pi],mxPE);
+    const{zi,pi,t}=conns[i];
+    const errVal=eO[Math.min(pi*predStep,eO.length-1)]||0;
+    const[er,eg,eb]=errColor(errVal,mxE);
     ctx.beginPath();
-    ctx.moveTo(zX[zi]+4,zY[zi]);
-    ctx.lineTo(rCol-10,predY[pi]);
-    ctx.strokeStyle=`rgba(${er},${eg},${eb},${0.06+str*0.5})`;
-    ctx.lineWidth=0.35+str*1.6;
+    ctx.moveTo(zX[zi]+6,zY[zi]);
+    ctx.lineTo(c3X-12,predY[pi]);
+    ctx.strokeStyle=`rgba(${er},${eg},${eb},${0.04+t*0.65})`;
+    ctx.lineWidth=0.4+t*2.8;
     ctx.stroke();
   }
 
-  // ── 4. Observation nodes (col 1) ────────────────────────────────────
+  // ── 4. Observation nodes (left column) ─────────────────────────────
   const mxObs=Math.max(...obs,0.001);
   obsY.forEach((ny,i)=>{
-    const v=obs[Math.min(i*obsDispStep,obs.length-1)]||0;
-    const br=0.35+0.65*(v/mxObs);
-    ctx.beginPath();ctx.arc(lCol,ny,3.5,0,2*Math.PI);
-    ctx.fillStyle=`rgba(${Math.round(90*br)},${Math.round(90*br)},${Math.round(90*br)},0.9)`;
+    const v=obs[Math.min(i*obsStep,obs.length-1)]||0;
+    const br=0.2+0.8*(v/mxObs);
+    ctx.beginPath();ctx.arc(c1X,ny,4.5,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${Math.round(110*br+15)},${Math.round(110*br+15)},${Math.round(110*br+15)},0.88)`;
     ctx.fill();
   });
 
-  // ── 5. Latent nodes (col 2) ─────────────────────────────────────────
+  // ── 5. Latent nodes (center) — the brain lighting up ───────────────
   const mxZ=Math.max(...zAbs,0.001);
   zX.forEach((nx,zi)=>{
     const ny=zY[zi];
     const absAct=zAbs[zi]||0;
     const activation=sAct[zi]||0;
-    const radius=3+absAct*7;
+    const radius=3.5+absAct*11;
+    const glowR=radius+absAct*10;
     const[ar,ag,ab]=actColor(activation,mxZ);
-    // glow
-    ctx.beginPath();ctx.arc(nx,ny,radius+absAct*6,0,2*Math.PI);
-    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.13)`;ctx.fill();
-    // core
+    // outer glow (large, transparent halo)
+    ctx.beginPath();ctx.arc(nx,ny,glowR,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.08)`;ctx.fill();
+    // inner glow ring
+    ctx.beginPath();ctx.arc(nx,ny,glowR*0.65,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.16)`;ctx.fill();
+    // core with radial gradient for 3-D depth
+    const grad=ctx.createRadialGradient(nx-2,ny-2,0,nx,ny,radius);
+    grad.addColorStop(0,`rgb(${Math.min(255,ar+80)},${Math.min(255,ag+60)},${Math.min(255,ab+25)})`);
+    grad.addColorStop(1,`rgb(${ar},${ag},${ab})`);
     ctx.beginPath();ctx.arc(nx,ny,radius,0,2*Math.PI);
-    ctx.fillStyle=`rgb(${ar},${ag},${ab})`;ctx.fill();
-    if(absAct>mxZ*0.5){ctx.strokeStyle='rgba(255,255,255,0.65)';ctx.lineWidth=0.9;ctx.stroke();}
+    ctx.fillStyle=grad;ctx.fill();
+    // white ring on highly active neurons
+    if(absAct>mxZ*0.5){ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1.1;ctx.stroke();}
   });
 
-  // ── 6. Prediction nodes (col 3) ─────────────────────────────────────
-  const mxPE2=Math.max(...predErrArr,0.001);
+  // ── 6. Prediction nodes (right column) ─────────────────────────────
+  const mxE2=Math.max(...eO.map(Math.abs),0.001);
   predY.forEach((ny,i)=>{
-    const pi=Math.min(i*predDispStep,pred.length-1);
+    const pi=Math.min(i*predStep,pred.length-1);
     const err=Math.abs(eO[pi]||0);
-    const v=pred[pi]||0;
-    const[er,eg,eb]=errColor(err,mxPE2);
-    const bright=0.3+0.7*Math.abs(v);
-    ctx.beginPath();ctx.arc(rCol,ny,3.5,0,2*Math.PI);
-    ctx.fillStyle=`rgba(${Math.round(er*bright+30*(1-bright))},${Math.round(eg*bright+30*(1-bright))},${Math.round(eb*bright+30*(1-bright))},0.92)`;
+    const[er,eg,eb]=errColor(err,mxE2);
+    const bright=Math.min(1,err/mxE2);
+    // glow halo
+    ctx.beginPath();ctx.arc(c3X,ny,5+10*bright,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${er},${eg},${eb},${0.1*bright})`;ctx.fill();
+    // core node
+    ctx.beginPath();ctx.arc(c3X,ny,4+8*bright,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${Math.round(er*bright+28*(1-bright))},${Math.round(eg*bright+28*(1-bright))},${Math.round(eb*bright+28*(1-bright))},0.94)`;
     ctx.fill();
-    if(err>mxPE2*0.4){ctx.strokeStyle='#fff';ctx.lineWidth=0.8;ctx.stroke();}
+    if(err>mxE2*0.45){ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.stroke();}
   });
 
-  // ── 7. Column dividers & arrows ─────────────────────────────────────
-  ctx.setLineDash([4,4]);ctx.strokeStyle='#252a35';ctx.lineWidth=1;
-  [lCol+14,rCol-14].forEach(x=>{
-    ctx.beginPath();ctx.moveTo(x,TOP);ctx.lineTo(x,BOT);ctx.stroke();
-  });ctx.setLineDash([]);
-  // Flow arrows between cols
-  const ay=(ly+ry)/2;
-  ctx.fillStyle='#4ab8ff';
-  ctx.beginPath();ctx.moveTo(lCol+14,ay);ctx.lineTo(lCol+28,ay-4);ctx.lineTo(lCol+28,ay+4);
-  ctx.closePath();ctx.fill();
-  ctx.beginPath();ctx.moveTo(rCol-14,ay);ctx.lineTo(rCol-28,ay-4);ctx.lineTo(rCol-28,ay+4);
-  ctx.closePath();ctx.fill();
+  // ── 7. Flow arrows between columns ─────────────────────────────────
+  const drawArrow=(x,y,dir)=>{
+    ctx.fillStyle='#4ab8ff';
+    ctx.beginPath();
+    if(dir>0){ctx.moveTo(x,y);ctx.lineTo(x-12,y-7);ctx.lineTo(x-12,y+7);}
+    else       {ctx.moveTo(x,y);ctx.lineTo(x+12,y-7);ctx.lineTo(x+12,y+7);}
+    ctx.closePath();ctx.fill();
+  };
+  drawArrow(c1X+14,midY,1);
+  drawArrow(c3X-14,midY,-1);
 
-  // ── 8. Error legend ─────────────────────────────────────────────────
-  const barW=90,barH=6,barX=W-barW-12,barY=BOT-10;
-  const grd=ctx.createLinearGradient(barX,0,barX+barW,0);
-  grd.addColorStop(0,'#1e1408');grd.addColorStop(1,'#ffc864');
-  ctx.fillStyle=grd;ctx.fillRect(barX,barY,barW,barH);
-  ctx.font='9px system-ui';ctx.fillStyle='#5a6370';ctx.textAlign='left';
-  ctx.fillText('error: dim=correct  bright=wrong',barX,barY-2);
+  // ── 8. Column divider lines ─────────────────────────────────────────
+  ctx.strokeStyle='#25303e';ctx.lineWidth=1.5;
+  [c1X+10,c3X-10].forEach(x=>{
+    ctx.beginPath();ctx.moveTo(x,ly);ctx.lineTo(x,ry);ctx.stroke();
+  });
 
-  // ── 9. Stats overlay ────────────────────────────────────────────────
-  const mxEZ=Math.max(...eZ,0.001);
-  const avgEZ=eZ.length?eZ.reduce((a,b)=>a+b,0)/eZ.length:0;
-  ctx.font='10px system-ui';ctx.fillStyle='#6a7485';ctx.textAlign='right';
-  ctx.fillText(`z err avg:${avgEZ.toFixed(3)} max:${mxEZ.toFixed(3)}`,W-12,TOP+8);
+  // ── 9. Error legend gradient ─────────────────────────────────────────
+  const bw=90,bh=7,bx=PAD,by=BOT+8;
+  const grd=ctx.createLinearGradient(bx,0,bx+bw,0);
+  grd.addColorStop(0,'#1a1208');grd.addColorStop(1,'#ffb840');
+  ctx.fillStyle=grd;ctx.fillRect(bx,by,bw,bh);
+  ctx.font='10px system-ui';ctx.fillStyle='#4a5565';ctx.textAlign='left';
+  ctx.fillText('pred error: dim=correct  bright=wrong',bx,BOT+22);
+
+  // ── 10. State error stats (top-right of canvas) ────────────────────
+  const eZnon=eZ.filter(x=>!isNaN(x));
+  if(eZnon.length){
+    const sumE=eZnon.reduce((a,b)=>a+b,0);
+    const avgE=sumE/eZnon.length;
+    const mxE3=Math.max(...eZnon);
+    ctx.font='11px system-ui';ctx.fillStyle='#5a6678';ctx.textAlign='right';
+    ctx.fillText(`z error  avg:${avgE.toFixed(3)}  max:${mxE3.toFixed(3)}`,W-PAD,12);
+  }
 }
 
 function heatmapViz(s){
@@ -315,12 +354,23 @@ function heatmapViz(s){
 }
 
 function nnStatus(s){
+  // Update the dedicated stat row under the neural net canvas.
   const te=s.trans_errors||[];
+  if(s.step!=null)$('nn_step').textContent=s.step;
+  const eZ=s.e_z_abs||[];
+  if(eZ.length){
+    const avg=eZ.reduce((a,b)=>a+b,0)/eZ.length;
+    $('nn_zerr').textContent=avg.toFixed(4);
+  }
   if(te.length){
-    const sum=te.reduce((a,b)=>a+b,0)/te.length;
-    const mx=Math.max(...te);const mn=Math.min(...te);
-    $('nn_status').textContent=`ensemble=${te.length}  trans err μ=${sum.toFixed(3)}  range=[${mn.toFixed(3)},${mx.toFixed(3)}]`;
-  }else{$('nn_status').textContent='ensemble=5  trans errors: connecting...';}
+    const m=te.reduce((a,b)=>a+b,0)/te.length;
+    const std=Math.sqrt(te.reduce((a,b)=>a+(b-m)*(b-m),0)/te.length);
+    $('nn_emu').textContent=m.toFixed(4);
+    $('nn_esig').textContent=std.toFixed(4);
+    // Scale bar: max realistic range ~[0,0.1]
+    const barW=Math.min(80,Math.round(m/0.1*80));
+    $('nn_ebar').style.width=barW+'px';
+  }
 }
 
 async function tick(){
@@ -334,7 +384,7 @@ async function tick(){
     const age=s.age??99;
     $('status').textContent=age>1.5?'⚠ stale ('+age.toFixed(1)+'s)':'live';
     $('status').className='legend'+(age>1.5?' stale':'');
-    radar(s);tracks(s);trace(s);brainViz(s);heatmapViz(s);nnStatus(s);
+    radar(s);tracks(s);trace(s);brainViz(s);nnStatus(s);
   }catch(e){$('status').textContent='disconnected';}
 }
 setInterval(tick,100);tick();
