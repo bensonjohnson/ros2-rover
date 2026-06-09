@@ -12,6 +12,7 @@ purely local predictive-coding rules (no backpropagation). Consists of:
 
 import os
 import sys
+import glob
 import argparse
 import time
 import json
@@ -23,24 +24,35 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from active_inference.pc_world_model import PCWorldModel, PCConfig
 
 
+def experience_files(log_path: str) -> list[str]:
+    """The main log plus any size-rotation parts the runner split off.
+
+    Parts are named <base>_part_<timestamp>.jsonl, so lexical order is
+    chronological; the main log holds the newest experience and comes last.
+    """
+    base = log_path[:-len(".jsonl")] if log_path.endswith(".jsonl") else log_path
+    paths = sorted(glob.glob(base + "_part_*.jsonl"))
+    if os.path.exists(log_path):
+        paths.append(log_path)
+    return paths
+
+
 def load_experience(log_path: str) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Load logged experience (obs, act) lines from JSONL file."""
-    if not os.path.exists(log_path):
-        return []
-    
+    """Load logged experience (obs, act) lines from the JSONL file(s)."""
     dataset = []
-    try:
-        with open(log_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line)
-                obs = np.array(data["obs"], dtype=np.float32)
-                act = np.array(data["act"], dtype=np.float32)
-                dataset.append((obs, act))
-    except Exception as e:
-        print(f"Error reading experience log: {e}")
+    for path in experience_files(log_path):
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    obs = np.array(data["obs"], dtype=np.float32)
+                    act = np.array(data["act"], dtype=np.float32)
+                    dataset.append((obs, act))
+        except Exception as e:
+            print(f"Error reading experience log {path}: {e}")
     return dataset
 
 
@@ -76,10 +88,37 @@ def run_sleep_cycle(args):
         cfg = sd["cfg"]
         model = PCWorldModel(cfg)
         model.load_state_dict(sd)
+        # Carried through to the saved checkpoint untouched (the awake runner
+        # warns if it ever runs the brain with a different scale).
+        saved_action_scale = sd.get("action_scale")
         print(f"World model initialized: obs={cfg.obs_dim}, latent={cfg.latent_dim}, ensemble={cfg.ensemble_size}")
     except Exception as e:
         print(f"Error loading model weights: {e}")
         return
+
+    # Lidar bin count = obs minus proprio tail (old checkpoints predate the
+    # n_proprio config field; the runner has always used 8 proprio channels
+    # whenever the obs vector is wider than the 72 lidar bins).
+    n_proprio = int(getattr(cfg, "n_proprio", 8 if cfg.obs_dim > 72 else 0))
+    num_bins = cfg.obs_dim - n_proprio
+
+    def probe_disagreement() -> float:
+        """Mean ensemble disagreement over a fixed probe set — the health
+        metric for the epistemic drive. Sleep must not crater this."""
+        probe_rng = np.random.default_rng(123)
+        idx = probe_rng.integers(0, n_steps, size=min(64, n_steps))
+        total = 0.0
+        for i in idx:
+            obs_np, act_np = dataset[int(i)]
+            z, _, _ = model.infer(torch.from_numpy(obs_np.copy()),
+                                  torch.from_numpy(act_np.copy()),
+                                  z_prev=torch.zeros(model.cfg.latent_dim))
+            actions = torch.rand(8, model.cfg.action_dim) * 2.0 - 1.0
+            total += float(model.epistemic_value(z, actions).mean())
+        return total / len(idx)
+
+    disagreement_before = probe_disagreement()
+    print(f"Ensemble disagreement before sleep: {disagreement_before:.5f}")
 
     # Temporarily override learning rates for sleep if specified
     original_lr_obs = model.cfg.lr_obs
@@ -135,10 +174,10 @@ def run_sleep_cycle(args):
                 o = torch.from_numpy(obs_np.copy())
                 a = torch.from_numpy(act_np.copy())
                 
-                # Biological Mutation: Inject sensory noise into LiDAR channels (first 72 bins)
+                # Biological Mutation: Inject sensory noise into the LiDAR channels
                 if args.noise_std > 0.0:
-                    noise = torch.randn(72) * args.noise_std
-                    o[:72] = torch.clamp(o[:72] + noise, 0.0, 1.0)
+                    noise = torch.randn(num_bins) * args.noise_std
+                    o[:num_bins] = torch.clamp(o[:num_bins] + noise, 0.0, 1.0)
                 
                 # Iterative local inference settling
                 z, F, err = model.infer(o, a, z_prev=zp)
@@ -150,40 +189,39 @@ def run_sleep_cycle(args):
                     model.learn(z, a, o, z_prev=zp, advance=False)
                     updates_count += 1
 
-                # Update visualizer if active (rate-limited to 30 Hz unless step_delay is active)
-                if dash is not None:
+                # Update visualizer when someone is watching (rate-limited to
+                # 30 Hz unless step_delay is active)
+                if dash is not None and dash.active():
                     now = time.time()
                     if args.step_delay > 0.0 or (now - last_dash_update) >= 0.033:
                         last_dash_update = now
                         o_hat, s_latent = model._decode(z)
                         z_prev_in = model._trans_input(zp, a)
-                        e_o = (o - o_hat).numpy()[:72]
+                        e_o = (o - o_hat).numpy()[:num_bins]
                         e_z = (z - model._prior_mean(z_prev_in)).numpy()
                         trans_errors = np.array([
                             float((z - model._predict_member(m, z_prev_in)).pow(2).mean())
                             for m in range(model.cfg.ensemble_size)
                         ])
-                        z_abs = np.abs(s_latent.numpy())
-                        e_z_abs = np.abs(e_z)
-                        
                         epi = float(model.epistemic_value(zp, a.unsqueeze(0))[0])
-                        
+
                         dash.update(
-                            obs=obs_np[:72],
-                            pred=model.reconstruct(z).numpy()[:72],
+                            obs=obs_np[:num_bins],
+                            pred=model.reconstruct(z).numpy()[:num_bins],
                             F=F, err=err,
                             epi=epi, epi_max=epi,
                             prag=0.0,
                             L=float(act_np[0]), R=float(act_np[1]), step=updates_count,
-                            z=z.numpy(),
                             s=s_latent.numpy(),
                             e_o=e_o,
-                            e_z=e_z,
                             W_o=model.W_o.detach().cpu().numpy(),
                             trans_errors=trans_errors,
-                            z_abs=z_abs,
-                            e_z_abs=e_z_abs,
-                            mode="sws"
+                            z_abs=np.abs(s_latent.numpy()),
+                            e_z_abs=np.abs(e_z),
+                            mode="sws",
+                            epoch=epoch + 1,
+                            epoch_total=args.sws_epochs,
+                            disagreement_before=disagreement_before,
                         )
                         if args.step_delay > 0.0:
                             time.sleep(args.step_delay)
@@ -198,81 +236,91 @@ def run_sleep_cycle(args):
         print(f" SWS Epoch {epoch+1}/{args.sws_epochs} | Avg Reconstruct Error: {avg_err:.4f} | Time: {time.time()-epoch_start:.1f}s")
 
     # --- REM Sleep: Generative Dreaming ---
+    # Each dream rollout belongs to ONE randomly chosen ensemble member: it
+    # dreams with its own transition prediction (plus latent noise), settles
+    # against the dreamed observation using its own prior, and only its own
+    # weights are updated. Members never regress toward a shared (mean) target
+    # — that would collapse ensemble disagreement, which IS the awake brain's
+    # epistemic exploration signal.
     print(f"\n--- Starting REM Sleep: Generative Dreaming ({args.rem_epochs} epochs) ---")
-    
+
     for epoch in range(args.rem_epochs):
         epoch_start = time.time()
         rem_updates = 0
-        
+
         # We will dream by starting from random historical states and rolling out random actions
         for _ in range(len(sequences)):
             # Pick a random sequence to settle the starting state
             rand_seq = sequences[rng.integers(len(sequences))]
             zp = torch.zeros(model.cfg.latent_dim)
-            
+
             # 1. Settle z_0 (warm-up/burn-in)
             for t in range(min(4, len(rand_seq))):
                 o = torch.from_numpy(rand_seq[t][0])
                 a = torch.from_numpy(rand_seq[t][1])
                 z_curr, _, _ = model.infer(o, a, z_prev=zp)
                 zp = z_curr
-                
-            # 2. Dream rollout: generate imaginary actions and predict states
+
+            # 2. Dream rollout owned by a single ensemble member
+            member = int(rng.integers(model.cfg.ensemble_size))
             for _ in range(L - 4):
                 # Generate random exploratory action
                 a_dream = (torch.rand(model.cfg.action_dim) * 2.0 - 1.0)
-                
-                # Project next state through the prior transition ensemble
+
+                # Member's own next-state prediction, perturbed in latent space
+                # so the dream explores around (not exactly on) its prediction.
                 s_in = model._trans_input(zp, a_dream)
-                preds = torch.stack([model._predict_member(m, s_in)
-                                     for m in range(model.cfg.ensemble_size)])
-                z_next = preds.mean(dim=0)
-                
+                z_pred = model._predict_member(member, s_in)
+                z_noisy = z_pred + args.dream_noise * torch.randn(model.cfg.latent_dim)
+
                 # Reconstruct expected observation (hallucination)
-                o_dream = model.reconstruct(z_next)
-                
-                # PC Learning on dreamed transitions to enforce self-consistency
-                model.learn(z_next, a_dream, o_dream, z_prev=zp, advance=False)
+                o_dream = model.reconstruct(z_noisy)
+
+                # Settle against the dreamed observation with the member's own
+                # prior, then pull only this member's transition toward the
+                # settled (decoder-consistent) state.
+                z_next, F_dream, err_dream = model.infer(o_dream, a_dream, z_prev=zp, member=member)
+                e_zm = z_next - z_pred
+                model.W_z[member] += model.cfg.lr_trans * model.pi_z * torch.outer(e_zm, s_in)
+                model.b_z[member] += model.cfg.lr_trans * model.pi_z * e_zm
                 rem_updates += 1
 
-                # Update visualizer if active (rate-limited to 30 Hz unless step_delay is active)
-                if dash is not None:
+                # Update visualizer when someone is watching (rate-limited to
+                # 30 Hz unless step_delay is active)
+                if dash is not None and dash.active():
                     now = time.time()
                     if args.step_delay > 0.0 or (now - last_dash_update) >= 0.033:
                         last_dash_update = now
                         o_hat, s_latent = model._decode(z_next)
                         z_prev_in = model._trans_input(zp, a_dream)
-                        e_o = np.zeros(72)  # dream error is zero by definition
-                        e_z = (z_next - model._prior_mean(z_prev_in)).numpy()
+                        e_o = (o_dream - o_hat).numpy()[:num_bins]
                         trans_errors = np.array([
                             float((z_next - model._predict_member(m, z_prev_in)).pow(2).mean())
                             for m in range(model.cfg.ensemble_size)
                         ])
-                        z_abs = np.abs(s_latent.numpy())
-                        e_z_abs = np.abs(e_z)
-                        
                         epi = float(model.epistemic_value(zp, a_dream.unsqueeze(0))[0])
-                        
+
                         dash.update(
-                            obs=o_dream.numpy()[:72],
-                            pred=o_dream.numpy()[:72],
-                            F=0.0, err=0.0,
+                            obs=o_dream.numpy()[:num_bins],
+                            pred=o_hat.numpy()[:num_bins],
+                            F=F_dream, err=err_dream,
                             epi=epi, epi_max=epi,
                             prag=0.0,
                             L=float(a_dream[0]), R=float(a_dream[1]), step=rem_updates,
-                            z=z_next.numpy(),
                             s=s_latent.numpy(),
                             e_o=e_o,
-                            e_z=e_z,
                             W_o=model.W_o.detach().cpu().numpy(),
                             trans_errors=trans_errors,
-                            z_abs=z_abs,
-                            e_z_abs=e_z_abs,
-                            mode="rem"
+                            z_abs=np.abs(s_latent.numpy()),
+                            e_z_abs=np.abs(e_zm.numpy()),
+                            mode="rem",
+                            epoch=epoch + 1,
+                            epoch_total=args.rem_epochs,
+                            disagreement_before=disagreement_before,
                         )
                         if args.step_delay > 0.0:
                             time.sleep(args.step_delay)
-                
+
                 zp = z_next
                 
         # Apply synaptic decay after dreaming too
@@ -286,21 +334,40 @@ def run_sleep_cycle(args):
     model.cfg.lr_obs = original_lr_obs
     model.cfg.lr_trans = original_lr_trans
 
+    disagreement_after = probe_disagreement()
+    ratio = disagreement_after / max(disagreement_before, 1e-12)
+    print(f"Ensemble disagreement after sleep: {disagreement_after:.5f} "
+          f"({ratio:.2f}x of pre-sleep)")
+    if ratio < 0.5:
+        print("⚠️ WARNING: sleep more than halved ensemble disagreement — the "
+              "epistemic (curiosity) signal is weakening. Consider fewer REM "
+              "epochs or higher --dream_noise.")
+
     # 3. Save consolidated weights
     print(f"\nSaving consolidated weights back to {model_path}...")
     try:
-        torch.save(model.state_dict(), model_path)
+        # Write-then-rename so a crash mid-save can't corrupt the brain.
+        tmp_path = model_path + ".tmp"
+        out_sd = model.state_dict()
+        if saved_action_scale is not None:
+            out_sd["action_scale"] = saved_action_scale
+        torch.save(out_sd, tmp_path)
+        os.replace(tmp_path, model_path)
         print("✅ Saved consolidated brain weights successfully!")
     except Exception as e:
         print(f"❌ Could not save brain weights: {e}")
         return
 
-    # 4. Archive old experience log
+    # 4. Archive the consolidated experience log(s), rotation parts included
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    archive_path = experience_path.replace(".jsonl", f"_done_{timestamp}.jsonl")
-    print(f"Archiving experience log to: {archive_path}")
+    base = experience_path[:-len(".jsonl")] if experience_path.endswith(".jsonl") else experience_path
     try:
-        os.rename(experience_path, archive_path)
+        # Archive names must NOT contain "_part_" or the next sleep cycle's
+        # glob would re-load already-consolidated experience.
+        for i, path in enumerate(experience_files(experience_path)):
+            archive_path = f"{base}_done_{timestamp}_{i:02d}.jsonl"
+            os.rename(path, archive_path)
+            print(f"Archived {path} -> {archive_path}")
         print("✅ Experience log archived. Fresh log will begin next session.")
     except Exception as e:
         print(f"⚠️ Could not archive experience log: {e}")
@@ -323,6 +390,7 @@ def main(args=None):
     parser.add_argument("--rem_epochs", type=int, default=3, help="REM Sleep epochs (dreaming)")
     parser.add_argument("--seq_len", type=int, default=16, help="Sequence window length")
     parser.add_argument("--noise_std", type=float, default=0.02, help="Lidar sensory noise amplitude")
+    parser.add_argument("--dream_noise", type=float, default=0.05, help="Latent noise amplitude during REM dream rollouts")
     parser.add_argument("--decay_rate", type=float, default=0.999, help="Synaptic homeostasis decay multiplier")
     parser.add_argument("--lr_obs_sleep", type=float, default=0.02, help="Observation learning rate during sleep")
     parser.add_argument("--lr_trans_sleep", type=float, default=0.01, help="Transition learning rate during sleep")

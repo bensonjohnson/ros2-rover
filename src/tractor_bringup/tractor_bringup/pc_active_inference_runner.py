@@ -34,7 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, JointState, Imu
-from std_msgs.msg import Float32MultiArray, Float32
+from std_msgs.msg import Float32MultiArray, Float32, Bool
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
@@ -70,6 +70,9 @@ class PCActiveInferenceRunner(Node):
         p("latent_dim", 64)
         p("ensemble_size", 5)
         p("n_infer_iters", 24)
+        p("replay_infer_iters", 10)   # cheaper settling during replay passes
+        p("proprio_precision", 4.0)   # error weight boost for the 8 proprio dims
+                                      # (vs 72 lidar dims they'd otherwise drown in)
         # Sequence replay: extra learning passes squeezed from past experience.
         p("replay_capacity", 4000)    # ~4-5 min of stream at 15 Hz
         p("replay_passes", 1)         # replayed windows per control tick (0 = off)
@@ -92,6 +95,7 @@ class PCActiveInferenceRunner(Node):
         p("dashboard_port", 8082)     # 0 disables the web dashboard
         p("log_experience", True)
         p("experience_log_path", os.path.expanduser("~/.ros/pnn_experience.jsonl"))
+        p("experience_log_max_mb", 256.0)  # rotate to *_part_<ts>.jsonl past this
 
         g = self.get_parameter
         self.scan_topic = g("scan_topic").value
@@ -111,6 +115,8 @@ class PCActiveInferenceRunner(Node):
         self.save_interval_s = float(g("save_interval_s").value)
         self.log_experience = bool(g("log_experience").value)
         self.experience_log_path = g("experience_log_path").value
+        self.experience_log_max_bytes = int(
+            float(g("experience_log_max_mb").value) * 1024 * 1024)
 
         # Proprio config
         self.use_proprio = bool(g("use_proprio").value)
@@ -135,7 +141,10 @@ class PCActiveInferenceRunner(Node):
             latent_dim=int(g("latent_dim").value),
             ensemble_size=int(g("ensemble_size").value),
             n_infer_iters=int(g("n_infer_iters").value),
+            n_proprio=self.n_proprio,
+            precision_proprio=float(g("proprio_precision").value),
         ))
+        self.replay_infer_iters = int(g("replay_infer_iters").value)
         # Use forward_bias as the default pragmatic_weight for backward compatibility with launch files.
         self.actor = EFEActor(ActorConfig(
             action_dim=2,
@@ -143,7 +152,9 @@ class PCActiveInferenceRunner(Node):
             target_wl=self.target_wl,
             target_wr=self.target_wr,
             target_yaw=self.target_yaw,
-            horizon=self.horizon
+            horizon=self.horizon,
+            num_bins=self.num_bins,
+            use_proprio=self.use_proprio,
         ))
         self._maybe_load()
         self._persist_ctr = 0
@@ -191,6 +202,10 @@ class PCActiveInferenceRunner(Node):
         # Subscribe to battery voltage and percentage
         self.create_subscription(Float32, "/battery_voltage", self._battery_voltage_cb, 10)
         self.create_subscription(Float32, "/battery_percentage", self._battery_percentage_cb, 10)
+        # Safety monitor's hold state, surfaced on the dashboard so a clamped
+        # rover doesn't look like a broken brain.
+        self._safety_hold = False
+        self.create_subscription(Bool, "/emergency_stop", self._estop_cb, 10)
 
         # --- dashboard ---
         self.dash = None
@@ -204,7 +219,8 @@ class PCActiveInferenceRunner(Node):
                 self.get_logger().warn(f"Dashboard disabled: {e}")
 
         rate = float(g("control_rate_hz").value)
-        self.timer = self.create_timer(1.0 / rate, self._control_step)
+        self._tick_period = 1.0 / rate
+        self.timer = self.create_timer(self._tick_period, self._control_step)
 
         self.get_logger().info(
             f"PC active-inference brain up: obs={self.num_bins} "
@@ -220,10 +236,18 @@ class PCActiveInferenceRunner(Node):
             num_bins=self.num_bins, max_range=self.max_range)
 
     def _joint_cb(self, msg: JointState):
-        # Wheel velocities live at indices 2,3 (see hiwonder_motor_driver).
-        if len(msg.velocity) >= 4:
-            self._wheel_l = float(msg.velocity[2])
-            self._wheel_r = float(msg.velocity[3])
+        # hiwonder_motor_driver publishes actual wheel velocities under the
+        # viz wheel joints (the base wheel joints carry raw encoder counts in
+        # position and zero velocity). Look up by name so a driver-side
+        # reorder can't silently feed the brain the wrong channels.
+        try:
+            li = msg.name.index("left_viz_wheel_joint")
+            ri = msg.name.index("right_viz_wheel_joint")
+        except ValueError:
+            return
+        if len(msg.velocity) > max(li, ri):
+            self._wheel_l = float(msg.velocity[li])
+            self._wheel_r = float(msg.velocity[ri])
 
     def _imu_cb(self, msg: Imu):
         w = msg.angular_velocity
@@ -252,6 +276,9 @@ class PCActiveInferenceRunner(Node):
     def _battery_percentage_cb(self, msg):
         self._battery_percentage = float(msg.data)
 
+    def _estop_cb(self, msg):
+        self._safety_hold = bool(msg.data)
+
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
         if not self.use_proprio:
@@ -278,9 +305,15 @@ class PCActiveInferenceRunner(Node):
             self._publish_track(0.0, 0.0)
             return
 
+        tick_start = time.monotonic()
         obs_np = self._build_obs()
         o_t = torch.from_numpy(obs_np)
         action_prev_np = self.last_action.numpy().copy()   # led into this o_t
+        # Snapshot the context infer() is about to use, BEFORE learn() advances
+        # z_prev and the new action overwrites last_action — the dashboard's
+        # state-error display needs the real settling context.
+        z_prev_pre = self.model.z_prev.clone()
+        action_into_t = self.last_action.clone()
 
         # Queue for background logging
         if self.logger_active and self.log_queue is not None:
@@ -320,29 +353,34 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn and self.replay_passes > 0 and len(self.replay) >= self.replay_min:
             self._replay_step()
 
-        # 5. Diagnostics.
+        # 5. Diagnostics (incl. tick wall time so overruns are observable).
         self._step += 1
+        tick_time = time.monotonic() - tick_start
+        if tick_time > self._tick_period:
+            self.get_logger().warning(
+                f"Control tick overran: {tick_time*1000:.1f} ms > "
+                f"{self._tick_period*1000:.1f} ms budget (consider fewer "
+                f"replay passes or replay_infer_iters)",
+                throttle_duration_sec=5.0)
         diag = Float32MultiArray()
         diag.data = [float(free_energy), float(obs_err),
                      float(info["epistemic"]), float(info["epistemic_max"]),
-                     float(out[0]), float(out[1])]
+                     float(out[0]), float(out[1]), float(tick_time)]
         self.diag_pub.publish(diag)
 
-        # Capture network internals for the brain visualizer.
-        o_hat, s_latent = self.model._decode(z)
-        z_prev_in = self.model._trans_input(self.model.z_prev, self.last_action)
-        e_o = (o_t - o_hat).numpy()
-        e_z = (z - self.model._prior_mean(z_prev_in)).numpy()
-        # Per-ensemble-member prediction errors for diversity display.
-        trans_errors = np.array([
-            float((z - self.model._predict_member(m, z_prev_in)).pow(2).mean())
-            for m in range(self.model.cfg.ensemble_size)
-        ])
-
-        if self.dash is not None:
-            # Abs-activation of each latent node (for node size in the diagram).
-            z_abs = np.abs(s_latent.numpy())
-            e_z_abs = np.abs(e_z)
+        # Capture network internals for the brain visualizer — only when a
+        # browser has polled recently, so the brain keeps its CPU when nobody
+        # is watching. (Uses the pre-learn context infer() settled against.)
+        if self.dash is not None and self.dash.active():
+            o_hat, s_latent = self.model._decode(z)
+            z_prev_in = self.model._trans_input(z_prev_pre, action_into_t)
+            e_o = (o_t - o_hat).numpy()
+            e_z = (z - self.model._prior_mean(z_prev_in)).numpy()
+            # Per-ensemble-member prediction errors for diversity display.
+            trans_errors = np.array([
+                float((z - self.model._predict_member(m, z_prev_in)).pow(2).mean())
+                for m in range(self.model.cfg.ensemble_size)
+            ])
             self.dash.update(
                 obs=self.latest_scan,
                 pred=self.model.reconstruct(z).numpy()[:self.num_bins],
@@ -351,16 +389,17 @@ class PCActiveInferenceRunner(Node):
                 prag=info["pragmatic"],
                 L=float(out[0]), R=float(out[1]), step=self._step,
                 # Neural net internals for the brain visualizer.
-                z=z.numpy(),                    # raw latent (64,)
                 s=s_latent.numpy(),             # tanh-activated latent (64,)
                 e_o=e_o,                        # sensory prediction error (72,)
-                e_z=e_z,                        # state prediction error (64,)
-                W_o=self.model.W_o.detach().cpu().numpy(),  # decoder weights (72,64)
+                W_o=self.model.W_o.detach().cpu().numpy(),  # -> top-K flows
                 trans_errors=trans_errors,       # per-ensemble-member error (5,)
-                z_abs=z_abs,                    # |activation| per latent node
-                e_z_abs=e_z_abs,                # |state error| per latent node
+                z_abs=np.abs(s_latent.numpy()),  # |activation| per latent node
+                e_z_abs=np.abs(e_z),             # |state error| per latent node
                 battery_voltage=self._battery_voltage,
                 battery_percentage=self._battery_percentage,
+                tick_ms=tick_time * 1000.0,
+                tick_budget_ms=self._tick_period * 1000.0,
+                safety_hold=self._safety_hold,
             )
         if self._step % 20 == 0:
             self.get_logger().info(
@@ -389,7 +428,8 @@ class PCActiveInferenceRunner(Node):
             for t in range(L):
                 o = torch.from_numpy(obs_seq[t])
                 a = torch.from_numpy(act_seq[t])
-                z, _, _ = self.model.infer(o, a, z_prev=zp)
+                z, _, _ = self.model.infer(o, a, z_prev=zp,
+                                           n_iters=self.replay_infer_iters)
                 if t >= self.replay_burn_in:
                     self.model.learn(z, a, o, z_prev=zp, advance=False)
                 zp = z
@@ -407,6 +447,15 @@ class PCActiveInferenceRunner(Node):
                 sd = torch.load(self.model_path, map_location="cpu", weights_only=False)
                 self.model.load_state_dict(sd)
                 self.get_logger().info(f"Loaded brain from {self.model_path}")
+                # The model learned dynamics conditioned on pre-scale actions;
+                # changing action_scale redefines what those actions DO.
+                saved_scale = sd.get("action_scale")
+                if saved_scale is not None and abs(saved_scale - self.action_scale) > 1e-6:
+                    self.get_logger().warning(
+                        f"action_scale mismatch: brain was trained with "
+                        f"{saved_scale:.3f}, now running with "
+                        f"{self.action_scale:.3f} — learned dynamics will be "
+                        f"wrong until the model re-adapts")
             except Exception as e:  # noqa: BLE001
                 self.get_logger().warn(f"Could not load brain: {e}")
 
@@ -416,7 +465,12 @@ class PCActiveInferenceRunner(Node):
         self._last_save = time.time()
         try:
             os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
-            torch.save(self.model.state_dict(), self.model_path)
+            # Write-then-rename so a crash mid-save can't corrupt the brain.
+            tmp_path = self.model_path + ".tmp"
+            sd = self.model.state_dict()
+            sd["action_scale"] = self.action_scale
+            torch.save(sd, tmp_path)
+            os.replace(tmp_path, self.model_path)
             self.get_logger().info(f"Saved brain to {self.model_path}")
         except Exception as e:  # noqa: BLE001
             self.get_logger().warn(f"Could not save brain: {e}")
@@ -442,28 +496,57 @@ class PCActiveInferenceRunner(Node):
             return
 
         self.get_logger().info(f"Experience logger thread active. Logging to {self.experience_log_path}")
-        
-        while self.logger_active or (self.log_queue is not None and not self.log_queue.empty()):
-            try:
-                item = self.log_queue.get(timeout=0.5)
-                if item is None:
-                    break
-                
-                obs_np, action_prev_np = item
-                line_dict = {
-                    "obs": [round(float(x), 5) for x in obs_np.tolist()],
-                    "act": [round(float(x), 5) for x in action_prev_np.tolist()]
-                }
-                
-                with open(self.experience_log_path, "a") as f:
-                    f.write(json.dumps(line_dict) + "\n")
-                    
-                self.log_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                self.get_logger().error(f"Error writing to experience log: {e}")
-                time.sleep(1.0)
+
+        f = None
+        bytes_written = 0
+        lines_since_flush = 0
+        try:
+            f = open(self.experience_log_path, "a")
+            bytes_written = f.tell()
+
+            while self.logger_active or (self.log_queue is not None and not self.log_queue.empty()):
+                try:
+                    item = self.log_queue.get(timeout=0.5)
+                    if item is None:
+                        break
+
+                    obs_np, action_prev_np = item
+                    line = json.dumps({
+                        "obs": [round(float(x), 5) for x in obs_np.tolist()],
+                        "act": [round(float(x), 5) for x in action_prev_np.tolist()],
+                    }) + "\n"
+                    bytes_written += f.write(line)
+                    lines_since_flush += 1
+                    if lines_since_flush >= 50:
+                        f.flush()
+                        lines_since_flush = 0
+
+                    # Rotate past the size cap. The sleep consolidator picks up
+                    # *_part_*.jsonl siblings, so no experience is lost.
+                    if bytes_written >= self.experience_log_max_bytes:
+                        f.close()
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        part_path = self.experience_log_path.replace(
+                            ".jsonl", f"_part_{ts}.jsonl")
+                        os.rename(self.experience_log_path, part_path)
+                        self.get_logger().info(
+                            f"Experience log rotated to {part_path}")
+                        f = open(self.experience_log_path, "a")
+                        bytes_written = 0
+                        lines_since_flush = 0
+
+                    self.log_queue.task_done()
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    self.get_logger().error(f"Error writing to experience log: {e}")
+                    time.sleep(1.0)
+        finally:
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:
+                    pass
 
 
 def main(args=None):

@@ -39,6 +39,8 @@ class ActorConfig:
     deterministic: bool = False # if True, argmax instead of sampling
     forward_bias: float = 0.3   # (deprecated, kept for configuration compatibility)
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
+    num_bins: int = 72          # lidar bins preceding the proprio channels in obs
+    use_proprio: bool = True    # False = no proprio channels, pragmatic term disabled
     target_wl: float = 0.65     # target left wheel speed in [0,1] (0.5 is stationary)
     target_wr: float = 0.65     # target right wheel speed in [0,1]
     target_yaw: float = 0.5     # target yaw rate in [0,1] (0.5 is straight, no spin)
@@ -100,12 +102,15 @@ class EFEActor:
             preds = torch.stack([s_in @ model.W_z[m].t() + model.b_z[m]
                                  for m in range(model.cfg.ensemble_size)])
 
-            # Epistemic value: ensemble variance summed over latent dims -> [N]
-            disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)
-            total_epistemic += disagreement
-
             # Next mean latent state: [N, D]
             z_next = preds.mean(dim=0)
+
+            # Epistemic value: ensemble variance summed over latent dims,
+            # normalized by mean prediction magnitude (matches
+            # PCWorldModel.epistemic_value) so it stays scale-invariant. -> [N]
+            disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)
+            scale = z_next.pow(2).sum(dim=1) + 1.0
+            total_epistemic += disagreement / scale
 
             # 2. Decode the next mean state to check proprioception alignment:
             # o_hat = sigmoid(W_o @ tanh(z_next) + b_o)
@@ -113,11 +118,13 @@ class EFEActor:
             u = s_latent @ model.W_o.t() + model.b_o
             o_hat = torch.sigmoid(u)  # [N, obs_dim]
 
-            # Proprio channels are at the end: [wl, wr, yaw]
-            if o_hat.shape[1] >= 3:
-                wl = o_hat[:, -3]
-                wr = o_hat[:, -2]
-                yaw = o_hat[:, -1]
+            # Proprio channels follow the lidar bins:
+            # [wl, wr, roll, pitch, yaw, ax, ay, az] at num_bins..num_bins+7.
+            nb = self.cfg.num_bins
+            if self.cfg.use_proprio and o_hat.shape[1] > nb:
+                wl = o_hat[:, nb]
+                wr = o_hat[:, nb + 1]
+                yaw = o_hat[:, nb + 4]
                 # Pragmatic cost is squared error from target proprio
                 cost = (wl - t_wl).pow(2) + (wr - t_wr).pow(2) + (yaw - t_yaw).pow(2)
                 total_pragmatic -= cost

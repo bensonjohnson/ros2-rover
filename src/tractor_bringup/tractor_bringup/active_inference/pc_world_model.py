@@ -58,6 +58,11 @@ class PCConfig:
     # Precisions (inverse variances) weighting the two error streams.
     precision_obs: float = 1.0
     precision_z: float = 1.0
+    # Proprio channels sit at the tail of the observation vector. With only a
+    # handful of proprio dims vs ~72 lidar dims, a shared precision lets lidar
+    # drown out self-motion — so the tail channels get their own (higher) one.
+    n_proprio: int = 0
+    precision_proprio: float = 1.0
 
     # Per-member bootstrap keep-probability (ensemble diversity).
     bootstrap_prob: float = 0.8
@@ -84,7 +89,13 @@ class PCWorldModel:
         self.W_z = [randn(D, D + A, scale=0.1) for _ in range(M)]
         self.b_z = [torch.zeros(D, device=self.device) for _ in range(M)]
 
-        self.pi_o = cfg.precision_obs
+        # Per-channel observation precision (getattr: checkpoints pickled
+        # before these config fields existed must still load).
+        n_prop = int(getattr(cfg, "n_proprio", 0))
+        pi_prop = float(getattr(cfg, "precision_proprio", cfg.precision_obs))
+        self.pi_o = torch.full((O,), float(cfg.precision_obs), device=self.device)
+        if n_prop > 0:
+            self.pi_o[O - n_prop:] = pi_prop
         self.pi_z = cfg.precision_z
 
         # Recurrent state carried across timesteps.
@@ -120,18 +131,27 @@ class PCWorldModel:
 
     @torch.no_grad()
     def infer(self, o_t: torch.Tensor, action_prev: torch.Tensor,
-              z_prev: torch.Tensor | None = None):
+              z_prev: torch.Tensor | None = None,
+              member: int | None = None,
+              n_iters: int | None = None):
         """Settle the current latent state by minimizing free energy.
 
         `z_prev` overrides the recurrent context (used by sequence replay so it
-        doesn't disturb the live state). Returns (z_settled, F, obs_err_norm).
+        doesn't disturb the live state). `member` uses a single ensemble
+        member's prediction as the temporal prior instead of the ensemble mean
+        (used by REM dreaming so members stay decoupled and diversity — the
+        epistemic signal — survives sleep). `n_iters` overrides the settle
+        iteration count (replay uses fewer to fit the control-tick budget).
+        Returns (z_settled, F, obs_err_norm).
         """
         zp = self.z_prev if z_prev is None else z_prev
         s_in = self._trans_input(zp, action_prev)
-        z_hat = self._prior_mean(s_in)            # temporal prior
+        z_hat = (self._prior_mean(s_in) if member is None
+                 else self._predict_member(member, s_in))   # temporal prior
         z = z_hat.clone()
 
-        for _ in range(self.cfg.n_infer_iters):
+        iters = self.cfg.n_infer_iters if n_iters is None else n_iters
+        for _ in range(iters):
             o_hat, s = self._decode(z)
             e_o = o_t - o_hat
             e_z = z - z_hat
@@ -144,7 +164,7 @@ class PCWorldModel:
         o_hat, _ = self._decode(z)
         e_o = o_t - o_hat
         e_z = z - z_hat
-        F = 0.5 * self.pi_o * (e_o @ e_o) + 0.5 * self.pi_z * (e_z @ e_z)
+        F = 0.5 * float((self.pi_o * e_o) @ e_o) + 0.5 * self.pi_z * float(e_z @ e_z)
         return z, float(F), float(torch.linalg.norm(e_o))
 
     # ---- learning: local weight updates after settling ---------------------
@@ -198,9 +218,14 @@ class PCWorldModel:
         # Stack ensemble predictions: [M, N, D]
         preds = torch.stack([s_in @ self.W_z[m].t() + self.b_z[m]
                              for m in range(self.cfg.ensemble_size)])
-        # Variance across ensemble members, summed over latent dims.
+        # Variance across ensemble members, summed over latent dims, then
+        # normalized by the mean prediction magnitude so curiosity reflects
+        # relative ignorance rather than raw weight scale (which grows over
+        # the brain's lifetime). The +1 keeps tiny early-life latents from
+        # exploding the ratio.
         disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)   # [N]
-        return disagreement
+        scale = preds.mean(dim=0).pow(2).sum(dim=1) + 1.0            # [N]
+        return disagreement / scale
 
     # ---- persistence -------------------------------------------------------
 
@@ -214,4 +239,6 @@ class PCWorldModel:
     def load_state_dict(self, sd):
         self.W_o, self.b_o = sd["W_o"], sd["b_o"]
         self.W_z, self.b_z = sd["W_z"], sd["b_z"]
-        self.z_prev = sd["z_prev"]
+        # Start each session with a fresh recurrent state: the checkpointed
+        # z_prev belongs to whatever moment the last save happened to catch.
+        self.z_prev = torch.zeros_like(sd["z_prev"])

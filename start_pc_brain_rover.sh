@@ -7,6 +7,15 @@
 # maximizing expected information gain (pure epistemic). The lidar safety
 # monitor hard-stops the tracks near obstacles so early erratic behavior is
 # physically bounded.
+#
+# Usage:
+#   ./start_pc_brain_rover.sh [awake|sleep] [options]
+# Options (named flags; legacy positional args still accepted in this order:
+# action_scale, control_rate, lidar_port, dashboard_port):
+#   --scale <f>        action scale (default 0.6)
+#   --rate <hz>        control rate (default 15.0)
+#   --lidar-port <dev> lidar serial port (default /dev/ttyUSB0)
+#   --port <n>         web dashboard port (default 8082)
 
 echo "=================================================="
 echo "ROS2 Rover - Predictive-Coding Active-Inference Brain"
@@ -38,11 +47,26 @@ else
   fi
 fi
 
-# Configuration (all optional positional args)
-ACTION_SCALE=${1:-"0.6"}     # scales track output [-1,1] (gentler while young)
-CONTROL_RATE=${2:-"15.0"}    # brain inference/control rate (Hz) — match lidar scan rate
-LIDAR_PORT=${3:-"/dev/ttyUSB0"}
-DASHBOARD_PORT=${4:-"8082"}
+# Configuration: defaults, then named flags, then legacy positional args.
+ACTION_SCALE="0.6"     # scales track output [-1,1] (gentler while young)
+CONTROL_RATE="15.0"    # brain inference/control rate (Hz) — match lidar scan rate
+LIDAR_PORT="/dev/ttyUSB0"
+DASHBOARD_PORT="8082"
+
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scale)      ACTION_SCALE="$2";   shift 2 ;;
+    --rate)       CONTROL_RATE="$2";   shift 2 ;;
+    --lidar-port) LIDAR_PORT="$2";     shift 2 ;;
+    --port)       DASHBOARD_PORT="$2"; shift 2 ;;
+    *)            POSITIONAL+=("$1");  shift ;;
+  esac
+done
+[ -n "${POSITIONAL[0]}" ] && ACTION_SCALE="${POSITIONAL[0]}"
+[ -n "${POSITIONAL[1]}" ] && CONTROL_RATE="${POSITIONAL[1]}"
+[ -n "${POSITIONAL[2]}" ] && LIDAR_PORT="${POSITIONAL[2]}"
+[ -n "${POSITIONAL[3]}" ] && DASHBOARD_PORT="${POSITIONAL[3]}"
 
 echo "Configuration:"
 echo "  Mode:           ${MODE}"
@@ -96,11 +120,14 @@ if [ "$MODE" = "awake" ]; then
   mkdir -p log
   LOG_FILE="log/pc_brain_rover_$(date +%Y%m%d_%H%M%S).log"
 
+  # Process substitution (not a pipeline) so $! is the ros2 launch process
+  # itself and the trap below actually stops it.
   ros2 launch tractor_bringup pc_active_inference.launch.py \
     action_scale:=${ACTION_SCALE} \
     control_rate_hz:=${CONTROL_RATE} \
     lidar_port:=${LIDAR_PORT} \
-    2>&1 | tee "$LOG_FILE" &
+    dashboard_port:=${DASHBOARD_PORT} \
+    > >(tee "$LOG_FILE") 2>&1 &
 
   LAUNCH_PID=$!
   trap 'echo; echo "Stopping PC brain..."; kill $LAUNCH_PID 2>/dev/null; sleep 2; echo "Stopped"; exit 0' SIGINT SIGTERM
@@ -118,16 +145,16 @@ if [ "$MODE" = "awake" ]; then
   wait $LAUNCH_PID
 else
   echo "Launching sleep consolidator and dreaming server..."
-  
+
   ros2 run tractor_bringup sleep_consolidator \
     --model_path ~/.ros/pnn_brain.pt \
     --experience_log_path ~/.ros/pnn_experience.jsonl \
     --dashboard_port ${DASHBOARD_PORT} \
     --visualize &
-  
+
   CONSOLIDATOR_PID=$!
   trap 'echo; echo "Terminating sleep consolidator..."; kill $CONSOLIDATOR_PID 2>/dev/null; sleep 2; echo "Stopped"; exit 0' SIGINT SIGTERM
-  
+
   echo ""
   echo "Sleep consolidator running (PID: $CONSOLIDATOR_PID)"
   echo "Monitor:"
@@ -136,4 +163,3 @@ else
   echo "Press Ctrl+C to stop sleep consolidator early"
   wait $CONSOLIDATOR_PID
 fi
-

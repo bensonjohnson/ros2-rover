@@ -22,6 +22,8 @@ import time
 from collections import deque
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
+import numpy as np
+
 
 _PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><title>PNN Brain</title>
@@ -287,7 +289,8 @@ _PAGE = """<!doctype html>
       <div class="nn-stat">z err: <span class="nn-stat-val" id="nn_zerr">-</span></div>
       <div class="nn-stat">ensemble &mu;: <span class="nn-stat-val" id="nn_emu">-</span></div>
       <div class="nn-stat">ensemble &sigma;: <span class="nn-stat-val" id="nn_esig">-</span></div>
-      <div class="bar-wrap">trans err: <span class="bar-bg"><span class="err-bar" id="nn_ebar" style="width:0px;background:#ff9d3b"></span></span></div>
+      <div class="bar-wrap">members: <span id="nn_ebars" style="display:inline-flex;gap:3px;"></span></div>
+      <div class="nn-stat" id="nn_dis_wrap" style="display:none">dis &mu;&#8320;: <span class="nn-stat-val" id="nn_dis">-</span></div>
     </div>
   </div>
 </div>
@@ -300,6 +303,10 @@ _PAGE = """<!doctype html>
   <div class="panel stats-panel">
     <div class="stats-header">
       <div class="stats-title">TELEMETRY</div>
+      <div class="status-badge stale" id="safety_badge" style="display:none">
+        <span class="status-dot"></span>
+        <span>SAFETY HOLD</span>
+      </div>
       <div class="status-badge live" id="status_badge">
         <span class="status-dot"></span>
         <span id="status">live</span>
@@ -339,6 +346,10 @@ _PAGE = """<!doctype html>
         <div class="stat-label">BATTERY %</div>
         <div class="stat-value" id="bat_pct">-</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">TICK TIME</div>
+        <div class="stat-value" id="tick_ms">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -365,7 +376,8 @@ _PAGE = """<!doctype html>
   
   <div class="panel"><canvas id="trace" width="300" height="200"></canvas>
     <div class="legend"><span class="dot" style="background:#5bc0ff"></span>free energy
-      <span class="dot" style="background:#ff9d3b"></span>sensory err</div></div>
+      <span class="dot" style="background:#ff9d3b"></span>sensory err
+      <span class="dot" style="background:#ffd043"></span>epistemic</div></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -422,18 +434,26 @@ function tracks(s){
     }
   }
 }
-let Fh=[],Eh=[];
+let Fh=[],Eh=[],EpiH=[];
 function trace(s){
-  if(s.F_hist){Fh=s.F_hist;Eh=s.err_hist;}
+  if(s.F_hist){Fh=s.F_hist;Eh=s.err_hist;EpiH=s.epi_hist||[];}
   const c=$('trace'),ctx=c.getContext('2d'),W=c.width,H=c.height;
   ctx.clearRect(0,0,W,H);
-  const plot=(arr,color)=>{if(!arr.length)return;
+  // Each series is min-max normalized independently (shapes are comparable,
+  // magnitudes are not) — so print each series' actual range alongside.
+  const plot=(arr,color)=>{if(!arr||!arr.length)return null;
     const mx=Math.max(...arr,1e-6),mn=Math.min(...arr);
     const rng=(mx-mn)||1;ctx.beginPath();
     for(let i=0;i<arr.length;i++){const x=i/(arr.length-1||1)*W;
-      const y=H-((arr[i]-mn)/rng)*(H-10)-5;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
-    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();};
-  plot(Fh,'#5bc0ff');plot(Eh,'#ff9d3b');
+      const y=H-((arr[i]-mn)/rng)*(H-26)-5;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();
+    return [mn,mx];};
+  const rF=plot(Fh,'#5bc0ff'),rE=plot(Eh,'#ff9d3b'),rEpi=plot(EpiH,'#ffd043');
+  ctx.font='9px system-ui';ctx.textAlign='left';
+  const fmt=r=>r?r[0].toFixed(3)+' – '+r[1].toFixed(3):'';
+  ctx.fillStyle='#5bc0ff';ctx.fillText('F '+fmt(rF),4,10);
+  ctx.fillStyle='#ff9d3b';ctx.fillText('err '+fmt(rE),4,20);
+  ctx.fillStyle='#ffd043';ctx.fillText('epi '+(rEpi?rEpi[0].toFixed(4)+' – '+rEpi[1].toFixed(4):''),104,10);
 }
 
 // ---- Neural Network Visualizer --------------------------------------------
@@ -458,13 +478,6 @@ function actColor(v,mx){
   if(v>=0)return lerp3([60,60,60],[0,200,140],t);
   return lerp3([60,60,60],[40,100,220],t);
 }
-// heatColor: for weight heatmap — blue=negative, orange=positive
-function heatColor(v){
-  const t=Math.max(-1,Math.min(1,v));
-  if(t>0)return lerp3([40,25,12],[255,210,80],t);
-  return lerp3([40,25,12],[60,120,230],-t);
-}
-
 function brainViz(s){
   const c=$('brain'),ctx=c.getContext('2d'),W=c.width,H=c.height;
   ctx.clearRect(0,0,W,H);
@@ -513,30 +526,18 @@ function brainViz(s){
   }
 
   // ── 3. Connections: latent (center) → prediction (right) ───────────
-  // Draw top-K strongest actual activation flows: weight * latent_activation.
-  const W_o = s.W_o || [];
-  const conns = [];
+  // The server pre-computes the top-K strongest activation flows
+  // (weight * latent_activation) as [zi, pi, flow] — far cheaper than
+  // shipping the whole decoder matrix on every poll.
+  const flows = s.flows || [];
   let maxFlow = 0.001;
-  if (W_o.length && sAct.length) {
-    for (let zi = 0; zi < zX.length; zi++) {
-      const act = sAct[zi] || 0;
-      for (let pi = 0; pi < predY.length; pi++) {
-        const bin_idx = Math.min(pi * predStep, W_o.length - 1);
-        const weight = W_o[bin_idx][zi] || 0;
-        const flow = weight * act;
-        const absFlow = Math.abs(flow);
-        if (absFlow > maxFlow) {
-          maxFlow = absFlow;
-        }
-        conns.push({ zi, pi, flow, absFlow });
-      }
-    }
+  for (const [, , flow] of flows) {
+    const a = Math.abs(flow);
+    if (a > maxFlow) maxFlow = a;
   }
-  conns.sort((a, b) => b.absFlow - a.absFlow);
-  const connK = Math.min(250, conns.length);
-  for (let i = 0; i < connK; i++) {
-    const { zi, pi, flow, absFlow } = conns[i];
-    const t = absFlow / maxFlow;
+  for (const [zi, pi, flow] of flows) {
+    if (zi >= zX.length || pi >= predY.length) continue;
+    const t = Math.abs(flow) / maxFlow;
     // Positive flow (excitation) = cyan/green; negative flow (inhibition) = orange/red
     const color = flow >= 0 ? `rgba(0,200,140,${0.04+t*0.65})` : `rgba(255,100,50,${0.04+t*0.65})`;
     ctx.beginPath();
@@ -635,26 +636,6 @@ function brainViz(s){
   }
 }
 
-function heatmapViz(s){
-  const c=$('heatmap'),ctx=c.getContext('2d'),W=c.width,H=c.height;
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='#1a1d23';ctx.fillRect(0,0,W,H);
-  const grid=s.W_o_grid||[];
-  if(!grid.length)return;
-  const n=grid.length;
-  const cols=Math.min(64,Math.ceil(Math.sqrt(n*W/H)));
-  const rows=Math.ceil(n/cols);
-  const cw=W/cols,ch=H/rows;
-  for(let i=0;i<n;i++){
-    const col=i%cols,row=Math.floor(i/cols);
-    const[er,eg,eb]=heatColor(grid[i]*3);   // scale weights for visibility
-    ctx.fillStyle=`rgb(${er},${eg},${eb})`;
-    ctx.fillRect(col*cw,row*ch,cw-0.4,ch-0.4);
-  }
-  ctx.font='9px system-ui';ctx.fillStyle='#5a6370';ctx.textAlign='left';
-  ctx.fillText('W_o decoder weights (binned)',3,H-2);
-}
-
 function nnStatus(s){
   // Update the dedicated stat row under the neural net canvas.
   const te=s.trans_errors||[];
@@ -669,9 +650,28 @@ function nnStatus(s){
     const std=Math.sqrt(te.reduce((a,b)=>a+(b-m)*(b-m),0)/te.length);
     $('nn_emu').textContent=m.toFixed(4);
     $('nn_esig').textContent=std.toFixed(4);
-    // Scale bar: max realistic range ~[0,0.1]
-    const barW=Math.min(80,Math.round(m/0.1*80));
-    $('nn_ebar').style.width=barW+'px';
+    // One mini-bar per ensemble member: shows WHICH member diverges, not
+    // just that one does.
+    const cont=$('nn_ebars');
+    if(cont.children.length!==te.length){
+      cont.innerHTML='';
+      te.forEach(()=>{
+        const bg=document.createElement('span');
+        bg.className='bar-bg';bg.style.width='16px';
+        const fill=document.createElement('span');
+        fill.className='err-bar';fill.style.background='#ff9d3b';
+        fill.style.height='100%';fill.style.display='block';
+        bg.appendChild(fill);cont.appendChild(bg);
+      });
+    }
+    const mxTe=Math.max(...te,1e-9);
+    te.forEach((v,i)=>{
+      cont.children[i].firstChild.style.width=Math.max(1,Math.round(v/mxTe*16))+'px';
+    });
+  }
+  if(s.disagreement_before!=null){
+    $('nn_dis_wrap').style.display='flex';
+    $('nn_dis').textContent=s.disagreement_before.toFixed(5);
   }
 }
 
@@ -684,7 +684,22 @@ async function tick(){
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('prag').textContent=fix(s.prag,4);
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
-    
+
+    // Control tick wall time vs budget (green = headroom, red = overrun)
+    const tEl=$('tick_ms');
+    if(s.tick_ms!=null){
+      tEl.textContent=s.tick_ms.toFixed(1)+' ms';
+      const b=s.tick_budget_ms;
+      if(b){
+        tEl.style.color = s.tick_ms>b ? '#ff5b5b' : (s.tick_ms>0.8*b ? '#ff9d3b' : '#00c88c');
+      }
+    }else{
+      tEl.textContent='-';tEl.style.color='';
+    }
+
+    // Safety gate badge: visible whenever the lidar monitor is holding the tracks
+    $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
+
     // Battery readings
     const volt = s.battery_voltage;
     const pct = s.battery_percentage;
@@ -714,18 +729,20 @@ async function tick(){
     const badge = $('status_badge');
     const statusText = $('status');
     if (s.mode) {
+      const prog = (s.epoch != null && s.epoch_total != null)
+        ? ' ' + s.epoch + '/' + s.epoch_total : '';
       if (s.mode === 'sws') {
         badge.className = 'status-badge live';
         badge.style.background = 'rgba(255, 157, 59, 0.1)';
         badge.style.borderColor = 'rgba(255, 157, 59, 0.25)';
         badge.style.color = '#ff9d3b';
-        statusText.textContent = 'SWS Replay';
+        statusText.textContent = 'SWS Replay' + prog;
       } else if (s.mode === 'rem') {
         badge.className = 'status-badge live';
         badge.style.background = 'rgba(147, 112, 219, 0.1)';
         badge.style.borderColor = 'rgba(147, 112, 219, 0.25)';
         badge.style.color = '#da70d6';
-        statusText.textContent = 'REM Dream';
+        statusText.textContent = 'REM Dream' + prog;
       } else {
         badge.className = 'status-badge live';
         badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
@@ -751,7 +768,10 @@ async function tick(){
     if (statusText) statusText.textContent = 'disconnected';
   }
 }
-setInterval(tick,100);tick();
+// Self-scheduling poll: the next request starts only after the previous one
+// finishes, so slow links can't pile up overlapping fetches.
+async function loop(){ await tick(); setTimeout(loop, 100); }
+loop();
 </script></body></html>
 """
 
@@ -759,20 +779,42 @@ setInterval(tick,100);tick();
 class PCDashboardState:
     """Thread-safe holder for the latest brain state + short trace history."""
 
+    # How many prediction nodes the page displays and how many of the
+    # strongest latent->prediction flows we ship (mirrors the client).
+    N_DISP = 24
+    TOP_FLOWS = 250
+
     def __init__(self, history: int = 240):
         self._lock = threading.Lock()
         self._state: dict = {}
         self._stamp = 0.0
+        self._last_request = 0.0
         self._F = deque(maxlen=history)
         self._err = deque(maxlen=history)
+        self._epi = deque(maxlen=history)
+
+    def active(self, within: float = 5.0) -> bool:
+        """True if a browser polled /state recently — producers use this to
+        skip the (comparatively expensive) state capture when nobody is
+        watching."""
+        with self._lock:
+            return (time.monotonic() - self._last_request) < within
 
     def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step,
-                z=None, s=None, e_o=None, e_z=None, W_o=None,
+                s=None, e_o=None, W_o=None,
                 trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None,
-                battery_voltage=None, battery_percentage=None) -> None:
+                battery_voltage=None, battery_percentage=None,
+                tick_ms=None, tick_budget_ms=None, safety_hold=None,
+                epoch=None, epoch_total=None, disagreement_before=None) -> None:
+        # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
+        flows = None
+        if W_o is not None and s is not None:
+            flows = self._top_flows(np.asarray(W_o), np.asarray(s))
+
         with self._lock:
             self._F.append(round(float(F), 4))
             self._err.append(round(float(err), 4))
+            self._epi.append(round(float(epi), 5))
             state: dict = {
                 "obs": [round(float(x), 3) for x in obs],
                 "pred": [round(float(x), 3) for x in pred],
@@ -783,26 +825,31 @@ class PCDashboardState:
             }
             if mode is not None:
                 state["mode"] = mode
+            if epoch is not None:
+                state["epoch"] = int(epoch)
+            if epoch_total is not None:
+                state["epoch_total"] = int(epoch_total)
+            if disagreement_before is not None:
+                state["disagreement_before"] = float(disagreement_before)
             if battery_voltage is not None:
                 state["battery_voltage"] = float(battery_voltage)
             if battery_percentage is not None:
                 state["battery_percentage"] = float(battery_percentage)
-            # Neural net activations & weights for the brain visualizer.
-            if z is not None:
-                state["z"] = [round(float(x), 4) for x in z]
+            if tick_ms is not None:
+                state["tick_ms"] = round(float(tick_ms), 2)
+            if tick_budget_ms is not None:
+                state["tick_budget_ms"] = round(float(tick_budget_ms), 2)
+            if safety_hold is not None:
+                state["safety_hold"] = bool(safety_hold)
+            # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]
+            if flows is not None:
+                state["flows"] = flows
             if e_o is not None:
                 state["e_o"] = [round(float(x), 4) for x in e_o]
-            if e_z is not None:
-                state["e_z"] = [round(float(x), 4) for x in e_z]
-            if W_o is not None:
-                state["W_o_grid"] = [round(float(x), 4)
-                                      for x in W_o.flatten()[::4].tolist()]  # every 4th
-                state["W_o"] = [[round(float(val), 3) for val in row] for row in W_o.tolist()]
-            if z is not None and s is not None:
-                # |tanh activation| per latent node: drives node size in the diagram.
-                state["z_abs"] = [round(float(abs(x)), 4) for x in s]
+            if z_abs is not None:
+                state["z_abs"] = [round(float(x), 4) for x in z_abs]
             if trans_errors is not None:
                 state["trans_errors"] = [round(float(x), 4) for x in trans_errors]
             if e_z_abs is not None:
@@ -810,13 +857,33 @@ class PCDashboardState:
             self._state = state
             self._stamp = time.monotonic()
 
+    @classmethod
+    def _top_flows(cls, W_o: np.ndarray, s: np.ndarray) -> list:
+        """Strongest latent->prediction activation flows, as [zi, pi, flow].
+
+        The page draws only N_DISP subsampled prediction nodes, so instead of
+        shipping the full decoder matrix (O*D floats per poll) we extract the
+        top-K |weight * activation| entries over those rows server-side.
+        """
+        n_disp = min(cls.N_DISP, W_o.shape[0])
+        row_step = max(1, W_o.shape[0] // n_disp)
+        rows = W_o[::row_step][:n_disp]              # [n_disp, D]
+        flow = rows * s[None, :]                     # [n_disp, D]
+        flat = flow.ravel()
+        k = min(cls.TOP_FLOWS, flat.size)
+        idx = np.argpartition(np.abs(flat), flat.size - k)[flat.size - k:]
+        D = flow.shape[1]
+        return [[int(i % D), int(i // D), round(float(flat[i]), 4)] for i in idx]
+
     def snapshot(self) -> dict:
         with self._lock:
+            self._last_request = time.monotonic()
             s = dict(self._state)
             if s:
                 s["age"] = time.monotonic() - self._stamp
                 s["F_hist"] = list(self._F)
                 s["err_hist"] = list(self._err)
+                s["epi_hist"] = list(self._epi)
             return s
 
 
@@ -826,9 +893,15 @@ def _make_handler(state: PCDashboardState):
             if self.path.startswith("/state"):
                 body = json.dumps(state.snapshot()).encode()
                 ctype = "application/json"
-            else:
+            elif self.path in ("/", "/index.html"):
                 body = _PAGE.encode()
                 ctype = "text/html"
+            else:
+                # e.g. /favicon.ico — don't answer every path with the page
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))

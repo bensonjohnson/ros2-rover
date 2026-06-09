@@ -59,6 +59,9 @@ def generate_launch_description():
     max_wheel_vel_arg = DeclareLaunchArgument(
         "max_wheel_vel", default_value="8.0",
         description="rad/s that maps wheel velocity to the proprio range edge")
+    dashboard_port_arg = DeclareLaunchArgument(
+        "dashboard_port", default_value="8082",
+        description="Web dashboard port (0 disables)")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -133,7 +136,7 @@ def generate_launch_description():
             "latent_dim": 64,
             "ensemble_size": 5,
             "torch_threads": 4,
-            "dashboard_port": 8082,
+            "dashboard_port": LaunchConfiguration("dashboard_port"),
         }])
 
     return LaunchDescription([
@@ -147,6 +150,7 @@ def generate_launch_description():
         imu_yaw_sign_arg,
         max_yaw_rate_arg,
         max_wheel_vel_arg,
+        dashboard_port_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
