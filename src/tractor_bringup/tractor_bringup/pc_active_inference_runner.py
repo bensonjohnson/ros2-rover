@@ -63,7 +63,7 @@ class PCActiveInferenceRunner(Node):
                                       # this (strangely mounted) IMU. VERIFY first.
         p("imu_yaw_sign", 1.0)        # flip if a left turn reads negative
         p("max_wheel_vel", 8.0)       # rad/s, for normalizing wheel velocity
-        p("max_yaw_rate", 3.0)        # rad/s, for normalizing IMU yaw rate
+        p("max_yaw_rate", 2.5)        # rad/s, for normalizing IMU yaw rate
         p("latent_dim", 64)
         p("ensemble_size", 5)
         p("n_infer_iters", 24)

@@ -51,6 +51,14 @@ def generate_launch_description():
     imu_yaw_sign_arg = DeclareLaunchArgument(
         "imu_yaw_sign", default_value="1.0",
         description="Flip to -1.0 if a left turn reads as negative yaw rate")
+    max_yaw_rate_arg = DeclareLaunchArgument(
+        "max_yaw_rate", default_value="2.5",
+        description="rad/s that maps yaw to the proprio range edge (set ~1.3x the "
+                    "rover's peak powered pivot rate so spins fill the range "
+                    "without clipping)")
+    max_wheel_vel_arg = DeclareLaunchArgument(
+        "max_wheel_vel", default_value="8.0",
+        description="rad/s that maps wheel velocity to the proprio range edge")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -118,6 +126,8 @@ def generate_launch_description():
             "use_proprio": True,
             "imu_yaw_axis": LaunchConfiguration("imu_yaw_axis"),
             "imu_yaw_sign": LaunchConfiguration("imu_yaw_sign"),
+            "max_yaw_rate": LaunchConfiguration("max_yaw_rate"),
+            "max_wheel_vel": LaunchConfiguration("max_wheel_vel"),
             "num_bins": 72,
             "max_range": 5.0,
             "latent_dim": 64,
@@ -135,6 +145,8 @@ def generate_launch_description():
         action_persist_arg,
         imu_yaw_axis_arg,
         imu_yaw_sign_arg,
+        max_yaw_rate_arg,
+        max_wheel_vel_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
