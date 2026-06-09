@@ -255,9 +255,13 @@ class LidarSafetyMonitor(Node):
             self._sector_dists['rear'] = float(np.min(r[rear_mask])) if np.any(rear_mask) else max_d
             self._min_overall_dist = min(self._sector_dists.values())
 
-            # Publish estop on every scan so subscribers always have latest state
-            # Include both front and rear blocked states for comprehensive safety
-            self.estop_pub.publish(Bool(data=self._sector_stopped['front'] or self._sector_stopped['rear']))
+            # Publish estop on every scan so subscribers always have latest state.
+            # FRONT ONLY: the motor driver consumes this as `_front_blocked` and
+            # clamps FORWARD motion on it. Folding rear in here made a rear
+            # obstacle clamp forward too, trapping the rover after it backed into
+            # something. Rear is already enforced (reverse-only) by the track gate
+            # in track_cmd_callback, so it must not appear in this signal.
+            self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
 
         except Exception as exc:
             self.get_logger().warn(f'LIDAR processing error: {exc}')
