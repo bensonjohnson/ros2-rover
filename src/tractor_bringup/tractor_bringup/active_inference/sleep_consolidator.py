@@ -49,6 +49,10 @@ def run_sleep_cycle(args):
     print("PNN Rover - Biological Sleep Consolidation Cycle")
     print("==================================================")
     
+    # Keep PyTorch single-threaded by default: the per-step ops are tiny
+    # (<=72-dim matmuls), so OpenMP fork/join sync costs more than it saves.
+    torch.set_num_threads(args.torch_threads)
+    
     model_path = os.path.expanduser(args.model_path)
     experience_path = os.path.expanduser(args.experience_log_path)
     
@@ -327,6 +331,7 @@ def main(args=None):
     parser.add_argument("--no_visualize", action="store_false", dest="visualize", help="Disable web dashboard streaming")
     parser.add_argument("--dashboard_port", type=int, default=8082, help="Web dashboard port")
     parser.add_argument("--step_delay", type=float, default=0.0, help="Time delay (seconds) between replay/dreaming steps to regulate animation speed")
+    parser.add_argument("--torch_threads", type=int, default=1, help="Number of CPU threads for PyTorch ops (default: 1; tensors here are tiny (<=72-dim) so multi-threaded BLAS adds more sync overhead than it saves)")
     
     parsed_args = parser.parse_args(args)
     run_sleep_cycle(parsed_args)
