@@ -331,6 +331,14 @@ _PAGE = """<!doctype html>
         <div class="stat-label">PRAGMATIC</div>
         <div class="stat-value" id="prag">-</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">BATTERY VOLTAGE</div>
+        <div class="stat-value" id="bat_volt">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">BATTERY %</div>
+        <div class="stat-value" id="bat_pct">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -676,6 +684,32 @@ async function tick(){
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('prag').textContent=fix(s.prag,4);
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
+    
+    // Battery readings
+    const volt = s.battery_voltage;
+    const pct = s.battery_percentage;
+    $('bat_volt').textContent = volt != null && volt > 0 ? volt.toFixed(2) + ' V' : '-';
+    
+    const batPctEl = $('bat_pct');
+    if (pct != null && pct > 0) {
+      batPctEl.textContent = pct.toFixed(1) + '%';
+      const pctCard = batPctEl.parentElement;
+      if (pct > 50) {
+        pctCard.style.borderColor = 'rgba(0, 200, 140, 0.2)';
+        batPctEl.style.color = '#00c88c';
+      } else if (pct > 25) {
+        pctCard.style.borderColor = 'rgba(255, 157, 59, 0.2)';
+        batPctEl.style.color = '#ff9d3b';
+      } else {
+        pctCard.style.borderColor = 'rgba(255, 91, 91, 0.3)';
+        batPctEl.style.color = '#ff5b5b';
+      }
+    } else {
+      batPctEl.textContent = '-';
+      batPctEl.style.color = '';
+      batPctEl.parentElement.style.borderColor = '';
+    }
+    
     const age=s.age??99;
     const badge = $('status_badge');
     const statusText = $('status');
@@ -734,7 +768,8 @@ class PCDashboardState:
 
     def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step,
                 z=None, s=None, e_o=None, e_z=None, W_o=None,
-                trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None) -> None:
+                trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None,
+                battery_voltage=None, battery_percentage=None) -> None:
         with self._lock:
             self._F.append(round(float(F), 4))
             self._err.append(round(float(err), 4))
@@ -748,6 +783,10 @@ class PCDashboardState:
             }
             if mode is not None:
                 state["mode"] = mode
+            if battery_voltage is not None:
+                state["battery_voltage"] = float(battery_voltage)
+            if battery_percentage is not None:
+                state["battery_percentage"] = float(battery_percentage)
             # Neural net activations & weights for the brain visualizer.
             if z is not None:
                 state["z"] = [round(float(x), 4) for x in z]

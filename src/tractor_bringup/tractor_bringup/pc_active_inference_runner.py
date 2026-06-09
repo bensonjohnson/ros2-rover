@@ -34,7 +34,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, JointState, Imu
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Float32
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
@@ -124,6 +124,8 @@ class PCActiveInferenceRunner(Node):
         self._wheel_l = self._wheel_r = 0.0
         self._roll_rate = self._pitch_rate = self._yaw_rate = 0.0
         self._accel_x = self._accel_y = self._accel_z = 0.0
+        self._battery_voltage = 0.0
+        self._battery_percentage = 0.0
 
         torch.set_num_threads(int(g("torch_threads").value))
 
@@ -186,6 +188,9 @@ class PCActiveInferenceRunner(Node):
             Float32MultiArray, g("track_cmd_topic").value, 10)
         self.diag_pub = self.create_publisher(
             Float32MultiArray, "/pnn/diagnostics", 10)
+        # Subscribe to battery voltage and percentage
+        self.create_subscription(Float32, "/battery_voltage", self._battery_voltage_cb, 10)
+        self.create_subscription(Float32, "/battery_percentage", self._battery_percentage_cb, 10)
 
         # --- dashboard ---
         self.dash = None
@@ -240,6 +245,12 @@ class PCActiveInferenceRunner(Node):
         self._accel_x = float(msg.linear_acceleration.x)
         self._accel_y = float(msg.linear_acceleration.y)
         self._accel_z = float(msg.linear_acceleration.z)
+
+    def _battery_voltage_cb(self, msg):
+        self._battery_voltage = float(msg.data)
+
+    def _battery_percentage_cb(self, msg):
+        self._battery_percentage = float(msg.data)
 
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
@@ -348,6 +359,8 @@ class PCActiveInferenceRunner(Node):
                 trans_errors=trans_errors,       # per-ensemble-member error (5,)
                 z_abs=z_abs,                    # |activation| per latent node
                 e_z_abs=e_z_abs,                # |state error| per latent node
+                battery_voltage=self._battery_voltage,
+                battery_percentage=self._battery_percentage,
             )
         if self._step % 20 == 0:
             self.get_logger().info(
