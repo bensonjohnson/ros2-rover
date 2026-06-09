@@ -372,8 +372,10 @@ def run_sleep_cycle(args):
     except Exception as e:
         print(f"⚠️ Could not archive experience log: {e}")
 
-    # Keep dashboard alive for review if visualize is enabled
-    if dash is not None:
+    # Keep dashboard alive for review if visualize is enabled (skipped under
+    # the brain supervisor, which serves the page itself and wants the child
+    # to exit so the rover returns to idle).
+    if dash is not None and not args.exit_when_done:
         print("\n✅ Sleep cycle completed! Keeping dashboard alive. Press Ctrl+C to exit.")
         try:
             while True:
@@ -399,6 +401,9 @@ def main(args=None):
     parser.add_argument("--no_visualize", action="store_false", dest="visualize", help="Disable web dashboard streaming")
     parser.add_argument("--dashboard_port", type=int, default=8082, help="Web dashboard port")
     parser.add_argument("--step_delay", type=float, default=0.0, help="Time delay (seconds) between replay/dreaming steps to regulate animation speed")
+    parser.add_argument("--exit_when_done", action="store_true",
+                        help="Exit after the cycle instead of keeping the dashboard alive "
+                             "(used by brain_supervisor, which owns the public page)")
     parser.add_argument("--torch_threads", type=int, default=1, help="Number of CPU threads for PyTorch ops (default: 1; tensors here are tiny (<=72-dim) so multi-threaded BLAS adds more sync overhead than it saves)")
     
     parsed_args = parser.parse_args(args)

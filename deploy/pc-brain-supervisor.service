@@ -1,0 +1,32 @@
+# PC Rover Brain Supervisor — systemd unit (template)
+#
+# Install with deploy/install_supervisor_service.sh (it fills in the
+# placeholders), or by hand:
+#   sed -e "s|@USER@|$USER|g" -e "s|@WORKSPACE@|$PWD|g" \
+#       deploy/pc-brain-supervisor.service | \
+#       sudo tee /etc/systemd/system/pc-brain-supervisor.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pc-brain-supervisor
+#
+# The supervisor serves the dashboard on :8082 immediately, git-pulls and
+# rebuilds the workspace on startup, then idles until the Awake/Sleep button
+# is clicked on the page. Restart=always also covers the supervisor's
+# self-re-exec after a successful code update.
+
+[Unit]
+Description=PC Rover Brain Supervisor (dashboard + awake/sleep control)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@WORKSPACE@
+# Add ROS env specifics here if you use them, e.g.:
+# Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source @WORKSPACE@/install/setup.bash && exec ros2 run tractor_bringup brain_supervisor --workspace @WORKSPACE@'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

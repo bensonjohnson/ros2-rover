@@ -269,9 +269,46 @@ _PAGE = """<!doctype html>
   .bar-wrap { display: inline-flex; align-items: center; gap: 6px; }
   .bar-bg { background: #15181d; border-radius: 3px; display: inline-block; width: 80px; height: 6px; overflow: hidden; }
   .err-bar { height: 100%; border-radius: 3px; display: block; }
+
+  /* Supervisor control bar (only shown when served by brain_supervisor) */
+  .ctrl-bar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .ctrl-btn {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 22px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(30, 34, 43, 0.8);
+    color: #cdd3da;
+    cursor: pointer;
+    transition: filter 0.1s ease, transform 0.05s ease;
+  }
+  .ctrl-btn:hover:not(:disabled) { filter: brightness(1.3); }
+  .ctrl-btn:active:not(:disabled) { transform: scale(0.97); }
+  .ctrl-btn:disabled { opacity: 0.3; cursor: default; }
+  .ctrl-btn.awake  { border-color: rgba(0,200,140,0.4); color: #00c88c; }
+  .ctrl-btn.sleep  { border-color: rgba(147,112,219,0.4); color: #da70d6; }
+  .ctrl-btn.stop   { border-color: rgba(255,91,91,0.4); color: #ff5b5b; }
+  .ctrl-btn.update { border-color: rgba(91,192,255,0.4); color: #5bc0ff; }
+  .ctrl-note { font-size: 11px; color: #7c8694; }
 </style></head><body>
 <h1>PREDICTIVE-CODING ROVER BRAIN</h1>
 <div class="sub">observed vs. predicted lidar &mdash; pure epistemic active inference</div>
+<div class="ctrl-bar" id="ctrl_bar">
+  <button class="ctrl-btn awake" id="btn_awake">Awake</button>
+  <button class="ctrl-btn sleep" id="btn_sleep">Sleep</button>
+  <button class="ctrl-btn stop" id="btn_stop">Stop</button>
+  <button class="ctrl-btn update" id="btn_update">Update</button>
+  <span class="ctrl-note" id="ctrl_note"></span>
+</div>
 <div class="brain-row">
   <div class="brain-panel">
     <div class="brain-title">NEURAL NET ACTIVITY</div>
@@ -675,9 +712,39 @@ function nnStatus(s){
   }
 }
 
+// ---- Supervisor controls (bar appears only when brain_supervisor serves us)
+async function sendControl(action){
+  if(action==='awake' && !confirm('Start AWAKE mode? The rover will drive autonomously.'))return;
+  if(action==='update' && !confirm('Pull latest code and rebuild?'))return;
+  try{
+    const r=await fetch('/control',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action})});
+    const j=await r.json();
+    $('ctrl_note').textContent=j.msg||'';
+  }catch(e){$('ctrl_note').textContent='control request failed';}
+}
+$('btn_awake').onclick=()=>sendControl('awake');
+$('btn_sleep').onclick=()=>sendControl('sleep');
+$('btn_stop').onclick=()=>sendControl('stop');
+$('btn_update').onclick=()=>sendControl('update');
+
+function controls(s){
+  const sm=s.supervisor_mode;
+  if(sm===undefined)return;          // standalone dashboard: no bar
+  $('ctrl_bar').style.display='flex';
+  const idle=(sm==='idle');
+  $('btn_awake').disabled=!idle;
+  $('btn_sleep').disabled=!idle;
+  $('btn_update').disabled=!idle;
+  $('btn_stop').disabled=(sm==='idle'||sm==='updating');
+  if(s.supervisor_note)$('ctrl_note').textContent=s.supervisor_note;
+}
+
 async function tick(){
   try{
     const s=await (await fetch('/state')).json();
+    controls(s);
     const fix=(x,n=3)=>(x==null?'-':x.toFixed(n));
     $('step').textContent=s.step??'-';
     $('F').textContent=fix(s.F);$('err').textContent=fix(s.err);

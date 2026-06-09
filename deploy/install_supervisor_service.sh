@@ -1,0 +1,37 @@
+#!/bin/bash
+# Install the PC brain supervisor as a systemd service.
+# Run from the ros2-rover workspace root on the rover:
+#   ./deploy/install_supervisor_service.sh
+
+set -e
+
+if [ ! -d "src" ] || [ ! -d ".git" ]; then
+  echo "Error: run this from the ros2-rover workspace root"
+  exit 1
+fi
+
+WORKSPACE=$(pwd)
+SERVICE_NAME="pc-brain-supervisor"
+TEMPLATE="deploy/${SERVICE_NAME}.service"
+
+if [ ! -f "install/setup.bash" ]; then
+  echo "Workspace not built yet — building first..."
+  source /opt/ros/jazzy/setup.bash
+  colcon build --packages-select tractor_bringup tractor_control tractor_sensors \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release
+fi
+
+echo "Installing ${SERVICE_NAME}.service (user=$USER, workspace=$WORKSPACE)"
+sed -e "s|@USER@|$USER|g" -e "s|@WORKSPACE@|$WORKSPACE|g" "$TEMPLATE" | \
+  sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now "$SERVICE_NAME"
+
+echo ""
+echo "Done. The supervisor starts at boot, pulls + rebuilds the code, and"
+echo "serves the dashboard at http://$(hostname -I | awk '{print $1}'):8082"
+echo ""
+echo "  status:  systemctl status $SERVICE_NAME"
+echo "  logs:    journalctl -u $SERVICE_NAME -f"
+echo "  stop:    sudo systemctl stop $SERVICE_NAME"
