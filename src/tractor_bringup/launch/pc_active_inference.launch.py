@@ -135,7 +135,10 @@ def generate_launch_description():
             "max_range": 5.0,
             "latent_dim": 64,
             "ensemble_size": 5,
-            "torch_threads": 4,
+            # Single-threaded torch, matching the sleep consolidator: the
+            # per-tick tensors are tiny (<=80-dim), so OpenMP fork/join sync
+            # costs more than the parallelism returns.
+            "torch_threads": 1,
             "dashboard_port": LaunchConfiguration("dashboard_port"),
         }])
 
