@@ -14,15 +14,24 @@ WORKSPACE=$(pwd)
 SERVICE_NAME="pc-brain-supervisor"
 TEMPLATE="deploy/${SERVICE_NAME}.service"
 
-if [ ! -f "install/setup.bash" ]; then
-  echo "Workspace not built yet — building first..."
-  source /opt/ros/jazzy/setup.bash
-  colcon build --packages-select tractor_bringup tractor_control tractor_sensors \
-    --cmake-args -DCMAKE_BUILD_TYPE=Release
+# The service must run as the workspace owner, never root — even if this
+# script itself was invoked with sudo (SUDO_USER preserves the real user).
+RUN_USER="${SUDO_USER:-$USER}"
+if [ "$RUN_USER" = "root" ]; then
+  echo "Error: could not determine a non-root user to run the service as."
+  echo "Run this script as the rover user (it will sudo where needed)."
+  exit 1
 fi
 
-echo "Installing ${SERVICE_NAME}.service (user=$USER, workspace=$WORKSPACE)"
-sed -e "s|@USER@|$USER|g" -e "s|@WORKSPACE@|$WORKSPACE|g" "$TEMPLATE" | \
+# Always rebuild so freshly added executables (entry points) exist before
+# the service tries to run them.
+echo "Building workspace..."
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select tractor_bringup tractor_control tractor_sensors \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+echo "Installing ${SERVICE_NAME}.service (user=$RUN_USER, workspace=$WORKSPACE)"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@WORKSPACE@|$WORKSPACE|g" "$TEMPLATE" | \
   sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null
 
 sudo systemctl daemon-reload
