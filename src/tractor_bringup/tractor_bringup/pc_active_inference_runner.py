@@ -31,7 +31,7 @@ import torch
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, JointState, Imu
 from std_msgs.msg import Float32MultiArray
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
@@ -53,6 +53,17 @@ class PCActiveInferenceRunner(Node):
         p("control_rate_hz", 15.0)
         p("num_bins", 72)
         p("max_range", 5.0)
+        # Proprioception: the rover senses its own motion (fixes the self-motion
+        # blind spot — one scan can't tell you if you're moving, and the
+        # commanded action != actual motion under slip / safety clamping).
+        p("use_proprio", True)
+        p("joint_states_topic", "/joint_states")
+        p("imu_topic", "/imu/data")
+        p("imu_yaw_axis", "z")        # x|y|z — the chip axis that is VERTICAL on
+                                      # this (strangely mounted) IMU. VERIFY first.
+        p("imu_yaw_sign", 1.0)        # flip if a left turn reads negative
+        p("max_wheel_vel", 8.0)       # rad/s, for normalizing wheel velocity
+        p("max_yaw_rate", 3.0)        # rad/s, for normalizing IMU yaw rate
         p("latent_dim", 64)
         p("ensemble_size", 5)
         p("n_infer_iters", 24)
@@ -84,11 +95,21 @@ class PCActiveInferenceRunner(Node):
         self.model_path = g("model_path").value
         self.save_interval_s = float(g("save_interval_s").value)
 
+        # Proprio config
+        self.use_proprio = bool(g("use_proprio").value)
+        self.imu_yaw_axis = str(g("imu_yaw_axis").value).lower()
+        self.imu_yaw_sign = float(g("imu_yaw_sign").value)
+        self.max_wheel_vel = float(g("max_wheel_vel").value)
+        self.max_yaw_rate = float(g("max_yaw_rate").value)
+        self.n_proprio = 3 if self.use_proprio else 0   # [wheel_L, wheel_R, yaw_rate]
+        self.obs_dim = self.num_bins + self.n_proprio
+        self._wheel_l = self._wheel_r = self._yaw_rate = 0.0
+
         torch.set_num_threads(int(g("torch_threads").value))
 
         # --- brain ---
         self.model = PCWorldModel(PCConfig(
-            obs_dim=self.num_bins,
+            obs_dim=self.obs_dim,
             latent_dim=int(g("latent_dim").value),
             ensemble_size=int(g("ensemble_size").value),
             n_infer_iters=int(g("n_infer_iters").value),
@@ -102,7 +123,7 @@ class PCActiveInferenceRunner(Node):
         # --- replay ---
         self.replay = SequenceReplay(
             capacity=int(g("replay_capacity").value),
-            obs_dim=self.num_bins, action_dim=2)
+            obs_dim=self.obs_dim, action_dim=2)
         self.replay_passes = int(g("replay_passes").value)
         self.replay_seq_len = int(g("replay_seq_len").value)
         self.replay_burn_in = int(g("replay_burn_in").value)
@@ -118,6 +139,11 @@ class PCActiveInferenceRunner(Node):
         # --- ROS I/O ---
         self.scan_sub = self.create_subscription(
             LaserScan, self.scan_topic, self._scan_cb, qos_profile_sensor_data)
+        if self.use_proprio:
+            self.create_subscription(
+                JointState, g("joint_states_topic").value, self._joint_cb, 10)
+            self.create_subscription(
+                Imu, g("imu_topic").value, self._imu_cb, qos_profile_sensor_data)
         self.track_pub = self.create_publisher(
             Float32MultiArray, g("track_cmd_topic").value, 10)
         self.diag_pub = self.create_publisher(
@@ -150,12 +176,35 @@ class PCActiveInferenceRunner(Node):
             msg.angle_min, msg.angle_increment,
             num_bins=self.num_bins, max_range=self.max_range)
 
+    def _joint_cb(self, msg: JointState):
+        # Wheel velocities live at indices 2,3 (see hiwonder_motor_driver).
+        if len(msg.velocity) >= 4:
+            self._wheel_l = float(msg.velocity[2])
+            self._wheel_r = float(msg.velocity[3])
+
+    def _imu_cb(self, msg: Imu):
+        w = msg.angular_velocity
+        comp = {"x": w.x, "y": w.y, "z": w.z}.get(self.imu_yaw_axis, w.z)
+        self._yaw_rate = self.imu_yaw_sign * float(comp)
+
+    def _build_obs(self) -> np.ndarray:
+        """Openness vector + proprio channel, all in [0,1] for the sigmoid decoder."""
+        if not self.use_proprio:
+            return self.latest_scan
+        # Map signed velocities to [0,1] (0.5 = stationary).
+        wl = np.clip(0.5 + 0.5 * self._wheel_l / self.max_wheel_vel, 0.0, 1.0)
+        wr = np.clip(0.5 + 0.5 * self._wheel_r / self.max_wheel_vel, 0.0, 1.0)
+        yaw = np.clip(0.5 + 0.5 * self._yaw_rate / self.max_yaw_rate, 0.0, 1.0)
+        proprio = np.array([wl, wr, yaw], dtype=np.float32)
+        return np.concatenate([self.latest_scan, proprio])
+
     def _control_step(self):
         if self.latest_scan is None:
             self._publish_track(0.0, 0.0)
             return
 
-        o_t = torch.from_numpy(self.latest_scan)
+        obs_np = self._build_obs()
+        o_t = torch.from_numpy(obs_np)
         action_prev_np = self.last_action.numpy().copy()   # led into this o_t
 
         # 1. Infer current latent from observation + previous action.
@@ -188,7 +237,7 @@ class PCActiveInferenceRunner(Node):
 
         # Store this transition, then squeeze extra learning from past windows.
         # Done after publishing so replay compute never delays the motor command.
-        self.replay.append(self.latest_scan, action_prev_np)
+        self.replay.append(obs_np, action_prev_np)
         if self.do_learn and self.replay_passes > 0 and len(self.replay) >= self.replay_min:
             self._replay_step()
 
@@ -203,7 +252,7 @@ class PCActiveInferenceRunner(Node):
         if self.dash is not None:
             self.dash.update(
                 obs=self.latest_scan,
-                pred=self.model.reconstruct(z).numpy(),
+                pred=self.model.reconstruct(z).numpy()[:self.num_bins],
                 F=free_energy, err=obs_err,
                 epi=info["epistemic"], epi_max=info["epistemic_max"],
                 L=float(out[0]), R=float(out[1]), step=self._step)

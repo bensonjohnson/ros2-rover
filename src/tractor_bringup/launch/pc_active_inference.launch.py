@@ -2,13 +2,15 @@
 
 Reuses ONLY the pieces this experiment needs, nothing else:
     - stl19p lidar bringup            -> /scan
+    - lsm9ds1 IMU                     -> /imu/data (proprio yaw-rate channel)
     - lidar_safety_monitor (track)    -> gates /track_cmd_ai -> /track_cmd
-    - hiwonder_motor_driver           -> drives the tracks
+    - hiwonder_motor_driver           -> tracks + /joint_states (wheel velocity)
     - pc_active_inference_runner      -> the predictive-coding brain
 
-No RealSense, IMU, odometry, joystick, or remote training server. The brain
-learns purely online on the rover CPU from lidar alone, and the safety monitor
-hard-stops the tracks near obstacles so early erratic behavior stays bounded.
+The brain learns online on the rover CPU from lidar + proprioception (wheel
+velocity + IMU yaw rate — the rover sensing its own motion), and the safety
+monitor hard-stops the tracks near obstacles so early erratic behavior stays
+bounded. No RealSense, odometry EKF, joystick, or remote training server.
 """
 
 import os
@@ -42,6 +44,13 @@ def generate_launch_description():
     action_persist_arg = DeclareLaunchArgument(
         "action_persist", default_value="5",
         description="Hold a chosen action this many ticks (anti-twitch)")
+    imu_yaw_axis_arg = DeclareLaunchArgument(
+        "imu_yaw_axis", default_value="z",
+        description="Chip axis that is VERTICAL on the (strangely mounted) IMU "
+                    "= the yaw axis. VERIFY with a spin + gravity check.")
+    imu_yaw_sign_arg = DeclareLaunchArgument(
+        "imu_yaw_sign", default_value="1.0",
+        description="Flip to -1.0 if a left turn reads as negative yaw rate")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -64,6 +73,11 @@ def generate_launch_description():
             "port_name": LaunchConfiguration("lidar_port"),
             "frame_id": "laser_link",
         }.items())
+
+    # IMU (LSM9DS1) for the proprio yaw-rate channel -> /imu/data
+    imu_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_sensors_dir, "launch", "lsm9ds1_imu.launch.py")))
 
     # Track-space safety gate: /track_cmd_ai -> (clamp near obstacles) -> /track_cmd
     safety_monitor_node = Node(
@@ -101,6 +115,9 @@ def generate_launch_description():
             "forward_bias": LaunchConfiguration("forward_bias"),
             "action_persist": LaunchConfiguration("action_persist"),
             "learn": LaunchConfiguration("learn"),
+            "use_proprio": True,
+            "imu_yaw_axis": LaunchConfiguration("imu_yaw_axis"),
+            "imu_yaw_sign": LaunchConfiguration("imu_yaw_sign"),
             "num_bins": 72,
             "max_range": 5.0,
             "latent_dim": 64,
@@ -116,11 +133,14 @@ def generate_launch_description():
         lidar_port_arg,
         forward_bias_arg,
         action_persist_arg,
+        imu_yaw_axis_arg,
+        imu_yaw_sign_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
 
         TimerAction(period=2.0, actions=[lidar_launch]),
+        TimerAction(period=4.0, actions=[imu_launch]),
         TimerAction(period=5.0, actions=[safety_monitor_node]),
         TimerAction(period=7.0, actions=[brain_node]),
     ])
