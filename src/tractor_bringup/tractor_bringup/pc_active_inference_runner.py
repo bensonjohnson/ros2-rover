@@ -66,6 +66,7 @@ class PCActiveInferenceRunner(Node):
         p("imu_yaw_sign", 1.0)        # flip if a left turn reads negative
         p("max_wheel_vel", 8.0)       # rad/s, for normalizing wheel velocity
         p("max_yaw_rate", 2.5)        # rad/s, for normalizing IMU yaw rate
+        p("max_accel", 19.6)          # m/s^2, scaling limit (approx 2g) for accelerometer
         p("latent_dim", 64)
         p("ensemble_size", 5)
         p("n_infer_iters", 24)
@@ -117,9 +118,11 @@ class PCActiveInferenceRunner(Node):
         self.imu_yaw_sign = float(g("imu_yaw_sign").value)
         self.max_wheel_vel = float(g("max_wheel_vel").value)
         self.max_yaw_rate = float(g("max_yaw_rate").value)
-        self.n_proprio = 3 if self.use_proprio else 0   # [wheel_L, wheel_R, yaw_rate]
+        self.max_accel = float(g("max_accel").value)
+        self.n_proprio = 6 if self.use_proprio else 0   # [wheel_L, wheel_R, yaw_rate, accel_x, accel_y, accel_z]
         self.obs_dim = self.num_bins + self.n_proprio
         self._wheel_l = self._wheel_r = self._yaw_rate = 0.0
+        self._accel_x = self._accel_y = self._accel_z = 0.0
 
         torch.set_num_threads(int(g("torch_threads").value))
 
@@ -220,16 +223,23 @@ class PCActiveInferenceRunner(Node):
         w = msg.angular_velocity
         comp = {"x": w.x, "y": w.y, "z": w.z}.get(self.imu_yaw_axis, w.z)
         self._yaw_rate = self.imu_yaw_sign * float(comp)
+        # Accelerometer readings
+        self._accel_x = float(msg.linear_acceleration.x)
+        self._accel_y = float(msg.linear_acceleration.y)
+        self._accel_z = float(msg.linear_acceleration.z)
 
     def _build_obs(self) -> np.ndarray:
-        """Openness vector + proprio channel, all in [0,1] for the sigmoid decoder."""
+        """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
         if not self.use_proprio:
             return self.latest_scan
-        # Map signed velocities to [0,1] (0.5 = stationary).
+        # Map signed velocities and accelerations to [0,1] (0.5 = neutral).
         wl = np.clip(0.5 + 0.5 * self._wheel_l / self.max_wheel_vel, 0.0, 1.0)
         wr = np.clip(0.5 + 0.5 * self._wheel_r / self.max_wheel_vel, 0.0, 1.0)
         yaw = np.clip(0.5 + 0.5 * self._yaw_rate / self.max_yaw_rate, 0.0, 1.0)
-        proprio = np.array([wl, wr, yaw], dtype=np.float32)
+        ax = np.clip(0.5 + 0.5 * self._accel_x / self.max_accel, 0.0, 1.0)
+        ay = np.clip(0.5 + 0.5 * self._accel_y / self.max_accel, 0.0, 1.0)
+        az = np.clip(0.5 + 0.5 * self._accel_z / self.max_accel, 0.0, 1.0)
+        proprio = np.array([wl, wr, yaw, ax, ay, az], dtype=np.float32)
         return np.concatenate([self.latest_scan, proprio])
 
     def _control_step(self):
