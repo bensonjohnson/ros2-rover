@@ -107,6 +107,8 @@ def run_sleep_cycle(args):
         except Exception as e:
             print(f"Could not start dream dashboard: {e}")
 
+    last_dash_update = 0.0
+
     # --- SWS: Memory Replay Epochs ---
     print(f"\n--- Starting Slow-Wave Sleep (SWS): Replaying {args.sws_epochs} epochs ---")
     rng = np.random.default_rng(args.seed)
@@ -144,40 +146,43 @@ def run_sleep_cycle(args):
                     model.learn(z, a, o, z_prev=zp, advance=False)
                     updates_count += 1
 
-                # Update visualizer if active
+                # Update visualizer if active (rate-limited to 30 Hz unless step_delay is active)
                 if dash is not None:
-                    o_hat, s_latent = model._decode(z)
-                    z_prev_in = model._trans_input(zp, a)
-                    e_o = (o - o_hat).numpy()[:72]
-                    e_z = (z - model._prior_mean(z_prev_in)).numpy()
-                    trans_errors = np.array([
-                        float((z - model._predict_member(m, z_prev_in)).pow(2).mean())
-                        for m in range(model.cfg.ensemble_size)
-                    ])
-                    z_abs = np.abs(s_latent.numpy())
-                    e_z_abs = np.abs(e_z)
-                    
-                    epi = float(model.epistemic_value(zp, a.unsqueeze(0))[0])
-                    
-                    dash.update(
-                        obs=obs_np[:72],
-                        pred=model.reconstruct(z).numpy()[:72],
-                        F=F, err=err,
-                        epi=epi, epi_max=epi,
-                        prag=0.0,
-                        L=float(act_np[0]), R=float(act_np[1]), step=updates_count,
-                        z=z.numpy(),
-                        s=s_latent.numpy(),
-                        e_o=e_o,
-                        e_z=e_z,
-                        W_o=model.W_o.detach().cpu().numpy(),
-                        trans_errors=trans_errors,
-                        z_abs=z_abs,
-                        e_z_abs=e_z_abs,
-                        mode="sws"
-                    )
-                    if args.step_delay > 0.0:
-                        time.sleep(args.step_delay)
+                    now = time.time()
+                    if args.step_delay > 0.0 or (now - last_dash_update) >= 0.033:
+                        last_dash_update = now
+                        o_hat, s_latent = model._decode(z)
+                        z_prev_in = model._trans_input(zp, a)
+                        e_o = (o - o_hat).numpy()[:72]
+                        e_z = (z - model._prior_mean(z_prev_in)).numpy()
+                        trans_errors = np.array([
+                            float((z - model._predict_member(m, z_prev_in)).pow(2).mean())
+                            for m in range(model.cfg.ensemble_size)
+                        ])
+                        z_abs = np.abs(s_latent.numpy())
+                        e_z_abs = np.abs(e_z)
+                        
+                        epi = float(model.epistemic_value(zp, a.unsqueeze(0))[0])
+                        
+                        dash.update(
+                            obs=obs_np[:72],
+                            pred=model.reconstruct(z).numpy()[:72],
+                            F=F, err=err,
+                            epi=epi, epi_max=epi,
+                            prag=0.0,
+                            L=float(act_np[0]), R=float(act_np[1]), step=updates_count,
+                            z=z.numpy(),
+                            s=s_latent.numpy(),
+                            e_o=e_o,
+                            e_z=e_z,
+                            W_o=model.W_o.detach().cpu().numpy(),
+                            trans_errors=trans_errors,
+                            z_abs=z_abs,
+                            e_z_abs=e_z_abs,
+                            mode="sws"
+                        )
+                        if args.step_delay > 0.0:
+                            time.sleep(args.step_delay)
                 zp = z
                 
         # Synaptic Homeostasis: apply synaptic decay (pruning)
@@ -226,40 +231,43 @@ def run_sleep_cycle(args):
                 model.learn(z_next, a_dream, o_dream, z_prev=zp, advance=False)
                 rem_updates += 1
 
-                # Update visualizer if active
+                # Update visualizer if active (rate-limited to 30 Hz unless step_delay is active)
                 if dash is not None:
-                    o_hat, s_latent = model._decode(z_next)
-                    z_prev_in = model._trans_input(zp, a_dream)
-                    e_o = np.zeros(72)  # dream error is zero by definition
-                    e_z = (z_next - model._prior_mean(z_prev_in)).numpy()
-                    trans_errors = np.array([
-                        float((z_next - model._predict_member(m, z_prev_in)).pow(2).mean())
-                        for m in range(model.cfg.ensemble_size)
-                    ])
-                    z_abs = np.abs(s_latent.numpy())
-                    e_z_abs = np.abs(e_z)
-                    
-                    epi = float(model.epistemic_value(zp, a_dream.unsqueeze(0))[0])
-                    
-                    dash.update(
-                        obs=o_dream.numpy()[:72],
-                        pred=o_dream.numpy()[:72],
-                        F=0.0, err=0.0,
-                        epi=epi, epi_max=epi,
-                        prag=0.0,
-                        L=float(a_dream[0]), R=float(a_dream[1]), step=rem_updates,
-                        z=z_next.numpy(),
-                        s=s_latent.numpy(),
-                        e_o=e_o,
-                        e_z=e_z,
-                        W_o=model.W_o.detach().cpu().numpy(),
-                        trans_errors=trans_errors,
-                        z_abs=z_abs,
-                        e_z_abs=e_z_abs,
-                        mode="rem"
-                    )
-                    if args.step_delay > 0.0:
-                        time.sleep(args.step_delay)
+                    now = time.time()
+                    if args.step_delay > 0.0 or (now - last_dash_update) >= 0.033:
+                        last_dash_update = now
+                        o_hat, s_latent = model._decode(z_next)
+                        z_prev_in = model._trans_input(zp, a_dream)
+                        e_o = np.zeros(72)  # dream error is zero by definition
+                        e_z = (z_next - model._prior_mean(z_prev_in)).numpy()
+                        trans_errors = np.array([
+                            float((z_next - model._predict_member(m, z_prev_in)).pow(2).mean())
+                            for m in range(model.cfg.ensemble_size)
+                        ])
+                        z_abs = np.abs(s_latent.numpy())
+                        e_z_abs = np.abs(e_z)
+                        
+                        epi = float(model.epistemic_value(zp, a_dream.unsqueeze(0))[0])
+                        
+                        dash.update(
+                            obs=o_dream.numpy()[:72],
+                            pred=o_dream.numpy()[:72],
+                            F=0.0, err=0.0,
+                            epi=epi, epi_max=epi,
+                            prag=0.0,
+                            L=float(a_dream[0]), R=float(a_dream[1]), step=rem_updates,
+                            z=z_next.numpy(),
+                            s=s_latent.numpy(),
+                            e_o=e_o,
+                            e_z=e_z,
+                            W_o=model.W_o.detach().cpu().numpy(),
+                            trans_errors=trans_errors,
+                            z_abs=z_abs,
+                            e_z_abs=e_z_abs,
+                            mode="rem"
+                        )
+                        if args.step_delay > 0.0:
+                            time.sleep(args.step_delay)
                 
                 zp = z_next
                 
@@ -293,6 +301,15 @@ def run_sleep_cycle(args):
     except Exception as e:
         print(f"⚠️ Could not archive experience log: {e}")
 
+    # Keep dashboard alive for review if visualize is enabled
+    if dash is not None:
+        print("\n✅ Sleep cycle completed! Keeping dashboard alive. Press Ctrl+C to exit.")
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            print("Exiting.")
+
 
 def main(args=None):
     parser = argparse.ArgumentParser(description="Biological PC Sleep Consolidator")
@@ -309,7 +326,7 @@ def main(args=None):
     parser.add_argument("--visualize", action="store_true", default=True, help="Stream dreaming steps to web dashboard")
     parser.add_argument("--no_visualize", action="store_false", dest="visualize", help="Disable web dashboard streaming")
     parser.add_argument("--dashboard_port", type=int, default=8082, help="Web dashboard port")
-    parser.add_argument("--step_delay", type=float, default=0.01, help="Time delay (seconds) between replay/dreaming steps to regulate animation speed")
+    parser.add_argument("--step_delay", type=float, default=0.0, help="Time delay (seconds) between replay/dreaming steps to regulate animation speed")
     
     parsed_args = parser.parse_args(args)
     run_sleep_cycle(parsed_args)
