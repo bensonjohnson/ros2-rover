@@ -679,18 +679,41 @@ async function tick(){
     const age=s.age??99;
     const badge = $('status_badge');
     const statusText = $('status');
-    if (age > 1.5) {
+    if (s.mode) {
+      if (s.mode === 'sws') {
+        badge.className = 'status-badge live';
+        badge.style.background = 'rgba(255, 157, 59, 0.1)';
+        badge.style.borderColor = 'rgba(255, 157, 59, 0.25)';
+        badge.style.color = '#ff9d3b';
+        statusText.textContent = 'SWS Replay';
+      } else if (s.mode === 'rem') {
+        badge.className = 'status-badge live';
+        badge.style.background = 'rgba(147, 112, 219, 0.1)';
+        badge.style.borderColor = 'rgba(147, 112, 219, 0.25)';
+        badge.style.color = '#da70d6';
+        statusText.textContent = 'REM Dream';
+      } else {
+        badge.className = 'status-badge live';
+        badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
+        statusText.textContent = s.mode;
+      }
+    } else if (age > 1.5) {
       badge.className = 'status-badge stale';
+      badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
       statusText.textContent = 'stale (' + age.toFixed(1) + 's)';
     } else {
       badge.className = 'status-badge live';
+      badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
       statusText.textContent = 'live';
     }
     radar(s);tracks(s);trace(s);brainViz(s);nnStatus(s);
   }catch(e){
     const badge = $('status_badge');
     const statusText = $('status');
-    if (badge) badge.className = 'status-badge disconnected';
+    if (badge) {
+      badge.className = 'status-badge disconnected';
+      badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
+    }
     if (statusText) statusText.textContent = 'disconnected';
   }
 }
@@ -711,7 +734,7 @@ class PCDashboardState:
 
     def update(self, *, obs, pred, F, err, epi, epi_max, L, R, step,
                 z=None, s=None, e_o=None, e_z=None, W_o=None,
-                trans_errors=None, z_abs=None, e_z_abs=None, prag=None) -> None:
+                trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None) -> None:
         with self._lock:
             self._F.append(round(float(F), 4))
             self._err.append(round(float(err), 4))
@@ -723,6 +746,8 @@ class PCDashboardState:
                 "prag": float(prag) if prag is not None else 0.0,
                 "L": float(L), "R": float(R), "step": int(step),
             }
+            if mode is not None:
+                state["mode"] = mode
             # Neural net activations & weights for the brain visualizer.
             if z is not None:
                 state["z"] = [round(float(x), 4) for x in z]
