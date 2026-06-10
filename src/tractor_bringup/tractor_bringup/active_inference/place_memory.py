@@ -41,10 +41,19 @@ class PlaceMemory:
         self.novelty = 1.0                   # of the most recent update
 
     def fingerprint(self, scan) -> np.ndarray:
-        """Rotation-invariant room descriptor from the binned scan."""
+        """Rotation-invariant room descriptor from the binned scan.
+
+        The raw DC term (mean openness x num_bins) dwarfs the shape
+        harmonics and makes every room look alike after normalization, so
+        it is removed before the FFT and re-added as a single half-weight
+        "room size" channel; harmonics are scaled to amplitude units so
+        size and shape carry comparable votes.
+        """
         s = np.asarray(scan, dtype=np.float64)
-        mag = np.abs(np.fft.rfft(s))[:self.n_freq]
-        return mag / (np.linalg.norm(mag) + 1e-9)
+        m = float(s.mean())
+        harm = np.abs(np.fft.rfft(s - m))[1:self.n_freq] / (s.size / 2.0)
+        v = np.concatenate([[0.5 * m], harm])
+        return v / (np.linalg.norm(v) + 1e-9)
 
     def update(self, scan) -> float:
         """Fold the current scan in; return place novelty in [0, 1].
