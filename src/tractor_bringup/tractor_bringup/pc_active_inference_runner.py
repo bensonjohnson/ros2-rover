@@ -99,7 +99,11 @@ class PCActiveInferenceRunner(Node):
         p("bearing_weight", 0.5)      # bonus toward nearest reachable novel cell
         p("visit_cell_size", 0.25)    # m per grid cell
         p("visit_tau_s", 420.0)       # visit-count decay time constant
-        p("obstacle_tau_s", 90.0)     # obstacle-layer decay time constant
+        p("obstacle_tau_s", 45.0)     # obstacle-layer decay time constant
+        p("obstacle_max_range", 3.0)  # only mark returns closer than this (m);
+                                      # heading error scatters far returns
+        p("obstacle_max_yaw_rate", 0.35)  # rad/s — don't mark while pivoting
+                                          # (stale scan + fresh heading = smear)
         p("visit_extent_m", 30.0)     # grid span (ring-clamped at the edges)
         p("novelty_horizon_s", 7.0)   # kinematic lookahead for the term
         p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
@@ -187,6 +191,8 @@ class PCActiveInferenceRunner(Node):
             extent_m=float(g("visit_extent_m").value),
             tau_s=float(g("visit_tau_s").value),
             obstacle_tau_s=float(g("obstacle_tau_s").value))
+        self.obstacle_max_range = float(g("obstacle_max_range").value)
+        self.obstacle_max_yaw_rate = float(g("obstacle_max_yaw_rate").value)
         self._novel_bearing = None
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
@@ -356,10 +362,18 @@ class PCActiveInferenceRunner(Node):
         The preprocessed scan is an openness map: value * max_range = nearest
         return per bin, bin 0 = robot-forward, CCW. Bins at (or clamped to)
         max_range carry no return and are skipped.
+
+        Skipped entirely while pivoting: the scan is up to a lidar period
+        old, so pairing it with the current heading smears returns into arcs
+        (that is what filled the minimap with phantom obstacles). Range is
+        also capped — heading error scatters far returns linearly.
         """
+        if abs(self._yaw_rate) > self.obstacle_max_yaw_rate:
+            return
         scan = self.latest_scan
         d = scan * self.max_range
-        hit = (d > 0.1) & (d < self.max_range * 0.95)
+        hit = (d > 0.1) & (d < min(self.obstacle_max_range,
+                                   self.max_range * 0.95))
         if not hit.any():
             return
         bins = np.nonzero(hit)[0]

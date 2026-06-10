@@ -35,10 +35,13 @@ import numpy as np
 
 
 class VisitGrid:
-    OBSTACLE_THRESH = 0.2     # seconds of observation before a cell is "blocked"
+    # Seconds of observation before a cell is "blocked". High enough that a
+    # cell must be seen repeatedly from a steady heading — scan-vs-pose
+    # mis-registration during pivots paints brief arcs that never get there.
+    OBSTACLE_THRESH = 1.0
 
     def __init__(self, cell_size: float = 0.25, extent_m: float = 30.0,
-                 tau_s: float = 420.0, obstacle_tau_s: float = 90.0):
+                 tau_s: float = 420.0, obstacle_tau_s: float = 45.0):
         self.cell_size = float(cell_size)
         self.tau_s = float(tau_s)
         self.obstacle_tau_s = float(obstacle_tau_s)
