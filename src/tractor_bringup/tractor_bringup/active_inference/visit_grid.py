@@ -90,13 +90,24 @@ class VisitGrid:
 
     def novel_bearing(self, x: float, y: float, blocked_fn=None,
                       novel_thresh: float = 0.5,
-                      max_radius_m: float = 6.0) -> float | None:
-        """World bearing (rad) toward the nearest REACHABLE novel cell.
+                      max_radius_m: float = 6.0,
+                      dist_weight: float = 0.5,
+                      clear_cap_m: float = 2.0) -> float | None:
+        """World bearing (rad) toward the BEST reachable novel cell.
 
-        BFS from the rover's cell to the closest cell with under
-        `novel_thresh` seconds of recent occupancy. This is the long-range
-        pull out of an over-visited region: the local kinematic rollout can
-        only see ~1 m, but the BFS sees across the whole grid window.
+        BFS from the rover's cell over cells with under `novel_thresh`
+        seconds of recent occupancy. This is the long-range pull out of an
+        over-visited region: the local kinematic rollout can only see ~1 m,
+        but the BFS sees across the whole grid window.
+
+        Candidates are scored, not taken nearest-first. The visit trail is
+        one cell wide, so "nearest novel" is almost always a cramped sliver
+        right beside the trail or behind the rover — that made the arrow
+        cycle between the true frontier and dead space at its back. Score =
+        openness - dist_weight * (bfs_dist / max_radius), where openness is
+        the brushfire clearance from anything the CURRENT scan shows,
+        capped at `clear_cap_m`. A novel cell in wide-open space (an open
+        doorway) outranks a nearer one hugging a wall.
 
         `blocked_fn(xs, ys) -> bool array` (built from the current scan)
         keeps the search from routing through walls the lidar can see right
@@ -135,18 +146,40 @@ class VisitGrid:
         else:
             blocked_win = np.zeros((y_hi - y_lo, x_hi - x_lo), dtype=bool)
 
+        # Brushfire: per-cell distance (in cells) to the nearest scan-blocked
+        # cell, capped — the openness half of the candidate score.
+        cap = max(2, int(clear_cap_m / self.cell_size))
+        h, w = blocked_win.shape
+        clear_win = np.full((h, w), cap, dtype=np.int32)
+        bq = deque()
+        for j, i in zip(*np.nonzero(blocked_win)):
+            clear_win[j, i] = 0
+            bq.append((int(i), int(j)))
+        while bq:
+            i, j = bq.popleft()
+            c = clear_win[j, i] + 1
+            if c >= cap:
+                continue
+            for ni, nj in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
+                if 0 <= ni < w and 0 <= nj < h and clear_win[nj, ni] > c:
+                    clear_win[nj, ni] = c
+                    bq.append((ni, nj))
+
         seen = np.zeros((self._n, self._n), dtype=bool)
         seen[sy, sx] = True
         q = deque([(sx, sy, 0)])
+        best = None
+        best_score = -1e9
         while q:
             cx, cy, d = q.popleft()
             # Skip trivially-adjacent cells: a bearing to a neighbor we are
             # practically standing on is noise, not direction.
             if d >= 2 and self._counts[cy, cx] < novel_thresh:
-                wx = (cx - self._half) * self.cell_size
-                wy = (cy - self._half) * self.cell_size
-                self._goal = (cx, cy)
-                return math.atan2(wy - y, wx - x)
+                openness = clear_win[cy - y_lo, cx - x_lo] / cap
+                s = openness - dist_weight * (d / max(max_r, 1))
+                if s > best_score:
+                    best_score = s
+                    best = (cx, cy)
             if d >= max_r:
                 continue
             for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
@@ -154,7 +187,12 @@ class VisitGrid:
                         and not blocked_win[ny - y_lo, nx - x_lo]:
                     seen[ny, nx] = True
                     q.append((nx, ny, d + 1))
-        return None
+        if best is None:
+            return None
+        self._goal = best
+        wx = (best[0] - self._half) * self.cell_size
+        wy = (best[1] - self._half) * self.cell_size
+        return math.atan2(wy - y, wx - x)
 
     # ---- dashboard export -----------------------------------------------------
 
