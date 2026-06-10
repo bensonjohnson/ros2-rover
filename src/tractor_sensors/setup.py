@@ -31,6 +31,7 @@ setup(
         "console_scripts": [
             "lc29h_rtk_gps = tractor_sensors.lc29h_rtk_gps:main",
             "lsm9ds1_imu = tractor_sensors.lsm9ds1_imu:main",
+            "bno085_imu = tractor_sensors.bno085_imu:main",
         ],
     },
 )

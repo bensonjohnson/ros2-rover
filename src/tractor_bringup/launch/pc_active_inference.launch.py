@@ -16,8 +16,9 @@ bounded. No RealSense, odometry EKF, joystick, or remote training server.
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -62,6 +63,10 @@ def generate_launch_description():
     dashboard_port_arg = DeclareLaunchArgument(
         "dashboard_port", default_value="8082",
         description="Web dashboard port (0 disables)")
+    imu_type_arg = DeclareLaunchArgument(
+        "imu_type", default_value="lsm9ds1",
+        description="'lsm9ds1' (raw, software fusion) or 'bno085' (on-chip "
+                    "fused orientation) — both publish /imu/data")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -85,10 +90,19 @@ def generate_launch_description():
             "frame_id": "laser_link",
         }.items())
 
-    # IMU (LSM9DS1) for the proprio yaw-rate channel -> /imu/data
+    # IMU for the proprio yaw-rate channel -> /imu/data. imu_type selects
+    # the LSM9DS1 (raw) or BNO085 (on-chip fused orientation, gyro
+    # auto-calibration — the better heading source for the EKF).
     imu_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(tractor_sensors_dir, "launch", "lsm9ds1_imu.launch.py")))
+            os.path.join(tractor_sensors_dir, "launch", "lsm9ds1_imu.launch.py")),
+        condition=IfCondition(PythonExpression(
+            ["'", LaunchConfiguration("imu_type"), "' == 'lsm9ds1'"])))
+    bno085_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(tractor_sensors_dir, "launch", "bno085_imu.launch.py")),
+        condition=IfCondition(PythonExpression(
+            ["'", LaunchConfiguration("imu_type"), "' == 'bno085'"])))
 
     # Fused odometry for the visit grid: skid-steer encoders drift in yaw
     # (track slip on pivots), which rotates the whole spatial-memory trail.
@@ -168,12 +182,13 @@ def generate_launch_description():
         max_yaw_rate_arg,
         max_wheel_vel_arg,
         dashboard_port_arg,
+        imu_type_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
 
         TimerAction(period=2.0, actions=[lidar_launch]),
-        TimerAction(period=4.0, actions=[imu_launch]),
+        TimerAction(period=4.0, actions=[imu_launch, bno085_launch]),
         TimerAction(period=5.0, actions=[safety_monitor_node]),
         TimerAction(period=6.0, actions=[rf2o_launch, ekf_launch]),
         TimerAction(period=8.0, actions=[brain_node]),
