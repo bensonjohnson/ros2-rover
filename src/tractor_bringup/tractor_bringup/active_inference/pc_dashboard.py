@@ -734,31 +734,34 @@ function vmap(s){
   }
   const [rx,ry,rth]=pose;
   const VIEW_M=8.0, scale=W/VIEW_M, cx=W/2, cy=H/2;   // rover-centered, 8 m window
-  // world->screen (y up in world, down on canvas)
-  const sx=wx=>cx+(wx-rx)*scale, sy=wy=>cy-(wy-ry)*scale;
+  // Heading-up view (matches the lidar radar): the rover stays fixed
+  // pointing up and the visited cells move/rotate around it.
+  // forward component -> up on screen, leftward component -> left on screen.
+  const cth=Math.cos(rth), sth=Math.sin(rth);
+  const toScreen=(wx,wy)=>{
+    const dx=wx-rx, dy=wy-ry;
+    const fwd=dx*cth+dy*sth, left=-dx*sth+dy*cth;
+    return [cx-left*scale, cy-fwd*scale];
+  };
   // range rings every 1 m
   ctx.strokeStyle='#1d2530';ctx.lineWidth=1;
   for(let r=1;r<=VIEW_M/2;r++){ctx.beginPath();ctx.arc(cx,cy,r*scale,0,2*Math.PI);ctx.stroke();}
   // visited cells: hotter orange = more visits (counts decay server-side)
   if(cells&&cells.length){
     const px=Math.max(2,cs*scale);
-    for(const [dx,dy,cnt] of cells){
-      const wx=dx*cs, wy=dy*cs;
-      const x=sx(wx)-px/2, y=sy(wy)-px/2;
-      if(x<-px||y<-px||x>W||y>H)continue;
+    for(const [gx,gy,cnt] of cells){
+      const [x,y]=toScreen(gx*cs, gy*cs);
+      if(x<-px||y<-px||x>W+px||y>H+px)continue;
       const t=Math.min(1,cnt/8);
       ctx.fillStyle=`rgba(${120+Math.round(135*t)},${60+Math.round(97*t)},20,${0.25+0.6*t})`;
-      ctx.fillRect(x,y,px,px);
+      ctx.fillRect(x-px/2,y-px/2,px,px);
     }
   }
-  // rover marker with heading
-  ctx.save();
-  ctx.translate(cx,cy);ctx.rotate(-rth);
+  // rover marker: fixed at center, always pointing up (heading-up view)
   ctx.fillStyle='#5bc0ff';
-  ctx.beginPath();ctx.moveTo(8,0);ctx.lineTo(-5,-5);ctx.lineTo(-5,5);ctx.closePath();ctx.fill();
-  ctx.restore();
+  ctx.beginPath();ctx.moveTo(cx,cy-9);ctx.lineTo(cx-5,cy+5);ctx.lineTo(cx+5,cy+5);ctx.closePath();ctx.fill();
   ctx.fillStyle='#4a5565';
-  ctx.fillText('spatial memory  (8 m view, rover-centered)',8,12);
+  ctx.fillText('spatial memory  (8 m view, heading-up)',8,12);
   // flash on memory clear (lift detected)
   if(s.grid_clears!=null){
     if(lastClears!==null && s.grid_clears>lastClears)clearFlashUntil=Date.now()+2500;
