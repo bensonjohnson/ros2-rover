@@ -13,6 +13,12 @@ a mode button is clicked on the page:
               everything (supervisor included) runs the new code. The same
               update runs automatically on startup.
 
+Lidar USB power: the STL19P spins whenever it has 5V (broadcast-only protocol,
+no motor-stop command), so while idle or sleeping the supervisor cuts the
+lidar's hub port with `sudo uhubctl` and powers it back up (waiting for
+/dev/ttyUSB* to enumerate) before launching awake mode. Requires a sudoers
+entry: `ubuntu ALL=(root) NOPASSWD: /usr/sbin/uhubctl`.
+
 The child processes host their own PCDashboardState server on an internal
 port; the supervisor proxies /state to it and injects `supervisor_mode`, so
 the one page at the public port works in every state. While idle, the last
@@ -52,10 +58,69 @@ class BrainSupervisor:
         self._note = ""                # short status line for the page
         os.makedirs(self.args.log_dir, exist_ok=True)
         threading.Thread(target=self._reaper_loop, daemon=True).start()
+        # Boot state: nothing runs yet, so the lidar shouldn't spin.
+        self._lidar_power(False)
+
+    # ---- lidar USB power -----------------------------------------------------
+
+    def _lidar_power(self, on: bool) -> bool:
+        """Switch the lidar's USB hub port via uhubctl (best effort)."""
+        if not self.args.lidar_power_control:
+            return True
+        ok = True
+        for hub in self.args.lidar_usb_hubs.split(","):
+            hub = hub.strip()
+            if not hub:
+                continue
+            cmd = ["sudo", "-n", "uhubctl", "-l", hub,
+                   "-p", str(self.args.lidar_usb_port),
+                   "-a", "on" if on else "off", "-f"]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True,
+                                   timeout=15)
+                if r.returncode != 0:
+                    ok = False
+                    print(f"[supervisor] uhubctl {hub} failed: "
+                          f"{(r.stderr or r.stdout).strip()}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                ok = False
+                print(f"[supervisor] uhubctl error: {e}", flush=True)
+        print(f"[supervisor] lidar USB power {'ON' if on else 'OFF'}"
+              f"{'' if ok else ' (with errors)'}", flush=True)
+        return ok
+
+    def _wait_for_lidar(self, timeout: float = 12.0) -> bool:
+        """Wait for the lidar serial device to enumerate after power-up."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if os.path.exists(self.args.lidar_port):
+                time.sleep(1.0)   # let the tty settle before the driver opens it
+                return True
+            time.sleep(0.3)
+        return False
 
     # ---- child lifecycle ---------------------------------------------------
 
     def start(self, mode: str) -> tuple[bool, str]:
+        with self._lock:
+            if self._mode == "updating":
+                return False, "update in progress"
+            if self._child is not None and self._child.poll() is None:
+                return False, f"already running: {self._mode}"
+            if mode == "awake":
+                self._note = "powering up lidar..."
+
+        # Awake needs the lidar; power its port up and wait for the tty to
+        # enumerate (done outside the lock — it takes a few seconds and the
+        # page keeps polling meanwhile).
+        if mode == "awake" and self.args.lidar_power_control:
+            self._lidar_power(True)
+            if not self._wait_for_lidar():
+                self._lidar_power(False)
+                with self._lock:
+                    self._note = f"lidar did not enumerate at {self.args.lidar_port}"
+                return False, self._note
+
         with self._lock:
             if self._mode == "updating":
                 return False, "update in progress"
@@ -132,6 +197,7 @@ class BrainSupervisor:
             self._mode = "idle"
             self._note = f"{mode} stopped"
         print(f"[supervisor] {mode} stopped", flush=True)
+        self._lidar_power(False)   # idle again: stop the lidar motor
         return True, f"{mode} stopped"
 
     # ---- code update ---------------------------------------------------------
@@ -228,6 +294,7 @@ class BrainSupervisor:
                 else:
                     self._note = f"{prev} exited (code {rc})"
             print(f"[supervisor] {self._note}", flush=True)
+            self._lidar_power(False)   # idle again: stop the lidar motor
 
     # ---- state for the page --------------------------------------------------
 
@@ -327,6 +394,16 @@ def main(argv=None):
                         default=os.path.expanduser("~/.ros/pc_brain_logs"))
     parser.add_argument("--workspace", default=os.getcwd(),
                         help="ros2-rover workspace root (git repo, colcon ws)")
+    parser.add_argument("--lidar-usb-hubs", dest="lidar_usb_hubs",
+                        default="1-1,2-1",
+                        help="uhubctl hub locations for the lidar port "
+                             "(USB2 hub and its USB3 sibling)")
+    parser.add_argument("--lidar-usb-port", dest="lidar_usb_port",
+                        type=int, default=4,
+                        help="Hub port number the lidar adapter is plugged into")
+    parser.add_argument("--no-lidar-power-control", dest="lidar_power_control",
+                        action="store_false", default=True,
+                        help="Don't switch the lidar's USB port power via uhubctl")
     parser.add_argument("--no-startup-update", action="store_true",
                         help="Skip the automatic git pull + build on startup")
     args = parser.parse_args(argv)

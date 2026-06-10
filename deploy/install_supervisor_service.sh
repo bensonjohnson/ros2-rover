@@ -30,6 +30,17 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select tractor_bringup tractor_control tractor_sensors \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 
+# Lidar USB power control: the supervisor powers the lidar's hub port down
+# while idle (the STL19P spins whenever it has 5V). Needs uhubctl + sudoers.
+if ! command -v uhubctl > /dev/null; then
+  echo "Installing uhubctl..."
+  sudo apt-get install -y uhubctl
+fi
+UHUBCTL_BIN=$(command -v uhubctl)
+echo "$RUN_USER ALL=(root) NOPASSWD: $UHUBCTL_BIN" | \
+  sudo tee /etc/sudoers.d/uhubctl-lidar > /dev/null
+sudo chmod 440 /etc/sudoers.d/uhubctl-lidar
+
 echo "Installing ${SERVICE_NAME}.service (user=$RUN_USER, workspace=$WORKSPACE)"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@WORKSPACE@|$WORKSPACE|g" "$TEMPLATE" | \
   sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null
