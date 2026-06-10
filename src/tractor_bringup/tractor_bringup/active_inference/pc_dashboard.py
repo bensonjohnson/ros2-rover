@@ -419,6 +419,10 @@ _PAGE = """<!doctype html>
     <div class="legend"><span class="dot" style="background:#5bc0ff"></span>free energy
       <span class="dot" style="background:#ff9d3b"></span>sensory err
       <span class="dot" style="background:#ffd043"></span>epistemic</div></div>
+
+  <div class="panel"><canvas id="vmap" width="300" height="300"></canvas>
+    <div class="legend"><span class="dot" style="background:#ff9d3b"></span>recently visited (fades in minutes)
+      <span class="dot" style="background:#5bc0ff"></span>rover</div></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -716,6 +720,56 @@ function nnStatus(s){
   }
 }
 
+// ---- Visit-grid minimap: the transient spatial memory, rover-centered ------
+let lastClears=null, clearFlashUntil=0;
+function vmap(s){
+  const c=$('vmap'),ctx=c.getContext('2d'),W=c.width,H=c.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#0f1218';ctx.fillRect(0,0,W,H);
+  const pose=s.pose, cells=s.visit_cells, cs=s.cell_size||0.25;
+  ctx.font='10px system-ui';ctx.textAlign='left';
+  if(!pose){
+    ctx.fillStyle='#5a6370';ctx.fillText('no pose / spatial memory data',10,H/2);
+    return;
+  }
+  const [rx,ry,rth]=pose;
+  const VIEW_M=8.0, scale=W/VIEW_M, cx=W/2, cy=H/2;   // rover-centered, 8 m window
+  // world->screen (y up in world, down on canvas)
+  const sx=wx=>cx+(wx-rx)*scale, sy=wy=>cy-(wy-ry)*scale;
+  // range rings every 1 m
+  ctx.strokeStyle='#1d2530';ctx.lineWidth=1;
+  for(let r=1;r<=VIEW_M/2;r++){ctx.beginPath();ctx.arc(cx,cy,r*scale,0,2*Math.PI);ctx.stroke();}
+  // visited cells: hotter orange = more visits (counts decay server-side)
+  if(cells&&cells.length){
+    const px=Math.max(2,cs*scale);
+    for(const [dx,dy,cnt] of cells){
+      const wx=dx*cs, wy=dy*cs;
+      const x=sx(wx)-px/2, y=sy(wy)-px/2;
+      if(x<-px||y<-px||x>W||y>H)continue;
+      const t=Math.min(1,cnt/8);
+      ctx.fillStyle=`rgba(${120+Math.round(135*t)},${60+Math.round(97*t)},20,${0.25+0.6*t})`;
+      ctx.fillRect(x,y,px,px);
+    }
+  }
+  // rover marker with heading
+  ctx.save();
+  ctx.translate(cx,cy);ctx.rotate(-rth);
+  ctx.fillStyle='#5bc0ff';
+  ctx.beginPath();ctx.moveTo(8,0);ctx.lineTo(-5,-5);ctx.lineTo(-5,5);ctx.closePath();ctx.fill();
+  ctx.restore();
+  ctx.fillStyle='#4a5565';
+  ctx.fillText('spatial memory  (8 m view, rover-centered)',8,12);
+  // flash on memory clear (lift detected)
+  if(s.grid_clears!=null){
+    if(lastClears!==null && s.grid_clears>lastClears)clearFlashUntil=Date.now()+2500;
+    lastClears=s.grid_clears;
+  }
+  if(Date.now()<clearFlashUntil){
+    ctx.fillStyle='rgba(255,208,67,0.92)';ctx.font='bold 13px system-ui';ctx.textAlign='center';
+    ctx.fillText('MEMORY CLEARED — rover was moved',W/2,H-14);ctx.textAlign='left';
+  }
+}
+
 // ---- Supervisor controls (bar appears only when brain_supervisor serves us)
 async function sendControl(action){
   if(action==='awake' && !confirm('Start AWAKE mode? The rover will drive autonomously.'))return;
@@ -754,7 +808,11 @@ async function tick(){
     $('F').textContent=fix(s.F);$('err').textContent=fix(s.err);
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('prag').textContent=fix(s.prag,4);
-    $('nov').textContent=fix(s.novelty,2);
+    // Novelty card doubles as the odometry-health indicator: without /odom
+    // the spatial term silently disables, and you should know.
+    const novEl=$('nov');
+    if(s.odom_ok===false){novEl.textContent='no odom';novEl.style.color='#ff5b5b';}
+    else{novEl.textContent=fix(s.novelty,2);novEl.style.color='';}
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
 
     // Control tick wall time vs budget (green = headroom, red = overrun)
@@ -829,7 +887,7 @@ async function tick(){
       badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
       statusText.textContent = 'live';
     }
-    radar(s);tracks(s);trace(s);brainViz(s);nnStatus(s);
+    radar(s);tracks(s);trace(s);vmap(s);brainViz(s);nnStatus(s);
   }catch(e){
     const badge = $('status_badge');
     const statusText = $('status');
@@ -878,7 +936,8 @@ class PCDashboardState:
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
-                novelty=None) -> None:
+                novelty=None, visit_cells=None, cell_size=None, pose=None,
+                odom_ok=None, grid_clears=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -916,6 +975,17 @@ class PCDashboardState:
                 state["safety_hold"] = bool(safety_hold)
             if novelty is not None:
                 state["novelty"] = round(float(novelty), 3)
+            # Transient spatial memory view (minimap).
+            if visit_cells is not None:
+                state["visit_cells"] = visit_cells
+            if cell_size is not None:
+                state["cell_size"] = float(cell_size)
+            if pose is not None:
+                state["pose"] = [round(float(v), 3) for v in pose]
+            if odom_ok is not None:
+                state["odom_ok"] = bool(odom_ok)
+            if grid_clears is not None:
+                state["grid_clears"] = int(grid_clears)
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]

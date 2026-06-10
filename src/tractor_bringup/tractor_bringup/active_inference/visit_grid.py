@@ -69,3 +69,18 @@ class VisitGrid:
 
     def novelty_at(self, x: float, y: float) -> float:
         return float(self.novelty(np.asarray([x]), np.asarray([y]))[0])
+
+    def sparse(self, min_count: float = 0.05, max_cells: int = 1500) -> list:
+        """Visited cells as [dx_cells, dy_cells, count] relative to the origin.
+
+        Only meaningfully-visited cells are returned (decay drives stale ones
+        under min_count), capped at the max_cells strongest — small enough to
+        ship to the dashboard every poll.
+        """
+        iy, ix = np.nonzero(self._counts > min_count)
+        counts = self._counts[iy, ix]
+        if counts.size > max_cells:
+            keep = np.argpartition(counts, counts.size - max_cells)[-max_cells:]
+            ix, iy, counts = ix[keep], iy[keep], counts[keep]
+        return [[int(x - self._half), int(y - self._half), round(float(c), 2)]
+                for x, y, c in zip(ix, iy, counts)]

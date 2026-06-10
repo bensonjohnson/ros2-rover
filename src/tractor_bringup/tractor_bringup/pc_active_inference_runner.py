@@ -185,6 +185,7 @@ class PCActiveInferenceRunner(Node):
             tau_s=float(g("visit_tau_s").value))
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
+        self._grid_clears = 0
         self._x = self._y = self._theta = 0.0
         self._odom_ok = False
         self._maybe_load()
@@ -395,6 +396,7 @@ class PCActiveInferenceRunner(Node):
         self.visit_grid.decay()
         if self.use_proprio and self._check_lifted():
             self.visit_grid.clear()
+            self._grid_clears += 1
             self.get_logger().info(
                 "Lift detected — visit grid cleared, everywhere is new again")
         if self._odom_ok:
@@ -477,6 +479,12 @@ class PCActiveInferenceRunner(Node):
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
                 novelty=info.get("novelty"),
+                # Transient spatial memory view (minimap).
+                visit_cells=self.visit_grid.sparse(),
+                cell_size=self.visit_grid.cell_size,
+                pose=[self._x, self._y, self._theta],
+                odom_ok=self._odom_ok,
+                grid_clears=self._grid_clears,
             )
         if self._step % 20 == 0:
             self.get_logger().info(
