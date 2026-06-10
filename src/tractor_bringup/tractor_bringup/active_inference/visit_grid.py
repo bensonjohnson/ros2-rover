@@ -49,6 +49,8 @@ class VisitGrid:
         self._goal: tuple[int, int] | None = None  # committed novel-cell target
         self._goal_time = 0.0          # when the current goal was chosen
         self._goal_blocked = 0         # consecutive scans calling it blocked
+        self._goal_gap = False         # goal is anchored to a lidar gap
+        self._goal_missing = 0         # consecutive scans with no matching gap
 
     # ---- maintenance --------------------------------------------------------
 
@@ -134,6 +136,30 @@ class VisitGrid:
             gx0, gy0 = self._goal
             wx = (gx0 - self._half) * self.cell_size
             wy = (gy0 - self._half) * self.cell_size
+            # Gap-anchored goals TRACK their gap: re-associate to the
+            # current scan's gap nearest the previous bearing, so the dot
+            # stays glued to the doorway as the lidar sees it now — odom
+            # drift cannot strand it, and it recedes through the opening
+            # as the rover advances (the pac-man chase). If the gap stays
+            # missing several scans running, it closed: re-roll.
+            if self._goal_gap:
+                best, best_d = None, math.radians(30.0)
+                prev_b = math.atan2(wy - y, wx - x)
+                for twx, twy, _sc in (gap_targets or []):
+                    tb = math.atan2(twy - y, twx - x)
+                    dd = abs((tb - prev_b + math.pi) % (2.0 * math.pi) - math.pi)
+                    if dd < best_d:
+                        best_d, best = dd, (twx, twy)
+                if best is not None:
+                    ix, iy = self._indices(np.asarray([best[0]]),
+                                           np.asarray([best[1]]))
+                    self._goal = (int(ix[0]), int(iy[0]))
+                    gx0, gy0 = self._goal
+                    wx, wy = best
+                    self._goal_missing = 0
+                    self._goal_time = time.monotonic()
+                else:
+                    self._goal_missing += 1
             d_cells = max(abs(gx0 - sx), abs(gy0 - sy))
             if blocked_fn is not None and bool(
                     blocked_fn(np.asarray([wx]), np.asarray([wy]))[0]):
@@ -144,7 +170,9 @@ class VisitGrid:
             stale = self._counts[gy0, gx0] >= novel_thresh
             aged = (time.monotonic() - self._goal_time) > goal_timeout_s
             walled = self._goal_blocked >= 4
-            if not (reached or stale or aged or walled or d_cells > max_r):
+            gone = self._goal_missing >= 6
+            if not (reached or stale or aged or walled or gone
+                    or d_cells > max_r):
                 return math.atan2(wy - y, wx - x)
             self._goal = None
 
@@ -171,6 +199,8 @@ class VisitGrid:
                 self._goal = best_g
                 self._goal_time = time.monotonic()
                 self._goal_blocked = 0
+                self._goal_gap = True
+                self._goal_missing = 0
                 wx = (best_g[0] - self._half) * self.cell_size
                 wy = (best_g[1] - self._half) * self.cell_size
                 return math.atan2(wy - y, wx - x)
@@ -228,6 +258,8 @@ class VisitGrid:
         self._goal = best
         self._goal_time = time.monotonic()
         self._goal_blocked = 0
+        self._goal_gap = False
+        self._goal_missing = 0
         wx = (best[0] - self._half) * self.cell_size
         wy = (best[1] - self._half) * self.cell_size
         return math.atan2(wy - y, wx - x)
