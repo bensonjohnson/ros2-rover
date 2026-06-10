@@ -16,6 +16,8 @@ control loop.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+import numpy as np
 import torch
 
 
@@ -41,6 +43,15 @@ class ActorConfig:
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
     num_bins: int = 72          # lidar bins preceding the proprio channels in obs
     use_proprio: bool = True    # False = no proprio channels, pragmatic term disabled
+    # Spatial novelty (transient visit-grid curiosity). The latent rollout is
+    # myopic (~0.5 s), but differential-drive kinematics are nearly free, so
+    # the novelty term looks several seconds ahead.
+    novelty_weight: float = 0.0     # 0 disables the term
+    novelty_horizon_s: float = 2.5  # kinematic lookahead
+    novelty_steps: int = 6          # integration steps over that horizon
+    action_scale: float = 0.6       # candidates are pre-scale; motors see cand*scale
+    kin_v_max: float = 0.2          # m/s of one track at full (post-scale) command
+    kin_track_width: float = 0.154  # m between track centers
     target_wl: float = 0.65     # target left wheel speed in [0,1] (0.5 is stationary)
     target_wr: float = 0.65     # target right wheel speed in [0,1]
     target_yaw: float = 0.5     # target yaw rate in [0,1] (0.5 is straight, no spin)
@@ -70,13 +81,42 @@ class EFEActor:
         # Concatenate along batch dimension: [N, H, 2]
         return torch.cat([struct_seq, rand_seq], dim=0)
 
+    def _spatial_novelty(self, cands: torch.Tensor, pose, novelty_fn) -> np.ndarray:
+        """Mean visit-grid novelty along each candidate's kinematic rollout.
+
+        Candidates hold one action over the horizon, so a simple constant-
+        twist unicycle integration predicts where each one takes the rover.
+        Returns [N] novelty in (0, 1].
+        """
+        cfg = self.cfg
+        a_eff = cands[:, 0, :].numpy() * cfg.action_scale     # [N,2] track cmds
+        v = 0.5 * (a_eff[:, 0] + a_eff[:, 1]) * cfg.kin_v_max
+        w = (a_eff[:, 1] - a_eff[:, 0]) * cfg.kin_v_max / cfg.kin_track_width
+
+        x0, y0, th0 = pose
+        N = a_eff.shape[0]
+        xs = np.full(N, x0, dtype=np.float64)
+        ys = np.full(N, y0, dtype=np.float64)
+        ths = np.full(N, th0, dtype=np.float64)
+        dt = cfg.novelty_horizon_s / cfg.novelty_steps
+        total = np.zeros(N, dtype=np.float64)
+        for _ in range(cfg.novelty_steps):
+            ths += w * dt
+            xs += v * np.cos(ths) * dt
+            ys += v * np.sin(ths) * dt
+            total += novelty_fn(xs, ys)
+        return total / cfg.novelty_steps
+
     @torch.no_grad()
-    def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None):
+    def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None,
+               pose=None, novelty_fn=None):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
         accumulating epistemic value (ensemble disagreement) and pragmatic
-        value (proprioceptive prior preference matching: moving forward, no spin).
+        value (proprioceptive prior preference matching: moving forward, no
+        spin). If `pose` (x, y, theta) and `novelty_fn` are given, a spatial-
+        novelty term steers toward recently-unvisited space.
         """
         H = self.cfg.horizon
         cands = self._candidates(H)  # [N, H, 2]
@@ -146,6 +186,16 @@ class EFEActor:
 
         score = (1.0 - beta) * epi_norm + beta * prag_norm
 
+        # Spatial novelty: steer toward recently-unvisited space.
+        nov = None
+        if (self.cfg.novelty_weight > 0.0 and pose is not None
+                and novelty_fn is not None):
+            nov = self._spatial_novelty(cands, pose, novelty_fn)
+            nov_t = torch.from_numpy(nov.astype(np.float32))
+            nov_min, nov_max = nov_t.min(), nov_t.max()
+            nov_norm = (nov_t - nov_min) / (nov_max - nov_min + 1e-6)
+            score = score + self.cfg.novelty_weight * nov_norm
+
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))
         else:
@@ -161,5 +211,6 @@ class EFEActor:
             "epistemic_max": float(total_epistemic.max()),
             "epistemic_mean": float(total_epistemic.mean()),
             "pragmatic": float(total_pragmatic[idx]),
+            "novelty": float(nov[idx]) if nov is not None else None,
         }
         return action, info

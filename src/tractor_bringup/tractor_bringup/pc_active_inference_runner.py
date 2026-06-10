@@ -23,6 +23,7 @@ Diagnostics (free energy, sensory error, epistemic value) are published on
 since pure PC has no conventional loss curve.
 """
 
+import math
 import os
 import time
 import queue
@@ -35,11 +36,13 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, JointState, Imu
 from std_msgs.msg import Float32MultiArray, Float32, Bool
+from nav_msgs.msg import Odometry
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
 from tractor_bringup.active_inference.replay import SequenceReplay
+from tractor_bringup.active_inference.visit_grid import VisitGrid
 from tractor_bringup.active_inference.pc_dashboard import (
     PCDashboardState, start_dashboard_server)
 
@@ -88,6 +91,19 @@ class PCActiveInferenceRunner(Node):
         p("target_yaw", 0.5)
         p("horizon", 8)
         p("action_persist", 5)        # hold a chosen action this many ticks (anti-twitch)
+        # Spatial novelty: transient (RAM-only, decaying) visit grid steers the
+        # rover toward recently-unvisited space — curiosity about new AREAS on
+        # top of the world model's curiosity about new DYNAMICS. Deliberately
+        # not a persistent map: counts decay in minutes and die with the node.
+        p("novelty_weight", 0.5)      # 0 disables the spatial-novelty term
+        p("visit_cell_size", 0.25)    # m per grid cell
+        p("visit_tau_s", 420.0)       # visit-count decay time constant
+        p("visit_extent_m", 30.0)     # grid span (ring-clamped at the edges)
+        p("novelty_horizon_s", 2.5)   # kinematic lookahead for the term
+        p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
+        p("kin_track_width", 0.154)   # m between track centers
+        p("odom_topic", "/odom")
+        p("lift_accel_dev", 3.0)      # m/s^2 deviation from gravity = "picked up"
         p("torch_threads", 4)
         p("model_path", os.path.expanduser("~/.ros/pnn_brain.pt"))
         p("save_interval_s", 60.0)
@@ -155,7 +171,22 @@ class PCActiveInferenceRunner(Node):
             horizon=self.horizon,
             num_bins=self.num_bins,
             use_proprio=self.use_proprio,
+            novelty_weight=float(g("novelty_weight").value),
+            novelty_horizon_s=float(g("novelty_horizon_s").value),
+            action_scale=self.action_scale,
+            kin_v_max=float(g("kin_v_max").value),
+            kin_track_width=float(g("kin_track_width").value),
         ))
+
+        # --- transient spatial memory (never persisted) ---
+        self.visit_grid = VisitGrid(
+            cell_size=float(g("visit_cell_size").value),
+            extent_m=float(g("visit_extent_m").value),
+            tau_s=float(g("visit_tau_s").value))
+        self.lift_accel_dev = float(g("lift_accel_dev").value)
+        self._lift_ticks = 0
+        self._x = self._y = self._theta = 0.0
+        self._odom_ok = False
         self._maybe_load()
         self._persist_ctr = 0
         self._held_raw = np.zeros(2, dtype=np.float32)
@@ -206,6 +237,9 @@ class PCActiveInferenceRunner(Node):
         # rover doesn't look like a broken brain.
         self._safety_hold = False
         self.create_subscription(Bool, "/emergency_stop", self._estop_cb, 10)
+        # Encoder odometry feeds the (transient) visit grid.
+        self.create_subscription(
+            Odometry, g("odom_topic").value, self._odom_cb, 10)
 
         # --- dashboard ---
         self.dash = None
@@ -279,6 +313,37 @@ class PCActiveInferenceRunner(Node):
     def _estop_cb(self, msg):
         self._safety_hold = bool(msg.data)
 
+    def _odom_cb(self, msg: Odometry):
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        self._x, self._y = float(p.x), float(p.y)
+        # Yaw from quaternion (planar robot).
+        self._theta = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self._odom_ok = True
+
+    def _check_lifted(self) -> bool:
+        """Detect being picked up: sustained non-gravity accel with wheels idle.
+
+        On a lift the grid is cleared — the rover may be somewhere new, so
+        everywhere should be novel again. Odometry is meaningless across the
+        teleport anyway; transience is the point of this memory.
+        """
+        accel_mag = math.sqrt(self._accel_x ** 2 + self._accel_y ** 2
+                              + self._accel_z ** 2)
+        if accel_mag < 0.5:           # IMU not publishing yet
+            self._lift_ticks = 0
+            return False
+        wheels_idle = abs(self._wheel_l) + abs(self._wheel_r) < 0.2
+        if wheels_idle and abs(accel_mag - 9.81) > self.lift_accel_dev:
+            self._lift_ticks += 1
+        else:
+            self._lift_ticks = 0
+        if self._lift_ticks >= 4:
+            self._lift_ticks = 0
+            return True
+        return False
+
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
         if not self.use_proprio:
@@ -326,11 +391,22 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
 
+        # Transient spatial memory upkeep: decay, lift-reset, mark "been here".
+        self.visit_grid.decay()
+        if self.use_proprio and self._check_lifted():
+            self.visit_grid.clear()
+            self.get_logger().info(
+                "Lift detected — visit grid cleared, everywhere is new again")
+        if self._odom_ok:
+            self.visit_grid.visit(self._x, self._y)
+
         # 3. Choose an action, but HOLD it for action_persist ticks so the rover
         #    commits to a move instead of re-deciding (and twitching) every tick.
         #    Inference + learning above still run every tick regardless.
         if self._persist_ctr <= 0:
-            action, info = self.actor.select(self.model, z)
+            pose = (self._x, self._y, self._theta) if self._odom_ok else None
+            action, info = self.actor.select(
+                self.model, z, pose=pose, novelty_fn=self.visit_grid.novelty)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
@@ -400,6 +476,7 @@ class PCActiveInferenceRunner(Node):
                 tick_ms=tick_time * 1000.0,
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
+                novelty=info.get("novelty"),
             )
         if self._step % 20 == 0:
             self.get_logger().info(

@@ -387,6 +387,10 @@ _PAGE = """<!doctype html>
         <div class="stat-label">TICK TIME</div>
         <div class="stat-value" id="tick_ms">-</div>
       </div>
+      <div class="stat-card color-blue">
+        <div class="stat-label">NOVELTY</div>
+        <div class="stat-value" id="nov">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -750,6 +754,7 @@ async function tick(){
     $('F').textContent=fix(s.F);$('err').textContent=fix(s.err);
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('prag').textContent=fix(s.prag,4);
+    $('nov').textContent=fix(s.novelty,2);
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
 
     // Control tick wall time vs budget (green = headroom, red = overrun)
@@ -872,7 +877,8 @@ class PCDashboardState:
                 trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None,
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
-                epoch=None, epoch_total=None, disagreement_before=None) -> None:
+                epoch=None, epoch_total=None, disagreement_before=None,
+                novelty=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -908,6 +914,8 @@ class PCDashboardState:
                 state["tick_budget_ms"] = round(float(tick_budget_ms), 2)
             if safety_hold is not None:
                 state["safety_hold"] = bool(safety_hold)
+            if novelty is not None:
+                state["novelty"] = round(float(novelty), 3)
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]
