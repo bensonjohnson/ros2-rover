@@ -427,7 +427,7 @@ _PAGE = """<!doctype html>
   <div class="panel"><canvas id="vmap" width="300" height="300"></canvas>
     <div class="legend"><span class="dot" style="background:#ff9d3b"></span>visited
       <span class="dot" style="background:#c8323c"></span>scan (live)
-      <span class="dot" style="background:#ffd043"></span>to novelty
+      <span class="dot" style="background:#ffd043"></span>goal dot
       <span class="dot" style="background:#5bc0ff"></span>rover</div></div>
 </div>
 <script>
@@ -776,6 +776,18 @@ function vmap(s){
       ctx.fillRect(px2-1.5,py2-1.5,3,3);
     }
   }
+  // the committed waypoint ("pac-dot"): the novel cell the rover is
+  // currently driving to; resets to a new one on arrival
+  if(s.novel_goal){
+    const [gx2,gy2]=toScreen(s.novel_goal[0],s.novel_goal[1]);
+    if(gx2>=0&&gy2>=0&&gx2<=W&&gy2<=H){
+      const pulse=3.5+1.5*Math.sin(Date.now()/280);
+      ctx.fillStyle='#ffd043';
+      ctx.beginPath();ctx.arc(gx2,gy2,pulse,0,2*Math.PI);ctx.fill();
+      ctx.strokeStyle='rgba(255,208,67,0.45)';ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(gx2,gy2,8,0,2*Math.PI);ctx.stroke();
+    }
+  }
   // compass: bearing toward the nearest reachable novel region
   if(s.novel_bearing!=null){
     const rel=s.novel_bearing-rth;            // heading-up frame
@@ -984,7 +996,7 @@ class PCDashboardState:
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, visit_cells=None,
                 cell_size=None, pose=None, odom_ok=None, grid_clears=None,
-                novel_bearing=None, epi_gate=None) -> None:
+                novel_bearing=None, epi_gate=None, novel_goal=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1029,6 +1041,8 @@ class PCDashboardState:
                 state["visit_cells"] = visit_cells
             if novel_bearing is not None:
                 state["novel_bearing"] = round(float(novel_bearing), 3)
+            if novel_goal is not None:
+                state["novel_goal"] = [round(float(v), 3) for v in novel_goal]
             if cell_size is not None:
                 state["cell_size"] = float(cell_size)
             if pose is not None:

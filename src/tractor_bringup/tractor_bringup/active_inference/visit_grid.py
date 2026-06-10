@@ -47,6 +47,8 @@ class VisitGrid:
         self._counts = np.zeros((n, n), dtype=np.float32)
         self._last_decay = time.monotonic()
         self._goal: tuple[int, int] | None = None  # committed novel-cell target
+        self._goal_time = 0.0          # when the current goal was chosen
+        self._goal_blocked = 0         # consecutive scans calling it blocked
 
     # ---- maintenance --------------------------------------------------------
 
@@ -92,7 +94,8 @@ class VisitGrid:
                       novel_thresh: float = 0.5,
                       max_radius_m: float = 6.0,
                       dist_weight: float = 0.5,
-                      clear_cap_m: float = 2.0) -> float | None:
+                      clear_cap_m: float = 2.0,
+                      goal_timeout_s: float = 40.0) -> float | None:
         """World bearing (rad) toward the BEST reachable novel cell.
 
         BFS from the rover's cell over cells with under `novel_thresh`
@@ -113,11 +116,14 @@ class VisitGrid:
         keeps the search from routing through walls the lidar can see right
         now. Returns None if nothing novel is reachable within max_radius_m.
 
-        Goal hysteresis: a re-search every cycle re-picks the *nearest* novel
-        cell, and ties at the blob edge make the bearing thrash. So once a
-        goal cell is chosen we stay committed to it until it is reached,
-        loses its novelty, leaves range, or the current scan says it sits in
-        a wall — only then does the BFS run again.
+        Goal hysteresis ("pac-dot" waypoint): a re-search every cycle
+        re-picks a goal, and ties plus scan flicker make the bearing thrash.
+        Once a goal cell is chosen we stay committed until it is REACHED,
+        loses its novelty, times out, or the scan calls it blocked several
+        cycles RUNNING. The blocked check must be persistent because the
+        ego-BEV scan cannot tell "inside a wall" from "momentarily occluded
+        behind something" — a single rotation used to kill the goal and
+        re-roll the arrow.
         """
         ix0, iy0 = self._indices(np.asarray([x]), np.asarray([y]))
         sx, sy = int(ix0[0]), int(iy0[0])
@@ -128,10 +134,16 @@ class VisitGrid:
             wx = (gx0 - self._half) * self.cell_size
             wy = (gy0 - self._half) * self.cell_size
             d_cells = max(abs(gx0 - sx), abs(gy0 - sy))
-            in_wall = (bool(blocked_fn(np.asarray([wx]), np.asarray([wy]))[0])
-                       if blocked_fn is not None else False)
-            if (d_cells >= 2 and d_cells <= max_r and not in_wall
-                    and self._counts[gy0, gx0] < novel_thresh):
+            if blocked_fn is not None and bool(
+                    blocked_fn(np.asarray([wx]), np.asarray([wy]))[0]):
+                self._goal_blocked += 1
+            else:
+                self._goal_blocked = 0
+            reached = d_cells < 2
+            stale = self._counts[gy0, gx0] >= novel_thresh
+            aged = (time.monotonic() - self._goal_time) > goal_timeout_s
+            walled = self._goal_blocked >= 4
+            if not (reached or stale or aged or walled or d_cells > max_r):
                 return math.atan2(wy - y, wx - x)
             self._goal = None
 
@@ -186,9 +198,18 @@ class VisitGrid:
         if best is None:
             return None
         self._goal = best
+        self._goal_time = time.monotonic()
+        self._goal_blocked = 0
         wx = (best[0] - self._half) * self.cell_size
         wy = (best[1] - self._half) * self.cell_size
         return math.atan2(wy - y, wx - x)
+
+    def goal_world(self) -> tuple[float, float] | None:
+        """The committed waypoint in world coordinates (for the minimap)."""
+        if self._goal is None:
+            return None
+        return ((self._goal[0] - self._half) * self.cell_size,
+                (self._goal[1] - self._half) * self.cell_size)
 
     # ---- dashboard export -----------------------------------------------------
 

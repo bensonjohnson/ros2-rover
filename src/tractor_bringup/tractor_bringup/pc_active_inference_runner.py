@@ -520,6 +520,7 @@ class PCActiveInferenceRunner(Node):
                 odom_ok=self._odom_ok,
                 grid_clears=self._grid_clears,
                 novel_bearing=self._novel_bearing,
+                novel_goal=self.visit_grid.goal_world(),
             )
         if self._step % 20 == 0:
             self.get_logger().info(
