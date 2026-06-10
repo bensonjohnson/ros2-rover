@@ -1,15 +1,25 @@
-"""Transient spatial memory — a decaying visit-count grid, RAM only.
+"""Transient spatial memory — decaying visit counts + obstacle layer, RAM only.
 
 "Explore new areas" needs at least a short-term memory of where the rover has
 recently been; without one, novelty-seeking degenerates into a random walk.
 This grid is deliberately NOT a map:
 
   - it lives only in RAM and dies with the process (never persisted),
-  - counts decay exponentially (tau ~ minutes), so it remembers "where I've
-    been lately", not "what this building looks like",
+  - both layers decay exponentially (tau ~ minutes), so it remembers "where
+    I've been / what blocked me lately", not "what this building looks like",
   - it is anchored to wherever odometry happened to start this session, so
     dropping the rover in a brand-new place needs no relocalization — the
     grid is simply all-novel there.
+
+Visit counts are in SECONDS of occupancy (the caller adds dt per tick), which
+keeps the novelty signal 1/(1+count) well-conditioned: a cell driven through
+once reads ~0.9, a cell camped in for a minute reads ~0.02.
+
+The obstacle layer is marked from live lidar returns and lets the planner
+stop kinematic rollouts at walls (novelty behind a wall is unreachable) and
+lets `novel_bearing` BFS around obstacles toward the nearest reachable novel
+cell — the long-range "compass" that pulls the rover out of an over-visited
+blob no matter how big it has grown.
 
 Decay also bounds the damage from skid-steer odometry drift: by the time the
 pose estimate has wandered, the cells it mis-attributes have mostly faded.
@@ -17,21 +27,27 @@ pose estimate has wandered, the cells it mis-attributes have mostly faded.
 
 from __future__ import annotations
 
+import math
 import time
+from collections import deque
 
 import numpy as np
 
 
 class VisitGrid:
+    OBSTACLE_THRESH = 0.2     # seconds of observation before a cell is "blocked"
+
     def __init__(self, cell_size: float = 0.25, extent_m: float = 30.0,
-                 tau_s: float = 420.0):
+                 tau_s: float = 420.0, obstacle_tau_s: float = 90.0):
         self.cell_size = float(cell_size)
         self.tau_s = float(tau_s)
+        self.obstacle_tau_s = float(obstacle_tau_s)
         n = max(3, int(round(extent_m / cell_size)))
         n += (n + 1) % 2                      # odd, so the origin is a cell center
         self._n = n
         self._half = n // 2
         self._counts = np.zeros((n, n), dtype=np.float32)
+        self._obst = np.zeros((n, n), dtype=np.float32)
         self._last_decay = time.monotonic()
 
     # ---- maintenance --------------------------------------------------------
@@ -44,12 +60,14 @@ class VisitGrid:
             return
         self._last_decay = now
         self._counts *= np.float32(np.exp(-dt / self.tau_s))
+        self._obst *= np.float32(np.exp(-dt / self.obstacle_tau_s))
 
     def clear(self) -> None:
         """Forget everything (used when the rover detects it was picked up)."""
         self._counts.fill(0.0)
+        self._obst.fill(0.0)
 
-    # ---- access -------------------------------------------------------------
+    # ---- writing ------------------------------------------------------------
 
     def _indices(self, xs: np.ndarray, ys: np.ndarray):
         ix = np.clip((np.round(xs / self.cell_size)).astype(np.int64) + self._half,
@@ -59,8 +77,19 @@ class VisitGrid:
         return ix, iy
 
     def visit(self, x: float, y: float, amount: float = 1.0) -> None:
+        """Mark presence; `amount` should be the tick dt (counts = seconds)."""
         ix, iy = self._indices(np.asarray([x]), np.asarray([y]))
         self._counts[iy[0], ix[0]] += amount
+
+    def mark_obstacles(self, xs: np.ndarray, ys: np.ndarray,
+                       amount: float) -> None:
+        """Mark lidar-return positions; `amount` = tick dt (counts = seconds)."""
+        if len(xs) == 0:
+            return
+        ix, iy = self._indices(np.asarray(xs), np.asarray(ys))
+        np.add.at(self._obst, (iy, ix), amount)
+
+    # ---- reading ------------------------------------------------------------
 
     def novelty(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
         """Novelty in (0, 1] per position: 1 = never (recently) visited."""
@@ -70,17 +99,61 @@ class VisitGrid:
     def novelty_at(self, x: float, y: float) -> float:
         return float(self.novelty(np.asarray([x]), np.asarray([y]))[0])
 
-    def sparse(self, min_count: float = 0.05, max_cells: int = 1500) -> list:
-        """Visited cells as [dx_cells, dy_cells, count] relative to the origin.
+    def blocked(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """Bool per position: recently observed as an obstacle."""
+        ix, iy = self._indices(np.asarray(xs), np.asarray(ys))
+        return self._obst[iy, ix] > self.OBSTACLE_THRESH
 
-        Only meaningfully-visited cells are returned (decay drives stale ones
-        under min_count), capped at the max_cells strongest — small enough to
-        ship to the dashboard every poll.
+    def novel_bearing(self, x: float, y: float, novel_thresh: float = 0.5,
+                      max_radius_m: float = 6.0) -> float | None:
+        """World bearing (rad) toward the nearest REACHABLE novel cell.
+
+        BFS over non-obstacle cells from the rover's cell to the closest cell
+        with under `novel_thresh` seconds of recent occupancy. This is the
+        long-range pull out of an over-visited region: the local kinematic
+        rollout can only see ~1 m, but the BFS sees across the whole grid
+        window and routes around walls. Returns None if nothing novel is
+        reachable within max_radius_m.
         """
-        iy, ix = np.nonzero(self._counts > min_count)
-        counts = self._counts[iy, ix]
-        if counts.size > max_cells:
-            keep = np.argpartition(counts, counts.size - max_cells)[-max_cells:]
-            ix, iy, counts = ix[keep], iy[keep], counts[keep]
-        return [[int(x - self._half), int(y - self._half), round(float(c), 2)]
-                for x, y, c in zip(ix, iy, counts)]
+        ix0, iy0 = self._indices(np.asarray([x]), np.asarray([y]))
+        sx, sy = int(ix0[0]), int(iy0[0])
+        max_r = int(max_radius_m / self.cell_size)
+        blocked = self._obst > self.OBSTACLE_THRESH
+        seen = np.zeros_like(blocked)
+        seen[sy, sx] = True
+        q = deque([(sx, sy, 0)])
+        while q:
+            cx, cy, d = q.popleft()
+            # Skip trivially-adjacent cells: a bearing to a neighbor we are
+            # practically standing on is noise, not direction.
+            if d >= 2 and self._counts[cy, cx] < novel_thresh:
+                wx = (cx - self._half) * self.cell_size
+                wy = (cy - self._half) * self.cell_size
+                return math.atan2(wy - y, wx - x)
+            if d >= max_r:
+                continue
+            for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                if 0 <= nx < self._n and 0 <= ny < self._n and not seen[ny, nx] \
+                        and not blocked[ny, nx]:
+                    seen[ny, nx] = True
+                    q.append((nx, ny, d + 1))
+        return None
+
+    # ---- dashboard exports ----------------------------------------------------
+
+    def _sparse(self, arr: np.ndarray, min_val: float, max_cells: int) -> list:
+        iy, ix = np.nonzero(arr > min_val)
+        vals = arr[iy, ix]
+        if vals.size > max_cells:
+            keep = np.argpartition(vals, vals.size - max_cells)[-max_cells:]
+            ix, iy, vals = ix[keep], iy[keep], vals[keep]
+        return [[int(x - self._half), int(y - self._half), round(float(v), 2)]
+                for x, y, v in zip(ix, iy, vals)]
+
+    def sparse(self, min_count: float = 0.05, max_cells: int = 1500) -> list:
+        """Visited cells as [dx_cells, dy_cells, seconds] relative to origin."""
+        return self._sparse(self._counts, min_count, max_cells)
+
+    def obstacle_sparse(self, max_cells: int = 1500) -> list:
+        """Obstacle cells as [dx_cells, dy_cells, seconds] relative to origin."""
+        return self._sparse(self._obst, self.OBSTACLE_THRESH, max_cells)

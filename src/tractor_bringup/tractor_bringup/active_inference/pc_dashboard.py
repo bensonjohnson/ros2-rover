@@ -421,7 +421,9 @@ _PAGE = """<!doctype html>
       <span class="dot" style="background:#ffd043"></span>epistemic</div></div>
 
   <div class="panel"><canvas id="vmap" width="300" height="300"></canvas>
-    <div class="legend"><span class="dot" style="background:#ff9d3b"></span>recently visited (fades in minutes)
+    <div class="legend"><span class="dot" style="background:#ff9d3b"></span>visited
+      <span class="dot" style="background:#c8323c"></span>obstacle
+      <span class="dot" style="background:#ffd043"></span>to novelty
       <span class="dot" style="background:#5bc0ff"></span>rover</div></div>
 </div>
 <script>
@@ -746,16 +748,41 @@ function vmap(s){
   // range rings every 1 m
   ctx.strokeStyle='#1d2530';ctx.lineWidth=1;
   for(let r=1;r<=VIEW_M/2;r++){ctx.beginPath();ctx.arc(cx,cy,r*scale,0,2*Math.PI);ctx.stroke();}
-  // visited cells: hotter orange = more visits (counts decay server-side)
+  // visited cells: hotter orange = more seconds of occupancy (decaying)
   if(cells&&cells.length){
     const px=Math.max(2,cs*scale);
     for(const [gx,gy,cnt] of cells){
       const [x,y]=toScreen(gx*cs, gy*cs);
       if(x<-px||y<-px||x>W+px||y>H+px)continue;
-      const t=Math.min(1,cnt/8);
+      const t=Math.min(1,cnt/20);   // ~20 s of presence saturates the color
       ctx.fillStyle=`rgba(${120+Math.round(135*t)},${60+Math.round(97*t)},20,${0.25+0.6*t})`;
       ctx.fillRect(x-px/2,y-px/2,px,px);
     }
+  }
+  // obstacle cells (decaying lidar returns): the walls around the trail
+  const obst=s.obstacle_cells;
+  if(obst&&obst.length){
+    const px=Math.max(2,cs*scale);
+    for(const [gx,gy,cnt] of obst){
+      const [x,y]=toScreen(gx*cs, gy*cs);
+      if(x<-px||y<-px||x>W+px||y>H+px)continue;
+      const t=Math.min(1,cnt/5);
+      ctx.fillStyle=`rgba(200,50,60,${0.35+0.55*t})`;
+      ctx.fillRect(x-px/2,y-px/2,px,px);
+    }
+  }
+  // compass: bearing toward the nearest reachable novel region
+  if(s.novel_bearing!=null){
+    const rel=s.novel_bearing-rth;            // heading-up frame
+    const ax=-Math.sin(rel), ay=-Math.cos(rel);
+    ctx.strokeStyle='#ffd043';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(cx+ax*12,cy+ay*12);ctx.lineTo(cx+ax*34,cy+ay*34);ctx.stroke();
+    ctx.fillStyle='#ffd043';
+    const hx=cx+ax*40, hy=cy+ay*40;
+    ctx.beginPath();ctx.moveTo(hx,hy);
+    ctx.lineTo(hx-ax*8-ay*4,hy-ay*8+ax*4);
+    ctx.lineTo(hx-ax*8+ay*4,hy-ay*8-ax*4);
+    ctx.closePath();ctx.fill();
   }
   // rover marker: fixed at center, always pointing up (heading-up view)
   ctx.fillStyle='#5bc0ff';
@@ -939,8 +966,9 @@ class PCDashboardState:
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
-                novelty=None, visit_cells=None, cell_size=None, pose=None,
-                odom_ok=None, grid_clears=None) -> None:
+                novelty=None, visit_cells=None, obstacle_cells=None,
+                cell_size=None, pose=None, odom_ok=None, grid_clears=None,
+                novel_bearing=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -981,6 +1009,10 @@ class PCDashboardState:
             # Transient spatial memory view (minimap).
             if visit_cells is not None:
                 state["visit_cells"] = visit_cells
+            if obstacle_cells is not None:
+                state["obstacle_cells"] = obstacle_cells
+            if novel_bearing is not None:
+                state["novel_bearing"] = round(float(novel_bearing), 3)
             if cell_size is not None:
                 state["cell_size"] = float(cell_size)
             if pose is not None:

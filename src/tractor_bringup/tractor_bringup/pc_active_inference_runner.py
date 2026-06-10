@@ -96,10 +96,12 @@ class PCActiveInferenceRunner(Node):
         # top of the world model's curiosity about new DYNAMICS. Deliberately
         # not a persistent map: counts decay in minutes and die with the node.
         p("novelty_weight", 0.5)      # 0 disables the spatial-novelty term
+        p("bearing_weight", 0.5)      # bonus toward nearest reachable novel cell
         p("visit_cell_size", 0.25)    # m per grid cell
         p("visit_tau_s", 420.0)       # visit-count decay time constant
+        p("obstacle_tau_s", 90.0)     # obstacle-layer decay time constant
         p("visit_extent_m", 30.0)     # grid span (ring-clamped at the edges)
-        p("novelty_horizon_s", 2.5)   # kinematic lookahead for the term
+        p("novelty_horizon_s", 7.0)   # kinematic lookahead for the term
         p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
         p("kin_track_width", 0.154)   # m between track centers
         p("odom_topic", "/odom")
@@ -173,6 +175,7 @@ class PCActiveInferenceRunner(Node):
             use_proprio=self.use_proprio,
             novelty_weight=float(g("novelty_weight").value),
             novelty_horizon_s=float(g("novelty_horizon_s").value),
+            bearing_weight=float(g("bearing_weight").value),
             action_scale=self.action_scale,
             kin_v_max=float(g("kin_v_max").value),
             kin_track_width=float(g("kin_track_width").value),
@@ -182,7 +185,9 @@ class PCActiveInferenceRunner(Node):
         self.visit_grid = VisitGrid(
             cell_size=float(g("visit_cell_size").value),
             extent_m=float(g("visit_extent_m").value),
-            tau_s=float(g("visit_tau_s").value))
+            tau_s=float(g("visit_tau_s").value),
+            obstacle_tau_s=float(g("obstacle_tau_s").value))
+        self._novel_bearing = None
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
         self._grid_clears = 0
@@ -345,6 +350,25 @@ class PCActiveInferenceRunner(Node):
             return True
         return False
 
+    def _mark_scan_obstacles(self):
+        """Project the current scan's real returns into the obstacle layer.
+
+        The preprocessed scan is an openness map: value * max_range = nearest
+        return per bin, bin 0 = robot-forward, CCW. Bins at (or clamped to)
+        max_range carry no return and are skipped.
+        """
+        scan = self.latest_scan
+        d = scan * self.max_range
+        hit = (d > 0.1) & (d < self.max_range * 0.95)
+        if not hit.any():
+            return
+        bins = np.nonzero(hit)[0]
+        angles = self._theta + (bins + 0.5) * (2.0 * np.pi / self.num_bins)
+        self.visit_grid.mark_obstacles(
+            self._x + d[bins] * np.cos(angles),
+            self._y + d[bins] * np.sin(angles),
+            amount=self._tick_period)
+
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
         if not self.use_proprio:
@@ -392,7 +416,9 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
 
-        # Transient spatial memory upkeep: decay, lift-reset, mark "been here".
+        # Transient spatial memory upkeep: decay, lift-reset, mark "been here"
+        # (counts are seconds of occupancy) and project the current scan's
+        # returns into the obstacle layer.
         self.visit_grid.decay()
         if self.use_proprio and self._check_lifted():
             self.visit_grid.clear()
@@ -400,15 +426,22 @@ class PCActiveInferenceRunner(Node):
             self.get_logger().info(
                 "Lift detected — visit grid cleared, everywhere is new again")
         if self._odom_ok:
-            self.visit_grid.visit(self._x, self._y)
+            self.visit_grid.visit(self._x, self._y, amount=self._tick_period)
+            self._mark_scan_obstacles()
 
         # 3. Choose an action, but HOLD it for action_persist ticks so the rover
         #    commits to a move instead of re-deciding (and twitching) every tick.
         #    Inference + learning above still run every tick regardless.
         if self._persist_ctr <= 0:
             pose = (self._x, self._y, self._theta) if self._odom_ok else None
+            self._novel_bearing = (
+                self.visit_grid.novel_bearing(self._x, self._y)
+                if self._odom_ok else None)
             action, info = self.actor.select(
-                self.model, z, pose=pose, novelty_fn=self.visit_grid.novelty)
+                self.model, z, pose=pose,
+                novelty_fn=self.visit_grid.novelty,
+                blocked_fn=self.visit_grid.blocked,
+                novel_bearing=self._novel_bearing)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
@@ -481,10 +514,12 @@ class PCActiveInferenceRunner(Node):
                 novelty=info.get("novelty"),
                 # Transient spatial memory view (minimap).
                 visit_cells=self.visit_grid.sparse(),
+                obstacle_cells=self.visit_grid.obstacle_sparse(),
                 cell_size=self.visit_grid.cell_size,
                 pose=[self._x, self._y, self._theta],
                 odom_ok=self._odom_ok,
                 grid_clears=self._grid_clears,
+                novel_bearing=self._novel_bearing,
             )
         if self._step % 20 == 0:
             self.get_logger().info(

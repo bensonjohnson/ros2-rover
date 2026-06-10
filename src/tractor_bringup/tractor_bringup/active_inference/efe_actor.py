@@ -47,8 +47,12 @@ class ActorConfig:
     # myopic (~0.5 s), but differential-drive kinematics are nearly free, so
     # the novelty term looks several seconds ahead.
     novelty_weight: float = 0.0     # 0 disables the term
-    novelty_horizon_s: float = 2.5  # kinematic lookahead
-    novelty_steps: int = 6          # integration steps over that horizon
+    novelty_horizon_s: float = 7.0  # kinematic lookahead
+    novelty_steps: int = 8          # integration steps over that horizon
+    bearing_weight: float = 0.5     # bonus for moving toward the nearest
+                                    # reachable novel region (BFS compass) —
+                                    # the long-range pull the short rollout
+                                    # can't provide from inside a visited blob
     action_scale: float = 0.6       # candidates are pre-scale; motors see cand*scale
     kin_v_max: float = 0.2          # m/s of one track at full (post-scale) command
     kin_track_width: float = 0.154  # m between track centers
@@ -81,12 +85,15 @@ class EFEActor:
         # Concatenate along batch dimension: [N, H, 2]
         return torch.cat([struct_seq, rand_seq], dim=0)
 
-    def _spatial_novelty(self, cands: torch.Tensor, pose, novelty_fn) -> np.ndarray:
-        """Mean visit-grid novelty along each candidate's kinematic rollout.
+    def _spatial_novelty(self, cands: torch.Tensor, pose, novelty_fn,
+                         blocked_fn=None, novel_bearing=None):
+        """Spatial scores for each candidate's kinematic rollout.
 
         Candidates hold one action over the horizon, so a simple constant-
         twist unicycle integration predicts where each one takes the rover.
-        Returns [N] novelty in (0, 1].
+        Rollouts that hit an obstacle cell stop accruing novelty there —
+        space behind a wall is not reachable novelty. Returns (novelty[N],
+        bearing_align[N]) both in [0, 1].
         """
         cfg = self.cfg
         a_eff = cands[:, 0, :].numpy() * cfg.action_scale     # [N,2] track cmds
@@ -98,18 +105,33 @@ class EFEActor:
         xs = np.full(N, x0, dtype=np.float64)
         ys = np.full(N, y0, dtype=np.float64)
         ths = np.full(N, th0, dtype=np.float64)
+        alive = np.ones(N, dtype=bool)
         dt = cfg.novelty_horizon_s / cfg.novelty_steps
         total = np.zeros(N, dtype=np.float64)
         for _ in range(cfg.novelty_steps):
             ths += w * dt
-            xs += v * np.cos(ths) * dt
-            ys += v * np.sin(ths) * dt
-            total += novelty_fn(xs, ys)
-        return total / cfg.novelty_steps
+            xs += v * np.cos(ths) * dt * alive
+            ys += v * np.sin(ths) * dt * alive
+            if blocked_fn is not None:
+                alive &= ~blocked_fn(xs, ys)
+            total += novelty_fn(xs, ys) * alive
+        nov = total / cfg.novelty_steps
+
+        # Alignment of each rollout's net displacement with the compass
+        # bearing toward the nearest reachable novel region. Scaled by how
+        # far the rollout actually travels, so spinning in place earns none.
+        align = np.zeros(N, dtype=np.float64)
+        if novel_bearing is not None:
+            dx, dy = xs - x0, ys - y0
+            dist = np.hypot(dx, dy)
+            bx, by = np.cos(novel_bearing), np.sin(novel_bearing)
+            cos_align = (dx * bx + dy * by) / (dist + 1e-9)
+            align = np.clip(cos_align, 0.0, 1.0) * np.minimum(1.0, dist / 0.3)
+        return nov, align
 
     @torch.no_grad()
     def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None,
-               pose=None, novelty_fn=None):
+               pose=None, novelty_fn=None, blocked_fn=None, novel_bearing=None):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
@@ -186,15 +208,22 @@ class EFEActor:
 
         score = (1.0 - beta) * epi_norm + beta * prag_norm
 
-        # Spatial novelty: steer toward recently-unvisited space.
+        # Spatial novelty: steer toward recently-unvisited space. The local
+        # rollout term is min-max normalized; the bearing alignment is an
+        # absolute [0,1] bonus so it survives even when every nearby rollout
+        # looks equally stale (deep inside a visited blob).
         nov = None
         if (self.cfg.novelty_weight > 0.0 and pose is not None
                 and novelty_fn is not None):
-            nov = self._spatial_novelty(cands, pose, novelty_fn)
+            nov, align = self._spatial_novelty(
+                cands, pose, novelty_fn,
+                blocked_fn=blocked_fn, novel_bearing=novel_bearing)
             nov_t = torch.from_numpy(nov.astype(np.float32))
             nov_min, nov_max = nov_t.min(), nov_t.max()
             nov_norm = (nov_t - nov_min) / (nov_max - nov_min + 1e-6)
             score = score + self.cfg.novelty_weight * nov_norm
+            score = score + self.cfg.bearing_weight * torch.from_numpy(
+                align.astype(np.float32))
 
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))
