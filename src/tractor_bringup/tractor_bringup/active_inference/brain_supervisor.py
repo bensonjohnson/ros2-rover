@@ -49,7 +49,8 @@ from tractor_bringup.active_inference.pc_dashboard import _PAGE
 
 
 class BrainSupervisor:
-    BUILD_PACKAGES = ["tractor_bringup", "tractor_control", "tractor_sensors"]
+    BUILD_PACKAGES = ["tractor_bringup", "tractor_control", "tractor_sensors",
+                      "rf2o_laser_odometry"]
 
     def __init__(self, args):
         self.args = args
