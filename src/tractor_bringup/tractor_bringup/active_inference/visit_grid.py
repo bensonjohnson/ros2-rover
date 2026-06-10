@@ -147,23 +147,19 @@ class VisitGrid:
             blocked_win = np.zeros((y_hi - y_lo, x_hi - x_lo), dtype=bool)
 
         # Brushfire: per-cell distance (in cells) to the nearest scan-blocked
-        # cell, capped — the openness half of the candidate score.
+        # cell, capped — the openness half of the candidate score. Vectorized
+        # chamfer sweeps (each pass propagates one cell in all 4 directions).
         cap = max(2, int(clear_cap_m / self.cell_size))
-        h, w = blocked_win.shape
-        clear_win = np.full((h, w), cap, dtype=np.int32)
-        bq = deque()
-        for j, i in zip(*np.nonzero(blocked_win)):
-            clear_win[j, i] = 0
-            bq.append((int(i), int(j)))
-        while bq:
-            i, j = bq.popleft()
-            c = clear_win[j, i] + 1
-            if c >= cap:
-                continue
-            for ni, nj in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
-                if 0 <= ni < w and 0 <= nj < h and clear_win[nj, ni] > c:
-                    clear_win[nj, ni] = c
-                    bq.append((ni, nj))
+        clear_win = np.where(blocked_win, 0, cap).astype(np.int32)
+        for _ in range(cap - 1):
+            n = clear_win.copy()
+            n[1:, :] = np.minimum(n[1:, :], clear_win[:-1, :] + 1)
+            n[:-1, :] = np.minimum(n[:-1, :], clear_win[1:, :] + 1)
+            n[:, 1:] = np.minimum(n[:, 1:], clear_win[:, :-1] + 1)
+            n[:, :-1] = np.minimum(n[:, :-1], clear_win[:, 1:] + 1)
+            if np.array_equal(n, clear_win):
+                break
+            clear_win = n
 
         seen = np.zeros((self._n, self._n), dtype=bool)
         seen[sy, sx] = True
