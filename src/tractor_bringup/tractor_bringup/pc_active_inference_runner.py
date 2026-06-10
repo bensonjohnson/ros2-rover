@@ -511,6 +511,7 @@ class PCActiveInferenceRunner(Node):
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
                 novelty=info.get("novelty"),
+                epi_gate=info.get("epi_gate"),
                 # Transient spatial memory view (minimap). Obstacles are not
                 # sent — the page draws the live scan (already in `obs`).
                 visit_cells=self.visit_grid.sparse(),

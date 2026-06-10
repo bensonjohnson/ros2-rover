@@ -391,6 +391,10 @@ _PAGE = """<!doctype html>
         <div class="stat-label">NOVELTY</div>
         <div class="stat-value" id="nov">-</div>
       </div>
+      <div class="stat-card color-gold">
+        <div class="stat-label">CURIOSITY GATE</div>
+        <div class="stat-value" id="epi_gate">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -858,6 +862,17 @@ async function tick(){
       tEl.textContent='-';tEl.style.color='';
     }
 
+    // Curiosity gate: how much weight the epistemic term currently carries.
+    // ~0 = model confident, driving on pragmatic+novelty (deliberate);
+    // 1 = genuine ensemble disagreement, full curiosity (post-dream / new place).
+    const gEl=$('epi_gate');
+    if(s.epi_gate!=null){
+      gEl.textContent=(s.epi_gate*100).toFixed(0)+'%';
+      gEl.style.color = s.epi_gate>0.7 ? '#ffd043' : (s.epi_gate>0.3 ? '#ff9d3b' : '#00c88c');
+    }else{
+      gEl.textContent='-';gEl.style.color='';
+    }
+
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
     $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
 
@@ -969,7 +984,7 @@ class PCDashboardState:
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, visit_cells=None,
                 cell_size=None, pose=None, odom_ok=None, grid_clears=None,
-                novel_bearing=None) -> None:
+                novel_bearing=None, epi_gate=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1007,6 +1022,8 @@ class PCDashboardState:
                 state["safety_hold"] = bool(safety_hold)
             if novelty is not None:
                 state["novelty"] = round(float(novelty), 3)
+            if epi_gate is not None:
+                state["epi_gate"] = round(float(epi_gate), 3)
             # Transient spatial memory view (minimap).
             if visit_cells is not None:
                 state["visit_cells"] = visit_cells
