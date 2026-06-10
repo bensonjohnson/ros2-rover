@@ -439,7 +439,8 @@ class PCActiveInferenceRunner(Node):
                 self.model, z, pose=pose,
                 novelty_fn=self.visit_grid.novelty,
                 blocked_fn=self._scan_blocked if self._odom_ok else None,
-                novel_bearing=self._novel_bearing)
+                novel_bearing=self._novel_bearing,
+                prev_action=self._held_raw)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)

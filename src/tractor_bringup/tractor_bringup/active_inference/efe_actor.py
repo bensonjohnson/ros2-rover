@@ -15,6 +15,7 @@ control loop.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -37,7 +38,17 @@ _STRUCTURED = [
 class ActorConfig:
     action_dim: int = 2
     n_random: int = 48          # random candidates per step
-    temperature: float = 0.5    # softmax temperature over the blended score
+    temperature: float = 0.25   # softmax temperature over the blended score
+    # Confidence gate: min-max normalization stretches the epistemic scores
+    # to [0,1] even when the ensemble has converged and the differences are
+    # noise — a competent model then dithers on amplified randomness. Gate
+    # the term by raw disagreement magnitude: below epi_floor the model is
+    # confident and defers to pragmatic + novelty; genuine novelty spikes
+    # disagreement and restores full curiosity weight.
+    epi_floor: float = 0.02     # summed-over-horizon disagreement at full gate
+    # Commitment: bonus for candidates near the currently-held action, so
+    # re-decisions refine the move instead of twitching to a new one.
+    smooth_weight: float = 0.25
     deterministic: bool = False # if True, argmax instead of sampling
     forward_bias: float = 0.3   # (deprecated, kept for configuration compatibility)
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
@@ -131,7 +142,8 @@ class EFEActor:
 
     @torch.no_grad()
     def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None,
-               pose=None, novelty_fn=None, blocked_fn=None, novel_bearing=None):
+               pose=None, novelty_fn=None, blocked_fn=None, novel_bearing=None,
+               prev_action=None):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
@@ -198,6 +210,9 @@ class EFEActor:
         epi_min, epi_max = total_epistemic.min(), total_epistemic.max()
         epi_norm = (total_epistemic - epi_min) / (epi_max - epi_min + 1e-6)
 
+        # Confidence gate (see ActorConfig.epi_floor).
+        epi_gate = min(1.0, float(epi_max) / max(self.cfg.epi_floor, 1e-9))
+
         prag_min, prag_max = total_pragmatic.min(), total_pragmatic.max()
         prag_norm = (total_pragmatic - prag_min) / (prag_max - prag_min + 1e-6)
 
@@ -206,7 +221,7 @@ class EFEActor:
         if forward_bias is not None:
             beta = forward_bias
 
-        score = (1.0 - beta) * epi_norm + beta * prag_norm
+        score = (1.0 - beta) * epi_gate * epi_norm + beta * prag_norm
 
         # Spatial novelty: steer toward recently-unvisited space. The local
         # rollout term is min-max normalized; the bearing alignment is an
@@ -225,6 +240,13 @@ class EFEActor:
             score = score + self.cfg.bearing_weight * torch.from_numpy(
                 align.astype(np.float32))
 
+        # Commitment bonus: prefer candidates near the action currently held,
+        # scaled by distance in command space (max possible = 2*sqrt(2)).
+        if prev_action is not None and self.cfg.smooth_weight > 0.0:
+            prev = torch.as_tensor(np.asarray(prev_action), dtype=torch.float32)
+            dist = (cands[:, 0, :] - prev).norm(dim=1) / (2.0 * math.sqrt(2.0))
+            score = score + self.cfg.smooth_weight * (1.0 - dist)
+
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))
         else:
@@ -241,5 +263,6 @@ class EFEActor:
             "epistemic_mean": float(total_epistemic.mean()),
             "pragmatic": float(total_pragmatic[idx]),
             "novelty": float(nov[idx]) if nov is not None else None,
+            "epi_gate": epi_gate,
         }
         return action, info
