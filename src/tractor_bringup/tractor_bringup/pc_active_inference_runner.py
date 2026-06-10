@@ -43,6 +43,7 @@ from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConf
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
 from tractor_bringup.active_inference.replay import SequenceReplay
 from tractor_bringup.active_inference.visit_grid import VisitGrid
+from tractor_bringup.active_inference.place_memory import PlaceMemory
 from tractor_bringup.active_inference.pc_dashboard import (
     PCDashboardState, start_dashboard_server)
 
@@ -186,6 +187,12 @@ class PCActiveInferenceRunner(Node):
             extent_m=float(g("visit_extent_m").value),
             tau_s=float(g("visit_tau_s").value))
         self._novel_bearing = None
+        # Topological place memory (room fingerprints, pose-free). Drives the
+        # explore/leave decision: cover a novel room, seek a doorway gap once
+        # it reads familiar. Hysteresis so the mode doesn't flap at the edge.
+        self.place_memory = PlaceMemory()
+        self._place_novelty = 1.0
+        self._room_familiar = False
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
         self._grid_clears = 0
@@ -460,6 +467,7 @@ class PCActiveInferenceRunner(Node):
         self.visit_grid.decay()
         if self.use_proprio and self._check_lifted():
             self.visit_grid.clear()
+            self.place_memory.clear()
             self._grid_clears += 1
             self.get_logger().info(
                 "Lift detected — visit grid cleared, everywhere is new again")
@@ -473,10 +481,20 @@ class PCActiveInferenceRunner(Node):
         #    (ego-BEV) — never accumulated, so it cannot smear.
         if self._persist_ctr <= 0:
             pose = (self._x, self._y, self._theta) if self._odom_ok else None
+            # Room-level decision (pose-free): place novelty from the scan
+            # fingerprint. Novel room -> cover it locally (visit-grid BFS);
+            # familiar room -> seek a doorway (gap-anchored pac-dot).
+            self._place_novelty = self.place_memory.update(self.latest_scan)
+            if self._room_familiar:
+                if self._place_novelty > 0.7:
+                    self._room_familiar = False
+            elif self._place_novelty < 0.4:
+                self._room_familiar = True
+            gaps = self._scan_gaps() if self._room_familiar else None
             self._novel_bearing = (
                 self.visit_grid.novel_bearing(self._x, self._y,
                                               blocked_fn=self._scan_blocked,
-                                              gap_targets=self._scan_gaps())
+                                              gap_targets=gaps)
                 if self._odom_ok else None)
             action, info = self.actor.select(
                 self.model, z, pose=pose,
@@ -564,6 +582,10 @@ class PCActiveInferenceRunner(Node):
                 grid_clears=self._grid_clears,
                 novel_bearing=self._novel_bearing,
                 novel_goal=self.visit_grid.goal_world(),
+                place_novelty=self._place_novelty,
+                places_n=self.place_memory.n_places(),
+                place_mode=("seek doorway" if self._room_familiar
+                            else "cover room"),
             )
         if self._step % 20 == 0:
             self.get_logger().info(

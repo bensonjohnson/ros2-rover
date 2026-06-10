@@ -395,6 +395,10 @@ _PAGE = """<!doctype html>
         <div class="stat-label">CURIOSITY GATE</div>
         <div class="stat-value" id="epi_gate">-</div>
       </div>
+      <div class="stat-card color-blue">
+        <div class="stat-label">ROOM</div>
+        <div class="stat-value" id="room">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -806,6 +810,10 @@ function vmap(s){
   ctx.beginPath();ctx.moveTo(cx,cy-9);ctx.lineTo(cx-5,cy+5);ctx.lineTo(cx+5,cy+5);ctx.closePath();ctx.fill();
   ctx.fillStyle='#4a5565';
   ctx.fillText('spatial memory  (8 m view, heading-up)',8,12);
+  if(s.place_mode){
+    ctx.fillStyle=s.place_mode==='seek doorway'?'#ffd043':'#5bc0ff';
+    ctx.fillText('mode: '+s.place_mode,8,24);
+  }
   // flash on memory clear (lift detected)
   if(s.grid_clears!=null){
     if(lastClears!==null && s.grid_clears>lastClears)clearFlashUntil=Date.now()+2500;
@@ -883,6 +891,16 @@ async function tick(){
       gEl.style.color = s.epi_gate>0.7 ? '#ffd043' : (s.epi_gate>0.3 ? '#ff9d3b' : '#00c88c');
     }else{
       gEl.textContent='-';gEl.style.color='';
+    }
+
+    // Room recognition: place novelty (fingerprint distance) and how many
+    // distinct-looking places are remembered. Gold = a new room.
+    const rEl=$('room');
+    if(s.place_novelty!=null){
+      rEl.textContent=(s.place_novelty*100).toFixed(0)+'% · '+(s.places_n||0)+' seen';
+      rEl.style.color = s.place_novelty>0.7 ? '#ffd043' : (s.place_novelty>0.4 ? '#ff9d3b' : '#00c88c');
+    }else{
+      rEl.textContent='-';rEl.style.color='';
     }
 
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
@@ -996,7 +1014,8 @@ class PCDashboardState:
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, visit_cells=None,
                 cell_size=None, pose=None, odom_ok=None, grid_clears=None,
-                novel_bearing=None, epi_gate=None, novel_goal=None) -> None:
+                novel_bearing=None, epi_gate=None, novel_goal=None,
+                place_novelty=None, places_n=None, place_mode=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1043,6 +1062,12 @@ class PCDashboardState:
                 state["novel_bearing"] = round(float(novel_bearing), 3)
             if novel_goal is not None:
                 state["novel_goal"] = [round(float(v), 3) for v in novel_goal]
+            if place_novelty is not None:
+                state["place_novelty"] = round(float(place_novelty), 3)
+            if places_n is not None:
+                state["places_n"] = int(places_n)
+            if place_mode is not None:
+                state["place_mode"] = place_mode
             if cell_size is not None:
                 state["cell_size"] = float(cell_size)
             if pose is not None:
