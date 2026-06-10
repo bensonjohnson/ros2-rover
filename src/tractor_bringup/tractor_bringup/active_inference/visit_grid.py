@@ -95,7 +95,8 @@ class VisitGrid:
                       max_radius_m: float = 6.0,
                       dist_weight: float = 0.5,
                       clear_cap_m: float = 2.0,
-                      goal_timeout_s: float = 40.0) -> float | None:
+                      goal_timeout_s: float = 40.0,
+                      gap_targets: list | None = None) -> float | None:
         """World bearing (rad) toward the BEST reachable novel cell.
 
         BFS from the rover's cell over cells with under `novel_thresh`
@@ -146,6 +147,33 @@ class VisitGrid:
             if not (reached or stale or aged or walled or d_cells > max_r):
                 return math.atan2(wy - y, wx - x)
             self._goal = None
+
+        # Prefer goals anchored in LIDAR GAPS (doorways, open space): pick
+        # the gap whose target point is still novel, weighted by the gap's
+        # width x depth score. The dot lands centered in the opening, well
+        # out — and once eaten, the next detection (from the new vantage
+        # point) naturally places the following dot beyond the doorway.
+        if gap_targets:
+            best_g, best_s = None, 0.0
+            for wx, wy, sc in gap_targets:
+                ix, iy = self._indices(np.asarray([wx]), np.asarray([wy]))
+                gx_, gy_ = int(ix[0]), int(iy[0])
+                d_cells = max(abs(gx_ - sx), abs(gy_ - sy))
+                if d_cells < 2 or d_cells > max_r:
+                    continue
+                if blocked_fn is not None and bool(
+                        blocked_fn(np.asarray([wx]), np.asarray([wy]))[0]):
+                    continue
+                eff = sc / (1.0 + self._counts[gy_, gx_])  # discount visited
+                if eff > best_s:
+                    best_s, best_g = eff, (gx_, gy_)
+            if best_g is not None:
+                self._goal = best_g
+                self._goal_time = time.monotonic()
+                self._goal_blocked = 0
+                wx = (best_g[0] - self._half) * self.cell_size
+                wy = (best_g[1] - self._half) * self.cell_size
+                return math.atan2(wy - y, wx - x)
 
         # Pre-evaluate blockage over the BFS window in one vectorized call.
         x_lo, x_hi = max(0, sx - max_r), min(self._n, sx + max_r + 1)

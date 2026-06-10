@@ -366,6 +366,48 @@ class PCActiveInferenceRunner(Node):
         wall = self.latest_scan[bins] * self.max_range  # nearest return per dir
         return r >= (wall - 0.10)                       # at/behind the wall
 
+    def _scan_gaps(self, min_width_bins: int = 5) -> list:
+        """Openings in the current scan as candidate goal anchors.
+
+        A gap is a contiguous angular run of bins whose range clearly
+        exceeds the room around it (doorways, hall mouths, open space).
+        For each gap we return a world point centered in it, placed well
+        into the opening — these anchor the pac-dot so goals sit in lidar
+        gaps instead of arbitrary nearby cells. Returned as
+        [(wx, wy, score), ...] with score = angular width x depth.
+        """
+        s = self.latest_scan
+        if s is None:
+            return []
+        # Adaptive openness threshold: clearly beyond the typical wall
+        # distance, with floors so tight rooms and open fields both work.
+        thr = float(np.clip(1.5 * np.median(s), 0.3, 0.7))
+        open_mask = s >= thr
+        if open_mask.all() or not open_mask.any():
+            return []                       # featureless: no anchor, BFS decides
+        nb = self.num_bins
+        shift = int(np.argmin(open_mask))   # rotate so index 0 is closed
+        m = np.roll(open_mask, -shift)
+        gaps, start = [], None
+        for i in range(nb + 1):
+            if i < nb and m[i]:
+                if start is None:
+                    start = i
+            elif start is not None:
+                width = i - start
+                if width >= min_width_bins:
+                    bins = (np.arange(start, i) + shift) % nb
+                    depth = float(np.median(s[bins])) * self.max_range
+                    phi = (((start + width / 2.0) + shift) % nb) / nb * 2.0 * np.pi
+                    ang = self._theta + phi
+                    dist = float(np.clip(0.6 * depth, 0.8, 2.5))
+                    gaps.append((self._x + dist * np.cos(ang),
+                                 self._y + dist * np.sin(ang),
+                                 width * depth))
+                start = None
+        gaps.sort(key=lambda g: -g[2])
+        return gaps
+
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
         if not self.use_proprio:
@@ -433,7 +475,8 @@ class PCActiveInferenceRunner(Node):
             pose = (self._x, self._y, self._theta) if self._odom_ok else None
             self._novel_bearing = (
                 self.visit_grid.novel_bearing(self._x, self._y,
-                                              blocked_fn=self._scan_blocked)
+                                              blocked_fn=self._scan_blocked,
+                                              gap_targets=self._scan_gaps())
                 if self._odom_ok else None)
             action, info = self.actor.select(
                 self.model, z, pose=pose,
