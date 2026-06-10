@@ -49,6 +49,10 @@ class ActorConfig:
     # Commitment: bonus for candidates near the currently-held action, so
     # re-decisions refine the move instead of twitching to a new one.
     smooth_weight: float = 0.25
+    # Penalty for rollouts the current scan blocks early. Without it, nosing
+    # into a wall costs nothing (blocked rollouts merely stop ACCRUING
+    # novelty) and the rover happily dithers against walls.
+    blocked_weight: float = 0.4
     deterministic: bool = False # if True, argmax instead of sampling
     forward_bias: float = 0.3   # (deprecated, kept for configuration compatibility)
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
@@ -104,7 +108,8 @@ class EFEActor:
         twist unicycle integration predicts where each one takes the rover.
         Rollouts that hit an obstacle cell stop accruing novelty there —
         space behind a wall is not reachable novelty. Returns (novelty[N],
-        bearing_align[N]) both in [0, 1].
+        bearing_align[N], survival[N]) all in [0, 1]; survival is the
+        fraction of the horizon each rollout stays clear of the scan.
         """
         cfg = self.cfg
         a_eff = cands[:, 0, :].numpy() * cfg.action_scale     # [N,2] track cmds
@@ -119,6 +124,7 @@ class EFEActor:
         alive = np.ones(N, dtype=bool)
         dt = cfg.novelty_horizon_s / cfg.novelty_steps
         total = np.zeros(N, dtype=np.float64)
+        surv = np.zeros(N, dtype=np.float64)
         for _ in range(cfg.novelty_steps):
             ths += w * dt
             xs += v * np.cos(ths) * dt * alive
@@ -126,19 +132,25 @@ class EFEActor:
             if blocked_fn is not None:
                 alive &= ~blocked_fn(xs, ys)
             total += novelty_fn(xs, ys) * alive
+            surv += alive
         nov = total / cfg.novelty_steps
+        surv = surv / cfg.novelty_steps
 
-        # Alignment of each rollout's net displacement with the compass
-        # bearing toward the nearest reachable novel region. Scaled by how
-        # far the rollout actually travels, so spinning in place earns none.
+        # Alignment with the compass bearing: displacement alignment for
+        # candidates that travel, HEADING alignment (slightly discounted)
+        # for those that mostly rotate — otherwise the spin that would point
+        # the rover at the open door earns nothing and every other term
+        # punishes it, leaving the rover unable to turn toward the arrow.
         align = np.zeros(N, dtype=np.float64)
         if novel_bearing is not None:
             dx, dy = xs - x0, ys - y0
             dist = np.hypot(dx, dy)
             bx, by = np.cos(novel_bearing), np.sin(novel_bearing)
-            cos_align = (dx * bx + dy * by) / (dist + 1e-9)
-            align = np.clip(cos_align, 0.0, 1.0) * np.minimum(1.0, dist / 0.3)
-        return nov, align
+            cos_disp = (dx * bx + dy * by) / (dist + 1e-9)
+            disp_align = np.clip(cos_disp, 0.0, 1.0) * np.minimum(1.0, dist / 0.3)
+            head_align = np.clip(np.cos(ths - novel_bearing), 0.0, 1.0)
+            align = np.maximum(disp_align, 0.6 * head_align)
+        return nov, align, surv
 
     @torch.no_grad()
     def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None,
@@ -230,15 +242,23 @@ class EFEActor:
         nov = None
         if (self.cfg.novelty_weight > 0.0 and pose is not None
                 and novelty_fn is not None):
-            nov, align = self._spatial_novelty(
+            nov, align, surv = self._spatial_novelty(
                 cands, pose, novelty_fn,
                 blocked_fn=blocked_fn, novel_bearing=novel_bearing)
             nov_t = torch.from_numpy(nov.astype(np.float32))
             nov_min, nov_max = nov_t.min(), nov_t.max()
             nov_norm = (nov_t - nov_min) / (nov_max - nov_min + 1e-6)
-            score = score + self.cfg.novelty_weight * nov_norm
+            # Same flat-noise guard as the epistemic gate: when every
+            # rollout sees near-identical novelty (e.g. all die at a wall),
+            # min-max would stretch noise to [0,1] and cause dithering.
+            nov_gate = min(1.0, float(nov_max - nov_min) / 0.1)
+            score = score + self.cfg.novelty_weight * nov_gate * nov_norm
             score = score + self.cfg.bearing_weight * torch.from_numpy(
                 align.astype(np.float32))
+            # Walls cost: rollouts the current scan stops early lose score,
+            # so "drive at the wall" loses to "arc along / away from it".
+            score = score - self.cfg.blocked_weight * torch.from_numpy(
+                (1.0 - surv).astype(np.float32))
 
         # Commitment bonus: prefer candidates near the action currently held,
         # scaled by distance in command space (max possible = 2*sqrt(2)).
