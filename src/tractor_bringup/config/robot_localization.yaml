@@ -61,10 +61,16 @@ ekf_filter_node:
     ]
     
     # Sensor configurations
-    # Laser odometry from LD19 LiDAR (rf2o) - Use for position/yaw ONLY, not velocity
+    # Laser odometry from LD19 LiDAR (rf2o) - position ONLY. Yaw is deliberately
+    # NOT fused: the LD19 needs ~100 ms per revolution while the skid-steer can
+    # yaw ~2.5 rad/s, so scans are rotationally smeared during turns and rf2o's
+    # heading jumps. Fused as absolute yaw, those jumps yank the EKF heading
+    # (seen as visit tiles rotating against the live scan). Heading comes from
+    # gyro integration instead: slow smooth drift, which the transient visit
+    # grid absorbs by design.
     odom0: odom_rf2o
     odom0_config: [true,  true,  false,  # x, y, z position - Use position from laser odometry
-                   false, false, true,   # roll, pitch, yaw orientation - Use yaw from laser odometry
+                   false, false, false,  # roll, pitch, yaw orientation - yaw DISABLED (smears during spins)
                    false, false, false,  # x, y, z linear velocity - DISABLED (use wheel encoders instead)
                    false, false, false,  # roll, pitch, yaw angular velocity - DISABLED (use wheel encoders + IMU)
                    false, false, false] # x, y, z linear acceleration
@@ -73,22 +79,26 @@ ekf_filter_node:
     odom0_differential: false
     odom0_relative: true
     
-    # Wheel Odometry (from hiwonder_motor_driver)
+    # Wheel Odometry (from hiwonder_motor_driver). Yaw rate is NOT fused:
+    # tracked rotation is pure slip, so encoder-derived yaw rate disagrees
+    # with the gyro and biases the heading. The IMU gyro is the sole yaw-rate
+    # source.
     odom1: odom
     odom1_config: [false, false, false, # x, y, z position (let laser odom handle pos)
                    false, false, false, # roll, pitch, yaw orientation
                    true,  true,  false, # x, y, z linear velocity
-                   false, false, true,  # roll, pitch, yaw angular velocity
+                   false, false, false, # roll, pitch, yaw angular velocity - DISABLED (track slip)
                    false, false, false] # x, y, z linear acceleration
     odom1_queue_size: 10
     odom1_nodelay: false
     odom1_differential: true
     odom1_relative: false
     
-    # IMU from LSM9DS1 (angular velocity only - yaw disabled to avoid magnetometer interference)
+    # IMU from LSM9DS1. Gyro yaw rate is the SOLE heading source (integrated
+    # by the EKF). Absolute yaw stays disabled to avoid magnetometer noise.
     imu0: imu/data
     imu0_config: [false, false, false,  # x, y, z position
-                  false, false, false,  # roll, pitch, yaw orientation (yaw disabled - use laser+wheels instead)
+                  false, false, false,  # roll, pitch, yaw orientation (magnetometer too noisy)
                   false, false, false,  # x, y, z linear velocity
                   false, false, true,   # roll, pitch, yaw angular velocity
                   false, false, false]  # x, y, z linear acceleration

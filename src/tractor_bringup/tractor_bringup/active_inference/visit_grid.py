@@ -46,6 +46,7 @@ class VisitGrid:
         self._half = n // 2
         self._counts = np.zeros((n, n), dtype=np.float32)
         self._last_decay = time.monotonic()
+        self._goal: tuple[int, int] | None = None  # committed novel-cell target
 
     # ---- maintenance --------------------------------------------------------
 
@@ -61,6 +62,7 @@ class VisitGrid:
     def clear(self) -> None:
         """Forget everything (used when the rover detects it was picked up)."""
         self._counts.fill(0.0)
+        self._goal = None
 
     # ---- writing ------------------------------------------------------------
 
@@ -99,10 +101,28 @@ class VisitGrid:
         `blocked_fn(xs, ys) -> bool array` (built from the current scan)
         keeps the search from routing through walls the lidar can see right
         now. Returns None if nothing novel is reachable within max_radius_m.
+
+        Goal hysteresis: a re-search every cycle re-picks the *nearest* novel
+        cell, and ties at the blob edge make the bearing thrash. So once a
+        goal cell is chosen we stay committed to it until it is reached,
+        loses its novelty, leaves range, or the current scan says it sits in
+        a wall — only then does the BFS run again.
         """
         ix0, iy0 = self._indices(np.asarray([x]), np.asarray([y]))
         sx, sy = int(ix0[0]), int(iy0[0])
         max_r = int(max_radius_m / self.cell_size)
+
+        if self._goal is not None:
+            gx0, gy0 = self._goal
+            wx = (gx0 - self._half) * self.cell_size
+            wy = (gy0 - self._half) * self.cell_size
+            d_cells = max(abs(gx0 - sx), abs(gy0 - sy))
+            in_wall = (bool(blocked_fn(np.asarray([wx]), np.asarray([wy]))[0])
+                       if blocked_fn is not None else False)
+            if (d_cells >= 2 and d_cells <= max_r and not in_wall
+                    and self._counts[gy0, gx0] < novel_thresh):
+                return math.atan2(wy - y, wx - x)
+            self._goal = None
 
         # Pre-evaluate blockage over the BFS window in one vectorized call.
         x_lo, x_hi = max(0, sx - max_r), min(self._n, sx + max_r + 1)
@@ -125,6 +145,7 @@ class VisitGrid:
             if d >= 2 and self._counts[cy, cx] < novel_thresh:
                 wx = (cx - self._half) * self.cell_size
                 wy = (cy - self._half) * self.cell_size
+                self._goal = (cx, cy)
                 return math.atan2(wy - y, wx - x)
             if d >= max_r:
                 continue
