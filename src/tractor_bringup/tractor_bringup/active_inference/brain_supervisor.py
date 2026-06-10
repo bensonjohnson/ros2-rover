@@ -13,11 +13,15 @@ a mode button is clicked on the page:
               everything (supervisor included) runs the new code. The same
               update runs automatically on startup.
 
-Lidar USB power: the STL19P spins whenever it has 5V (broadcast-only protocol,
-no motor-stop command), so while idle or sleeping the supervisor cuts the
-lidar's hub port with `sudo uhubctl` and powers it back up (waiting for
-/dev/ttyUSB* to enumerate) before launching awake mode. Requires a sudoers
-entry: `ubuntu ALL=(root) NOPASSWD: /usr/sbin/uhubctl`.
+Lidar USB power (--lidar-power-control, OFF by default): the STL19P spins
+whenever it has 5V (broadcast-only protocol, no motor-stop command), so the
+supervisor can cut the lidar's hub port with `sudo uhubctl` while idle and
+power it back up (waiting for /dev/ttyUSB* to enumerate) before awake mode.
+Requires a sudoers entry (`ubuntu ALL=(root) NOPASSWD: /usr/sbin/uhubctl`)
+AND a hub with real per-port VBUS switching — the rover's onboard Genesys
+hub only gates the data lines (device disconnects but the motor keeps
+spinning), so this stays disabled until the lidar is behind a hub with
+actual power MOSFETs (see the uhubctl compatible-hubs list).
 
 The child processes host their own PCDashboardState server on an internal
 port; the supervisor proxies /state to it and injects `supervisor_mode`, so
@@ -401,9 +405,11 @@ def main(argv=None):
     parser.add_argument("--lidar-usb-port", dest="lidar_usb_port",
                         type=int, default=4,
                         help="Hub port number the lidar adapter is plugged into")
-    parser.add_argument("--no-lidar-power-control", dest="lidar_power_control",
-                        action="store_false", default=True,
-                        help="Don't switch the lidar's USB port power via uhubctl")
+    parser.add_argument("--lidar-power-control", dest="lidar_power_control",
+                        action="store_true", default=False,
+                        help="Switch the lidar's USB port power via uhubctl when "
+                             "idle (needs a hub with REAL per-port VBUS switching; "
+                             "the onboard hub only gates data, motor keeps spinning)")
     parser.add_argument("--no-startup-update", action="store_true",
                         help="Skip the automatic git pull + build on startup")
     args = parser.parse_args(argv)
