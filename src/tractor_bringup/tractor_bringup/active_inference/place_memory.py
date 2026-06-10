@@ -29,7 +29,7 @@ import numpy as np
 
 
 class PlaceMemory:
-    def __init__(self, n_freq: int = 10, match_thresh: float = 0.25,
+    def __init__(self, n_freq: int = 10, match_thresh: float = 0.2,
                  tau_s: float = 900.0, max_places: int = 64):
         self.n_freq = int(n_freq)
         self.match_thresh = float(match_thresh)
@@ -43,17 +43,17 @@ class PlaceMemory:
     def fingerprint(self, scan) -> np.ndarray:
         """Rotation-invariant room descriptor from the binned scan.
 
-        The raw DC term (mean openness x num_bins) dwarfs the shape
-        harmonics and makes every room look alike after normalization, so
-        it is removed before the FFT and re-added as a single half-weight
-        "room size" channel; harmonics are scaled to amplitude units so
-        size and shape carry comparable votes.
+        Channel 0 is mean openness (room SIZE), the rest are FFT magnitudes
+        of the mean-removed scan in amplitude units (room SHAPE). The
+        vector is deliberately NOT unit-normalized and compared by
+        Euclidean distance: normalization makes two featureless rooms of
+        different sizes (small square vs big open) collapse onto the same
+        direction and read identical.
         """
         s = np.asarray(scan, dtype=np.float64)
         m = float(s.mean())
         harm = np.abs(np.fft.rfft(s - m))[1:self.n_freq] / (s.size / 2.0)
-        v = np.concatenate([[0.5 * m], harm])
-        return v / (np.linalg.norm(v) + 1e-9)
+        return np.concatenate([[m], harm])
 
     def update(self, scan) -> float:
         """Fold the current scan in; return place novelty in [0, 1].
@@ -80,8 +80,8 @@ class PlaceMemory:
             self.novelty = 1.0
             return 1.0
 
-        # Cosine distance to every remembered place (fingerprints are unit).
-        d = 1.0 - np.asarray([float(fp @ p) for p in self._fps])
+        # Euclidean distance to every remembered place.
+        d = np.asarray([float(np.linalg.norm(fp - p)) for p in self._fps])
         i = int(np.argmin(d))
         dmin = float(d[i])
         self.novelty = float(np.clip(dmin / self.match_thresh, 0.0, 1.0))
@@ -90,8 +90,7 @@ class PlaceMemory:
             # Recognized: reinforce, and let the stored fingerprint track
             # slow appearance changes (doors opening, furniture moved).
             self._weights[i] += dt
-            blended = 0.98 * self._fps[i] + 0.02 * fp
-            self._fps[i] = blended / (np.linalg.norm(blended) + 1e-9)
+            self._fps[i] = 0.98 * self._fps[i] + 0.02 * fp
         else:
             self._fps.append(fp)
             self._weights.append(max(dt, 0.1))
