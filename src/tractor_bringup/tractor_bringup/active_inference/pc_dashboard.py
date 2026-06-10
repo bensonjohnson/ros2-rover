@@ -422,7 +422,7 @@ _PAGE = """<!doctype html>
 
   <div class="panel"><canvas id="vmap" width="300" height="300"></canvas>
     <div class="legend"><span class="dot" style="background:#ff9d3b"></span>visited
-      <span class="dot" style="background:#c8323c"></span>obstacle
+      <span class="dot" style="background:#c8323c"></span>scan (live)
       <span class="dot" style="background:#ffd043"></span>to novelty
       <span class="dot" style="background:#5bc0ff"></span>rover</div></div>
 </div>
@@ -759,16 +759,17 @@ function vmap(s){
       ctx.fillRect(x-px/2,y-px/2,px,px);
     }
   }
-  // obstacle cells (decaying lidar returns): the walls around the trail
-  const obst=s.obstacle_cells;
-  if(obst&&obst.length){
-    const px=Math.max(2,cs*scale);
-    for(const [gx,gy,cnt] of obst){
-      const [x,y]=toScreen(gx*cs, gy*cs);
-      if(x<-px||y<-px||x>W+px||y>H+px)continue;
-      const t=Math.min(1,cnt/5);
-      ctx.fillStyle=`rgba(200,50,60,${0.35+0.55*t})`;
-      ctx.fillRect(x-px/2,y-px/2,px,px);
+  // live scan outline (ego-BEV): the walls as the lidar sees them RIGHT NOW.
+  // No accumulation, so nothing can smear — same data as the radar panel.
+  const obs=s.obs, MAXR=5.0;
+  if(obs&&obs.length){
+    ctx.fillStyle='rgba(200,50,60,0.85)';
+    for(let b=0;b<obs.length;b++){
+      if(obs[b]>=0.95)continue;            // no return in this direction
+      const r=obs[b]*MAXR;
+      const phi=(b+0.5)/obs.length*2*Math.PI;   // ego angle, 0=forward, CCW
+      const px2=cx-Math.sin(phi)*r*scale, py2=cy-Math.cos(phi)*r*scale;
+      ctx.fillRect(px2-1.5,py2-1.5,3,3);
     }
   }
   // compass: bearing toward the nearest reachable novel region
@@ -966,7 +967,7 @@ class PCDashboardState:
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
-                novelty=None, visit_cells=None, obstacle_cells=None,
+                novelty=None, visit_cells=None,
                 cell_size=None, pose=None, odom_ok=None, grid_clears=None,
                 novel_bearing=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
@@ -1009,8 +1010,6 @@ class PCDashboardState:
             # Transient spatial memory view (minimap).
             if visit_cells is not None:
                 state["visit_cells"] = visit_cells
-            if obstacle_cells is not None:
-                state["obstacle_cells"] = obstacle_cells
             if novel_bearing is not None:
                 state["novel_bearing"] = round(float(novel_bearing), 3)
             if cell_size is not None:

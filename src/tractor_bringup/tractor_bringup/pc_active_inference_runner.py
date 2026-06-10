@@ -99,11 +99,6 @@ class PCActiveInferenceRunner(Node):
         p("bearing_weight", 0.5)      # bonus toward nearest reachable novel cell
         p("visit_cell_size", 0.25)    # m per grid cell
         p("visit_tau_s", 420.0)       # visit-count decay time constant
-        p("obstacle_tau_s", 45.0)     # obstacle-layer decay time constant
-        p("obstacle_max_range", 3.0)  # only mark returns closer than this (m);
-                                      # heading error scatters far returns
-        p("obstacle_max_yaw_rate", 0.35)  # rad/s — don't mark while pivoting
-                                          # (stale scan + fresh heading = smear)
         p("visit_extent_m", 30.0)     # grid span (ring-clamped at the edges)
         p("novelty_horizon_s", 7.0)   # kinematic lookahead for the term
         p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
@@ -189,10 +184,7 @@ class PCActiveInferenceRunner(Node):
         self.visit_grid = VisitGrid(
             cell_size=float(g("visit_cell_size").value),
             extent_m=float(g("visit_extent_m").value),
-            tau_s=float(g("visit_tau_s").value),
-            obstacle_tau_s=float(g("obstacle_tau_s").value))
-        self.obstacle_max_range = float(g("obstacle_max_range").value)
-        self.obstacle_max_yaw_rate = float(g("obstacle_max_yaw_rate").value)
+            tau_s=float(g("visit_tau_s").value))
         self._novel_bearing = None
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
@@ -356,32 +348,23 @@ class PCActiveInferenceRunner(Node):
             return True
         return False
 
-    def _mark_scan_obstacles(self):
-        """Project the current scan's real returns into the obstacle layer.
+    def _scan_blocked(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+        """Ego-BEV blockage from the CURRENT scan — no accumulation, no smear.
 
-        The preprocessed scan is an openness map: value * max_range = nearest
-        return per bin, bin 0 = robot-forward, CCW. Bins at (or clamped to)
-        max_range carry no return and are skipped.
-
-        Skipped entirely while pivoting: the scan is up to a lidar period
-        old, so pairing it with the current heading smears returns into arcs
-        (that is what filled the minimap with phantom obstacles). Range is
-        also capped — heading error scatters far returns linearly.
+        A world position is blocked if it lies at/beyond the nearest lidar
+        return in its direction from the rover. World-frame obstacle
+        accumulation inherits every instant's heading error (it filled the
+        grid with phantom walls); the live scan is the obstacle truth and it
+        is free.
         """
-        if abs(self._yaw_rate) > self.obstacle_max_yaw_rate:
-            return
-        scan = self.latest_scan
-        d = scan * self.max_range
-        hit = (d > 0.1) & (d < min(self.obstacle_max_range,
-                                   self.max_range * 0.95))
-        if not hit.any():
-            return
-        bins = np.nonzero(hit)[0]
-        angles = self._theta + (bins + 0.5) * (2.0 * np.pi / self.num_bins)
-        self.visit_grid.mark_obstacles(
-            self._x + d[bins] * np.cos(angles),
-            self._y + d[bins] * np.sin(angles),
-            amount=self._tick_period)
+        dx = np.asarray(xs) - self._x
+        dy = np.asarray(ys) - self._y
+        r = np.hypot(dx, dy)
+        phi = np.arctan2(dy, dx) - self._theta          # ego angle, 0=forward
+        bins = (np.mod(phi, 2.0 * np.pi)
+                / (2.0 * np.pi) * self.num_bins).astype(np.int64) % self.num_bins
+        wall = self.latest_scan[bins] * self.max_range  # nearest return per dir
+        return r >= (wall - 0.10)                       # at/behind the wall
 
     def _build_obs(self) -> np.ndarray:
         """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
@@ -431,8 +414,7 @@ class PCActiveInferenceRunner(Node):
             self.model.learn(z, self.last_action, o_t)
 
         # Transient spatial memory upkeep: decay, lift-reset, mark "been here"
-        # (counts are seconds of occupancy) and project the current scan's
-        # returns into the obstacle layer.
+        # (counts are seconds of occupancy).
         self.visit_grid.decay()
         if self.use_proprio and self._check_lifted():
             self.visit_grid.clear()
@@ -441,20 +423,22 @@ class PCActiveInferenceRunner(Node):
                 "Lift detected — visit grid cleared, everywhere is new again")
         if self._odom_ok:
             self.visit_grid.visit(self._x, self._y, amount=self._tick_period)
-            self._mark_scan_obstacles()
 
         # 3. Choose an action, but HOLD it for action_persist ticks so the rover
         #    commits to a move instead of re-deciding (and twitching) every tick.
         #    Inference + learning above still run every tick regardless.
+        #    Obstacle truth for the spatial terms is the CURRENT scan
+        #    (ego-BEV) — never accumulated, so it cannot smear.
         if self._persist_ctr <= 0:
             pose = (self._x, self._y, self._theta) if self._odom_ok else None
             self._novel_bearing = (
-                self.visit_grid.novel_bearing(self._x, self._y)
+                self.visit_grid.novel_bearing(self._x, self._y,
+                                              blocked_fn=self._scan_blocked)
                 if self._odom_ok else None)
             action, info = self.actor.select(
                 self.model, z, pose=pose,
                 novelty_fn=self.visit_grid.novelty,
-                blocked_fn=self.visit_grid.blocked,
+                blocked_fn=self._scan_blocked if self._odom_ok else None,
                 novel_bearing=self._novel_bearing)
             self._held_raw = action.numpy()
             self._held_info = info
@@ -526,9 +510,9 @@ class PCActiveInferenceRunner(Node):
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
                 novelty=info.get("novelty"),
-                # Transient spatial memory view (minimap).
+                # Transient spatial memory view (minimap). Obstacles are not
+                # sent — the page draws the live scan (already in `obs`).
                 visit_cells=self.visit_grid.sparse(),
-                obstacle_cells=self.visit_grid.obstacle_sparse(),
                 cell_size=self.visit_grid.cell_size,
                 pose=[self._x, self._y, self._theta],
                 odom_ok=self._odom_ok,
