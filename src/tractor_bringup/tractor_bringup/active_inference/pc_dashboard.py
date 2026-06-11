@@ -971,7 +971,8 @@ class PCDashboardState:
                 teleop=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, novelty_pred=None, novelty_target=None,
-                epi_gate=None, places_n=None, mem_clears=None) -> None:
+                epi_gate=None, places_n=None, mem_clears=None,
+                proprio=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1024,6 +1025,10 @@ class PCDashboardState:
                 state["places_n"] = int(places_n)
             if mem_clears is not None:
                 state["mem_clears"] = int(mem_clears)
+            # Proprio channels as fed to the brain: [wl, wr, roll, pitch,
+            # yaw, ax, ay, az] each normalized to [0,1] (0.5 = rest).
+            if proprio is not None:
+                state["proprio"] = [round(float(x), 4) for x in proprio]
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]

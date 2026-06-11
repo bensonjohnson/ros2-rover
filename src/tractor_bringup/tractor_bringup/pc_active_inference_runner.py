@@ -525,6 +525,7 @@ class PCActiveInferenceRunner(Node):
                 novelty_target=self.target_novelty,
                 places_n=self.place_memory.n_places(),
                 mem_clears=self._mem_clears,
+                proprio=o_t.numpy()[self.num_bins:self.num_bins + 8],
             )
         if self._step % 20 == 0:
             self.get_logger().info(
