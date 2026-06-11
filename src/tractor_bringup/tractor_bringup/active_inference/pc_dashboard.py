@@ -344,6 +344,11 @@ _PAGE = """<!doctype html>
         <span class="status-dot"></span>
         <span>SAFETY HOLD</span>
       </div>
+      <div class="status-badge live" id="teleop_badge"
+           style="display:none;background:rgba(91,192,255,0.1);border-color:rgba(91,192,255,0.25);color:#5bc0ff">
+        <span class="status-dot"></span>
+        <span>TELEOP</span>
+      </div>
       <div class="status-badge live" id="status_badge">
         <span class="status-dot"></span>
         <span id="status">live</span>
@@ -853,6 +858,8 @@ async function tick(){
 
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
     $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
+    // Teleop badge: a human is driving; the brain is watching and learning
+    $('teleop_badge').style.display = s.teleop ? 'inline-flex' : 'none';
 
     // Battery readings
     const volt = s.battery_voltage;
@@ -961,6 +968,7 @@ class PCDashboardState:
                 trans_errors=None, z_abs=None, e_z_abs=None, prag=None, mode=None,
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
+                teleop=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, novelty_pred=None, novelty_target=None,
                 epi_gate=None, places_n=None, mem_clears=None) -> None:
@@ -999,6 +1007,8 @@ class PCDashboardState:
                 state["tick_budget_ms"] = round(float(tick_budget_ms), 2)
             if safety_hold is not None:
                 state["safety_hold"] = bool(safety_hold)
+            if teleop is not None:
+                state["teleop"] = bool(teleop)
             # Interoceptive novelty channel (felt vs predicted).
             if novelty is not None:
                 state["novelty"] = round(float(novelty), 3)

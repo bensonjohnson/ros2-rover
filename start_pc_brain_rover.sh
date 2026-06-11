@@ -90,6 +90,9 @@ if [ "$MODE" = "awake" ]; then
   echo "WARNING: Rover will drive AUTONOMOUSLY and learn online!"
   echo "  - Behavior WILL be erratic until the world model settles"
   echo "  - Lidar safety monitor hard-stops the tracks near obstacles"
+  echo "  - Shadow teleop: hold RB on the Xbox controller to drive it"
+  echo "    yourself — the brain learns from your driving, and autonomy"
+  echo "    resumes when you release"
   echo "  - Brain weights persist to ~/.ros/pnn_brain.pt (saved periodically)"
   echo "  - Keep emergency stop ready"
 else

@@ -36,6 +36,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, JointState, Imu
 from std_msgs.msg import Float32MultiArray, Float32, Bool
+from geometry_msgs.msg import Twist
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
@@ -99,6 +100,14 @@ class PCActiveInferenceRunner(Node):
         p("novelty_pref_weight", 2.0) # weight of that preference in the EFE
         p("novelty_ema_tau_s", 1.0)   # smoothing so the channel is predictable
         p("lift_accel_dev", 3.0)      # m/s^2 deviation from gravity = "picked up"
+        # Shadow teleop: a controller twist on this topic overrides the actor
+        # (the human drives), but inference/learning/logging continue exactly
+        # as in autonomy — the brain gains experience from human trajectories.
+        # Release the deadman and the actor resumes after teleop_timeout_s.
+        p("teleop_topic", "/cmd_vel_teleop")
+        p("teleop_timeout_s", 0.5)
+        p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
+        p("kin_track_width", 0.154)   # m between track centers (twist -> tracks)
         p("torch_threads", 4)
         p("model_path", os.path.expanduser("~/.ros/pnn_brain.pt"))
         p("save_interval_s", 60.0)
@@ -184,6 +193,11 @@ class PCActiveInferenceRunner(Node):
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
         self._mem_clears = 0
+        self.teleop_timeout_s = float(g("teleop_timeout_s").value)
+        self.kin_v_max = float(g("kin_v_max").value)
+        self.kin_track_width = float(g("kin_track_width").value)
+        self._teleop_action: np.ndarray | None = None
+        self._teleop_stamp = 0.0
         self._maybe_load()
         self._persist_ctr = 0
         self._held_raw = np.zeros(2, dtype=np.float32)
@@ -234,6 +248,9 @@ class PCActiveInferenceRunner(Node):
         # rover doesn't look like a broken brain.
         self._safety_hold = False
         self.create_subscription(Bool, "/emergency_stop", self._estop_cb, 10)
+        # Controller twists for shadow-teleop (deadman released = topic silent).
+        self.create_subscription(
+            Twist, g("teleop_topic").value, self._teleop_cb, 10)
 
         # --- dashboard ---
         self.dash = None
@@ -306,6 +323,21 @@ class PCActiveInferenceRunner(Node):
 
     def _estop_cb(self, msg):
         self._safety_hold = bool(msg.data)
+
+    def _teleop_cb(self, msg: Twist):
+        """Controller twist -> pre-scale per-track action, same convention as
+        the actor's output so the model sees one consistent action space.
+
+        out = a * action_scale always holds; full stick therefore caps at the
+        same envelope autonomy gets (the brain can't represent more).
+        """
+        v, w = float(msg.linear.x), float(msg.angular.z)
+        vl = v - 0.5 * w * self.kin_track_width
+        vr = v + 0.5 * w * self.kin_track_width
+        post = np.array([vl, vr], dtype=np.float32) / max(self.kin_v_max, 1e-6)
+        self._teleop_action = np.clip(
+            post / max(self.action_scale, 1e-6), -1.0, 1.0).astype(np.float32)
+        self._teleop_stamp = time.monotonic()
 
     def _check_lifted(self) -> bool:
         """Detect being picked up: sustained non-gravity accel with wheels idle.
@@ -396,16 +428,28 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
 
-        # 3. Choose an action, but HOLD it for action_persist ticks so the rover
-        #    commits to a move instead of re-deciding (and twitching) every tick.
+        # 3. Choose an action. A live controller (shadow teleop) overrides the
+        #    actor — the human drives, the brain watches and learns from the
+        #    exact same (obs, action) stream. Otherwise the actor decides and
+        #    HOLDs its choice for action_persist ticks (anti-twitch).
         #    Inference + learning above still run every tick regardless.
-        if self._persist_ctr <= 0:
+        teleop = (self._teleop_action is not None
+                  and time.monotonic() - self._teleop_stamp
+                  < self.teleop_timeout_s)
+        if teleop:
+            self._held_raw = self._teleop_action.copy()
+            self._held_info = {"epistemic": 0.0, "epistemic_max": 0.0,
+                               "pragmatic": 0.0, "epi_gate": 0.0}
+            self._persist_ctr = 0   # actor re-decides as soon as human lets go
+        elif self._persist_ctr <= 0:
             action, info = self.actor.select(
                 self.model, z, prev_action=self._held_raw)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
-        self._persist_ctr -= 1
+            self._persist_ctr -= 1
+        else:
+            self._persist_ctr -= 1
         raw = self._held_raw
         info = self._held_info
 
@@ -471,6 +515,7 @@ class PCActiveInferenceRunner(Node):
                 tick_ms=tick_time * 1000.0,
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
+                teleop=teleop,
                 epi_gate=info.get("epi_gate"),
                 # Interoceptive channel observability: what the brain was fed
                 # vs what it predicted — the gap closing is the brain learning

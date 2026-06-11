@@ -67,6 +67,11 @@ def generate_launch_description():
         "imu_type", default_value="lsm9ds1",
         description="'lsm9ds1' (raw, software fusion) or 'bno085' (on-chip "
                     "fused orientation) — both publish /imu/data")
+    teleop_arg = DeclareLaunchArgument(
+        "teleop", default_value="true",
+        description="Start Xbox joy nodes for shadow teleop: hold the deadman "
+                    "(RB) to drive; the brain learns from your trajectories "
+                    "and resumes autonomy when you let go")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -104,6 +109,38 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(
             ["'", LaunchConfiguration("imu_type"), "' == 'bno085'"])))
 
+    # Shadow teleop: joy + teleop_twist_joy -> /cmd_vel_teleop, consumed ONLY
+    # by the brain runner (which substitutes the human action for the actor's
+    # and publishes it through the same safety-gated track path). It must NOT
+    # go through the safety monitor's twist path: the motor driver listens to
+    # /cmd_vel AND /track_cmd, and feeding both would double-drive the motors.
+    joy_node = Node(
+        package="joy",
+        executable="joy_node",
+        name="joy_node",
+        output="screen",
+        parameters=[os.path.join(tractor_bringup_dir, "config",
+                                 "xbox_teleop.yaml")],
+        condition=IfCondition(LaunchConfiguration("teleop")))
+    teleop_twist_node = Node(
+        package="teleop_twist_joy",
+        executable="teleop_node",
+        name="teleop_twist_joy",
+        output="screen",
+        parameters=[
+            os.path.join(tractor_bringup_dir, "config", "xbox_teleop.yaml"),
+            # Match the stick range to the brain's action envelope
+            # (action_scale 0.6 x kin_v_max 0.2 = 0.12 m/s; full spin =
+            # 2*0.12/0.154 = 1.56 rad/s) so the model sees graded actions
+            # across the whole stick instead of clipping at half deflection.
+            {"scale_linear.x": 0.12,
+             "scale_linear_turbo.x": 0.12,
+             "scale_angular.yaw": 1.5,
+             "scale_angular_turbo.yaw": 1.5},
+        ],
+        remappings=[("cmd_vel", "/cmd_vel_teleop")],
+        condition=IfCondition(LaunchConfiguration("teleop")))
+
     # Track-space safety gate: /track_cmd_ai -> (clamp near obstacles) -> /track_cmd
     safety_monitor_node = Node(
         package="tractor_bringup",
@@ -112,7 +149,7 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "scan_topic": "/scan",
-            "input_cmd_topic": "/cmd_vel_teleop",   # unused here, kept for the node's API
+            "input_cmd_topic": "/cmd_vel_unused",   # twist path must stay idle (see above)
             "output_cmd_topic": "/cmd_vel",
             "input_track_topic": "/track_cmd_ai",
             "output_track_topic": "/track_cmd",
@@ -169,12 +206,14 @@ def generate_launch_description():
         max_wheel_vel_arg,
         dashboard_port_arg,
         imu_type_arg,
+        teleop_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
 
         TimerAction(period=2.0, actions=[lidar_launch]),
         TimerAction(period=4.0, actions=[imu_launch, bno085_launch]),
-        TimerAction(period=5.0, actions=[safety_monitor_node]),
+        TimerAction(period=5.0, actions=[safety_monitor_node,
+                                         joy_node, teleop_twist_node]),
         TimerAction(period=7.0, actions=[brain_node]),
     ])
