@@ -63,6 +63,11 @@ class PCConfig:
     # drown out self-motion — so the tail channels get their own (higher) one.
     n_proprio: int = 0
     precision_proprio: float = 1.0
+    # Interoceptive channels (e.g. place novelty) follow the proprio block at
+    # the very end of the observation vector. A single scalar against ~80
+    # dims needs an even stronger precision to register in settling/learning.
+    n_intero: int = 0
+    precision_intero: float = 1.0
 
     # Per-member bootstrap keep-probability (ensemble diversity).
     bootstrap_prob: float = 0.8
@@ -93,9 +98,13 @@ class PCWorldModel:
         # before these config fields existed must still load).
         n_prop = int(getattr(cfg, "n_proprio", 0))
         pi_prop = float(getattr(cfg, "precision_proprio", cfg.precision_obs))
+        n_int = int(getattr(cfg, "n_intero", 0))
+        pi_int = float(getattr(cfg, "precision_intero", cfg.precision_obs))
         self.pi_o = torch.full((O,), float(cfg.precision_obs), device=self.device)
         if n_prop > 0:
-            self.pi_o[O - n_prop:] = pi_prop
+            self.pi_o[O - n_int - n_prop:O - n_int] = pi_prop
+        if n_int > 0:
+            self.pi_o[O - n_int:] = pi_int
         self.pi_z = cfg.precision_z
 
         # Recurrent state carried across timesteps.

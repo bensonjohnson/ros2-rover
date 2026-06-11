@@ -104,19 +104,6 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(
             ["'", LaunchConfiguration("imu_type"), "' == 'bno085'"])))
 
-    # Fused odometry for the visit grid: skid-steer encoders drift in yaw
-    # (track slip on pivots), which rotates the whole spatial-memory trail.
-    # RF2O scan matching + IMU gyro fix exactly that, fused by the EKF into
-    # /odometry/filtered (EKF owns the odom -> base_footprint TF).
-    rf2o_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(tractor_sensors_dir, "launch", "lidar_odometry.launch.py")),
-        launch_arguments={"publish_tf": "false"}.items())
-    ekf_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(tractor_bringup_dir, "launch", "robot_localization.launch.py")),
-        launch_arguments={"use_gps": "false"}.items())
-
     # Track-space safety gate: /track_cmd_ai -> (clamp near obstacles) -> /track_cmd
     safety_monitor_node = Node(
         package="tractor_bringup",
@@ -158,7 +145,6 @@ def generate_launch_description():
             "imu_yaw_sign": LaunchConfiguration("imu_yaw_sign"),
             "max_yaw_rate": LaunchConfiguration("max_yaw_rate"),
             "max_wheel_vel": LaunchConfiguration("max_wheel_vel"),
-            "odom_topic": "/odometry/filtered",   # EKF-fused (encoders+rf2o+IMU)
             "num_bins": 72,
             "max_range": 5.0,
             "latent_dim": 64,
@@ -190,6 +176,5 @@ def generate_launch_description():
         TimerAction(period=2.0, actions=[lidar_launch]),
         TimerAction(period=4.0, actions=[imu_launch, bno085_launch]),
         TimerAction(period=5.0, actions=[safety_monitor_node]),
-        TimerAction(period=6.0, actions=[rf2o_launch, ekf_launch]),
-        TimerAction(period=8.0, actions=[brain_node]),
+        TimerAction(period=7.0, actions=[brain_node]),
     ])

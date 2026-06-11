@@ -428,11 +428,10 @@ _PAGE = """<!doctype html>
       <span class="dot" style="background:#ff9d3b"></span>sensory err
       <span class="dot" style="background:#ffd043"></span>epistemic</div></div>
 
-  <div class="panel"><canvas id="vmap" width="300" height="300"></canvas>
-    <div class="legend"><span class="dot" style="background:#ff9d3b"></span>visited
-      <span class="dot" style="background:#c8323c"></span>scan (live)
-      <span class="dot" style="background:#ffd043"></span>goal dot
-      <span class="dot" style="background:#5bc0ff"></span>rover</div></div>
+  <div class="panel"><canvas id="novtrace" width="300" height="200"></canvas>
+    <div class="legend"><span class="dot" style="background:#39ff14"></span>novelty (felt)
+      <span class="dot" style="background:#ff9d3b"></span>novelty (predicted)
+      <span class="dot" style="background:#5a6370"></span>target</div></div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -730,94 +729,42 @@ function nnStatus(s){
   }
 }
 
-// ---- Visit-grid minimap: the transient spatial memory, rover-centered ------
+// ---- Interoception trace: felt vs predicted place novelty ------------------
+// The curiosity appetite made visible: green = the novelty the brain FEELS
+// (its observation channel), orange = what it PREDICTED to feel. The gap
+// closing is the brain learning its own novelty dynamics; both hovering
+// under the gray target line is the standing "hunger" that drives it to
+// seek new rooms.
 let lastClears=null, clearFlashUntil=0;
-function vmap(s){
-  const c=$('vmap'),ctx=c.getContext('2d'),W=c.width,H=c.height;
+function novtrace(s){
+  const c=$('novtrace'),ctx=c.getContext('2d'),W=c.width,H=c.height;
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle='#0f1218';ctx.fillRect(0,0,W,H);
-  const pose=s.pose, cells=s.visit_cells, cs=s.cell_size||0.25;
-  ctx.font='10px system-ui';ctx.textAlign='left';
-  if(!pose){
-    ctx.fillStyle='#5a6370';ctx.fillText('no pose / spatial memory data',10,H/2);
-    return;
-  }
-  const [rx,ry,rth]=pose;
-  const VIEW_M=8.0, scale=W/VIEW_M, cx=W/2, cy=H/2;   // rover-centered, 8 m window
-  // Heading-up view (matches the lidar radar): the rover stays fixed
-  // pointing up and the visited cells move/rotate around it.
-  // forward component -> up on screen, leftward component -> left on screen.
-  const cth=Math.cos(rth), sth=Math.sin(rth);
-  const toScreen=(wx,wy)=>{
-    const dx=wx-rx, dy=wy-ry;
-    const fwd=dx*cth+dy*sth, left=-dx*sth+dy*cth;
-    return [cx-left*scale, cy-fwd*scale];
-  };
-  // range rings every 1 m
+  const yOf=v=>H-6-v*(H-26);          // fixed [0,1] scale, label band on top
+  // gridlines at 0, .5, 1
   ctx.strokeStyle='#1d2530';ctx.lineWidth=1;
-  for(let r=1;r<=VIEW_M/2;r++){ctx.beginPath();ctx.arc(cx,cy,r*scale,0,2*Math.PI);ctx.stroke();}
-  // visited cells: hotter orange = more seconds of occupancy (decaying)
-  if(cells&&cells.length){
-    const px=Math.max(2,cs*scale);
-    for(const [gx,gy,cnt] of cells){
-      const [x,y]=toScreen(gx*cs, gy*cs);
-      if(x<-px||y<-px||x>W+px||y>H+px)continue;
-      const t=Math.min(1,cnt/20);   // ~20 s of presence saturates the color
-      ctx.fillStyle=`rgba(${120+Math.round(135*t)},${60+Math.round(97*t)},20,${0.25+0.6*t})`;
-      ctx.fillRect(x-px/2,y-px/2,px,px);
+  for(const v of [0,0.5,1]){ctx.beginPath();ctx.moveTo(0,yOf(v));ctx.lineTo(W,yOf(v));ctx.stroke();}
+  // target preference line
+  if(s.novelty_target!=null){
+    ctx.strokeStyle='#5a6370';ctx.setLineDash([4,4]);ctx.beginPath();
+    ctx.moveTo(0,yOf(s.novelty_target));ctx.lineTo(W,yOf(s.novelty_target));ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  const plot=(arr,color)=>{if(!arr||!arr.length)return;
+    ctx.beginPath();
+    for(let i=0;i<arr.length;i++){
+      const x=i/(arr.length-1||1)*W;
+      i?ctx.lineTo(x,yOf(arr[i])):ctx.moveTo(x,yOf(arr[i]));
     }
-  }
-  // live scan outline (ego-BEV): the walls as the lidar sees them RIGHT NOW.
-  // No accumulation, so nothing can smear — same data as the radar panel.
-  const obs=s.obs, MAXR=5.0;
-  if(obs&&obs.length){
-    ctx.fillStyle='rgba(200,50,60,0.85)';
-    for(let b=0;b<obs.length;b++){
-      if(obs[b]>=0.95)continue;            // no return in this direction
-      const r=obs[b]*MAXR;
-      const phi=(b+0.5)/obs.length*2*Math.PI;   // ego angle, 0=forward, CCW
-      const px2=cx-Math.sin(phi)*r*scale, py2=cy-Math.cos(phi)*r*scale;
-      ctx.fillRect(px2-1.5,py2-1.5,3,3);
-    }
-  }
-  // the committed waypoint ("pac-dot"): the novel cell the rover is
-  // currently driving to; resets to a new one on arrival
-  if(s.novel_goal){
-    const [gx2,gy2]=toScreen(s.novel_goal[0],s.novel_goal[1]);
-    if(gx2>=0&&gy2>=0&&gx2<=W&&gy2<=H){
-      const pulse=3.5+1.5*Math.sin(Date.now()/280);
-      ctx.fillStyle='#ffd043';
-      ctx.beginPath();ctx.arc(gx2,gy2,pulse,0,2*Math.PI);ctx.fill();
-      ctx.strokeStyle='rgba(255,208,67,0.45)';ctx.lineWidth=1.5;
-      ctx.beginPath();ctx.arc(gx2,gy2,8,0,2*Math.PI);ctx.stroke();
-    }
-  }
-  // compass: bearing toward the nearest reachable novel region
-  if(s.novel_bearing!=null){
-    const rel=s.novel_bearing-rth;            // heading-up frame
-    const ax=-Math.sin(rel), ay=-Math.cos(rel);
-    ctx.strokeStyle='#ffd043';ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(cx+ax*12,cy+ay*12);ctx.lineTo(cx+ax*34,cy+ay*34);ctx.stroke();
-    ctx.fillStyle='#ffd043';
-    const hx=cx+ax*40, hy=cy+ay*40;
-    ctx.beginPath();ctx.moveTo(hx,hy);
-    ctx.lineTo(hx-ax*8-ay*4,hy-ay*8+ax*4);
-    ctx.lineTo(hx-ax*8+ay*4,hy-ay*8-ax*4);
-    ctx.closePath();ctx.fill();
-  }
-  // rover marker: fixed at center, always pointing up (heading-up view)
-  ctx.fillStyle='#5bc0ff';
-  ctx.beginPath();ctx.moveTo(cx,cy-9);ctx.lineTo(cx-5,cy+5);ctx.lineTo(cx+5,cy+5);ctx.closePath();ctx.fill();
-  ctx.fillStyle='#4a5565';
-  ctx.fillText('spatial memory  (8 m view, heading-up)',8,12);
-  if(s.place_mode){
-    ctx.fillStyle=s.place_mode==='seek doorway'?'#ffd043':'#5bc0ff';
-    ctx.fillText('mode: '+s.place_mode,8,24);
-  }
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;ctx.stroke();};
+  plot(s.nov_pred_hist,'#ff9d3b');
+  plot(s.nov_hist,'#39ff14');
+  ctx.font='10px system-ui';ctx.textAlign='left';ctx.fillStyle='#4a5565';
+  ctx.fillText('interoception: place novelty (brain input)',8,12);
   // flash on memory clear (lift detected)
-  if(s.grid_clears!=null){
-    if(lastClears!==null && s.grid_clears>lastClears)clearFlashUntil=Date.now()+2500;
-    lastClears=s.grid_clears;
+  if(s.mem_clears!=null){
+    if(lastClears!==null && s.mem_clears>lastClears)clearFlashUntil=Date.now()+2500;
+    lastClears=s.mem_clears;
   }
   if(Date.now()<clearFlashUntil){
     ctx.fillStyle='rgba(255,208,67,0.92)';ctx.font='bold 13px system-ui';ctx.textAlign='center';
@@ -863,11 +810,12 @@ async function tick(){
     $('F').textContent=fix(s.F);$('err').textContent=fix(s.err);
     $('epi').textContent=fix(s.epi,4);$('epimax').textContent=fix(s.epi_max,4);
     $('prag').textContent=fix(s.prag,4);
-    // Novelty card doubles as the odometry-health indicator: without /odom
-    // the spatial term silently disables, and you should know.
+    // Novelty card: felt -> predicted interoception. The pair converging is
+    // the brain learning the channel; both low = sated (familiar room).
     const novEl=$('nov');
-    if(s.odom_ok===false){novEl.textContent='no odom';novEl.style.color='#ff5b5b';}
-    else{novEl.textContent=fix(s.novelty,2);novEl.style.color='';}
+    if(s.novelty!=null){
+      novEl.textContent=fix(s.novelty,2)+' → '+fix(s.novelty_pred,2);
+    }else{novEl.textContent='-';}
     $('L').textContent=fix(s.L,2);$('R').textContent=fix(s.R,2);
 
     // Control tick wall time vs budget (green = headroom, red = overrun)
@@ -896,9 +844,9 @@ async function tick(){
     // Room recognition: place novelty (fingerprint distance) and how many
     // distinct-looking places are remembered. Gold = a new room.
     const rEl=$('room');
-    if(s.place_novelty!=null){
-      rEl.textContent=(s.place_novelty*100).toFixed(0)+'% · '+(s.places_n||0)+' seen';
-      rEl.style.color = s.place_novelty>0.7 ? '#ffd043' : (s.place_novelty>0.4 ? '#ff9d3b' : '#00c88c');
+    if(s.novelty!=null){
+      rEl.textContent=(s.novelty*100).toFixed(0)+'% · '+(s.places_n||0)+' seen';
+      rEl.style.color = s.novelty>0.7 ? '#ffd043' : (s.novelty>0.4 ? '#ff9d3b' : '#00c88c');
     }else{
       rEl.textContent='-';rEl.style.color='';
     }
@@ -963,7 +911,7 @@ async function tick(){
       badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
       statusText.textContent = 'live';
     }
-    radar(s);tracks(s);trace(s);vmap(s);brainViz(s);nnStatus(s);
+    radar(s);tracks(s);trace(s);novtrace(s);brainViz(s);nnStatus(s);
   }catch(e){
     const badge = $('status_badge');
     const statusText = $('status');
@@ -998,6 +946,8 @@ class PCDashboardState:
         self._F = deque(maxlen=history)
         self._err = deque(maxlen=history)
         self._epi = deque(maxlen=history)
+        self._nov = deque(maxlen=history)
+        self._nov_pred = deque(maxlen=history)
 
     def active(self, within: float = 5.0) -> bool:
         """True if a browser polled /state recently — producers use this to
@@ -1012,10 +962,8 @@ class PCDashboardState:
                 battery_voltage=None, battery_percentage=None,
                 tick_ms=None, tick_budget_ms=None, safety_hold=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
-                novelty=None, visit_cells=None,
-                cell_size=None, pose=None, odom_ok=None, grid_clears=None,
-                novel_bearing=None, epi_gate=None, novel_goal=None,
-                place_novelty=None, places_n=None, place_mode=None) -> None:
+                novelty=None, novelty_pred=None, novelty_target=None,
+                epi_gate=None, places_n=None, mem_clears=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1051,31 +999,21 @@ class PCDashboardState:
                 state["tick_budget_ms"] = round(float(tick_budget_ms), 2)
             if safety_hold is not None:
                 state["safety_hold"] = bool(safety_hold)
+            # Interoceptive novelty channel (felt vs predicted).
             if novelty is not None:
                 state["novelty"] = round(float(novelty), 3)
+                self._nov.append(round(float(novelty), 4))
+            if novelty_pred is not None:
+                state["novelty_pred"] = round(float(novelty_pred), 3)
+                self._nov_pred.append(round(float(novelty_pred), 4))
+            if novelty_target is not None:
+                state["novelty_target"] = round(float(novelty_target), 3)
             if epi_gate is not None:
                 state["epi_gate"] = round(float(epi_gate), 3)
-            # Transient spatial memory view (minimap).
-            if visit_cells is not None:
-                state["visit_cells"] = visit_cells
-            if novel_bearing is not None:
-                state["novel_bearing"] = round(float(novel_bearing), 3)
-            if novel_goal is not None:
-                state["novel_goal"] = [round(float(v), 3) for v in novel_goal]
-            if place_novelty is not None:
-                state["place_novelty"] = round(float(place_novelty), 3)
             if places_n is not None:
                 state["places_n"] = int(places_n)
-            if place_mode is not None:
-                state["place_mode"] = place_mode
-            if cell_size is not None:
-                state["cell_size"] = float(cell_size)
-            if pose is not None:
-                state["pose"] = [round(float(v), 3) for v in pose]
-            if odom_ok is not None:
-                state["odom_ok"] = bool(odom_ok)
-            if grid_clears is not None:
-                state["grid_clears"] = int(grid_clears)
+            if mem_clears is not None:
+                state["mem_clears"] = int(mem_clears)
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]
@@ -1119,6 +1057,8 @@ class PCDashboardState:
                 s["F_hist"] = list(self._F)
                 s["err_hist"] = list(self._err)
                 s["epi_hist"] = list(self._epi)
+                s["nov_hist"] = list(self._nov)
+                s["nov_pred_hist"] = list(self._nov_pred)
             return s
 
 

@@ -78,8 +78,9 @@ fi
 echo "  Dashboard Port: ${DASHBOARD_PORT}"
 echo "  Model:          temporal predictive coding (local Hebbian updates, no backprop)"
 if [ "$MODE" = "awake" ]; then
-  echo "  Drive:          pure epistemic (ensemble-disagreement info gain)"
-  echo "  Input:          lidar only  ->  Output: per-track [L,R] in [-1,1]"
+  echo "  Drive:          epistemic (ensemble disagreement) + novelty appetite"
+  echo "  Input:          lidar + proprio + place novelty (interoception)"
+  echo "                  ->  Output: per-track [L,R] in [-1,1]"
 else
   echo "  Cycle:          Slow-Wave Sleep (replay) + REM Sleep (dreaming) + Homeostasis Pruning"
 fi

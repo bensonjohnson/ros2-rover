@@ -96,11 +96,12 @@ def run_sleep_cycle(args):
         print(f"Error loading model weights: {e}")
         return
 
-    # Lidar bin count = obs minus proprio tail (old checkpoints predate the
-    # n_proprio config field; the runner has always used 8 proprio channels
-    # whenever the obs vector is wider than the 72 lidar bins).
+    # Lidar bin count = obs minus the proprio + intero tail (old checkpoints
+    # predate the n_proprio/n_intero config fields; the runner has always used
+    # 8 proprio channels whenever the obs vector is wider than 72 lidar bins).
     n_proprio = int(getattr(cfg, "n_proprio", 8 if cfg.obs_dim > 72 else 0))
-    num_bins = cfg.obs_dim - n_proprio
+    n_intero = int(getattr(cfg, "n_intero", 0))
+    num_bins = cfg.obs_dim - n_proprio - n_intero
 
     def probe_disagreement() -> float:
         """Mean ensemble disagreement over a fixed probe set — the health

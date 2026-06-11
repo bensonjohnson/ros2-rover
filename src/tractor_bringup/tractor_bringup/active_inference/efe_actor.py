@@ -1,16 +1,24 @@
-"""Action selection by expected free energy — pure epistemic value.
+"""Action selection by expected free energy — epistemic + pragmatic value.
 
-Active inference picks actions that minimize expected free energy. With no
-pragmatic (goal) term, that reduces to MAXIMIZING expected information gain:
-do the thing you'd learn the most from. We estimate information gain as the
-world model's transition-ensemble disagreement about the resulting latent.
+Active inference picks actions that minimize expected free energy: an
+epistemic term (expected information gain, estimated as the world model's
+transition-ensemble disagreement about the resulting latent) plus a pragmatic
+term (squared error between the DECODED predicted observation and prior
+preferences over it).
+
+Curiosity about PLACES lives in the pragmatic term, not in bolt-on score
+machinery: the observation vector carries an interoceptive place-novelty
+channel (see PlaceMemory) and the actor holds a prior preference for it being
+high — an appetite for new rooms. Action sequences whose predicted
+observations keep novelty up are preferred, exactly like the preference for
+forward wheel speed.
 
 We don't run a planner. Each control step we propose a batch of candidate
-track commands (a structured set + random samples), score each by one-step
-epistemic value, and softmax-sample one. Sampling (rather than hard argmax)
-keeps early behavior from locking onto a single direction and lets the brain
-keep probing. One forward pass over the ensemble — cheap enough for the CPU
-control loop.
+track commands (a structured set + random samples), score each by rollout
+expected free energy, and softmax-sample one. Sampling (rather than hard
+argmax) keeps early behavior from locking onto a single direction and lets
+the brain keep probing. One forward pass over the ensemble — cheap enough for
+the CPU control loop.
 """
 
 from __future__ import annotations
@@ -49,31 +57,20 @@ class ActorConfig:
     # Commitment: bonus for candidates near the currently-held action, so
     # re-decisions refine the move instead of twitching to a new one.
     smooth_weight: float = 0.25
-    # Penalty for rollouts the current scan blocks early. Without it, nosing
-    # into a wall costs nothing (blocked rollouts merely stop ACCRUING
-    # novelty) and the rover happily dithers against walls.
-    blocked_weight: float = 0.4
     deterministic: bool = False # if True, argmax instead of sampling
-    forward_bias: float = 0.3   # (deprecated, kept for configuration compatibility)
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
     num_bins: int = 72          # lidar bins preceding the proprio channels in obs
-    use_proprio: bool = True    # False = no proprio channels, pragmatic term disabled
-    # Spatial novelty (transient visit-grid curiosity). The latent rollout is
-    # myopic (~0.5 s), but differential-drive kinematics are nearly free, so
-    # the novelty term looks several seconds ahead.
-    novelty_weight: float = 0.0     # 0 disables the term
-    novelty_horizon_s: float = 7.0  # kinematic lookahead
-    novelty_steps: int = 8          # integration steps over that horizon
-    bearing_weight: float = 0.5     # bonus for moving toward the nearest
-                                    # reachable novel region (BFS compass) —
-                                    # the long-range pull the short rollout
-                                    # can't provide from inside a visited blob
-    action_scale: float = 0.6       # candidates are pre-scale; motors see cand*scale
-    kin_v_max: float = 0.2          # m/s of one track at full (post-scale) command
-    kin_track_width: float = 0.154  # m between track centers
+    use_proprio: bool = True    # False = no proprio channels, proprio preference disabled
     target_wl: float = 0.65     # target left wheel speed in [0,1] (0.5 is stationary)
     target_wr: float = 0.65     # target right wheel speed in [0,1]
     target_yaw: float = 0.5     # target yaw rate in [0,1] (0.5 is straight, no spin)
+    # Interoceptive novelty preference (the appetite for new rooms). The
+    # observation's LAST channel is place novelty; preferring it high makes
+    # exploration ordinary goal-seeking under EFE. The weight is per-step
+    # against the 3 proprio preference terms — one channel needs the boost.
+    n_intero: int = 1           # interoceptive channels at the obs tail (0 disables)
+    target_novelty: float = 0.8 # preferred place novelty in [0,1]
+    novelty_pref_weight: float = 2.0
     horizon: int = 8            # planning horizon length
     seed: int = 0
     structured: list = field(default_factory=lambda: list(_STRUCTURED))
@@ -100,69 +97,14 @@ class EFEActor:
         # Concatenate along batch dimension: [N, H, 2]
         return torch.cat([struct_seq, rand_seq], dim=0)
 
-    def _spatial_novelty(self, cands: torch.Tensor, pose, novelty_fn,
-                         blocked_fn=None, novel_bearing=None):
-        """Spatial scores for each candidate's kinematic rollout.
-
-        Candidates hold one action over the horizon, so a simple constant-
-        twist unicycle integration predicts where each one takes the rover.
-        Rollouts that hit an obstacle cell stop accruing novelty there —
-        space behind a wall is not reachable novelty. Returns (novelty[N],
-        bearing_align[N], survival[N]) all in [0, 1]; survival is the
-        fraction of the horizon each rollout stays clear of the scan.
-        """
-        cfg = self.cfg
-        a_eff = cands[:, 0, :].numpy() * cfg.action_scale     # [N,2] track cmds
-        v = 0.5 * (a_eff[:, 0] + a_eff[:, 1]) * cfg.kin_v_max
-        w = (a_eff[:, 1] - a_eff[:, 0]) * cfg.kin_v_max / cfg.kin_track_width
-
-        x0, y0, th0 = pose
-        N = a_eff.shape[0]
-        xs = np.full(N, x0, dtype=np.float64)
-        ys = np.full(N, y0, dtype=np.float64)
-        ths = np.full(N, th0, dtype=np.float64)
-        alive = np.ones(N, dtype=bool)
-        dt = cfg.novelty_horizon_s / cfg.novelty_steps
-        total = np.zeros(N, dtype=np.float64)
-        surv = np.zeros(N, dtype=np.float64)
-        for _ in range(cfg.novelty_steps):
-            ths += w * dt
-            xs += v * np.cos(ths) * dt * alive
-            ys += v * np.sin(ths) * dt * alive
-            if blocked_fn is not None:
-                alive &= ~blocked_fn(xs, ys)
-            total += novelty_fn(xs, ys) * alive
-            surv += alive
-        nov = total / cfg.novelty_steps
-        surv = surv / cfg.novelty_steps
-
-        # Alignment with the compass bearing: displacement alignment for
-        # candidates that travel, HEADING alignment (slightly discounted)
-        # for those that mostly rotate — otherwise the spin that would point
-        # the rover at the open door earns nothing and every other term
-        # punishes it, leaving the rover unable to turn toward the arrow.
-        align = np.zeros(N, dtype=np.float64)
-        if novel_bearing is not None:
-            dx, dy = xs - x0, ys - y0
-            dist = np.hypot(dx, dy)
-            bx, by = np.cos(novel_bearing), np.sin(novel_bearing)
-            cos_disp = (dx * bx + dy * by) / (dist + 1e-9)
-            disp_align = np.clip(cos_disp, 0.0, 1.0) * np.minimum(1.0, dist / 0.3)
-            head_align = np.clip(np.cos(ths - novel_bearing), 0.0, 1.0)
-            align = np.maximum(disp_align, 0.6 * head_align)
-        return nov, align, surv
-
     @torch.no_grad()
-    def select(self, model, z_from: torch.Tensor, forward_bias: float | None = None,
-               pose=None, novelty_fn=None, blocked_fn=None, novel_bearing=None,
-               prev_action=None):
+    def select(self, model, z_from: torch.Tensor, prev_action=None):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
         accumulating epistemic value (ensemble disagreement) and pragmatic
-        value (proprioceptive prior preference matching: moving forward, no
-        spin). If `pose` (x, y, theta) and `novelty_fn` are given, a spatial-
-        novelty term steers toward recently-unvisited space.
+        value (prior preference matching over the decoded observation: moving
+        forward, no spin, and high place novelty — the curiosity appetite).
         """
         H = self.cfg.horizon
         cands = self._candidates(H)  # [N, H, 2]
@@ -215,6 +157,15 @@ class EFEActor:
                 cost = (wl - t_wl).pow(2) + (wr - t_wr).pow(2) + (yaw - t_yaw).pow(2)
                 total_pragmatic -= cost
 
+            # Interoceptive preference: the obs tail carries place novelty;
+            # prefer rollouts whose PREDICTED novelty stays near the target.
+            # This is where curiosity about places lives now — in the
+            # generative model, not in bolt-on kinematic score terms.
+            if self.cfg.n_intero > 0:
+                nov_hat = o_hat[:, -1]
+                total_pragmatic -= self.cfg.novelty_pref_weight * \
+                    (nov_hat - self.cfg.target_novelty).pow(2)
+
             # Advance recurrent state for next step of rollout
             z = z_next
 
@@ -228,37 +179,8 @@ class EFEActor:
         prag_min, prag_max = total_pragmatic.min(), total_pragmatic.max()
         prag_norm = (total_pragmatic - prag_min) / (prag_max - prag_min + 1e-6)
 
-        # Fallback to config value, or blend with custom forward_bias if passed
         beta = self.cfg.pragmatic_weight
-        if forward_bias is not None:
-            beta = forward_bias
-
         score = (1.0 - beta) * epi_gate * epi_norm + beta * prag_norm
-
-        # Spatial novelty: steer toward recently-unvisited space. The local
-        # rollout term is min-max normalized; the bearing alignment is an
-        # absolute [0,1] bonus so it survives even when every nearby rollout
-        # looks equally stale (deep inside a visited blob).
-        nov = None
-        if (self.cfg.novelty_weight > 0.0 and pose is not None
-                and novelty_fn is not None):
-            nov, align, surv = self._spatial_novelty(
-                cands, pose, novelty_fn,
-                blocked_fn=blocked_fn, novel_bearing=novel_bearing)
-            nov_t = torch.from_numpy(nov.astype(np.float32))
-            nov_min, nov_max = nov_t.min(), nov_t.max()
-            nov_norm = (nov_t - nov_min) / (nov_max - nov_min + 1e-6)
-            # Same flat-noise guard as the epistemic gate: when every
-            # rollout sees near-identical novelty (e.g. all die at a wall),
-            # min-max would stretch noise to [0,1] and cause dithering.
-            nov_gate = min(1.0, float(nov_max - nov_min) / 0.1)
-            score = score + self.cfg.novelty_weight * nov_gate * nov_norm
-            score = score + self.cfg.bearing_weight * torch.from_numpy(
-                align.astype(np.float32))
-            # Walls cost: rollouts the current scan stops early lose score,
-            # so "drive at the wall" loses to "arc along / away from it".
-            score = score - self.cfg.blocked_weight * torch.from_numpy(
-                (1.0 - surv).astype(np.float32))
 
         # Commitment bonus: prefer candidates near the action currently held,
         # scaled by distance in command space (max possible = 2*sqrt(2)).
@@ -282,7 +204,6 @@ class EFEActor:
             "epistemic_max": float(total_epistemic.max()),
             "epistemic_mean": float(total_epistemic.mean()),
             "pragmatic": float(total_pragmatic[idx]),
-            "novelty": float(nov[idx]) if nov is not None else None,
             "epi_gate": epi_gate,
         }
         return action, info

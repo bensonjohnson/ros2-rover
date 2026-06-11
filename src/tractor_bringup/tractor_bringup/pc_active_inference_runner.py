@@ -36,13 +36,11 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, JointState, Imu
 from std_msgs.msg import Float32MultiArray, Float32, Bool
-from nav_msgs.msg import Odometry
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
 from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
 from tractor_bringup.active_inference.replay import SequenceReplay
-from tractor_bringup.active_inference.visit_grid import VisitGrid
 from tractor_bringup.active_inference.place_memory import PlaceMemory
 from tractor_bringup.active_inference.pc_dashboard import (
     PCDashboardState, start_dashboard_server)
@@ -92,19 +90,14 @@ class PCActiveInferenceRunner(Node):
         p("target_yaw", 0.5)
         p("horizon", 8)
         p("action_persist", 5)        # hold a chosen action this many ticks (anti-twitch)
-        # Spatial novelty: transient (RAM-only, decaying) visit grid steers the
-        # rover toward recently-unvisited space — curiosity about new AREAS on
-        # top of the world model's curiosity about new DYNAMICS. Deliberately
-        # not a persistent map: counts decay in minutes and die with the node.
-        p("novelty_weight", 0.5)      # 0 disables the spatial-novelty term
-        p("bearing_weight", 0.5)      # bonus toward nearest reachable novel cell
-        p("visit_cell_size", 0.25)    # m per grid cell
-        p("visit_tau_s", 420.0)       # visit-count decay time constant
-        p("visit_extent_m", 30.0)     # grid span (ring-clamped at the edges)
-        p("novelty_horizon_s", 7.0)   # kinematic lookahead for the term
-        p("kin_v_max", 0.2)           # m/s of one track at full post-scale command
-        p("kin_track_width", 0.154)   # m between track centers
-        p("odom_topic", "/odom")
+        # Interoceptive novelty: place novelty (pose-free room fingerprints) is
+        # an OBSERVATION the brain must predict, with a prior preference for it
+        # being high — curiosity about new PLACES becomes ordinary goal-seeking
+        # under EFE, alongside the ensemble's curiosity about new DYNAMICS.
+        p("novelty_precision", 6.0)   # error-weight boost for the 1 novelty dim
+        p("target_novelty", 0.8)      # preferred place novelty (the appetite)
+        p("novelty_pref_weight", 2.0) # weight of that preference in the EFE
+        p("novelty_ema_tau_s", 1.0)   # smoothing so the channel is predictable
         p("lift_accel_dev", 3.0)      # m/s^2 deviation from gravity = "picked up"
         p("torch_threads", 4)
         p("model_path", os.path.expanduser("~/.ros/pnn_brain.pt"))
@@ -128,6 +121,7 @@ class PCActiveInferenceRunner(Node):
         self.target_yaw = float(g("target_yaw").value)
         self.horizon = int(g("horizon").value)
         self.action_persist = int(g("action_persist").value)
+        self.target_novelty = float(g("target_novelty").value)
         self.do_learn = bool(g("learn").value)
         self.model_path = g("model_path").value
         self.save_interval_s = float(g("save_interval_s").value)
@@ -144,7 +138,8 @@ class PCActiveInferenceRunner(Node):
         self.max_yaw_rate = float(g("max_yaw_rate").value)
         self.max_accel = float(g("max_accel").value)
         self.n_proprio = 8 if self.use_proprio else 0   # [wheel_L, wheel_R, roll_rate, pitch_rate, yaw_rate, accel_x, accel_y, accel_z]
-        self.obs_dim = self.num_bins + self.n_proprio
+        self.n_intero = 1             # place novelty, appended after proprio
+        self.obs_dim = self.num_bins + self.n_proprio + self.n_intero
         self._wheel_l = self._wheel_r = 0.0
         self._roll_rate = self._pitch_rate = self._yaw_rate = 0.0
         self._accel_x = self._accel_y = self._accel_z = 0.0
@@ -161,6 +156,8 @@ class PCActiveInferenceRunner(Node):
             n_infer_iters=int(g("n_infer_iters").value),
             n_proprio=self.n_proprio,
             precision_proprio=float(g("proprio_precision").value),
+            n_intero=self.n_intero,
+            precision_intero=float(g("novelty_precision").value),
         ))
         self.replay_infer_iters = int(g("replay_infer_iters").value)
         # Use forward_bias as the default pragmatic_weight for backward compatibility with launch files.
@@ -173,31 +170,20 @@ class PCActiveInferenceRunner(Node):
             horizon=self.horizon,
             num_bins=self.num_bins,
             use_proprio=self.use_proprio,
-            novelty_weight=float(g("novelty_weight").value),
-            novelty_horizon_s=float(g("novelty_horizon_s").value),
-            bearing_weight=float(g("bearing_weight").value),
-            action_scale=self.action_scale,
-            kin_v_max=float(g("kin_v_max").value),
-            kin_track_width=float(g("kin_track_width").value),
+            n_intero=self.n_intero,
+            target_novelty=self.target_novelty,
+            novelty_pref_weight=float(g("novelty_pref_weight").value),
         ))
 
-        # --- transient spatial memory (never persisted) ---
-        self.visit_grid = VisitGrid(
-            cell_size=float(g("visit_cell_size").value),
-            extent_m=float(g("visit_extent_m").value),
-            tau_s=float(g("visit_tau_s").value))
-        self._novel_bearing = None
-        # Topological place memory (room fingerprints, pose-free). Drives the
-        # explore/leave decision: cover a novel room, seek a doorway gap once
-        # it reads familiar. Hysteresis so the mode doesn't flap at the edge.
+        # Topological place memory (room fingerprints, pose-free, RAM-only).
+        # Its novelty IS the interoceptive observation channel: smoothed by an
+        # EMA so the brain sees a predictable signal, not fingerprint flicker.
         self.place_memory = PlaceMemory()
-        self._place_novelty = 1.0
-        self._room_familiar = False
+        self.novelty_ema_tau_s = float(g("novelty_ema_tau_s").value)
+        self._nov_ema = 1.0
         self.lift_accel_dev = float(g("lift_accel_dev").value)
         self._lift_ticks = 0
-        self._grid_clears = 0
-        self._x = self._y = self._theta = 0.0
-        self._odom_ok = False
+        self._mem_clears = 0
         self._maybe_load()
         self._persist_ctr = 0
         self._held_raw = np.zeros(2, dtype=np.float32)
@@ -248,9 +234,6 @@ class PCActiveInferenceRunner(Node):
         # rover doesn't look like a broken brain.
         self._safety_hold = False
         self.create_subscription(Bool, "/emergency_stop", self._estop_cb, 10)
-        # Encoder odometry feeds the (transient) visit grid.
-        self.create_subscription(
-            Odometry, g("odom_topic").value, self._odom_cb, 10)
 
         # --- dashboard ---
         self.dash = None
@@ -324,21 +307,11 @@ class PCActiveInferenceRunner(Node):
     def _estop_cb(self, msg):
         self._safety_hold = bool(msg.data)
 
-    def _odom_cb(self, msg: Odometry):
-        p = msg.pose.pose.position
-        q = msg.pose.pose.orientation
-        self._x, self._y = float(p.x), float(p.y)
-        # Yaw from quaternion (planar robot).
-        self._theta = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                                 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self._odom_ok = True
-
     def _check_lifted(self) -> bool:
         """Detect being picked up: sustained non-gravity accel with wheels idle.
 
-        On a lift the grid is cleared — the rover may be somewhere new, so
-        everywhere should be novel again. Odometry is meaningless across the
-        teleport anyway; transience is the point of this memory.
+        On a lift the place memory is cleared — the rover may be somewhere
+        new, so everywhere should read novel again.
         """
         accel_mag = math.sqrt(self._accel_x ** 2 + self._accel_y ** 2
                               + self._accel_z ** 2)
@@ -355,70 +328,15 @@ class PCActiveInferenceRunner(Node):
             return True
         return False
 
-    def _scan_blocked(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """Ego-BEV blockage from the CURRENT scan — no accumulation, no smear.
-
-        A world position is blocked if it lies at/beyond the nearest lidar
-        return in its direction from the rover. World-frame obstacle
-        accumulation inherits every instant's heading error (it filled the
-        grid with phantom walls); the live scan is the obstacle truth and it
-        is free.
-        """
-        dx = np.asarray(xs) - self._x
-        dy = np.asarray(ys) - self._y
-        r = np.hypot(dx, dy)
-        phi = np.arctan2(dy, dx) - self._theta          # ego angle, 0=forward
-        bins = (np.mod(phi, 2.0 * np.pi)
-                / (2.0 * np.pi) * self.num_bins).astype(np.int64) % self.num_bins
-        wall = self.latest_scan[bins] * self.max_range  # nearest return per dir
-        return r >= (wall - 0.10)                       # at/behind the wall
-
-    def _scan_gaps(self, min_width_bins: int = 5) -> list:
-        """Openings in the current scan as candidate goal anchors.
-
-        A gap is a contiguous angular run of bins whose range clearly
-        exceeds the room around it (doorways, hall mouths, open space).
-        For each gap we return a world point centered in it, placed well
-        into the opening — these anchor the pac-dot so goals sit in lidar
-        gaps instead of arbitrary nearby cells. Returned as
-        [(wx, wy, score), ...] with score = angular width x depth.
-        """
-        s = self.latest_scan
-        if s is None:
-            return []
-        # Adaptive openness threshold: clearly beyond the typical wall
-        # distance, with floors so tight rooms and open fields both work.
-        thr = float(np.clip(1.5 * np.median(s), 0.3, 0.7))
-        open_mask = s >= thr
-        if open_mask.all() or not open_mask.any():
-            return []                       # featureless: no anchor, BFS decides
-        nb = self.num_bins
-        shift = int(np.argmin(open_mask))   # rotate so index 0 is closed
-        m = np.roll(open_mask, -shift)
-        gaps, start = [], None
-        for i in range(nb + 1):
-            if i < nb and m[i]:
-                if start is None:
-                    start = i
-            elif start is not None:
-                width = i - start
-                if width >= min_width_bins:
-                    bins = (np.arange(start, i) + shift) % nb
-                    depth = float(np.median(s[bins])) * self.max_range
-                    phi = (((start + width / 2.0) + shift) % nb) / nb * 2.0 * np.pi
-                    ang = self._theta + phi
-                    dist = float(np.clip(0.6 * depth, 0.8, 2.5))
-                    gaps.append((self._x + dist * np.cos(ang),
-                                 self._y + dist * np.sin(ang),
-                                 width * depth))
-                start = None
-        gaps.sort(key=lambda g: -g[2])
-        return gaps
-
     def _build_obs(self) -> np.ndarray:
-        """Openness vector + proprio channels, all in [0,1] for the sigmoid decoder."""
+        """Openness vector + proprio + interoceptive novelty, all in [0,1].
+
+        The last channel is the EMA-smoothed place novelty: an interoceptive
+        sense the model must predict like any other observation.
+        """
+        nov = np.array([self._nov_ema], dtype=np.float32)
         if not self.use_proprio:
-            return self.latest_scan
+            return np.concatenate([self.latest_scan, nov])
         # Map signed velocities, rates, and accelerations to [0,1] (0.5 = neutral).
         wl = np.clip(0.5 + 0.5 * self._wheel_l / self.max_wheel_vel, 0.0, 1.0)
         wr = np.clip(0.5 + 0.5 * self._wheel_r / self.max_wheel_vel, 0.0, 1.0)
@@ -434,7 +352,7 @@ class PCActiveInferenceRunner(Node):
         az = np.clip(0.5 + 0.5 * self._accel_z / self.max_accel, 0.0, 1.0)
         
         proprio = np.array([wl, wr, roll, pitch, yaw, ax, ay, az], dtype=np.float32)
-        return np.concatenate([self.latest_scan, proprio])
+        return np.concatenate([self.latest_scan, proprio, nov])
 
     def _control_step(self):
         if self.latest_scan is None:
@@ -442,6 +360,22 @@ class PCActiveInferenceRunner(Node):
             return
 
         tick_start = time.monotonic()
+
+        # Interoceptive novelty: fold the scan into place memory EVERY tick,
+        # EMA-smoothed so the channel is a clean signal the one-step model can
+        # latch onto rather than per-scan fingerprint flicker. Lift detection
+        # resets it — the rover may be somewhere new.
+        if self.use_proprio and self._check_lifted():
+            self.place_memory.clear()
+            self._nov_ema = 1.0
+            self._mem_clears += 1
+            self.get_logger().info(
+                "Lift detected — place memory cleared, everywhere is new again")
+        nov_raw = self.place_memory.update(self.latest_scan)
+        alpha = min(1.0, self._tick_period
+                    / max(self.novelty_ema_tau_s, self._tick_period))
+        self._nov_ema += alpha * (nov_raw - self._nov_ema)
+
         obs_np = self._build_obs()
         o_t = torch.from_numpy(obs_np)
         action_prev_np = self.last_action.numpy().copy()   # led into this o_t
@@ -462,46 +396,12 @@ class PCActiveInferenceRunner(Node):
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
 
-        # Transient spatial memory upkeep: decay, lift-reset, mark "been here"
-        # (counts are seconds of occupancy).
-        self.visit_grid.decay()
-        if self.use_proprio and self._check_lifted():
-            self.visit_grid.clear()
-            self.place_memory.clear()
-            self._grid_clears += 1
-            self.get_logger().info(
-                "Lift detected — visit grid cleared, everywhere is new again")
-        if self._odom_ok:
-            self.visit_grid.visit(self._x, self._y, amount=self._tick_period)
-
         # 3. Choose an action, but HOLD it for action_persist ticks so the rover
         #    commits to a move instead of re-deciding (and twitching) every tick.
         #    Inference + learning above still run every tick regardless.
-        #    Obstacle truth for the spatial terms is the CURRENT scan
-        #    (ego-BEV) — never accumulated, so it cannot smear.
         if self._persist_ctr <= 0:
-            pose = (self._x, self._y, self._theta) if self._odom_ok else None
-            # Room-level decision (pose-free): place novelty from the scan
-            # fingerprint. Novel room -> cover it locally (visit-grid BFS);
-            # familiar room -> seek a doorway (gap-anchored pac-dot).
-            self._place_novelty = self.place_memory.update(self.latest_scan)
-            if self._room_familiar:
-                if self._place_novelty > 0.7:
-                    self._room_familiar = False
-            elif self._place_novelty < 0.4:
-                self._room_familiar = True
-            gaps = self._scan_gaps() if self._room_familiar else None
-            self._novel_bearing = (
-                self.visit_grid.novel_bearing(self._x, self._y,
-                                              blocked_fn=self._scan_blocked,
-                                              gap_targets=gaps)
-                if self._odom_ok else None)
             action, info = self.actor.select(
-                self.model, z, pose=pose,
-                novelty_fn=self.visit_grid.novelty,
-                blocked_fn=self._scan_blocked if self._odom_ok else None,
-                novel_bearing=self._novel_bearing,
-                prev_action=self._held_raw)
+                self.model, z, prev_action=self._held_raw)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
@@ -571,21 +471,15 @@ class PCActiveInferenceRunner(Node):
                 tick_ms=tick_time * 1000.0,
                 tick_budget_ms=self._tick_period * 1000.0,
                 safety_hold=self._safety_hold,
-                novelty=info.get("novelty"),
                 epi_gate=info.get("epi_gate"),
-                # Transient spatial memory view (minimap). Obstacles are not
-                # sent — the page draws the live scan (already in `obs`).
-                visit_cells=self.visit_grid.sparse(),
-                cell_size=self.visit_grid.cell_size,
-                pose=[self._x, self._y, self._theta],
-                odom_ok=self._odom_ok,
-                grid_clears=self._grid_clears,
-                novel_bearing=self._novel_bearing,
-                novel_goal=self.visit_grid.goal_world(),
-                place_novelty=self._place_novelty,
+                # Interoceptive channel observability: what the brain was fed
+                # vs what it predicted — the gap closing is the brain learning
+                # its own novelty dynamics.
+                novelty=self._nov_ema,
+                novelty_pred=float(o_hat[-1]),
+                novelty_target=self.target_novelty,
                 places_n=self.place_memory.n_places(),
-                place_mode=("seek doorway" if self._room_familiar
-                            else "cover room"),
+                mem_clears=self._mem_clears,
             )
         if self._step % 20 == 0:
             self.get_logger().info(
@@ -631,6 +525,12 @@ class PCActiveInferenceRunner(Node):
         if os.path.exists(self.model_path):
             try:
                 sd = torch.load(self.model_path, map_location="cpu", weights_only=False)
+                if sd["W_o"].shape[0] != self.obs_dim:
+                    self.get_logger().warning(
+                        f"Saved brain has obs_dim={sd['W_o'].shape[0]} but this "
+                        f"runner builds obs_dim={self.obs_dim} (observation "
+                        f"layout changed) — starting with a fresh brain")
+                    return
                 self.model.load_state_dict(sd)
                 self.get_logger().info(f"Loaded brain from {self.model_path}")
                 # The model learned dynamics conditioned on pre-scale actions;
@@ -682,6 +582,24 @@ class PCActiveInferenceRunner(Node):
             return
 
         self.get_logger().info(f"Experience logger thread active. Logging to {self.experience_log_path}")
+
+        # Rotate away a log written with a different observation layout —
+        # mixing obs widths in one file breaks sleep replay.
+        try:
+            if os.path.exists(self.experience_log_path) \
+                    and os.path.getsize(self.experience_log_path) > 0:
+                with open(self.experience_log_path) as old:
+                    n_old = len(json.loads(old.readline())["obs"])
+                if n_old != self.obs_dim:
+                    ts = time.strftime("%Y%m%d_%H%M%S")
+                    part_path = self.experience_log_path.replace(
+                        ".jsonl", f"_obs{n_old}_{ts}.jsonl")
+                    os.rename(self.experience_log_path, part_path)
+                    self.get_logger().info(
+                        f"Experience log used obs_dim={n_old} (now "
+                        f"{self.obs_dim}) — rotated to {part_path}")
+        except Exception as e:  # noqa: BLE001
+            self.get_logger().warn(f"Experience log layout check failed: {e}")
 
         f = None
         bytes_written = 0
