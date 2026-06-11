@@ -2,7 +2,7 @@ bno085_imu_publisher:
   ros__parameters:
     # I2C Configuration
     i2c_bus: 5                   # same bus the LSM9DS1 used
-    address: 0x4A                # 0x4B if the ADR jumper is closed
+    address: 0x4B                # this board straps ADR high (0x4A if open)
     frame_id: 'imu_link'
 
     # Sensor Configuration
