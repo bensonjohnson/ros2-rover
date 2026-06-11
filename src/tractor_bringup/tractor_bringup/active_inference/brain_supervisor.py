@@ -139,6 +139,7 @@ class BrainSupervisor:
                     f"control_rate_hz:={self.args.control_rate}",
                     f"lidar_port:={self.args.lidar_port}",
                     f"dashboard_port:={self.args.child_port}",
+                    f"imu_type:={self.args.imu_type}",
                 ]
             elif mode == "sleep":
                 cmd = [
@@ -391,6 +392,8 @@ def main(argv=None):
     parser.add_argument("--action-scale", dest="action_scale", default="0.6")
     parser.add_argument("--control-rate", dest="control_rate", default="15.0")
     parser.add_argument("--lidar-port", dest="lidar_port", default="/dev/ttyUSB0")
+    parser.add_argument("--imu-type", dest="imu_type", default="bno085",
+                        choices=["lsm9ds1", "bno085"])
     parser.add_argument("--model-path", dest="model_path",
                         default=os.path.expanduser("~/.ros/pnn_brain.pt"))
     parser.add_argument("--experience-log-path", dest="experience_log_path",
