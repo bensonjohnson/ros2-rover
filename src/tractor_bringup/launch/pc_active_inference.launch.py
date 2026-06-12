@@ -154,8 +154,13 @@ def generate_launch_description():
             "input_track_topic": "/track_cmd_ai",
             "output_track_topic": "/track_cmd",
             "stop_distance": 0.15,
+            "stop_distance_rear": 0.30,
             "slow_distance": 0.15,
             "hysteresis": 0.10,
+            # Phantom suppression: a block needs >=3 in-zone points on 2
+            # consecutive scans (~25% of stops were single-return noise).
+            "min_block_points": 3,
+            "block_scans": 2,
             "min_valid_range": 0.05,
             "max_eval_distance": 5.0,
             "robot_front_offset": 0.06,

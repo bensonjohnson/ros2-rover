@@ -322,3 +322,27 @@ class PCWorldModel:
         # Start each session with a fresh recurrent state: the checkpointed
         # z_prev belongs to whatever moment the last save happened to catch.
         self.z_prev = torch.zeros_like(sd["z_prev"])
+
+
+def insert_obs_channel(sd: dict, index: int, b_init: float = -2.0,
+                       pi_init: float | None = None) -> dict:
+    """Widen a saved fast-brain state_dict by one observation channel.
+
+    The decoder is one row per channel, so a checkpoint trained before a new
+    sensory channel existed can keep every learned weight: insert a zero row
+    (plus bias / precision entries) at `index` and let the new channel train
+    up from scratch online. The transition ensemble lives entirely in latent
+    space and is untouched. b_init defaults to a low bias (sigmoid(-2)≈0.12)
+    for channels that are usually near zero.
+    """
+    W = sd["W_o"]
+    sd["W_o"] = torch.cat([W[:index], torch.zeros(1, W.shape[1]), W[index:]])
+    b = sd["b_o"]
+    sd["b_o"] = torch.cat([b[:index], torch.tensor([b_init]), b[index:]])
+    for key, fill in (("pi_o", pi_init), ("err_sq_ema", None)):
+        v = sd.get(key)
+        if v is None:
+            continue
+        val = float(v.mean()) if fill is None else float(fill)
+        sd[key] = torch.cat([v[:index], torch.tensor([val]), v[index:]])
+    return sd

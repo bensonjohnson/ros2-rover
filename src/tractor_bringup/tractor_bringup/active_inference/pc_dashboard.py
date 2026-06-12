@@ -408,6 +408,10 @@ _PAGE = """<!doctype html>
         <div class="stat-label">ROOM</div>
         <div class="stat-value" id="room">-</div>
       </div>
+      <div class="stat-card color-red">
+        <div class="stat-label">HOLD (FELT &rarr; PRED)</div>
+        <div class="stat-value" id="hold_card">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -995,6 +999,15 @@ async function tick(){
 
     // (Slow-layer state now lives in the two-story brain panel.)
 
+    // Safety-hold interoception: current gate state -> what the brain
+    // predicts it will feel next tick. Rising predictions near walls =
+    // the brain has learned where its 'pain' lives.
+    const hEl=$('hold_card');
+    if(s.hold_pred!=null){
+      hEl.textContent=(s.safety_hold?'1':'0')+' → '+fix(s.hold_pred,2);
+      hEl.style.color = s.hold_pred>0.5 ? '#ff5b5b' : (s.hold_pred>0.2 ? '#ff9d3b' : '#00c88c');
+    }else{hEl.textContent='-';hEl.style.color='';}
+
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
     $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
     // Teleop badge: a human is driving; the brain is watching and learning
@@ -1128,6 +1141,7 @@ class PCDashboardState:
                 teleop=None,
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, novelty_pred=None, novelty_target=None,
+                hold_pred=None,
                 epi_gate=None, places_n=None, mem_clears=None,
                 proprio=None, pi=None,
                 slow_epi=None, slow_nov_pred=None, slow_ticks=None,
@@ -1180,6 +1194,9 @@ class PCDashboardState:
                 self._nov_pred.append(round(float(novelty_pred), 4))
             if novelty_target is not None:
                 state["novelty_target"] = round(float(novelty_target), 3)
+            # Interoceptive safety hold: predicted gate state next tick.
+            if hold_pred is not None:
+                state["hold_pred"] = round(float(hold_pred), 3)
             if epi_gate is not None:
                 state["epi_gate"] = round(float(epi_gate), 3)
             if places_n is not None:

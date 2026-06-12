@@ -30,7 +30,11 @@ from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 
 # Side/rear sector boundaries (radians) — fixed, not parameterized
 _SIDE_MIN = 0.52   # ~30°  — side sectors start here
-_SIDE_MAX = 2.62   # ~150° — side sectors end / rear starts
+_SIDE_MAX = 1.57   # ~90°  — side sectors end. They used to run to 150°,
+                   # which let a wall BEHIND-left force a forward-left turn
+                   # straight — aborting doorway turns. Only obstacles the
+                   # rover actually sweeps toward (30–90°) gate turns now.
+_REAR_MIN = 2.62   # ~150° — rear sector starts
 
 
 class LidarSafetyMonitor(Node):
@@ -55,6 +59,12 @@ class LidarSafetyMonitor(Node):
         self.declare_parameter('min_valid_range', 0.05)
         self.declare_parameter('stale_timeout', 0.2)
         self.declare_parameter('min_block_duration', 0.3)  # Minimum hold time (seconds)
+        # Phantom suppression: a single noisy lidar return inside the corridor
+        # used to trigger a full stop (~25% of blocks cleared to >1m open
+        # space within 0.4s). A real obstacle inside the path returns many
+        # points across consecutive scans, so require both.
+        self.declare_parameter('min_block_points', 3)   # in-zone points below threshold
+        self.declare_parameter('block_scans', 2)        # consecutive qualifying scans
 
         # Robot geometry
         self.declare_parameter('robot_front_offset', 0.06)  # LiDAR to front bumper (m)
@@ -83,6 +93,8 @@ class LidarSafetyMonitor(Node):
             'front': False, 'left': False, 'right': False, 'rear': False
         }
         self._front_blocked_time = None   # Timestamp when front block started
+        self._front_close_streak = 0      # consecutive scans with enough close in-path points
+        self._rear_close_streak = 0
         self._last_scan_time = self.get_clock().now()
 
         # Subscribers
@@ -139,6 +151,8 @@ class LidarSafetyMonitor(Node):
         self.min_valid_range = float(self.get_parameter('min_valid_range').value)
         self.stale_timeout = float(self.get_parameter('stale_timeout').value)
         self.min_block_duration = float(self.get_parameter('min_block_duration').value)
+        self.min_block_points = int(self.get_parameter('min_block_points').value)
+        self.block_scans = int(self.get_parameter('block_scans').value)
         self.robot_front_offset = float(self.get_parameter('robot_front_offset').value)
         self.robot_half_width = float(self.get_parameter('robot_half_width').value)
 
@@ -172,6 +186,10 @@ class LidarSafetyMonitor(Node):
                 self.stale_timeout = param.value
             elif param.name == 'min_block_duration':
                 self.min_block_duration = param.value
+            elif param.name == 'min_block_points':
+                self.min_block_points = int(param.value)
+            elif param.name == 'block_scans':
+                self.block_scans = int(param.value)
         self._log_params()
         return SetParametersResult(successful=True)
 
@@ -203,6 +221,8 @@ class LidarSafetyMonitor(Node):
                 for k in self._sector_dists:
                     self._sector_dists[k] = self.max_distance
                 self._min_overall_dist = self.max_distance
+                self._front_close_streak = 0
+                self._rear_close_streak = 0
                 self._update_front_blocked_state()
                 self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
                 return
@@ -239,6 +259,15 @@ class LidarSafetyMonitor(Node):
             else:
                 self._front_path_dist = self.max_distance
 
+            # Phantom suppression: count how many in-path points are actually
+            # below the stop threshold this scan. One speck is noise; a real
+            # obstacle at 15 cm inside a 24 cm corridor returns dozens.
+            close_pts = int(np.count_nonzero(in_path
+                                             & (x_bumper < self.stop_dist)))
+            self._front_close_streak = (self._front_close_streak + 1
+                                        if close_pts >= self.min_block_points
+                                        else 0)
+
             # === Update front blocked state (scan-driven) ===
             self._update_front_blocked_state()
 
@@ -246,7 +275,7 @@ class LidarSafetyMonitor(Node):
             abs_a = np.abs(a)
             left_mask = (a > _SIDE_MIN) & (a < _SIDE_MAX)
             right_mask = (a < -_SIDE_MIN) & (a > -_SIDE_MAX)
-            rear_mask = abs_a >= _SIDE_MAX
+            rear_mask = abs_a >= _REAR_MIN
 
             max_d = self.max_distance
             self._sector_dists['front'] = self._front_path_dist
@@ -254,6 +283,13 @@ class LidarSafetyMonitor(Node):
             self._sector_dists['right'] = float(np.min(r[right_mask])) if np.any(right_mask) else max_d
             self._sector_dists['rear'] = float(np.min(r[rear_mask])) if np.any(rear_mask) else max_d
             self._min_overall_dist = min(self._sector_dists.values())
+
+            # Rear phantom suppression, same recipe as the front corridor.
+            rear_close = int(np.count_nonzero(rear_mask
+                                              & (r < self.stop_dist_rear)))
+            self._rear_close_streak = (self._rear_close_streak + 1
+                                       if rear_close >= self.min_block_points
+                                       else 0)
 
             # Publish estop on every scan so subscribers always have latest state.
             # FRONT ONLY: the motor driver consumes this as `_front_blocked` and
@@ -291,8 +327,11 @@ class LidarSafetyMonitor(Node):
                     # Edge case: no blocked_time recorded
                     self._sector_stopped['front'] = False
         else:
-            # Currently clear — block if too close
-            if self._front_path_dist < self.stop_dist:
+            # Currently clear — block when close AND corroborated (enough
+            # in-path points across consecutive scans; see min_block_points /
+            # block_scans). A lone noise return no longer stops the rover.
+            if (self._front_path_dist < self.stop_dist
+                    and self._front_close_streak >= self.block_scans):
                 self._sector_stopped['front'] = True
                 self._front_blocked_time = now
                 self._emergency_stops += 1
@@ -365,7 +404,8 @@ class LidarSafetyMonitor(Node):
                         left = max(left, 0.0)
                         right = max(right, 0.0)
                 else:
-                    if rear_dist < self.stop_dist_rear:
+                    if (rear_dist < self.stop_dist_rear
+                            and self._rear_close_streak >= self.block_scans):
                         self._sector_stopped['rear'] = True
                         self.get_logger().warn(
                             f'BLOCKED rear={rear_dist:.2f}m '
@@ -449,7 +489,8 @@ class LidarSafetyMonitor(Node):
                     else:
                         out_cmd.linear.x = 0.0
                 else:
-                    if rear_dist < self.stop_dist_rear:
+                    if (rear_dist < self.stop_dist_rear
+                            and self._rear_close_streak >= self.block_scans):
                         self._sector_stopped['rear'] = True
                         self.get_logger().warn(
                             f'BLOCKED rear={rear_dist:.2f}m '
@@ -522,9 +563,14 @@ class LidarSafetyMonitor(Node):
         ]
         self.sector_dist_pub.publish(sector_msg)
 
-        # Publish estop continuously so late-joining subscribers get current state
-        # Include both front and rear blocked states for comprehensive safety
-        self.estop_pub.publish(Bool(data=self._sector_stopped['front'] or self._sector_stopped['rear']))
+        # Publish estop continuously so late-joining subscribers get current
+        # state. FRONT ONLY — same contract as scan_callback. This used to
+        # fold rear in, so a latched rear block flicker-clamped FORWARD motion
+        # in the motor driver (which consumes this as _front_blocked) at 10 Hz
+        # against the front-only scan publisher — trapping the rover against
+        # the very obstacle it needed to drive away from. Rear is enforced
+        # reverse-only in the command callbacks.
+        self.estop_pub.publish(Bool(data=self._sector_stopped['front']))
 
         blocked = [s for s, v in self._sector_stopped.items() if v]
         f = self._sector_dists

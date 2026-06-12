@@ -39,7 +39,8 @@ from std_msgs.msg import Float32MultiArray, Float32, Bool
 from geometry_msgs.msg import Twist
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
-from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConfig
+from tractor_bringup.active_inference.pc_world_model import (
+    PCWorldModel, PCConfig, insert_obs_channel)
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
 from tractor_bringup.active_inference.replay import SequenceReplay
 from tractor_bringup.active_inference.place_memory import PlaceMemory
@@ -100,6 +101,10 @@ class PCActiveInferenceRunner(Node):
         p("target_novelty", 0.8)      # preferred place novelty (the appetite)
         p("novelty_pref_weight", 2.0) # weight of that preference in the EFE
         p("novelty_ema_tau_s", 1.0)   # smoothing so the channel is predictable
+        # Interoceptive safety hold: the lidar gate's clamp state is an
+        # OBSERVATION the brain must predict, with a prior preference for it
+        # staying low — collision avoidance learned from the gate's firings.
+        p("hold_pref_weight", 2.0)    # weight of the hold-avoidance preference
         p("lift_accel_dev", 3.0)      # m/s^2 deviation from gravity = "picked up"
         # Hierarchy: a slow contextual layer (same PC machine, one level up)
         # ticking ~1 Hz. Its prediction of the fast latent is a top-down prior
@@ -160,7 +165,9 @@ class PCActiveInferenceRunner(Node):
         self.max_yaw_rate = float(g("max_yaw_rate").value)
         self.max_accel = float(g("max_accel").value)
         self.n_proprio = 8 if self.use_proprio else 0   # [wheel_L, wheel_R, roll_rate, pitch_rate, yaw_rate, accel_x, accel_y, accel_z]
-        self.n_intero = 1             # place novelty, appended after proprio
+        self.n_intero = 2             # [safety hold, place novelty] after proprio
+                                      # (novelty stays LAST — the actor, slow
+                                      # layer, and consolidator index it at -1)
         self.obs_dim = self.num_bins + self.n_proprio + self.n_intero
         self._wheel_l = self._wheel_r = 0.0
         self._roll_rate = self._pitch_rate = self._yaw_rate = 0.0
@@ -195,6 +202,7 @@ class PCActiveInferenceRunner(Node):
             n_intero=self.n_intero,
             target_novelty=self.target_novelty,
             novelty_pref_weight=float(g("novelty_pref_weight").value),
+            hold_pref_weight=float(g("hold_pref_weight").value),
             slow_prior_weight=float(g("slow_prior_weight").value),
         ))
 
@@ -390,14 +398,17 @@ class PCActiveInferenceRunner(Node):
         return False
 
     def _build_obs(self) -> np.ndarray:
-        """Openness vector + proprio + interoceptive novelty, all in [0,1].
+        """Openness vector + proprio + interoception, all in [0,1].
 
-        The last channel is the EMA-smoothed place novelty: an interoceptive
-        sense the model must predict like any other observation.
+        The interoceptive tail is [safety hold, place novelty]: the lidar
+        gate's clamp state (a 'pain' sense the model learns to predict and
+        the actor learns to avoid) followed by the EMA-smoothed place novelty.
+        Novelty stays last — downstream code indexes it at -1.
         """
-        nov = np.array([self._nov_ema], dtype=np.float32)
+        intero = np.array([1.0 if self._safety_hold else 0.0, self._nov_ema],
+                          dtype=np.float32)
         if not self.use_proprio:
-            return np.concatenate([self.latest_scan, nov])
+            return np.concatenate([self.latest_scan, intero])
         # Map signed velocities, rates, and accelerations to [0,1] (0.5 = neutral).
         wl = np.clip(0.5 + 0.5 * self._wheel_l / self.max_wheel_vel, 0.0, 1.0)
         wr = np.clip(0.5 + 0.5 * self._wheel_r / self.max_wheel_vel, 0.0, 1.0)
@@ -413,7 +424,7 @@ class PCActiveInferenceRunner(Node):
         az = np.clip(0.5 + 0.5 * self._accel_z / self.max_accel, 0.0, 1.0)
         
         proprio = np.array([wl, wr, roll, pitch, yaw, ax, ay, az], dtype=np.float32)
-        return np.concatenate([self.latest_scan, proprio, nov])
+        return np.concatenate([self.latest_scan, proprio, intero])
 
     def _control_step(self):
         if self.latest_scan is None:
@@ -472,6 +483,12 @@ class PCActiveInferenceRunner(Node):
         teleop = (self._teleop_action is not None
                   and time.monotonic() - self._teleop_stamp
                   < self.teleop_timeout_s)
+        # Gate fired while holding a forward action: the held command is now a
+        # wasted clamp — drop the persist window so the actor re-decides
+        # immediately (with forward candidates penalized, below).
+        if (self._safety_hold and self._persist_ctr > 0
+                and float(self._held_raw[0] + self._held_raw[1]) > 0.0):
+            self._persist_ctr = 0
         if teleop:
             self._held_raw = self._teleop_action.copy()
             self._held_info = {"epistemic": 0.0, "epistemic_max": 0.0,
@@ -481,7 +498,8 @@ class PCActiveInferenceRunner(Node):
             action, info = self.actor.select(
                 self.model, z, prev_action=self._held_raw,
                 slow_action=(self.slow.macro_action
-                             if self.slow is not None else None))
+                             if self.slow is not None else None),
+                forward_blocked=self._safety_hold)
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
@@ -579,6 +597,9 @@ class PCActiveInferenceRunner(Node):
                 novelty=self._nov_ema,
                 novelty_pred=float(o_hat[-1]),
                 novelty_target=self.target_novelty,
+                # Interoceptive safety hold: what the brain expects to feel
+                # from the gate next tick (felt state = safety_hold above).
+                hold_pred=float(o_hat[-2]),
                 places_n=self.place_memory.n_places(),
                 mem_clears=self._mem_clears,
                 proprio=o_t.numpy()[self.num_bins:self.num_bins + 8],
@@ -655,9 +676,20 @@ class PCActiveInferenceRunner(Node):
         if os.path.exists(self.model_path):
             try:
                 sd = torch.load(self.model_path, map_location="cpu", weights_only=False)
-                if sd["W_o"].shape[0] != self.obs_dim:
+                saved_dim = sd["W_o"].shape[0]
+                if saved_dim == self.obs_dim - 1:
+                    # Pre-hold-channel checkpoint (intero tail was [novelty]
+                    # alone): graft a fresh decoder row for the hold channel
+                    # just before novelty and keep everything learned.
+                    insert_obs_channel(
+                        sd, index=saved_dim - 1,
+                        pi_init=float(self.model.pi_prior[self.obs_dim - 2]))
+                    self.get_logger().info(
+                        f"Migrated checkpoint: grafted safety-hold obs channel "
+                        f"({saved_dim} -> {self.obs_dim}); learned weights kept")
+                elif saved_dim != self.obs_dim:
                     self.get_logger().warning(
-                        f"Saved brain has obs_dim={sd['W_o'].shape[0]} but this "
+                        f"Saved brain has obs_dim={saved_dim} but this "
                         f"runner builds obs_dim={self.obs_dim} (observation "
                         f"layout changed) — starting with a fresh brain")
                     return

@@ -75,6 +75,16 @@ class ActorConfig:
     n_intero: int = 1           # interoceptive channels at the obs tail (0 disables)
     target_novelty: float = 0.8 # preferred place novelty in [0,1]
     novelty_pref_weight: float = 2.0
+    # Safety-hold preference (only with n_intero >= 2, tail = [hold, novelty]):
+    # the obs carries the safety gate's state as an interoceptive channel, and
+    # the actor prefers rollouts predicted NOT to trip it — collision
+    # avoidance as ordinary goal-seeking, learned from the gate's own firings.
+    target_hold: float = 0.0
+    hold_pref_weight: float = 2.0
+    # While the gate is actively clamping forward motion, forward candidates
+    # are wasted ticks — penalize them so escapes start immediately instead
+    # of pushing into the clamp for the persist window.
+    blocked_penalty: float = 4.0
     horizon: int = 8            # planning horizon length
     seed: int = 0
     structured: list = field(default_factory=lambda: list(_STRUCTURED))
@@ -103,7 +113,7 @@ class EFEActor:
 
     @torch.no_grad()
     def select(self, model, z_from: torch.Tensor, prev_action=None,
-               slow_action=None):
+               slow_action=None, forward_blocked: bool = False):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
@@ -171,6 +181,13 @@ class EFEActor:
                 total_pragmatic -= self.cfg.novelty_pref_weight * \
                     (nov_hat - self.cfg.target_novelty).pow(2)
 
+            # Safety-hold avoidance (see ActorConfig.target_hold): with two
+            # intero channels the tail is [hold, novelty].
+            if self.cfg.n_intero >= 2:
+                hold_hat = o_hat[:, -2]
+                total_pragmatic -= self.cfg.hold_pref_weight * \
+                    (hold_hat - self.cfg.target_hold).pow(2)
+
             # Advance recurrent state for next step of rollout
             z = z_next
 
@@ -199,6 +216,13 @@ class EFEActor:
             sa = torch.as_tensor(np.asarray(slow_action), dtype=torch.float32)
             dist = (cands[:, 0, :] - sa).norm(dim=1) / (2.0 * math.sqrt(2.0))
             score = score + self.cfg.slow_prior_weight * (1.0 - dist)
+
+        # Gate awareness (see ActorConfig.blocked_penalty): score components
+        # are O(1), so the penalty dominates for any meaningfully-forward
+        # candidate while leaving reverse/pivot ranking untouched.
+        if forward_blocked and self.cfg.blocked_penalty > 0.0:
+            fwd = (cands[:, 0, 0] + cands[:, 0, 1]) * 0.5
+            score = score - self.cfg.blocked_penalty * torch.clamp(fwd, min=0.0)
 
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))
