@@ -335,7 +335,8 @@ _PAGE = """<!doctype html>
 <div class="wrap">
   <div class="panel"><canvas id="radar" width="340" height="340"></canvas>
     <div class="legend"><span class="dot" style="background:#39ff14"></span>observed
-      <span class="dot" style="background:#ff9d3b"></span>predicted</div></div>
+      <span class="dot" style="background:#ff9d3b"></span>predicted
+      <span class="dot" style="background:#ffd043"></span>attention (learned precision)</div></div>
       
   <div class="panel stats-panel">
     <div class="stats-header">
@@ -404,6 +405,14 @@ _PAGE = """<!doctype html>
         <div class="stat-label">ROOM</div>
         <div class="stat-value" id="room">-</div>
       </div>
+      <div class="stat-card color-gold">
+        <div class="stat-label">SLOW LAYER</div>
+        <div class="stat-value" id="slow_card">-</div>
+      </div>
+      <div class="stat-card color-blue">
+        <div class="stat-label">SLOW PLAN</div>
+        <div class="stat-value" id="slow_plan">-</div>
+      </div>
     </div>
     
     <div class="tracks-panel">
@@ -458,6 +467,20 @@ function radar(s){
   ctx.clearRect(0,0,W,W);
   ctx.strokeStyle='#2a3038';ctx.lineWidth=1;
   for(const f of [0.33,0.66,1.0]){ctx.beginPath();ctx.arc(cx,cy,f*R,0,2*Math.PI);ctx.stroke();}
+  // Attention ring: learned precision multiplier per bin at the outer edge.
+  // Bright gold = the brain has learned this direction is predictable
+  // (trusted); dim = learned-noisy, down-weighted in settling and learning.
+  if(s.pi&&s.pi.length){
+    const n=s.pi.length;
+    for(let i=0;i<n;i++){
+      const a0=-(i/n)*2*Math.PI-Math.PI/2, a1=-((i+1)/n)*2*Math.PI-Math.PI/2;
+      // multiplier clamps to [0.25,4]; map log-scale to [0,1]
+      const v=Math.max(0,Math.min(1,(Math.log(s.pi[i]||1)-Math.log(0.25))/(Math.log(4)-Math.log(0.25))));
+      const [x0,y0]=polar(cx,cy,R+7,a0), [x1,y1]=polar(cx,cy,R+7,a1);
+      ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);
+      ctx.strokeStyle=`rgba(255,208,67,${0.08+0.8*v})`;ctx.lineWidth=3;ctx.stroke();
+    }
+  }
   drawRing(ctx,cx,cy,R,s.pred,'#ff9d3b');
   drawRing(ctx,cx,cy,R,s.obs,'#39ff14');
   ctx.fillStyle='#cdd3da';ctx.beginPath();ctx.arc(cx,cy,4,0,2*Math.PI);ctx.fill();
@@ -856,6 +879,24 @@ async function tick(){
       rEl.textContent='-';rEl.style.color='';
     }
 
+    // Slow layer: contextual (1 Hz) story of the hierarchy. Epi = how
+    // uncertain the slow ensemble is about the next few SECONDS; the plan is
+    // the macro action its EFE chose ('warming' until it earns influence).
+    const slEl=$('slow_card');
+    if(s.slow_ticks!=null){
+      slEl.textContent=(s.slow_epi!=null?s.slow_epi.toFixed(4):'-')
+        +' · '+s.slow_ticks+'t';
+    }else{slEl.textContent='-';}
+    const spEl=$('slow_plan');
+    if(s.slow_action&&s.slow_action.length>=2){
+      spEl.textContent='L'+(s.slow_action[0]>=0?'+':'')+s.slow_action[0].toFixed(1)
+        +' R'+(s.slow_action[1]>=0?'+':'')+s.slow_action[1].toFixed(1)
+        +(s.slow_nov_pred!=null?' · n'+s.slow_nov_pred.toFixed(2):'');
+      spEl.style.color='';
+    }else if(s.slow_ticks!=null){
+      spEl.textContent='warming';spEl.style.color='#5a6370';
+    }else{spEl.textContent='-';}
+
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
     $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
     // Teleop badge: a human is driving; the brain is watching and learning
@@ -972,7 +1013,9 @@ class PCDashboardState:
                 epoch=None, epoch_total=None, disagreement_before=None,
                 novelty=None, novelty_pred=None, novelty_target=None,
                 epi_gate=None, places_n=None, mem_clears=None,
-                proprio=None) -> None:
+                proprio=None, pi=None,
+                slow_epi=None, slow_nov_pred=None, slow_ticks=None,
+                slow_action=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1029,6 +1072,18 @@ class PCDashboardState:
             # yaw, ax, ay, az] each normalized to [0,1] (0.5 = rest).
             if proprio is not None:
                 state["proprio"] = [round(float(x), 4) for x in proprio]
+            # Learned attention: precision multiplier per lidar bin.
+            if pi is not None:
+                state["pi"] = [round(float(x), 3) for x in pi]
+            # Slow contextual layer (hierarchy story two).
+            if slow_epi is not None:
+                state["slow_epi"] = round(float(slow_epi), 5)
+            if slow_nov_pred is not None:
+                state["slow_nov_pred"] = round(float(slow_nov_pred), 3)
+            if slow_ticks is not None:
+                state["slow_ticks"] = int(slow_ticks)
+            if slow_action is not None:
+                state["slow_action"] = [round(float(x), 2) for x in slow_action]
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]

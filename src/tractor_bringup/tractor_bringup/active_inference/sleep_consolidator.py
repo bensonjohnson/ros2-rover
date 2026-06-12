@@ -56,6 +56,173 @@ def load_experience(log_path: str) -> list[tuple[np.ndarray, np.ndarray]]:
     return dataset
 
 
+def consolidate_slow_layer(args, model, dataset, rng):
+    """Sleep for the hierarchy's second story.
+
+    The slow layer's sensory world IS the fast layer's latent space, and the
+    fast consolidation above just shifted that space. So slow sleep first
+    RE-GROUNDS: it replays the logged observations through the freshly
+    consolidated fast model to regenerate the slow training sequences in the
+    fast layer's NEW latent space, then runs SWS replay and member-owned REM
+    dreaming on the slow model — the same recipe, one level up.
+    """
+    slow_path = os.path.expanduser(args.slow_model_path)
+    if args.slow_sws_epochs <= 0 and args.slow_rem_epochs <= 0:
+        return
+    if not os.path.exists(slow_path):
+        print("\nNo slow-layer checkpoint — skipping slow consolidation")
+        return
+
+    print("\n--- Slow-Layer Consolidation ---")
+    try:
+        ssd = torch.load(slow_path, map_location="cpu", weights_only=False)
+        meta = ssd.get("meta", {})
+        if meta.get("fast_latent_dim") != model.cfg.latent_dim:
+            print(f"Slow layer was trained against fast latent_dim="
+                  f"{meta.get('fast_latent_dim')} (now {model.cfg.latent_dim})"
+                  f" — skipping")
+            return
+        smodel = PCWorldModel(ssd["model"]["cfg"])
+        smodel.load_state_dict(ssd["model"])
+    except Exception as e:
+        print(f"Could not load slow layer: {e} — skipping")
+        return
+
+    period = int(meta.get("period_ticks", 15))
+    D = model.cfg.latent_dim
+    n_intero = int(getattr(model.cfg, "n_intero", 0))
+    num_bins = model.cfg.obs_dim - int(getattr(model.cfg, "n_proprio", 0)) \
+        - n_intero
+    sqrt_obs = float(np.sqrt(model.cfg.obs_dim))
+
+    # 1. Re-ground: regenerate slow observations under the NEW fast weights.
+    print(f"Re-grounding: replaying {len(dataset)} steps through the "
+          f"consolidated fast model (windows of {period})...")
+    t0 = time.time()
+    slow_steps = []          # (slow_obs np, mean_action np)
+    zp = torch.zeros(D)
+    sum_s = torch.zeros(D)
+    sum_open = sum_err = sum_nov = 0.0
+    sum_act = np.zeros(2)
+    n_in_window = 0
+    for obs_np, act_np in dataset:
+        o = torch.from_numpy(obs_np.copy())
+        a = torch.from_numpy(act_np.copy())
+        z, _, err = model.infer(o, a, z_prev=zp, n_iters=10)
+        zp = z
+        sum_s += torch.tanh(z)
+        sum_open += float(obs_np[:num_bins].mean())
+        sum_err += min(1.0, err / sqrt_obs)
+        sum_nov += float(obs_np[-1]) if n_intero > 0 else 0.0
+        sum_act += act_np
+        n_in_window += 1
+        if n_in_window >= period:
+            slow_obs = np.concatenate([
+                0.5 + 0.5 * (sum_s / n_in_window).numpy(),
+                [sum_open / n_in_window, sum_err / n_in_window,
+                 sum_nov / n_in_window],
+            ]).astype(np.float32)
+            slow_steps.append((slow_obs,
+                               (sum_act / n_in_window).astype(np.float32)))
+            sum_s.zero_(); sum_open = sum_err = sum_nov = 0.0
+            sum_act[:] = 0.0; n_in_window = 0
+    print(f"Regenerated {len(slow_steps)} slow steps in {time.time()-t0:.1f}s")
+
+    L = args.seq_len
+    if len(slow_steps) < L * 4:
+        print("Not enough slow steps for consolidation — skipping")
+        return
+    sequences = [slow_steps[i:i + L]
+                 for i in range(0, len(slow_steps) - L + 1, L // 2)]
+
+    def probe_slow() -> float:
+        total = 0.0
+        idx = np.random.default_rng(123).integers(
+            0, len(slow_steps), size=min(32, len(slow_steps)))
+        for i in idx:
+            o_np, a_np = slow_steps[int(i)]
+            z, _, _ = smodel.infer(torch.from_numpy(o_np.copy()),
+                                   torch.from_numpy(a_np.copy()),
+                                   z_prev=torch.zeros(smodel.cfg.latent_dim))
+            acts = torch.rand(8, smodel.cfg.action_dim) * 2.0 - 1.0
+            total += float(smodel.epistemic_value(z, acts).mean())
+        return total / len(idx)
+
+    dis_before = probe_slow()
+    print(f"Slow ensemble disagreement before: {dis_before:.5f}")
+
+    # 2. SWS: replay the regenerated slow sequences (real experience, no
+    # injected noise — the windowed averaging already smooths the signal).
+    for epoch in range(args.slow_sws_epochs):
+        t0 = time.time()
+        err_sum = 0.0
+        for idx in rng.permutation(len(sequences)):
+            seq = sequences[idx]
+            zp2 = torch.zeros(smodel.cfg.latent_dim)
+            for t, (o_np, a_np) in enumerate(seq):
+                o = torch.from_numpy(o_np.copy())
+                a = torch.from_numpy(a_np.copy())
+                z2, _, err2 = smodel.infer(o, a, z_prev=zp2)
+                err_sum += err2
+                if t >= 4:
+                    smodel.learn(z2, a, o, z_prev=zp2, advance=False,
+                                 update_precision=False)
+                zp2 = z2
+        smodel.W_o *= args.decay_rate
+        for m in range(smodel.cfg.ensemble_size):
+            smodel.W_z[m] *= args.decay_rate
+        print(f" Slow SWS {epoch+1}/{args.slow_sws_epochs} | "
+              f"Avg Err: {err_sum/max(1,len(sequences)*L):.4f} | "
+              f"Time: {time.time()-t0:.1f}s")
+
+    # 3. REM: member-owned dreaming, same decoupling rule as the fast layer
+    # (members never regress toward a shared target — disagreement IS the
+    # slow epistemic signal).
+    for epoch in range(args.slow_rem_epochs):
+        t0 = time.time()
+        rem_updates = 0
+        for _ in range(len(sequences)):
+            seq = sequences[rng.integers(len(sequences))]
+            zp2 = torch.zeros(smodel.cfg.latent_dim)
+            for t in range(min(4, len(seq))):
+                o = torch.from_numpy(seq[t][0].copy())
+                a = torch.from_numpy(seq[t][1].copy())
+                zp2, _, _ = smodel.infer(o, a, z_prev=zp2)
+            member = int(rng.integers(smodel.cfg.ensemble_size))
+            for _ in range(L - 4):
+                a_dream = torch.rand(smodel.cfg.action_dim) * 2.0 - 1.0
+                s_in = smodel._trans_input(zp2, a_dream)
+                z_pred = smodel._predict_member(member, s_in)
+                z_noisy = z_pred + args.dream_noise * \
+                    torch.randn(smodel.cfg.latent_dim)
+                o_dream = smodel.reconstruct(z_noisy)
+                z_next, _, _ = smodel.infer(o_dream, a_dream, z_prev=zp2,
+                                            member=member)
+                e_zm = z_next - z_pred
+                smodel.W_z[member] += smodel.cfg.lr_trans * smodel.pi_z * \
+                    torch.outer(e_zm, s_in)
+                smodel.b_z[member] += smodel.cfg.lr_trans * smodel.pi_z * e_zm
+                rem_updates += 1
+                zp2 = z_next
+        smodel.W_o *= args.decay_rate
+        for m in range(smodel.cfg.ensemble_size):
+            smodel.W_z[m] *= args.decay_rate
+        print(f" Slow REM {epoch+1}/{args.slow_rem_epochs} | "
+              f"Dream Steps: {rem_updates} | Time: {time.time()-t0:.1f}s")
+
+    dis_after = probe_slow()
+    print(f"Slow ensemble disagreement after: {dis_after:.5f} "
+          f"({dis_after/max(dis_before,1e-12):.2f}x of pre-sleep)")
+
+    try:
+        tmp = slow_path + ".tmp"
+        torch.save({"model": smodel.state_dict(), "meta": meta}, tmp)
+        os.replace(tmp, slow_path)
+        print("✅ Saved consolidated slow layer")
+    except Exception as e:
+        print(f"❌ Could not save slow layer: {e}")
+
+
 def run_sleep_cycle(args):
     print("==================================================")
     print("PNN Rover - Biological Sleep Consolidation Cycle")
@@ -186,8 +353,11 @@ def run_sleep_cycle(args):
                 
                 # Hebbian local update (no backprop)
                 # Burn-in: let the first 4 steps settle the recurrence before learning
+                # update_precision=False: SWS injects artificial noise — it
+                # must not be written into the learned sensor-noise ledger.
                 if t >= 4:
-                    model.learn(z, a, o, z_prev=zp, advance=False)
+                    model.learn(z, a, o, z_prev=zp, advance=False,
+                                update_precision=False)
                     updates_count += 1
 
                 # Update visualizer when someone is watching (rate-limited to
@@ -359,6 +529,14 @@ def run_sleep_cycle(args):
         print(f"❌ Could not save brain weights: {e}")
         return
 
+    # 3b. Slow-layer sleep: re-ground on the NEW fast weights, then SWS + REM
+    # one level up. Must run before the logs are archived — re-grounding
+    # replays them.
+    try:
+        consolidate_slow_layer(args, model, dataset, rng)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ Slow-layer consolidation failed: {e}")
+
     # 4. Archive the consolidated experience log(s), rotation parts included
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     base = experience_path[:-len(".jsonl")] if experience_path.endswith(".jsonl") else experience_path
@@ -388,6 +566,9 @@ def run_sleep_cycle(args):
 def main(args=None):
     parser = argparse.ArgumentParser(description="Biological PC Sleep Consolidator")
     parser.add_argument("--model_path", type=str, default="~/.ros/pnn_brain.pt")
+    parser.add_argument("--slow_model_path", type=str, default="~/.ros/pnn_brain_slow.pt")
+    parser.add_argument("--slow_sws_epochs", type=int, default=3, help="Slow-layer SWS epochs (0 disables slow sleep)")
+    parser.add_argument("--slow_rem_epochs", type=int, default=2, help="Slow-layer REM epochs")
     parser.add_argument("--experience_log_path", type=str, default="~/.ros/pnn_experience.jsonl")
     parser.add_argument("--sws_epochs", type=int, default=5, help="Slow-Wave Sleep epochs (replay)")
     parser.add_argument("--rem_epochs", type=int, default=3, help="REM Sleep epochs (dreaming)")

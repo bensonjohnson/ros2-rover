@@ -69,6 +69,18 @@ class PCConfig:
     n_intero: int = 0
     precision_intero: float = 1.0
 
+    # Learned precision: each observation channel keeps a slow EMA of its own
+    # squared prediction error; its precision becomes prior × clamp(ref/ema),
+    # ref being the cross-channel mean. Channels noisier than average get
+    # down-weighted (the model stops being surprised by what it can't
+    # predict), more-predictable channels get boosted — attention, learned.
+    # The hand-set block precisions above remain as the PRIOR the learned
+    # multiplier modulates; the clamp bounds how far data can move them.
+    learn_precision: bool = True
+    precision_tau_steps: float = 2000.0   # EMA horizon, in learn() calls
+    precision_mult_min: float = 0.25
+    precision_mult_max: float = 4.0
+
     # Per-member bootstrap keep-probability (ensemble diversity).
     bootstrap_prob: float = 0.8
 
@@ -105,6 +117,10 @@ class PCWorldModel:
             self.pi_o[O - n_int - n_prop:O - n_int] = pi_prop
         if n_int > 0:
             self.pi_o[O - n_int:] = pi_int
+        # pi_o is the WORKING precision (prior × learned multiplier); the
+        # prior is kept so the multiplier stays bounded relative to it.
+        self.pi_prior = self.pi_o.clone()
+        self._err_sq_ema: torch.Tensor | None = None
         self.pi_z = cfg.precision_z
 
         # Recurrent state carried across timesteps.
@@ -142,7 +158,9 @@ class PCWorldModel:
     def infer(self, o_t: torch.Tensor, action_prev: torch.Tensor,
               z_prev: torch.Tensor | None = None,
               member: int | None = None,
-              n_iters: int | None = None):
+              n_iters: int | None = None,
+              td_target: torch.Tensor | None = None,
+              td_precision: float = 0.0):
         """Settle the current latent state by minimizing free energy.
 
         `z_prev` overrides the recurrent context (used by sequence replay so it
@@ -151,6 +169,12 @@ class PCWorldModel:
         (used by REM dreaming so members stay decoupled and diversity — the
         epistemic signal — survives sleep). `n_iters` overrides the settle
         iteration count (replay uses fewer to fit the control-tick budget).
+
+        `td_target` is a TOP-DOWN prior from a deeper layer: its prediction of
+        this layer's activation tanh(z), weighted by `td_precision`. In the
+        hierarchy, the slow layer's prediction of the fast latent is an
+        empirical prior the fast layer settles under — the deeper layer's
+        expectation gently biasing what the shallower layer perceives.
         Returns (z_settled, F, obs_err_norm).
         """
         zp = self.z_prev if z_prev is None else z_prev
@@ -159,6 +183,7 @@ class PCWorldModel:
                  else self._predict_member(member, s_in))   # temporal prior
         z = z_hat.clone()
 
+        use_td = td_target is not None and td_precision > 0.0
         iters = self.cfg.n_infer_iters if n_iters is None else n_iters
         for _ in range(iters):
             o_hat, s = self._decode(z)
@@ -168,12 +193,17 @@ class PCWorldModel:
             dF_du = -self.pi_o * e_o * (o_hat * (1.0 - o_hat))
             g_obs = (self.W_o.t() @ dF_du) * (1.0 - s * s)
             g_z = g_obs + self.pi_z * e_z
+            if use_td:
+                g_z = g_z + td_precision * (s - td_target) * (1.0 - s * s)
             z = z - self.cfg.infer_lr * g_z
 
-        o_hat, _ = self._decode(z)
+        o_hat, s = self._decode(z)
         e_o = o_t - o_hat
         e_z = z - z_hat
         F = 0.5 * float((self.pi_o * e_o) @ e_o) + 0.5 * self.pi_z * float(e_z @ e_z)
+        if use_td:
+            e_td = s - td_target
+            F += 0.5 * td_precision * float(e_td @ e_td)
         return z, float(F), float(torch.linalg.norm(e_o))
 
     # ---- learning: local weight updates after settling ---------------------
@@ -181,11 +211,15 @@ class PCWorldModel:
     @torch.no_grad()
     def learn(self, z_settled: torch.Tensor, action_prev: torch.Tensor,
               o_t: torch.Tensor, z_prev: torch.Tensor | None = None,
-              advance: bool = True):
+              advance: bool = True, update_precision: bool = True):
         """Apply local predictive-coding updates.
 
         `z_prev` overrides the transition context; `advance=False` leaves the
         live recurrent state untouched (both used by replay).
+        `update_precision=False` freezes the learned precision EMA — replay
+        and sleep re-derive errors from cold contexts (and SWS injects
+        artificial noise), neither of which belongs in the sensor-noise
+        ledger; only the live stream writes it.
         """
         cfg = self.cfg
         zp = self.z_prev if z_prev is None else z_prev
@@ -193,6 +227,8 @@ class PCWorldModel:
         # Observation weights: ΔW_o = -lr ∂F/∂W_o = -lr (dF_du) sᵀ
         o_hat, s = self._decode(z_settled)
         e_o = o_t - o_hat
+        if update_precision and getattr(cfg, "learn_precision", True):
+            self._update_precision(e_o)
         dF_du = -self.pi_o * e_o * (o_hat * (1.0 - o_hat))
         self.W_o -= cfg.lr_obs * torch.outer(dF_du, s)
         self.b_o -= cfg.lr_obs * dF_du
@@ -211,6 +247,33 @@ class PCWorldModel:
         # Advance recurrent state.
         if advance:
             self.z_prev = z_settled.detach().clone()
+
+    @torch.no_grad()
+    def _update_precision(self, e_o: torch.Tensor):
+        """Fold one error sample into the learned per-channel precision.
+
+        Optimal precision is the inverse error variance (the −log π term in F
+        makes 1/⟨e²⟩ the stationary point), so the rule is just a slow EMA of
+        e² per channel inverted RELATIVE to the cross-channel mean: the
+        relative form keeps the average precision anchored at the prior, so
+        overall F magnitude and effective learning rates stay stable.
+        """
+        cfg = self.cfg
+        e2 = e_o * e_o
+        if self._err_sq_ema is None:
+            self._err_sq_ema = e2.clone()
+        else:
+            alpha = 1.0 / float(getattr(cfg, "precision_tau_steps", 2000.0))
+            self._err_sq_ema += alpha * (e2 - self._err_sq_ema)
+        ref = float(self._err_sq_ema.mean())
+        mult = torch.clamp(ref / (self._err_sq_ema + 1e-12),
+                           float(getattr(cfg, "precision_mult_min", 0.25)),
+                           float(getattr(cfg, "precision_mult_max", 4.0)))
+        self.pi_o = self.pi_prior * mult
+
+    def precision_mult(self) -> torch.Tensor:
+        """Learned precision multiplier per channel (1.0 = at the prior)."""
+        return self.pi_o / self.pi_prior
 
     # ---- epistemic value (expected information gain) -----------------------
 
@@ -243,11 +306,19 @@ class PCWorldModel:
             "W_o": self.W_o, "b_o": self.b_o,
             "W_z": self.W_z, "b_z": self.b_z,
             "z_prev": self.z_prev, "cfg": self.cfg,
+            "pi_o": self.pi_o, "err_sq_ema": self._err_sq_ema,
         }
 
     def load_state_dict(self, sd):
         self.W_o, self.b_o = sd["W_o"], sd["b_o"]
         self.W_z, self.b_z = sd["W_z"], sd["b_z"]
+        # Learned precision (checkpoints from before it existed load with the
+        # prior-initialized pi_o and start their EMA fresh).
+        if sd.get("pi_o") is not None and sd["pi_o"].shape == self.pi_o.shape:
+            self.pi_o = sd["pi_o"]
+        if sd.get("err_sq_ema") is not None \
+                and sd["err_sq_ema"].shape == self.pi_prior.shape:
+            self._err_sq_ema = sd["err_sq_ema"]
         # Start each session with a fresh recurrent state: the checkpointed
         # z_prev belongs to whatever moment the last save happened to catch.
         self.z_prev = torch.zeros_like(sd["z_prev"])

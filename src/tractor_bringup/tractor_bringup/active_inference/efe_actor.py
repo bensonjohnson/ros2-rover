@@ -57,6 +57,10 @@ class ActorConfig:
     # Commitment: bonus for candidates near the currently-held action, so
     # re-decisions refine the move instead of twitching to a new one.
     smooth_weight: float = 0.25
+    # Policy prior from the slow layer: bonus for candidates near the macro
+    # action the slow context chose. A prior over policies from above, not a
+    # command — obstacle terms and epistemic value can still overrule it.
+    slow_prior_weight: float = 0.25
     deterministic: bool = False # if True, argmax instead of sampling
     pragmatic_weight: float = 0.4 # beta weight: 0 = pure epistemic, 1 = pure pragmatic
     num_bins: int = 72          # lidar bins preceding the proprio channels in obs
@@ -98,7 +102,8 @@ class EFEActor:
         return torch.cat([struct_seq, rand_seq], dim=0)
 
     @torch.no_grad()
-    def select(self, model, z_from: torch.Tensor, prev_action=None):
+    def select(self, model, z_from: torch.Tensor, prev_action=None,
+               slow_action=None):
         """Return (action[2], info) for the current latent state.
 
         Performs multi-step trajectory rollouts over the world model ensemble,
@@ -188,6 +193,12 @@ class EFEActor:
             prev = torch.as_tensor(np.asarray(prev_action), dtype=torch.float32)
             dist = (cands[:, 0, :] - prev).norm(dim=1) / (2.0 * math.sqrt(2.0))
             score = score + self.cfg.smooth_weight * (1.0 - dist)
+
+        # Policy prior from the slow layer (see ActorConfig.slow_prior_weight).
+        if slow_action is not None and self.cfg.slow_prior_weight > 0.0:
+            sa = torch.as_tensor(np.asarray(slow_action), dtype=torch.float32)
+            dist = (cands[:, 0, :] - sa).norm(dim=1) / (2.0 * math.sqrt(2.0))
+            score = score + self.cfg.slow_prior_weight * (1.0 - dist)
 
         if self.cfg.deterministic:
             idx = int(torch.argmax(score))

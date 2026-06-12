@@ -43,6 +43,7 @@ from tractor_bringup.active_inference.pc_world_model import PCWorldModel, PCConf
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
 from tractor_bringup.active_inference.replay import SequenceReplay
 from tractor_bringup.active_inference.place_memory import PlaceMemory
+from tractor_bringup.active_inference.slow_layer import SlowLayer, SlowLayerConfig
 from tractor_bringup.active_inference.pc_dashboard import (
     PCDashboardState, start_dashboard_server)
 
@@ -100,6 +101,18 @@ class PCActiveInferenceRunner(Node):
         p("novelty_pref_weight", 2.0) # weight of that preference in the EFE
         p("novelty_ema_tau_s", 1.0)   # smoothing so the channel is predictable
         p("lift_accel_dev", 3.0)      # m/s^2 deviation from gravity = "picked up"
+        # Hierarchy: a slow contextual layer (same PC machine, one level up)
+        # ticking ~1 Hz. Its prediction of the fast latent is a top-down prior
+        # in fast settling; its EFE macro action is a policy prior in the fast
+        # actor. Own checkpoint — see slow_layer.py for why it is never fused.
+        p("slow_enabled", True)
+        p("slow_latent_dim", 16)
+        p("slow_period_ticks", 15)    # fast ticks per slow tick (~1 s @ 15 Hz)
+        p("slow_horizon", 8)          # slow planning steps (~10-30 s lookahead)
+        p("slow_warmup_ticks", 30)    # slow ticks before it earns influence
+        p("td_precision", 0.2)        # weight of the top-down prior in settling
+        p("slow_prior_weight", 0.25)  # weight of the macro-action policy prior
+        p("slow_model_path", os.path.expanduser("~/.ros/pnn_brain_slow.pt"))
         # Shadow teleop: a controller twist on this topic overrides the actor
         # (the human drives), but inference/learning/logging continue exactly
         # as in autonomy — the brain gains experience from human trajectories.
@@ -182,7 +195,23 @@ class PCActiveInferenceRunner(Node):
             n_intero=self.n_intero,
             target_novelty=self.target_novelty,
             novelty_pref_weight=float(g("novelty_pref_weight").value),
+            slow_prior_weight=float(g("slow_prior_weight").value),
         ))
+
+        # Slow contextual layer (hierarchy story two; own checkpoint).
+        self.slow: SlowLayer | None = None
+        self.td_precision = float(g("td_precision").value)
+        self.slow_model_path = g("slow_model_path").value
+        if bool(g("slow_enabled").value):
+            self.slow = SlowLayer(SlowLayerConfig(
+                fast_latent_dim=int(g("latent_dim").value),
+                latent_dim=int(g("slow_latent_dim").value),
+                period_ticks=int(g("slow_period_ticks").value),
+                horizon=int(g("slow_horizon").value),
+                warmup_ticks=int(g("slow_warmup_ticks").value),
+                target_novelty=self.target_novelty,
+                novelty_pref_weight=float(g("novelty_pref_weight").value),
+            ))
 
         # Topological place memory (room fingerprints, pose-free, RAM-only).
         # Its novelty IS the interoceptive observation channel: smoothed by an
@@ -401,6 +430,8 @@ class PCActiveInferenceRunner(Node):
             self.place_memory.clear()
             self._nov_ema = 1.0
             self._mem_clears += 1
+            if self.slow is not None:
+                self.slow.reset_state()
             self.get_logger().info(
                 "Lift detected — place memory cleared, everywhere is new again")
         nov_raw = self.place_memory.update(self.latest_scan)
@@ -421,8 +452,13 @@ class PCActiveInferenceRunner(Node):
         if self.logger_active and self.log_queue is not None:
             self.log_queue.put((obs_np, action_prev_np))
 
-        # 1. Infer current latent from observation + previous action.
-        z, free_energy, obs_err = self.model.infer(o_t, self.last_action)
+        # 1. Infer current latent from observation + previous action, under
+        #    the slow layer's top-down prior when it has one (hierarchical
+        #    settling: context biases perception).
+        z, free_energy, obs_err = self.model.infer(
+            o_t, self.last_action,
+            td_target=self.slow.td_target if self.slow is not None else None,
+            td_precision=self.td_precision)
 
         # 2. Learn (pure PC local update) before moving on.
         if self.do_learn:
@@ -443,7 +479,9 @@ class PCActiveInferenceRunner(Node):
             self._persist_ctr = 0   # actor re-decides as soon as human lets go
         elif self._persist_ctr <= 0:
             action, info = self.actor.select(
-                self.model, z, prev_action=self._held_raw)
+                self.model, z, prev_action=self._held_raw,
+                slow_action=(self.slow.macro_action
+                             if self.slow is not None else None))
             self._held_raw = action.numpy()
             self._held_info = info
             self._persist_ctr = max(1, self.action_persist)
@@ -461,6 +499,19 @@ class PCActiveInferenceRunner(Node):
 
         # Remember the action actually executed for the next temporal prior.
         self.last_action = torch.from_numpy(a.astype(np.float32))
+
+        # Slow layer: fold this tick into the context window; close the window
+        # every period_ticks. (After publishing — the slow tick's few ms must
+        # never delay the motor command.)
+        if self.slow is not None:
+            self.slow.accumulate(
+                torch.tanh(z),
+                float(np.mean(self.latest_scan)),
+                min(1.0, obs_err / math.sqrt(self.obs_dim)),  # ~RMS error
+                self._nov_ema,
+                a)
+            if self.slow.ready():
+                self.slow.tick(learn=self.do_learn)
 
         # Store this transition, then squeeze extra learning from past windows.
         # Done after publishing so replay compute never delays the motor command.
@@ -526,6 +577,17 @@ class PCActiveInferenceRunner(Node):
                 places_n=self.place_memory.n_places(),
                 mem_clears=self._mem_clears,
                 proprio=o_t.numpy()[self.num_bins:self.num_bins + 8],
+                # Learned attention: precision multiplier per lidar bin
+                # (1 = at the prior, >1 = trusted, <1 = learned-noisy).
+                pi=self.model.precision_mult().numpy()[:self.num_bins],
+                # Slow-layer context (None until the layer exists/warms up).
+                slow_epi=(self.slow.info.get("slow_epi")
+                          if self.slow is not None else None),
+                slow_nov_pred=(self.slow.info.get("slow_nov_pred")
+                               if self.slow is not None else None),
+                slow_ticks=(self.slow.ticks if self.slow is not None else None),
+                slow_action=(self.slow.macro_action
+                             if self.slow is not None else None),
             )
         if self._step % 20 == 0:
             self.get_logger().info(
@@ -557,7 +619,10 @@ class PCActiveInferenceRunner(Node):
                 z, _, _ = self.model.infer(o, a, z_prev=zp,
                                            n_iters=self.replay_infer_iters)
                 if t >= self.replay_burn_in:
-                    self.model.learn(z, a, o, z_prev=zp, advance=False)
+                    # update_precision=False: replay errors come from cold
+                    # contexts, not the sensors — keep them out of the ledger.
+                    self.model.learn(z, a, o, z_prev=zp, advance=False,
+                                     update_precision=False)
                 zp = z
 
     def _publish_track(self, left: float, right: float):
@@ -579,6 +644,13 @@ class PCActiveInferenceRunner(Node):
                     return
                 self.model.load_state_dict(sd)
                 self.get_logger().info(f"Loaded brain from {self.model_path}")
+                if self.slow is not None:
+                    ok, reason = self.slow.load(self.slow_model_path)
+                    if ok:
+                        self.get_logger().info(
+                            f"Loaded slow layer from {self.slow_model_path}")
+                    elif reason != "no checkpoint":
+                        self.get_logger().warning(f"Slow layer: {reason}")
                 # The model learned dynamics conditioned on pre-scale actions;
                 # changing action_scale redefines what those actions DO.
                 saved_scale = sd.get("action_scale")
@@ -603,6 +675,8 @@ class PCActiveInferenceRunner(Node):
             sd["action_scale"] = self.action_scale
             torch.save(sd, tmp_path)
             os.replace(tmp_path, self.model_path)
+            if self.slow is not None:
+                self.slow.save(self.slow_model_path)
             self.get_logger().info(f"Saved brain to {self.model_path}")
         except Exception as e:  # noqa: BLE001
             self.get_logger().warn(f"Could not save brain: {e}")
