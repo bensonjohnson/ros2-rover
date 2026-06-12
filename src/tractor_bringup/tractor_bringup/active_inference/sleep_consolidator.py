@@ -56,7 +56,7 @@ def load_experience(log_path: str) -> list[tuple[np.ndarray, np.ndarray]]:
     return dataset
 
 
-def consolidate_slow_layer(args, model, dataset, rng):
+def consolidate_slow_layer(args, model, dataset, rng, dash=None):
     """Sleep for the hierarchy's second story.
 
     The slow layer's sensory world IS the fast layer's latent space, and the
@@ -99,17 +99,25 @@ def consolidate_slow_layer(args, model, dataset, rng):
     print(f"Re-grounding: replaying {len(dataset)} steps through the "
           f"consolidated fast model (windows of {period})...")
     t0 = time.time()
+    last_dash = 0.0
+    total_windows = max(1, len(dataset) // period)
+    # Visualization-only slow context: settles the slow model over each
+    # regenerated window so the dashboard's slow story lights up live.
+    zp2_vis = torch.zeros(smodel.cfg.latent_dim)
+    last_slow_s = None
     slow_steps = []          # (slow_obs np, mean_action np)
     zp = torch.zeros(D)
     sum_s = torch.zeros(D)
     sum_open = sum_err = sum_nov = 0.0
     sum_act = np.zeros(2)
     n_in_window = 0
+    step_i = 0
     for obs_np, act_np in dataset:
         o = torch.from_numpy(obs_np.copy())
         a = torch.from_numpy(act_np.copy())
-        z, _, err = model.infer(o, a, z_prev=zp, n_iters=10)
+        z, F_g, err = model.infer(o, a, z_prev=zp, n_iters=10)
         zp = z
+        step_i += 1
         sum_s += torch.tanh(z)
         sum_open += float(obs_np[:num_bins].mean())
         sum_err += min(1.0, err / sqrt_obs)
@@ -124,8 +132,33 @@ def consolidate_slow_layer(args, model, dataset, rng):
             ]).astype(np.float32)
             slow_steps.append((slow_obs,
                                (sum_act / n_in_window).astype(np.float32)))
+            if dash is not None:
+                z2v, _, _ = smodel.infer(
+                    torch.from_numpy(slow_obs.copy()),
+                    torch.from_numpy(slow_steps[-1][1].copy()),
+                    z_prev=zp2_vis)
+                zp2_vis = z2v
+                last_slow_s = [float(x) for x in torch.tanh(z2v)]
             sum_s.zero_(); sum_open = sum_err = sum_nov = 0.0
             sum_act[:] = 0.0; n_in_window = 0
+        if dash is not None and dash.active():
+            now = time.time()
+            if args.step_delay > 0.0 or (now - last_dash) >= 0.033:
+                last_dash = now
+                s_lat = torch.tanh(z).numpy()
+                dash.update(
+                    obs=obs_np[:num_bins],
+                    pred=model.reconstruct(z).numpy()[:num_bins],
+                    F=F_g, err=err, epi=0.0, epi_max=0.0, prag=0.0,
+                    L=float(act_np[0]), R=float(act_np[1]), step=step_i,
+                    s=s_lat, z_abs=np.abs(s_lat),
+                    mode="slow-ground",
+                    epoch=len(slow_steps), epoch_total=total_windows,
+                    slow_s=last_slow_s,
+                    slow_window=[n_in_window, period],
+                )
+                if args.step_delay > 0.0:
+                    time.sleep(args.step_delay)
     print(f"Regenerated {len(slow_steps)} slow steps in {time.time()-t0:.1f}s")
 
     L = args.seq_len
@@ -153,6 +186,7 @@ def consolidate_slow_layer(args, model, dataset, rng):
 
     # 2. SWS: replay the regenerated slow sequences (real experience, no
     # injected noise — the windowed averaging already smooths the signal).
+    sws_steps = 0
     for epoch in range(args.slow_sws_epochs):
         t0 = time.time()
         err_sum = 0.0
@@ -162,11 +196,29 @@ def consolidate_slow_layer(args, model, dataset, rng):
             for t, (o_np, a_np) in enumerate(seq):
                 o = torch.from_numpy(o_np.copy())
                 a = torch.from_numpy(a_np.copy())
-                z2, _, err2 = smodel.infer(o, a, z_prev=zp2)
+                z2, F2, err2 = smodel.infer(o, a, z_prev=zp2)
                 err_sum += err2
                 if t >= 4:
                     smodel.learn(z2, a, o, z_prev=zp2, advance=False,
                                  update_precision=False)
+                    sws_steps += 1
+                if dash is not None and dash.active():
+                    now = time.time()
+                    if args.step_delay > 0.0 or (now - last_dash) >= 0.033:
+                        last_dash = now
+                        dash.update(
+                            obs=[], pred=[],
+                            F=F2, err=err2, epi=0.0, epi_max=0.0, prag=0.0,
+                            L=float(a_np[0]), R=float(a_np[1]),
+                            step=sws_steps,
+                            mode="slow-sws",
+                            epoch=epoch + 1, epoch_total=args.slow_sws_epochs,
+                            slow_s=[float(x) for x in torch.tanh(z2)],
+                            slow_F=F2, slow_err=err2,
+                            slow_dis_before=dis_before,
+                        )
+                        if args.step_delay > 0.0:
+                            time.sleep(args.step_delay)
                 zp2 = z2
         smodel.W_o *= args.decay_rate
         for m in range(smodel.cfg.ensemble_size):
@@ -196,13 +248,30 @@ def consolidate_slow_layer(args, model, dataset, rng):
                 z_noisy = z_pred + args.dream_noise * \
                     torch.randn(smodel.cfg.latent_dim)
                 o_dream = smodel.reconstruct(z_noisy)
-                z_next, _, _ = smodel.infer(o_dream, a_dream, z_prev=zp2,
-                                            member=member)
+                z_next, F_d, err_d = smodel.infer(o_dream, a_dream, z_prev=zp2,
+                                                  member=member)
                 e_zm = z_next - z_pred
                 smodel.W_z[member] += smodel.cfg.lr_trans * smodel.pi_z * \
                     torch.outer(e_zm, s_in)
                 smodel.b_z[member] += smodel.cfg.lr_trans * smodel.pi_z * e_zm
                 rem_updates += 1
+                if dash is not None and dash.active():
+                    now = time.time()
+                    if args.step_delay > 0.0 or (now - last_dash) >= 0.033:
+                        last_dash = now
+                        dash.update(
+                            obs=[], pred=[],
+                            F=F_d, err=err_d, epi=0.0, epi_max=0.0, prag=0.0,
+                            L=float(a_dream[0]), R=float(a_dream[1]),
+                            step=rem_updates,
+                            mode="slow-rem",
+                            epoch=epoch + 1, epoch_total=args.slow_rem_epochs,
+                            slow_s=[float(x) for x in torch.tanh(z_next)],
+                            slow_F=F_d, slow_err=err_d,
+                            slow_dis_before=dis_before,
+                        )
+                        if args.step_delay > 0.0:
+                            time.sleep(args.step_delay)
                 zp2 = z_next
         smodel.W_o *= args.decay_rate
         for m in range(smodel.cfg.ensemble_size):
@@ -533,7 +602,7 @@ def run_sleep_cycle(args):
     # one level up. Must run before the logs are archived — re-grounding
     # replays them.
     try:
-        consolidate_slow_layer(args, model, dataset, rng)
+        consolidate_slow_layer(args, model, dataset, rng, dash=dash)
     except Exception as e:  # noqa: BLE001
         print(f"⚠️ Slow-layer consolidation failed: {e}")
 

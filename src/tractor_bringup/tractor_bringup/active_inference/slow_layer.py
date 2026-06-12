@@ -105,7 +105,13 @@ class SlowLayer:
         self.ticks = 0                      # slow ticks this process
         self.macro_action: np.ndarray | None = None   # policy prior for fast actor
         self.td_target: torch.Tensor | None = None    # predicted mean tanh(z1)
+        self.s2: torch.Tensor | None = None           # tanh(z2) for the dashboard
         self.info: dict = {}
+
+    @property
+    def window_fill(self) -> int:
+        """Fast ticks accumulated toward the next slow tick."""
+        return self._n
 
     # ---- window accumulation (every fast tick) -----------------------------
 
@@ -155,11 +161,13 @@ class SlowLayer:
         self.td_target = (2.0 * o2_hat[:self.cfg.fast_latent_dim] - 1.0) \
             if warm else None
 
+        self.s2 = torch.tanh(z2)
         self.info = {
             "slow_F": F2, "slow_err": err2,
             "slow_epi": float(ainfo["epistemic"]),
             "slow_nov_pred": float(o2_hat[-1]),
             "slow_ticks": self.ticks,
+            "slow_s": [round(float(x), 4) for x in self.s2],
         }
 
         self._sum_s.zero_()
@@ -182,6 +190,7 @@ class SlowLayer:
         self.ticks = 0
         self.macro_action = None
         self.td_target = None
+        self.s2 = None
 
     # ---- persistence (own checkpoint, never fused with the fast brain) -----
 

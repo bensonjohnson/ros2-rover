@@ -547,6 +547,11 @@ class PCActiveInferenceRunner(Node):
                 float((z - self.model._predict_member(m, z_prev_in)).pow(2).mean())
                 for m in range(self.model.cfg.ensemble_size)
             ])
+            # Top-down agreement: how close the fast settle landed to the slow
+            # layer's expectation (RMS gap over fast latent dims).
+            td = self.slow.td_target if self.slow is not None else None
+            td_gap = (float((torch.tanh(z) - td).norm() / math.sqrt(td.numel()))
+                      if td is not None else None)
             self.dash.update(
                 obs=self.latest_scan,
                 pred=self.model.reconstruct(z).numpy()[:self.num_bins],
@@ -588,6 +593,20 @@ class PCActiveInferenceRunner(Node):
                 slow_ticks=(self.slow.ticks if self.slow is not None else None),
                 slow_action=(self.slow.macro_action
                              if self.slow is not None else None),
+                # Two-story brain panel: slow latent, window progress, and
+                # whether the priors are live yet.
+                slow_s=(self.slow.info.get("slow_s")
+                        if self.slow is not None else None),
+                slow_window=([self.slow.window_fill,
+                              self.slow.cfg.period_ticks]
+                             if self.slow is not None else None),
+                slow_warm=(self.slow.macro_action is not None
+                           if self.slow is not None else None),
+                slow_F=(self.slow.info.get("slow_F")
+                        if self.slow is not None else None),
+                slow_err=(self.slow.info.get("slow_err")
+                          if self.slow is not None else None),
+                td_gap=td_gap,
             )
         if self._step % 20 == 0:
             self.get_logger().info(

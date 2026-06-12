@@ -312,14 +312,14 @@ _PAGE = """<!doctype html>
 <div class="brain-row">
   <div class="brain-panel">
     <div class="brain-title">NEURAL NET ACTIVITY</div>
-    <div class="brain-sub">forward pass: observation &rarr; latent z &rarr; prediction</div>
-    <canvas id="brain" width="920" height="380"></canvas>
+    <div class="brain-sub">two-story hierarchy: slow context (1 Hz) over fast perception (15 Hz)</div>
+    <canvas id="brain" width="920" height="560"></canvas>
     <div class="legend" style="margin-top:6px;text-align:center;">
-      <span class="dot" style="background:#5bc0ff"></span>latent active
-      <span class="dot" style="background:#3060d0"></span>latent suppressed
+      <span class="dot" style="background:#00c88c"></span>active / excite
+      <span class="dot" style="background:#3060d0"></span>suppressed / inhibit
       <span class="dot" style="background:#ff9d3b"></span>pred error (bright=wrong)
-      <span class="dot" style="background:#00c88c"></span>positive flow
-      <span class="dot" style="background:#ff6432"></span>negative flow
+      <span class="dot" style="background:#5bc0ff"></span>bottom-up
+      <span class="dot" style="background:#ffd043"></span>top-down prior &amp; attention
     </div>
     <div class="nn-row">
       <div class="nn-stat">step: <span class="nn-stat-val" id="nn_step">-</span></div>
@@ -327,7 +327,10 @@ _PAGE = """<!doctype html>
       <div class="nn-stat">ensemble &mu;: <span class="nn-stat-val" id="nn_emu">-</span></div>
       <div class="nn-stat">ensemble &sigma;: <span class="nn-stat-val" id="nn_esig">-</span></div>
       <div class="bar-wrap">members: <span id="nn_ebars" style="display:inline-flex;gap:3px;"></span></div>
+      <div class="nn-stat" id="nn_slowf_wrap" style="display:none">slow F: <span class="nn-stat-val" id="nn_sF">-</span></div>
+      <div class="nn-stat" id="nn_slowe_wrap" style="display:none">slow err: <span class="nn-stat-val" id="nn_serr">-</span></div>
       <div class="nn-stat" id="nn_dis_wrap" style="display:none">dis &mu;&#8320;: <span class="nn-stat-val" id="nn_dis">-</span></div>
+      <div class="nn-stat" id="nn_dis2_wrap" style="display:none">dis&sup2; &mu;&#8320;: <span class="nn-stat-val" id="nn_dis2">-</span></div>
     </div>
   </div>
 </div>
@@ -404,14 +407,6 @@ _PAGE = """<!doctype html>
       <div class="stat-card color-blue">
         <div class="stat-label">ROOM</div>
         <div class="stat-value" id="room">-</div>
-      </div>
-      <div class="stat-card color-gold">
-        <div class="stat-label">SLOW LAYER</div>
-        <div class="stat-value" id="slow_card">-</div>
-      </div>
-      <div class="stat-card color-blue">
-        <div class="stat-label">SLOW PLAN</div>
-        <div class="stat-value" id="slow_plan">-</div>
       </div>
     </div>
     
@@ -538,12 +533,14 @@ function trace(s){
   ctx.fillStyle='#ffd043';ctx.fillText('epi '+(rEpi?rEpi[0].toFixed(4)+' – '+rEpi[1].toFixed(4):''),104,10);
 }
 
-// ---- Neural Network Visualizer --------------------------------------------
-// Shows a 3-layer forward pass: observation (input) -> latent z -> prediction (output).
-// - Input nodes (left): observed lidar, colored by magnitude.
-// - Latent nodes (center): 64 nodes sized by |tanh activation|, colored by state error.
-// - Output nodes (right): predicted observation, colored by prediction error.
-// - Lines: thicker = more activation flowing through that path.
+// ---- Neural Network Visualizer: the two-story brain ------------------------
+// Bottom story (fast, 15 Hz): observation -> latent z1 (8x8 grid) -> prediction,
+// with the top decoder flows drawn as wires and prediction error as heat.
+// Top story (slow, 1 Hz): latent z2 (4x4 grid), the window-fill gauge feeding
+// it, and the two couplings that make this a hierarchy — a bottom-up arrow
+// (mean fast activation becomes the slow obs) and a top-down arrow (the slow
+// prediction becomes an empirical prior on fast settling; gold brightness =
+// how closely the fast layer is agreeing with it).
 
 function lerp3(a,b,t){
   return[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
@@ -560,6 +557,7 @@ function actColor(v,mx){
   if(v>=0)return lerp3([60,60,60],[0,200,140],t);
   return lerp3([60,60,60],[40,100,220],t);
 }
+let lastSlowTicks=null, slowPulseUntil=0;
 function brainViz(s){
   const c=$('brain'),ctx=c.getContext('2d'),W=c.width,H=c.height;
   ctx.clearRect(0,0,W,H);
@@ -567,24 +565,142 @@ function brainViz(s){
 
   const obs=s.obs||[],sAct=s.s||[],pred=s.pred||[],zAbs=s.z_abs||[];
   const eZ=s.e_z_abs||[],eO=s.e_o||[];
-  if(!sAct.length)return;
+  const slowS=s.slow_s||[];
+  const hasFast=sAct.length>0;
+  const hasSlow=slowS.length>0;
+  const warm=!!s.slow_warm;
 
-  // Layout: 920x380 canvas, three wide-spaced columns.
-  // c1X=observation (left), c2X=latent (center), c3X=prediction (right)
-  const PAD=28;
-  const TOP=26,BOT=H-PAD-12,ly=TOP,ry=BOT,CH=W-PAD*2;
+  // Layout: slow story on top, divider, fast story below.
+  const PAD=28,CH=W-PAD*2;
   const c1X=PAD+CH*0.13;   // observation column x
-  const c2X=PAD+CH*0.50;   // latent column x (centered)
+  const c2X=PAD+CH*0.50;   // latent column x (both stories share it)
   const c3X=PAD+CH*0.87;   // prediction column x
+  const DIV=200;           // story divider y
+  const ly=246,ry=H-50;    // fast node band
   const midY=(ly+ry)*0.5;
 
-  // ── 1. Column labels at top ────────────────────────────────────────
-  ctx.font='bold 11px system-ui';ctx.fillStyle='#6a7888';ctx.textAlign='center';
-  ctx.fillText('OBSERVATION  (lidar)',c1X,TOP-6);
-  ctx.fillText('LATENT  z  (64 dims)',c2X,TOP-6);
-  ctx.fillText('PREDICTION  (what brain expects)',c3X,TOP-6);
+  // Pulse the bottom-up arrow whenever a slow tick closes a window.
+  if(s.slow_ticks!=null){
+    if(lastSlowTicks!==null&&s.slow_ticks>lastSlowTicks)slowPulseUntil=Date.now()+700;
+    lastSlowTicks=s.slow_ticks;
+  }
+  const pulse=Date.now()<slowPulseUntil;
 
-  // ── 2. Build node Y positions ──────────────────────────────────────
+  // ════ SLOW STORY (top) ══════════════════════════════════════════════
+  ctx.font='bold 11px system-ui';ctx.textAlign='left';
+  ctx.fillStyle=hasSlow?'#6a7888':'#39414d';
+  ctx.fillText('SLOW CONTEXT · 1 Hz',PAD,18);
+  // plan chip (top-right): the macro action + slow ensemble uncertainty
+  ctx.textAlign='right';
+  if(s.slow_action&&s.slow_action.length>=2){
+    const f=v=>(v>=0?'+':'')+v.toFixed(1);
+    ctx.fillStyle='#9aa7b5';
+    ctx.fillText('plan  L'+f(s.slow_action[0])+'  R'+f(s.slow_action[1])
+      +(s.slow_epi!=null?'  ·  epi '+s.slow_epi.toFixed(3):''),W-PAD,18);
+  }else if(hasSlow||s.slow_window){
+    ctx.fillStyle='#5a6370';
+    ctx.fillText('warming'+(s.slow_ticks!=null?' · '+s.slow_ticks+'t':''),W-PAD,18);
+  }
+  ctx.textAlign='left';
+
+  // Whole slow story dims until the layer has earned influence (or is the
+  // one being trained, during slow dream phases where s.mode is set).
+  const slowAlpha=hasSlow?((warm||s.mode)?1.0:0.5):0.25;
+  ctx.globalAlpha=slowAlpha;
+
+  // z2 grid: 4x4, same glow language as the fast latents.
+  const cols2=4,n2=Math.max(16,slowS.length);
+  const sX=[],sY=[];
+  for(let i=0;i<n2;i++){
+    sX.push(c2X+((i%cols2)-(cols2-1)/2)*34);
+    sY.push(50+Math.floor(i/cols2)*30);
+  }
+  const mxS2=Math.max(...slowS.map(Math.abs),0.001);
+  for(let i=0;i<n2;i++){
+    const v=slowS[i]||0,abs=Math.abs(v);
+    const radius=3.5+abs*9,glowR=radius+abs*8;
+    const[ar,ag,ab]=actColor(v,mxS2);
+    ctx.beginPath();ctx.arc(sX[i],sY[i],glowR,0,2*Math.PI);
+    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.10)`;ctx.fill();
+    const grad=ctx.createRadialGradient(sX[i]-1.5,sY[i]-1.5,0,sX[i],sY[i],radius);
+    grad.addColorStop(0,`rgb(${Math.min(255,ar+80)},${Math.min(255,ag+60)},${Math.min(255,ab+25)})`);
+    grad.addColorStop(1,`rgb(${ar},${ag},${ab})`);
+    ctx.beginPath();ctx.arc(sX[i],sY[i],radius,0,2*Math.PI);
+    ctx.fillStyle=grad;ctx.fill();
+    if(abs>mxS2*0.5){ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1;ctx.stroke();}
+  }
+  ctx.font='10px system-ui';ctx.fillStyle='#5a6678';ctx.textAlign='center';
+  ctx.fillText('z²  context  ('+(hasSlow?slowS.length:16)+')',c2X,178);
+  ctx.textAlign='left';
+
+  // Window-fill gauge: fast ticks accumulated toward the next slow tick.
+  if(s.slow_window&&s.slow_window.length>=2){
+    const fill=s.slow_window[0],period=Math.max(1,s.slow_window[1]);
+    const gx=PAD,gy=84,gw=170,segW=gw/period;
+    for(let i=0;i<period;i++){
+      ctx.fillStyle=i<fill?'rgba(91,192,255,0.85)':'rgba(91,192,255,0.12)';
+      ctx.fillRect(gx+i*segW,gy,Math.max(1,segW-2),10);
+    }
+    ctx.font='10px system-ui';ctx.fillStyle='#5a6678';
+    ctx.fillText('window '+fill+'/'+period
+      +(s.slow_ticks!=null?'  ·  '+s.slow_ticks+' slow ticks':''),gx,gy+24);
+  }
+
+  // ── Couplings: the arrows that make it a hierarchy ──────────────────
+  const aTop=164,aBot=236,bx=c2X-110,tx=c2X+110;
+  // bottom-up (fast -> slow): pulses bright when a window closes
+  const buA=pulse?0.95:0.35;
+  ctx.strokeStyle=`rgba(91,192,255,${buA})`;ctx.fillStyle=ctx.strokeStyle;
+  ctx.lineWidth=pulse?2.2:1.4;
+  ctx.beginPath();ctx.moveTo(bx,aBot);ctx.lineTo(bx,aTop+8);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(bx,aTop);ctx.lineTo(bx-5,aTop+9);ctx.lineTo(bx+5,aTop+9);
+  ctx.closePath();ctx.fill();
+  ctx.font='10px system-ui';ctx.fillStyle='#5a6678';ctx.textAlign='right';
+  ctx.fillText('bottom-up: mean tanh z¹',bx-8,(aTop+aBot)/2+3);
+  // top-down (slow -> fast): gold brightness = how closely fast settling
+  // is agreeing with the slow layer's expectation
+  const agree=s.td_gap!=null?Math.max(0,Math.min(1,1-s.td_gap)):null;
+  const tdA=agree!=null?0.15+0.75*agree:0.12;
+  ctx.strokeStyle=`rgba(255,208,67,${tdA})`;ctx.fillStyle=ctx.strokeStyle;
+  ctx.lineWidth=agree!=null?2:1.2;
+  ctx.beginPath();ctx.moveTo(tx,aTop);ctx.lineTo(tx,aBot-8);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(tx,aBot);ctx.lineTo(tx-5,aBot-9);ctx.lineTo(tx+5,aBot-9);
+  ctx.closePath();ctx.fill();
+  ctx.fillStyle='#5a6678';ctx.textAlign='left';
+  ctx.fillText(agree!=null
+    ?('top-down prior · agreement '+(agree*100).toFixed(0)+'%')
+    :(s.mode?'top-down prior':'top-down prior (warming)'),tx+8,(aTop+aBot)/2+3);
+  ctx.globalAlpha=1;
+
+  // ── Story divider ───────────────────────────────────────────────────
+  ctx.strokeStyle='#1d2530';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(PAD,DIV);ctx.lineTo(W-PAD,DIV);ctx.stroke();
+
+  // ════ FAST STORY (bottom) ═══════════════════════════════════════════
+  ctx.font='bold 11px system-ui';ctx.fillStyle=hasFast?'#6a7888':'#39414d';
+  ctx.textAlign='left';ctx.fillText('FAST PERCEPTION · 15 Hz',PAD,218);
+  // z state-error stats share the title row
+  const eZnon=eZ.filter(x=>!isNaN(x));
+  if(eZnon.length){
+    const avgE=eZnon.reduce((a,b)=>a+b,0)/eZnon.length;
+    const mxE3=Math.max(...eZnon);
+    ctx.font='10px system-ui';ctx.fillStyle='#5a6678';ctx.textAlign='right';
+    ctx.fillText(`z error  avg:${avgE.toFixed(3)}  max:${mxE3.toFixed(3)}`,W-PAD,218);
+  }
+  if(!hasFast){
+    ctx.font='11px system-ui';ctx.fillStyle='#39414d';ctx.textAlign='center';
+    ctx.fillText(s.mode?'fast layer idle — slow consolidation running':'no fast activity',c2X,midY);
+    ctx.textAlign='left';
+    return;
+  }
+
+  // Column labels
+  ctx.font='bold 11px system-ui';ctx.fillStyle='#6a7888';ctx.textAlign='center';
+  ctx.fillText('OBSERVATION  (lidar)',c1X,240);
+  ctx.fillText('LATENT  z¹  ('+sAct.length+')',c2X,240);
+  ctx.fillText('PREDICTION  (what brain expects)',c3X,240);
+
+  // Node Y positions
   const N_DISP=Math.min(24,obs.length,pred.length);
   const obsStep=Math.max(1,Math.floor(obs.length/N_DISP));
   const predStep=Math.max(1,Math.floor(pred.length/N_DISP));
@@ -594,7 +710,7 @@ function brainViz(s){
     obsY.push(ly+t*(ry-ly));
     predY.push(ly+t*(ry-ly));
   }
-  // Latent grid: 8 cols × 8 rows.
+  // Latent grid: 8 cols x 8 rows.
   const zNodes=Math.min(sAct.length,zAbs.length);
   const zCols=8,zRows=Math.ceil(zNodes/zCols);
   const zX=[],zY=[];
@@ -607,30 +723,29 @@ function brainViz(s){
     }
   }
 
-  // ── 3. Connections: latent (center) → prediction (right) ───────────
-  // The server pre-computes the top-K strongest activation flows
-  // (weight * latent_activation) as [zi, pi, flow] — far cheaper than
-  // shipping the whole decoder matrix on every poll.
-  const flows = s.flows || [];
-  let maxFlow = 0.001;
-  for (const [, , flow] of flows) {
-    const a = Math.abs(flow);
-    if (a > maxFlow) maxFlow = a;
+  // Decoder flows (latent -> prediction): server ships the top-K strongest
+  // |weight * activation| entries; draw only the ones that matter so the
+  // wiring reads as structure, not noise.
+  const flows=s.flows||[];
+  let maxFlow=0.001;
+  for(const[,,flow]of flows){
+    const a=Math.abs(flow);
+    if(a>maxFlow)maxFlow=a;
   }
-  for (const [zi, pi, flow] of flows) {
-    if (zi >= zX.length || pi >= predY.length) continue;
-    const t = Math.abs(flow) / maxFlow;
-    // Positive flow (excitation) = cyan/green; negative flow (inhibition) = orange/red
-    const color = flow >= 0 ? `rgba(0,200,140,${0.04+t*0.65})` : `rgba(255,100,50,${0.04+t*0.65})`;
+  for(const[zi,pi,flow]of flows){
+    if(zi>=zX.length||pi>=predY.length)continue;
+    const t=Math.abs(flow)/maxFlow;
+    if(t<0.12)continue;
+    const color=flow>=0?`rgba(0,200,140,${0.05+t*0.45})`:`rgba(255,100,50,${0.05+t*0.45})`;
     ctx.beginPath();
-    ctx.moveTo(zX[zi] + 6, zY[zi]);
-    ctx.lineTo(c3X - 12, predY[pi]);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 0.4 + t * 2.8;
+    ctx.moveTo(zX[zi]+6,zY[zi]);
+    ctx.lineTo(c3X-12,predY[pi]);
+    ctx.strokeStyle=color;
+    ctx.lineWidth=0.4+t*1.6;
     ctx.stroke();
   }
 
-  // ── 4. Observation nodes (left column) ─────────────────────────────
+  // Observation nodes (left column)
   const mxObs=Math.max(...obs,0.001);
   obsY.forEach((ny,i)=>{
     const v=obs[Math.min(i*obsStep,obs.length-1)]||0;
@@ -640,7 +755,7 @@ function brainViz(s){
     ctx.fill();
   });
 
-  // ── 5. Latent nodes (center) — the brain lighting up ───────────────
+  // Latent nodes (center) — single halo + gradient core
   const mxZ=Math.max(...zAbs,0.001);
   zX.forEach((nx,zi)=>{
     const ny=zY[zi];
@@ -649,40 +764,32 @@ function brainViz(s){
     const radius=3.5+absAct*11;
     const glowR=radius+absAct*10;
     const[ar,ag,ab]=actColor(activation,mxZ);
-    // outer glow (large, transparent halo)
     ctx.beginPath();ctx.arc(nx,ny,glowR,0,2*Math.PI);
-    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.08)`;ctx.fill();
-    // inner glow ring
-    ctx.beginPath();ctx.arc(nx,ny,glowR*0.65,0,2*Math.PI);
-    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.16)`;ctx.fill();
-    // core with radial gradient for 3-D depth
+    ctx.fillStyle=`rgba(${ar},${ag},${ab},0.12)`;ctx.fill();
     const grad=ctx.createRadialGradient(nx-2,ny-2,0,nx,ny,radius);
     grad.addColorStop(0,`rgb(${Math.min(255,ar+80)},${Math.min(255,ag+60)},${Math.min(255,ab+25)})`);
     grad.addColorStop(1,`rgb(${ar},${ag},${ab})`);
     ctx.beginPath();ctx.arc(nx,ny,radius,0,2*Math.PI);
     ctx.fillStyle=grad;ctx.fill();
-    // white ring on highly active neurons
     if(absAct>mxZ*0.5){ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1.1;ctx.stroke();}
   });
 
-  // ── 6. Prediction nodes (right column) ─────────────────────────────
+  // Prediction nodes (right column): error as heat
   const mxE2=Math.max(...eO.map(Math.abs),0.001);
   predY.forEach((ny,i)=>{
     const pi=Math.min(i*predStep,pred.length-1);
     const err=Math.abs(eO[pi]||0);
     const[er,eg,eb]=errColor(err,mxE2);
     const bright=Math.min(1,err/mxE2);
-    // glow halo
     ctx.beginPath();ctx.arc(c3X,ny,5+10*bright,0,2*Math.PI);
     ctx.fillStyle=`rgba(${er},${eg},${eb},${0.1*bright})`;ctx.fill();
-    // core node
     ctx.beginPath();ctx.arc(c3X,ny,4+8*bright,0,2*Math.PI);
     ctx.fillStyle=`rgba(${Math.round(er*bright+28*(1-bright))},${Math.round(eg*bright+28*(1-bright))},${Math.round(eb*bright+28*(1-bright))},0.94)`;
     ctx.fill();
     if(err>mxE2*0.45){ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.stroke();}
   });
 
-  // ── 7. Flow arrows between columns ─────────────────────────────────
+  // Flow arrows between columns
   const drawArrow=(x,y,dir)=>{
     ctx.fillStyle='#4ab8ff';
     ctx.beginPath();
@@ -693,28 +800,23 @@ function brainViz(s){
   drawArrow(c1X+14,midY,1);
   drawArrow(c3X-14,midY,-1);
 
-  // ── 8. Column divider lines ─────────────────────────────────────────
+  // Column divider lines
   ctx.strokeStyle='#25303e';ctx.lineWidth=1.5;
   [c1X+10,c3X-10].forEach(x=>{
     ctx.beginPath();ctx.moveTo(x,ly);ctx.lineTo(x,ry);ctx.stroke();
   });
 
-  // ── 9. Error legend gradient ─────────────────────────────────────────
-  const bw=90,bh=7,bx=PAD,by=BOT+8;
-  const grd=ctx.createLinearGradient(bx,0,bx+bw,0);
-  grd.addColorStop(0,'#1a1208');grd.addColorStop(1,'#ffb840');
-  ctx.fillStyle=grd;ctx.fillRect(bx,by,bw,bh);
-  ctx.font='10px system-ui';ctx.fillStyle='#4a5565';ctx.textAlign='left';
-  ctx.fillText('pred error: dim=correct  bright=wrong',bx,BOT+22);
-
-  // ── 10. State error stats (top-right of canvas) ────────────────────
-  const eZnon=eZ.filter(x=>!isNaN(x));
-  if(eZnon.length){
-    const sumE=eZnon.reduce((a,b)=>a+b,0);
-    const avgE=sumE/eZnon.length;
-    const mxE3=Math.max(...eZnon);
-    ctx.font='11px system-ui';ctx.fillStyle='#5a6678';ctx.textAlign='right';
-    ctx.fillText(`z error  avg:${avgE.toFixed(3)}  max:${mxE3.toFixed(3)}`,W-PAD,12);
+  // Attention strip: learned precision per lidar bin (matches the radar's
+  // gold ring; bright = trusted, dim = learned-noisy)
+  if(s.pi&&s.pi.length){
+    const aw=216,ax=PAD,ay=H-24,bw2=aw/s.pi.length;
+    for(let i=0;i<s.pi.length;i++){
+      const v=Math.max(0,Math.min(1,(Math.log(s.pi[i]||1)-Math.log(0.25))/(Math.log(4)-Math.log(0.25))));
+      ctx.fillStyle=`rgba(255,208,67,${0.08+0.8*v})`;
+      ctx.fillRect(ax+i*bw2,ay,Math.max(1,bw2-0.5),8);
+    }
+    ctx.font='10px system-ui';ctx.fillStyle='#4a5565';ctx.textAlign='left';
+    ctx.fillText('attention: learned precision per lidar bin (bright = trusted)',ax+aw+10,ay+8);
   }
 }
 
@@ -754,6 +856,18 @@ function nnStatus(s){
   if(s.disagreement_before!=null){
     $('nn_dis_wrap').style.display='flex';
     $('nn_dis').textContent=s.disagreement_before.toFixed(5);
+  }
+  if(s.slow_F!=null){
+    $('nn_slowf_wrap').style.display='flex';
+    $('nn_sF').textContent=s.slow_F.toFixed(3);
+  }
+  if(s.slow_err!=null){
+    $('nn_slowe_wrap').style.display='flex';
+    $('nn_serr').textContent=s.slow_err.toFixed(3);
+  }
+  if(s.slow_dis_before!=null){
+    $('nn_dis2_wrap').style.display='flex';
+    $('nn_dis2').textContent=s.slow_dis_before.toFixed(5);
   }
 }
 
@@ -879,23 +993,7 @@ async function tick(){
       rEl.textContent='-';rEl.style.color='';
     }
 
-    // Slow layer: contextual (1 Hz) story of the hierarchy. Epi = how
-    // uncertain the slow ensemble is about the next few SECONDS; the plan is
-    // the macro action its EFE chose ('warming' until it earns influence).
-    const slEl=$('slow_card');
-    if(s.slow_ticks!=null){
-      slEl.textContent=(s.slow_epi!=null?s.slow_epi.toFixed(4):'-')
-        +' · '+s.slow_ticks+'t';
-    }else{slEl.textContent='-';}
-    const spEl=$('slow_plan');
-    if(s.slow_action&&s.slow_action.length>=2){
-      spEl.textContent='L'+(s.slow_action[0]>=0?'+':'')+s.slow_action[0].toFixed(1)
-        +' R'+(s.slow_action[1]>=0?'+':'')+s.slow_action[1].toFixed(1)
-        +(s.slow_nov_pred!=null?' · n'+s.slow_nov_pred.toFixed(2):'');
-      spEl.style.color='';
-    }else if(s.slow_ticks!=null){
-      spEl.textContent='warming';spEl.style.color='#5a6370';
-    }else{spEl.textContent='-';}
+    // (Slow-layer state now lives in the two-story brain panel.)
 
     // Safety gate badge: visible whenever the lidar monitor is holding the tracks
     $('safety_badge').style.display = s.safety_hold ? 'inline-flex' : 'none';
@@ -945,6 +1043,24 @@ async function tick(){
         badge.style.borderColor = 'rgba(147, 112, 219, 0.25)';
         badge.style.color = '#da70d6';
         statusText.textContent = 'REM Dream' + prog;
+      } else if (s.mode === 'slow-ground') {
+        badge.className = 'status-badge live';
+        badge.style.background = 'rgba(0, 200, 200, 0.1)';
+        badge.style.borderColor = 'rgba(0, 200, 200, 0.25)';
+        badge.style.color = '#00c8c8';
+        statusText.textContent = 'Re-grounding' + prog;
+      } else if (s.mode === 'slow-sws') {
+        badge.className = 'status-badge live';
+        badge.style.background = 'rgba(255, 157, 59, 0.1)';
+        badge.style.borderColor = 'rgba(255, 157, 59, 0.25)';
+        badge.style.color = '#ff9d3b';
+        statusText.textContent = 'SWS² Replay' + prog;
+      } else if (s.mode === 'slow-rem') {
+        badge.className = 'status-badge live';
+        badge.style.background = 'rgba(147, 112, 219, 0.1)';
+        badge.style.borderColor = 'rgba(147, 112, 219, 0.25)';
+        badge.style.color = '#da70d6';
+        statusText.textContent = 'REM² Dream' + prog;
       } else {
         badge.className = 'status-badge live';
         badge.style.background = ''; badge.style.borderColor = ''; badge.style.color = '';
@@ -984,7 +1100,7 @@ class PCDashboardState:
     # How many prediction nodes the page displays and how many of the
     # strongest latent->prediction flows we ship (mirrors the client).
     N_DISP = 24
-    TOP_FLOWS = 250
+    TOP_FLOWS = 80
 
     def __init__(self, history: int = 240):
         self._lock = threading.Lock()
@@ -1015,7 +1131,9 @@ class PCDashboardState:
                 epi_gate=None, places_n=None, mem_clears=None,
                 proprio=None, pi=None,
                 slow_epi=None, slow_nov_pred=None, slow_ticks=None,
-                slow_action=None) -> None:
+                slow_action=None, slow_s=None, slow_window=None,
+                slow_warm=None, slow_F=None, slow_err=None,
+                td_gap=None, slow_dis_before=None) -> None:
         # Heavy lifting (top-K flow extraction) happens OUTSIDE the lock.
         flows = None
         if W_o is not None and s is not None:
@@ -1084,6 +1202,23 @@ class PCDashboardState:
                 state["slow_ticks"] = int(slow_ticks)
             if slow_action is not None:
                 state["slow_action"] = [round(float(x), 2) for x in slow_action]
+            # Two-story brain panel: slow latent activations, window progress
+            # toward the next slow tick, whether the priors are live, and how
+            # closely fast settling agrees with the top-down expectation.
+            if slow_s is not None:
+                state["slow_s"] = [round(float(x), 4) for x in slow_s]
+            if slow_window is not None:
+                state["slow_window"] = [int(slow_window[0]), int(slow_window[1])]
+            if slow_warm is not None:
+                state["slow_warm"] = bool(slow_warm)
+            if slow_F is not None:
+                state["slow_F"] = round(float(slow_F), 4)
+            if slow_err is not None:
+                state["slow_err"] = round(float(slow_err), 4)
+            if td_gap is not None:
+                state["td_gap"] = round(float(td_gap), 4)
+            if slow_dis_before is not None:
+                state["slow_dis_before"] = float(slow_dis_before)
             # Neural net activations for the brain visualizer.
             if s is not None:
                 state["s"] = [round(float(x), 4) for x in s]
