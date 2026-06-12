@@ -60,6 +60,12 @@ def main():
     ap.add_argument("--log-envs", type=int, default=1,
                     help="how many envs write experience jsonl")
     ap.add_argument("--report-s", type=float, default=5.0)
+    ap.add_argument("--no-eval-after", action="store_true",
+                    help="skip the automatic frozen-eval + best_ pick")
+    ap.add_argument("--eval-envs", type=int, default=64)
+    ap.add_argument("--eval-ticks", type=int, default=4500,
+                    help="frozen-eval length per house (4500 = 5 sim-min)")
+    ap.add_argument("--eval-seed", type=int, default=777_000)
     args = ap.parse_args()
 
     from pnn_sim.batched.trainer import BatchedTrainer, BatchedTrainConfig
@@ -93,6 +99,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if args.snapshot_every > 0 and trainer.status()["step"] > 0:
+            trainer.snapshot()        # final state always joins the lineup
         trainer.close()
         s = trainer.status()
         wall = time.time() - t0
@@ -100,6 +108,42 @@ def main():
               f"{s['sim_hours_total']:.1f} sim-hours of experience in "
               f"{wall / 60.0:.1f} min wall; brain -> {trainer.model_path}",
               flush=True)
+
+    if not args.no_eval_after and args.snapshot_every > 0:
+        _eval_and_pick_best(args)
+
+
+def _eval_and_pick_best(args):
+    """Frozen-eval every snapshot in unseen houses; copy the winner to
+    <out-dir>/best_pnn_brain.pt (+ slow) and record the table as json."""
+    import glob
+    import json
+    import shutil
+
+    from pnn_sim.eval_checkpoints import make_eval_args, run_eval
+
+    snaps = sorted(glob.glob(
+        os.path.join(args.out_dir, "snapshots", "pnn_brain_step*.pt")))
+    if not snaps:
+        return
+    print(f"\nfrozen-eval of {len(snaps)} snapshots in unseen houses "
+          f"(seed {args.eval_seed}) ...", flush=True)
+    results, best = run_eval(snaps, make_eval_args(
+        envs=args.eval_envs, ticks=args.eval_ticks,
+        eval_seed=args.eval_seed, device=args.device,
+        work_dir=os.path.join(args.out_dir, "eval_tmp")))
+
+    src = results[best]["ckpt"]
+    dst = os.path.join(args.out_dir, "best_pnn_brain.pt")
+    shutil.copy2(src, dst)
+    slow_src = src.replace("pnn_brain_", "pnn_brain_slow_")
+    if os.path.exists(slow_src):
+        shutil.copy2(slow_src,
+                     os.path.join(args.out_dir, "best_pnn_brain_slow.pt"))
+    with open(os.path.join(args.out_dir, "eval_results.json"), "w") as f:
+        json.dump({"results": results, "best": src}, f, indent=2)
+    print(f"\nbest brain -> {dst} (from {os.path.basename(src)}); "
+          f"table -> eval_results.json", flush=True)
 
 
 if __name__ == "__main__":

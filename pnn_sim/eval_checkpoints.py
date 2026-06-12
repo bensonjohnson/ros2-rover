@@ -37,6 +37,15 @@ import numpy as np
 import torch
 
 
+def make_eval_args(envs=64, ticks=4500, early_ticks=900,
+                   eval_seed=777_000, device="cuda",
+                   work_dir="/tmp/pnn_eval"):
+    """Namespace for eval_checkpoint() — lets train_batched reuse the eval."""
+    return argparse.Namespace(envs=envs, ticks=ticks, early_ticks=early_ticks,
+                              eval_seed=eval_seed, device=device,
+                              work_dir=work_dir)
+
+
 def eval_checkpoint(path: str, args) -> dict:
     from pnn_sim.batched.trainer import BatchedTrainer, BatchedTrainConfig
 
@@ -89,19 +98,28 @@ def eval_checkpoint(path: str, args) -> dict:
 
 
 def suggest(results: list[dict]) -> int:
-    """Composite: explore a lot, predict well, don't hit things."""
+    """Composite: explore a lot, predict well, don't hit things.
+
+    A metric only votes if its spread across checkpoints is meaningful
+    (>5% of its mean magnitude) — min-max normalization would otherwise
+    blow measurement noise up to a full point. Ties go to the lower
+    settled error.
+    """
     def norm(key, invert=False):
         vals = np.array([r[key] for r in results], dtype=float)
         span = vals.max() - vals.min()
-        n = (vals - vals.min()) / span if span > 1e-12 \
-            else np.zeros_like(vals)
+        if span <= 0.05 * max(np.abs(vals).mean(), 1e-12):
+            return np.zeros_like(vals)          # uninformative — abstain
+        n = (vals - vals.min()) / span
         return 1.0 - n if invert else n
 
     score = (norm("rooms") + norm("dist_m")
              + norm("err_late", invert=True) + norm("coll_h", invert=True))
     for r, s in zip(results, score):
         r["score"] = float(s)
-    return int(np.argmax(score))
+    err = np.array([r["err_late"] for r in results])
+    order = np.lexsort((err, -score))           # max score, then min err
+    return int(order[0])
 
 
 def main():
@@ -126,6 +144,11 @@ def main():
     if not ckpts:
         raise SystemExit("no fast-brain checkpoints given")
 
+    results, best = run_eval(ckpts, args)
+
+
+def run_eval(ckpts: list[str], args) -> tuple[list[dict], int]:
+    """Evaluate checkpoints, print the table, return (results, best_idx)."""
     results = []
     for c in ckpts:
         print(f"evaluating {c} ...", flush=True)
@@ -144,6 +167,7 @@ def main():
     print(f"\nsuggested transfer brain: {results[best]['ckpt']}")
     print("(score = normalized rooms + dist + low err_late + low coll/h; "
           "sanity-check the raw columns before trusting it)")
+    return results, best
 
 
 if __name__ == "__main__":
