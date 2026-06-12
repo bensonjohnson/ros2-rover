@@ -71,3 +71,6 @@ calibration_data_rlpd/
 
 # Numpy archives (replay buffers, demo dumps, training dataset shards)
 *.npz
+
+# Headless sim training outputs
+sim_out/

@@ -207,13 +207,15 @@ class EFEActor:
         # Commitment bonus: prefer candidates near the action currently held,
         # scaled by distance in command space (max possible = 2*sqrt(2)).
         if prev_action is not None and self.cfg.smooth_weight > 0.0:
-            prev = torch.as_tensor(np.asarray(prev_action), dtype=torch.float32)
+            prev = torch.as_tensor(np.asarray(prev_action), dtype=torch.float32,
+                                   device=cands.device)
             dist = (cands[:, 0, :] - prev).norm(dim=1) / (2.0 * math.sqrt(2.0))
             score = score + self.cfg.smooth_weight * (1.0 - dist)
 
         # Policy prior from the slow layer (see ActorConfig.slow_prior_weight).
         if slow_action is not None and self.cfg.slow_prior_weight > 0.0:
-            sa = torch.as_tensor(np.asarray(slow_action), dtype=torch.float32)
+            sa = torch.as_tensor(np.asarray(slow_action), dtype=torch.float32,
+                                 device=cands.device)
             dist = (cands[:, 0, :] - sa).norm(dim=1) / (2.0 * math.sqrt(2.0))
             score = score + self.cfg.slow_prior_weight * (1.0 - dist)
 
@@ -229,7 +231,8 @@ class EFEActor:
         else:
             logits = score / max(self.cfg.temperature, 1e-6)
             logits = logits - logits.max()
-            probs = torch.softmax(logits, dim=0)
+            # Sample on CPU: the generator lives there, and N is tiny.
+            probs = torch.softmax(logits, dim=0).cpu()
             idx = int(torch.multinomial(probs, 1, generator=self._g))
 
         # MPC: select the FIRST action of the chosen sequence

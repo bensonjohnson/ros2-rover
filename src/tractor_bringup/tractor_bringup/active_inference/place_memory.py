@@ -30,14 +30,19 @@ import numpy as np
 
 class PlaceMemory:
     def __init__(self, n_freq: int = 10, match_thresh: float = 0.2,
-                 tau_s: float = 900.0, max_places: int = 64):
+                 tau_s: float = 900.0, max_places: int = 64,
+                 time_fn=time.monotonic):
+        # time_fn: clock for the presence-decay. The rover uses wall time;
+        # a faster-than-realtime simulator must pass its own sim clock or the
+        # 15-min decay runs against the wrong timescale.
         self.n_freq = int(n_freq)
         self.match_thresh = float(match_thresh)
         self.tau_s = float(tau_s)
         self.max_places = int(max_places)
+        self._time_fn = time_fn
         self._fps: list[np.ndarray] = []     # unit-norm fingerprints
         self._weights: list[float] = []      # seconds of presence, decaying
-        self._last = time.monotonic()
+        self._last = self._time_fn()
         self.novelty = 1.0                   # of the most recent update
 
     def fingerprint(self, scan) -> np.ndarray:
@@ -61,7 +66,7 @@ class PlaceMemory:
         1.0 = nothing remembered looks like this (a new room);
         0.0 = dead match for a recently-occupied place.
         """
-        now = time.monotonic()
+        now = self._time_fn()
         dt = max(0.0, now - self._last)
         self._last = now
 
