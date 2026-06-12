@@ -79,8 +79,11 @@ control before trusting a brain from here on the rover.
 ## Picking the transfer brain by data
 
 Training drops numbered snapshots under `<out-dir>/snapshots/` every
-`--snapshot-every` batch ticks (default 10k). Score them with a frozen
-eval in houses no training run has seen:
+`--snapshot-every` batch ticks (default 10k), and **automatically** ends
+the run with a frozen eval of all snapshots in unseen houses, copying the
+winner to `<out-dir>/best_pnn_brain.pt` (+ slow layer) with the table in
+`eval_results.json` — that's the file to scp to the rover. Opt out with
+`--no-eval-after`, or re-run/extend the sweep by hand:
 
 ```bash
 python3 -m pnn_sim.eval_checkpoints sim_out_batched/snapshots/*.pt
