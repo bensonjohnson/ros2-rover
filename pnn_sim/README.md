@@ -39,9 +39,42 @@ python3 -m pnn_sim.train_sim --ticks 650000 --workers 16
 - `--switch-world-every 27000`: new house every ~30 sim-minutes (default).
 - `--load ~/.ros/pnn_brain.pt`: continue from the rover's brain.
 - `--device cuda`: runs the brain on GPU. Measured **slower** than CPU for
-  the per-tick ≤82-dim tensors (kernel-launch overhead dominates); CPU +
-  workers is the throughput path. The flag exists for experiments.
+  the per-tick ≤82-dim tensors (kernel-launch overhead dominates); for
+  single-stream, CPU + workers is the throughput path. To use a GPU
+  properly, see batched mode below.
 - `--freeze`: evaluate without learning.
+
+## Batched mode — one brain, B worlds (the GPU path)
+
+```bash
+python3 -m pnn_sim.train_batched --envs 256 --ticks 100000   # --device cuda default
+```
+
+`pnn_sim/batched/` reimplements the world model, EFE actor, and slow layer
+with a batch dimension: **shared weights, per-env recurrent state and
+behavior, local PC updates averaged over the batch each tick**. Same
+stationary point as the reference rules, a B-sample gradient estimate
+instead of 1 — and tensors wide enough that the GPU finally pays.
+
+- Measured (AMD V620, ROCm): ~2,800 env-ticks/s at `--envs 256` (~190×
+  realtime into ONE brain) vs ~370 batched on CPU. Going to 1024 envs gets
+  slightly *slower* — the numpy raycaster becomes the bottleneck, so ~256
+  is the sweet spot until the env moves to torch too.
+- `--lr-scale`: the batch-averaged gradient is ~√B less noisy; 2–4 is
+  worth trying for faster settling.
+- No sequence replay in this mode (B fresh streams replace it); experience
+  jsonl is logged for `--log-envs` streams (default 1) so sleep mode still
+  works.
+- `pnn_sim/batched/verify.py` asserts numerical equivalence against the
+  reference modules (infer, learn, actor, preprocessing, dynamics, gate) —
+  run it after touching either implementation.
+- Checkpoints are the same schema; `--load ~/.ros/pnn_brain.pt` to start
+  from the rover's brain, and the output loads on the rover unchanged.
+
+Caveat: batch-averaged learning is a (principled) departure from the
+single-stream online rule the hyperparameters were tuned on — treat the
+first long runs as experiments, and compare against a single-stream
+control before trusting a brain from here on the rover.
 
 Only `numpy` and `torch` are imported (plus the brain modules); on the
 Spark, just `rsync` this repo (or only `pnn_sim/` + `src/tractor_bringup/`)
