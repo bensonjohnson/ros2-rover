@@ -47,6 +47,9 @@ def main():
                     "across the batch (0 = never)")
     ap.add_argument("--load", default="",
                     help="existing pnn_brain.pt to continue from")
+    ap.add_argument("--snapshot-every", type=int, default=10_000,
+                    help="batch ticks between numbered snapshots under "
+                    "<out-dir>/snapshots/ for eval_checkpoints (0 = off)")
     ap.add_argument("--out-dir", default="sim_out_batched")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--action-scale", type=float, default=0.6)
@@ -64,7 +67,8 @@ def main():
     trainer = BatchedTrainer(BatchedTrainConfig(
         envs=args.envs, device=args.device, lr_scale=args.lr_scale,
         switch_world_every=args.switch_world_every,
-        load_path=args.load, out_dir=args.out_dir, seed=args.seed,
+        load_path=args.load, snapshot_every=args.snapshot_every,
+        out_dir=args.out_dir, seed=args.seed,
         action_scale=args.action_scale, torch_threads=args.torch_threads,
         learn=not args.freeze, log_envs=args.log_envs,
     ))

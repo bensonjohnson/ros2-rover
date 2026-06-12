@@ -82,6 +82,7 @@ class BatchedTrainConfig:
     out_dir: str = "sim_out_batched"
     load_path: str = ""
     save_interval_s: float = 60.0
+    snapshot_every: int = 0         # batch ticks; 0 = no numbered snapshots
     log_envs: int = 1
     experience_log_max_mb: float = 256.0
 
@@ -180,6 +181,19 @@ class BatchedTrainer:
         if self.slow is not None:
             self.slow.save(self.slow_model_path)
 
+    def snapshot(self):
+        """Numbered checkpoint pair for later frozen-eval comparison."""
+        snap_dir = os.path.join(self.cfg.out_dir, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        sd = self.model.state_dict()
+        sd["action_scale"] = self.cfg.action_scale
+        path = os.path.join(snap_dir, f"pnn_brain_step{self._step:08d}.pt")
+        torch.save(sd, path)
+        if self.slow is not None:
+            self.slow.save(os.path.join(
+                snap_dir, f"pnn_brain_slow_step{self._step:08d}.pt"))
+        return path
+
     def _log_experience(self, obs_np: np.ndarray, act_prev: np.ndarray):
         for i in range(len(self._exp_files)):
             if self._exp_files[i] is None:
@@ -263,11 +277,15 @@ class BatchedTrainer:
             td_precision=cfg.td_precision if td is not None else 0.0)
         self._F = float(F.mean())
         self._err = float(obs_err.mean())
+        self.last_obs_err = obs_err          # [B], for per-env eval metrics
 
-        # 2. Learn — ONE shared update from B streams.
+        # 2. Learn — ONE shared update from B streams. learn() advances the
+        #    recurrent state, so frozen evals must advance it explicitly.
         if cfg.learn:
             self.model.learn(z, self.last_action, o_t,
                              lr_scale=cfg.lr_scale)
+        else:
+            self.model.z_prev = z.detach().clone()
 
         # 3. Action per env: persist / gate-drop / batched select.
         held_fwd = self.held_raw.sum(axis=1) > 0.0
@@ -313,6 +331,9 @@ class BatchedTrainer:
 
         self._step += 1
         self.sim_time += self.tick_period
+        if self.cfg.snapshot_every > 0 \
+                and self._step % self.cfg.snapshot_every == 0:
+            self.snapshot()
         self.save()
 
     # ------------------------------------------------------------------

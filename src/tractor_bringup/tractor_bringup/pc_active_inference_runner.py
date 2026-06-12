@@ -471,9 +471,14 @@ class PCActiveInferenceRunner(Node):
             td_target=self.slow.td_target if self.slow is not None else None,
             td_precision=self.td_precision)
 
-        # 2. Learn (pure PC local update) before moving on.
+        # 2. Learn (pure PC local update) before moving on. learn() is what
+        #    advances the recurrent state, so a frozen brain (learn:=false)
+        #    must advance it explicitly or it perceives every tick from a
+        #    zero context (same pattern as SlowLayer.tick).
         if self.do_learn:
             self.model.learn(z, self.last_action, o_t)
+        else:
+            self.model.z_prev = z.detach().clone()
 
         # 3. Choose an action. A live controller (shadow teleop) overrides the
         #    actor — the human drives, the brain watches and learns from the

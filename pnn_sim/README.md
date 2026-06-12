@@ -76,6 +76,27 @@ single-stream online rule the hyperparameters were tuned on — treat the
 first long runs as experiments, and compare against a single-stream
 control before trusting a brain from here on the rover.
 
+## Picking the transfer brain by data
+
+Training drops numbered snapshots under `<out-dir>/snapshots/` every
+`--snapshot-every` batch ticks (default 10k). Score them with a frozen
+eval in houses no training run has seen:
+
+```bash
+python3 -m pnn_sim.eval_checkpoints sim_out_batched/snapshots/*.pt
+```
+
+Every checkpoint sees the same unseen worlds and noise streams, so the
+columns are directly comparable: `err_early` (how fast a frozen brain
+makes sense of a novel house), `err_late` (settled prediction quality),
+`stops/h` / `coll/h` (gate pressure and gate failures), `rooms` / `dist_m`
+(exploration actually happening). Stop training when these flatten between
+snapshots; transfer the suggested pick (or your own read of the columns).
+
+Note: frozen mode advances the recurrent state explicitly (learn() is what
+normally advances it) — this fix also applies to `learn:=false` eval on
+the rover runner.
+
 Only `numpy` and `torch` are imported (plus the brain modules); on the
 Spark, just `rsync` this repo (or only `pnn_sim/` + `src/tractor_bringup/`)
 and run.

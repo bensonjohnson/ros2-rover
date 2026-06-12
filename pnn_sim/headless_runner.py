@@ -324,9 +324,12 @@ class SimBrainRunner:
             td_precision=cfg.td_precision)
         self._last_F, self._last_err = F, obs_err
 
-        # 2. Learn.
+        # 2. Learn. learn() advances the recurrent state, so a frozen brain
+        #    must advance it explicitly (same pattern as SlowLayer.tick).
         if cfg.learn:
             self.model.learn(z, self.last_action, o_t)
+        else:
+            self.model.z_prev = z.detach().clone()
 
         # 3. Action: persist / gate-drop / select — runner logic verbatim
         #    (minus teleop: there is no human in the loop here).
