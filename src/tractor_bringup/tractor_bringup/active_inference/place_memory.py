@@ -32,7 +32,7 @@ class PlaceMemory:
     def __init__(self, n_freq: int = 10, match_thresh: float = 0.35,
                  tau_s: float = 900.0, max_places: int = 64,
                  time_fn=time.monotonic, shape_weight: float = 1.0,
-                 fam_scale_s: float = 20.0):
+                 fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6):
         # time_fn: clock for the presence-decay. The rover uses wall time;
         # a faster-than-realtime simulator must pass its own sim clock or the
         # 15-min decay runs against the wrong timescale.
@@ -51,6 +51,13 @@ class PlaceMemory:
         # this many seconds of accumulated presence, so entering a new room
         # yields a SUSTAINED (learnable) novelty signal instead of a
         # single-tick spike that is extinguished the moment it is stored.
+        # fp_ema_tau_s: temporal smoothing of the fingerprint before matching.
+        # Real lidar fingerprints jitter ~5x more than sim per scan (rotation,
+        # dropouts), which over-segments one room into phantom places. EMA-ing
+        # the FINGERPRINT (not the raw scan — |FFT| is rotation-invariant, so
+        # smoothing it doesn't blur angular structure while spinning) over
+        # ~tau seconds knocks that per-scan noise down by ~sqrt(N), so a
+        # stationary/rotating rover stays one place. 0 disables.
         self.n_freq = int(n_freq)
         self.match_thresh = float(match_thresh)
         self.tau_s = float(tau_s)
@@ -58,6 +65,8 @@ class PlaceMemory:
         self._time_fn = time_fn
         self.shape_weight = float(shape_weight)
         self.fam_scale_s = float(fam_scale_s)
+        self.fp_ema_tau_s = float(fp_ema_tau_s)
+        self._fp_ema: np.ndarray | None = None
         self._fps: list[np.ndarray] = []     # unit-norm fingerprints
         self._weights: list[float] = []      # seconds of presence, decaying
         self._last = self._time_fn()
@@ -97,6 +106,14 @@ class PlaceMemory:
                 self._weights = [self._weights[i] for i in keep]
 
         fp = self.fingerprint(scan)
+        # Temporal denoise (rotation-invariant domain) before matching.
+        if self.fp_ema_tau_s > 0.0:
+            if self._fp_ema is None:
+                self._fp_ema = fp.copy()
+            else:
+                a = min(1.0, dt / self.fp_ema_tau_s)
+                self._fp_ema += a * (fp - self._fp_ema)
+            fp = self._fp_ema.copy()    # stored downstream; don't alias the EMA
         if not self._fps:
             self._fps.append(fp)
             self._weights.append(max(dt, 0.1))
@@ -137,4 +154,5 @@ class PlaceMemory:
         """Forget everything (rover picked up / moved to a new building)."""
         self._fps.clear()
         self._weights.clear()
+        self._fp_ema = None
         self.novelty = 1.0
