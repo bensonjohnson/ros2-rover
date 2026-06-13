@@ -76,9 +76,11 @@ def eval_checkpoint(path: str, args) -> dict:
     dist = np.zeros(B)
 
     for t in range(args.ticks):
-        px, py = trainer.env.x.copy(), trainer.env.y.copy()
+        px = trainer.env.x.cpu().numpy().copy()
+        py = trainer.env.y.cpu().numpy().copy()
         trainer.tick()
-        dist += np.hypot(trainer.env.x - px, trainer.env.y - py)
+        dist += np.hypot(trainer.env.x.cpu().numpy() - px,
+                         trainer.env.y.cpu().numpy() - py)
         err = trainer.last_obs_err.cpu().numpy()
         if t < early_ticks:
             err_sum_early += err
@@ -92,7 +94,7 @@ def eval_checkpoint(path: str, args) -> dict:
         "err_late": float(err_sum_late.mean()) / (args.ticks - late_from),
         "stops_h": trainer.gate.stops / B / sim_hours,
         "coll_h": trainer._collisions / B / sim_hours,
-        "rooms": float(np.mean([p.n_places() for p in trainer.place])),
+        "rooms": float(trainer.place.n_places().float().mean()),
         "dist_m": float(dist.mean()),
     }
 

@@ -28,13 +28,13 @@ import torch
 
 from tractor_bringup.active_inference.pc_world_model import PCConfig
 from tractor_bringup.active_inference.efe_actor import ActorConfig
-from tractor_bringup.active_inference.place_memory import PlaceMemory
 from tractor_bringup.active_inference.slow_layer import SlowLayerConfig
 
 from ..rover import RoverConfig
 from ..safety_gate import GateConfig
 from .model import BatchedPCWorldModel, BatchedEFEActor, BatchedSlowLayer
 from .env import BatchedEnv, BatchedGate, batched_preprocess
+from .place import BatchedPlaceMemory
 
 
 @dataclass
@@ -107,8 +107,9 @@ class BatchedTrainer:
         self.tick_period = 1.0 / cfg.control_rate_hz
         self.sim_time = 0.0
 
-        self.env = BatchedEnv(B, cfg.rover, seed=cfg.seed)
-        self.gate = BatchedGate(cfg.gate, B, time_fn=lambda: self.sim_time)
+        self.env = BatchedEnv(B, cfg.rover, seed=cfg.seed, device=cfg.device)
+        self.gate = BatchedGate(cfg.gate, B, time_fn=lambda: self.sim_time,
+                                device=cfg.device)
 
         self.model = BatchedPCWorldModel(PCConfig(
             obs_dim=self.obs_dim, latent_dim=cfg.latent_dim,
@@ -140,9 +141,8 @@ class BatchedTrainer:
                 seed=cfg.seed,
             ), batch=B, device=cfg.device)
 
-        self.place = [PlaceMemory(time_fn=lambda: self.sim_time)
-                      for _ in range(B)]
-        self.nov_ema = np.ones(B, dtype=np.float32)
+        self.place = BatchedPlaceMemory(B, device=cfg.device)
+        self.nov_ema = torch.ones(B, device=self.device)
 
         self.last_action = torch.zeros(B, 2, device=self.device)
         self.exec_action = np.zeros((B, 2), dtype=np.float32)
@@ -223,50 +223,49 @@ class BatchedTrainer:
                 % cfg.switch_world_every == 0
             if due.any():
                 self.env.switch_world(due)
-                for b in np.flatnonzero(due):
-                    self.place[b].clear()
-                    self.nov_ema[b] = 1.0
+                idx = torch.from_numpy(np.flatnonzero(due)).to(self.device)
+                self.place.clear(idx)
+                self.nov_ema[idx] = 1.0
                 if self.slow is not None:
-                    self.slow.reset_env(torch.from_numpy(
-                        np.flatnonzero(due)).to(self.device))
+                    self.slow.reset_env(idx)
 
-        # --- sense ---
-        ranges = self.env.scan()                       # [B, beams]
+        # --- sense (device-resident: raycast, binning, gate) ---
+        ranges = self.env.scan()                       # [B, beams] device
         scan72 = batched_preprocess(ranges, self.env.angle_min,
                                     self.env.angle_increment,
                                     num_bins=cfg.num_bins,
                                     max_range=cfg.max_range)
         self.gate.process_scan(ranges, self.env.angle_min,
                                self.env.angle_increment)
-        hold = self.gate.front_blocked                 # [B] bool
+        hold = self.gate.front_blocked                 # [B] bool, device
+        hold_np = hold.cpu().numpy()
 
-        # --- interoceptive novelty (per-env PlaceMemory, cheap on CPU) ---
-        nov_raw = np.fromiter(
-            (self.place[b].update(scan72[b]) for b in range(B)),
-            dtype=np.float32, count=B)
+        # --- interoceptive novelty (batched place memory, on device) ---
+        nov_raw = self.place.update(scan72, self.tick_period)
         alpha = min(1.0, self.tick_period
                     / max(cfg.novelty_ema_tau_s, self.tick_period))
         self.nov_ema += alpha * (nov_raw - self.nov_ema)
+        nov = self.nov_ema
 
         # --- observation [B, obs_dim], reference layout/normalization ---
         e = self.env
-        proprio = np.stack([
-            np.clip(0.5 + 0.5 * e.wheel_l / 8.0, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.wheel_r / 8.0, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.rng.normal(0, e.cfg.gyro_noise_std, B) / 2.5, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.rng.normal(0, e.cfg.gyro_noise_std, B) / 2.5, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.yaw_rate / 2.5, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.accel[:, 0] / 19.6, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.accel[:, 1] / 19.6, 0.0, 1.0),
-            np.clip(0.5 + 0.5 * e.accel[:, 2] / 19.6, 0.0, 1.0),
-        ], axis=1).astype(np.float32)
-        intero = np.stack([hold.astype(np.float32), self.nov_ema], axis=1)
-        obs_np = np.concatenate([scan72, proprio, intero], axis=1)
+        proprio = torch.stack([
+            (0.5 + 0.5 * e.wheel_l / 8.0).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.wheel_r / 8.0).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.noise(e.cfg.gyro_noise_std) / 2.5).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.noise(e.cfg.gyro_noise_std) / 2.5).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.yaw_rate / 2.5).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.accel[:, 0] / 19.6).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.accel[:, 1] / 19.6).clamp(0.0, 1.0),
+            (0.5 + 0.5 * e.accel[:, 2] / 19.6).clamp(0.0, 1.0),
+        ], dim=1)
+        intero = torch.stack([hold.float(), nov], dim=1)
+        o_t = torch.cat([scan72, proprio, intero], dim=1)
 
-        o_t = torch.from_numpy(obs_np).to(self.device)
         act_prev = self.last_action.cpu().numpy()
         if self.cfg.log_envs > 0:
-            self._log_experience(obs_np, act_prev)
+            self._log_experience(
+                o_t[:len(self._exp_files)].cpu().numpy(), act_prev)
 
         # 1. Infer (slow top-down prior masked by per-env warmup).
         td = None
@@ -289,7 +288,7 @@ class BatchedTrainer:
 
         # 3. Action per env: persist / gate-drop / batched select.
         held_fwd = self.held_raw.sum(axis=1) > 0.0
-        self.persist[hold & (self.persist > 0) & held_fwd] = 0
+        self.persist[hold_np & (self.persist > 0) & held_fwd] = 0
         redecide = self.persist <= 0
 
         slow_act = slow_warm = None
@@ -300,7 +299,7 @@ class BatchedTrainer:
             self.model, z,
             prev_action=torch.from_numpy(self.held_raw).to(self.device),
             slow_action=slow_act, slow_warm=slow_warm,
-            forward_blocked=torch.from_numpy(hold).to(self.device))
+            forward_blocked=hold)
         action_np = action.cpu().numpy()
         self.held_raw = np.where(redecide[:, None], action_np, self.held_raw)
         self.persist = np.where(redecide,
@@ -312,7 +311,8 @@ class BatchedTrainer:
             + (1.0 - cfg.action_smoothing) * self.exec_action
         self.exec_action = a
         out = np.clip(a * cfg.action_scale, -1.0, 1.0)
-        gated = self.gate.gate(out)
+        gated = self.gate.gate(
+            torch.from_numpy(out.astype(np.float32)).to(self.device))
         self.env.step(gated, self.tick_period)
         self._collisions += int(self.env.collided.sum())
 
@@ -322,9 +322,9 @@ class BatchedTrainer:
         if self.slow is not None:
             self.slow.accumulate(
                 torch.tanh(z),
-                torch.from_numpy(scan72.mean(axis=1)).to(self.device),
+                scan72.mean(dim=1),
                 (obs_err / math.sqrt(self.obs_dim)).clamp(max=1.0),
-                torch.from_numpy(self.nov_ema).to(self.device),
+                nov,
                 self.last_action)
             if self.slow.ready():
                 self.slow.tick(learn=cfg.learn, lr_scale=cfg.lr_scale)

@@ -56,10 +56,16 @@ behavior, local PC updates averaged over the batch each tick**. Same
 stationary point as the reference rules, a B-sample gradient estimate
 instead of 1 — and tensors wide enough that the GPU finally pays.
 
-- Measured (AMD V620, ROCm): ~2,800 env-ticks/s at `--envs 256` (~190×
-  realtime into ONE brain) vs ~370 batched on CPU. Going to 1024 envs gets
-  slightly *slower* — the numpy raycaster becomes the bottleneck, so ~256
-  is the sweet spot until the env moves to torch too.
+- The whole pipeline is device-resident: raycast, scan binning, safety
+  gate, place memory, and brain all run as batched tensor math on the GPU
+  (plain CUDA/HIP arithmetic — RT cores are not involved or needed).
+- Measured (AMD V620, ROCm): ~22,500 env-ticks/s at `--envs 8192`
+  (~1,500× realtime into ONE brain), ~11,700 at 256. Throughput keeps
+  scaling with batch size; big-B/short-tick runs (e.g. `--envs 8192
+  --ticks 1200`) are a legitimate regime — few, very low-variance updates.
+  Watch the eval's `rooms`/`dist_m` columns there: 1,200 ticks is only 80
+  sim-seconds of *temporal* depth per env, thin for the slow layer and the
+  novelty-appetite loop even when prediction error looks great.
 - `--lr-scale`: the batch-averaged gradient is ~√B less noisy; 2–4 is
   worth trying for faster settling.
 - No sequence replay in this mode (B fresh streams replace it); experience

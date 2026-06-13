@@ -137,7 +137,8 @@ def test_preprocess():
     rng = np.random.default_rng(17)
     ranges = rng.uniform(0.03, 12.0, size=(B, 360)).astype(np.float32)
     ranges[rng.random((B, 360)) < 0.05] = np.inf
-    out = batched_preprocess(ranges, 0.0, 2 * np.pi / 360)
+    out = batched_preprocess(torch.from_numpy(ranges), 0.0,
+                             2 * np.pi / 360).numpy()
     for b in range(B):
         ref = preprocess_scan(ranges[b], 0.0, 2 * np.pi / 360)
         assert np.allclose(ref, out[b], atol=1e-6), f"preprocess differs env {b}"
@@ -159,17 +160,20 @@ def test_rover_dynamics():
     bat.x[0], bat.y[0], bat.theta[0] = world.start_pose
     bat.v_left[0] = bat.v_right[0] = bat._prev_v[0] = 0.0
 
+    # The torch env is float32 (GPU-friendly; fp64 is crippled on most
+    # GPUs), the scalar sim float64 — tolerances reflect that.
     for _ in range(50):
         cmd = rng.uniform(-1, 1, size=2)
         ref.step(cmd[0], cmd[1], 1 / 15)
-        cmds = np.tile(cmd, (3, 1))
+        cmds = torch.from_numpy(np.tile(cmd, (3, 1)).astype(np.float32))
         bat.step(cmds, 1 / 15)
-        assert abs(ref.x - bat.x[0]) < 1e-9 and abs(ref.y - bat.y[0]) < 1e-9, \
-            "pose diverged"
-        assert abs(ref.yaw_rate - bat.yaw_rate[0]) < 1e-9, "gyro diverged"
+        assert abs(ref.x - float(bat.x[0])) < 1e-4 \
+            and abs(ref.y - float(bat.y[0])) < 1e-4, "pose diverged"
+        assert abs(ref.yaw_rate - float(bat.yaw_rate[0])) < 1e-4, \
+            "gyro diverged"
     r_ref, _, _ = ref.scan()
-    r_bat = bat.scan()
-    assert np.allclose(r_ref, r_bat[0], atol=1e-4), "lidar diverged"
+    r_bat = bat.scan().numpy()
+    assert np.allclose(r_ref, r_bat[0], atol=1e-2), "lidar diverged"
     print("ok  rover dynamics + lidar match the scalar sim")
 
 
@@ -189,16 +193,47 @@ def test_gate():
             ranges[front] = rng.uniform(0.08, 0.18, size=8)
             ranges[-8:] = rng.uniform(0.08, 0.18, size=8)
         ref.process_scan(ranges, 0.0, inc)
-        bat.process_scan(np.tile(ranges, (2, 1)), 0.0, inc)
+        bat.process_scan(torch.from_numpy(np.tile(ranges, (2, 1))), 0.0, inc)
         assert ref.front_blocked == bool(bat.front_blocked[0]), \
             f"front_blocked diverged at scan {i}"
         cmd = rng.uniform(-1, 1, size=2)
         gl, gr = ref.gate(cmd[0], cmd[1])
-        gb = bat.gate(np.tile(cmd, (2, 1)))
-        assert abs(gl - gb[0, 0]) < 1e-9 and abs(gr - gb[0, 1]) < 1e-9, \
+        gb = bat.gate(torch.from_numpy(
+            np.tile(cmd, (2, 1)).astype(np.float32))).numpy()
+        assert abs(gl - gb[0, 0]) < 1e-6 and abs(gr - gb[0, 1]) < 1e-6, \
             f"gated cmd diverged at scan {i}: ({gl},{gr}) vs {gb[0]}"
         t["v"] += 1 / 15
     print("ok  safety gate state machine matches (300 scans)")
+
+
+def test_place_memory():
+    """Batched slot-array place memory vs the reference list version,
+    driven by the same scan stream at the sim's fixed dt."""
+    from tractor_bringup.active_inference.place_memory import PlaceMemory
+    from pnn_sim.batched.place import BatchedPlaceMemory
+
+    dt = 1.0 / 15.0
+    t = {"v": 0.0}
+    refs = [PlaceMemory(time_fn=lambda: t["v"]) for _ in range(3)]
+    bat = BatchedPlaceMemory(3, max_places=64)
+
+    rng = np.random.default_rng(31)
+    # Scan stream that revisits a few "rooms" so matching/reinforce/new
+    # paths all fire: blend between room prototypes with noise.
+    rooms = rng.uniform(0.2, 1.0, size=(5, 72)).astype(np.float32)
+    for i in range(400):
+        scans = np.stack([rooms[(i // 40 + b) % 5]
+                          + rng.normal(0, 0.01, 72).astype(np.float32)
+                          for b in range(3)])
+        t["v"] += dt
+        nov_ref = np.array([refs[b].update(scans[b]) for b in range(3)])
+        nov_bat = bat.update(torch.from_numpy(scans), dt).numpy()
+        assert np.allclose(nov_ref, nov_bat, atol=1e-5), \
+            f"novelty diverged at step {i}: {nov_ref} vs {nov_bat}"
+    for b in range(3):
+        assert refs[b].n_places() == int(bat.n_places()[b]), \
+            f"place count diverged env {b}"
+    print("ok  place memory matches (400 steps, revisits + new rooms)")
 
 
 def main():
@@ -210,6 +245,7 @@ def main():
     test_preprocess()
     test_rover_dynamics()
     test_gate()
+    test_place_memory()
     print("\nall equivalence tests passed")
 
 
