@@ -29,17 +29,28 @@ import numpy as np
 
 
 class PlaceMemory:
-    def __init__(self, n_freq: int = 10, match_thresh: float = 0.2,
+    def __init__(self, n_freq: int = 10, match_thresh: float = 0.35,
                  tau_s: float = 900.0, max_places: int = 64,
-                 time_fn=time.monotonic):
+                 time_fn=time.monotonic, shape_weight: float = 4.0,
+                 fam_scale_s: float = 20.0):
         # time_fn: clock for the presence-decay. The rover uses wall time;
         # a faster-than-realtime simulator must pass its own sim clock or the
         # 15-min decay runs against the wrong timescale.
+        # shape_weight: the FFT *shape* harmonics (room geometry) are tiny
+        # next to channel-0 mean openness (room size), so similarly-open
+        # rooms collapse onto one fingerprint. Scaling shape up lets the
+        # descriptor tell rooms apart by their wall layout, not just size.
+        # fam_scale_s: novelty of a matched place decays from 1 to 0 over
+        # this many seconds of accumulated presence, so entering a new room
+        # yields a SUSTAINED (learnable) novelty signal instead of a
+        # single-tick spike that is extinguished the moment it is stored.
         self.n_freq = int(n_freq)
         self.match_thresh = float(match_thresh)
         self.tau_s = float(tau_s)
         self.max_places = int(max_places)
         self._time_fn = time_fn
+        self.shape_weight = float(shape_weight)
+        self.fam_scale_s = float(fam_scale_s)
         self._fps: list[np.ndarray] = []     # unit-norm fingerprints
         self._weights: list[float] = []      # seconds of presence, decaying
         self._last = self._time_fn()
@@ -58,7 +69,7 @@ class PlaceMemory:
         s = np.asarray(scan, dtype=np.float64)
         m = float(s.mean())
         harm = np.abs(np.fft.rfft(s - m))[1:self.n_freq] / (s.size / 2.0)
-        return np.concatenate([[m], harm])
+        return np.concatenate([[m], self.shape_weight * harm])
 
     def update(self, scan) -> float:
         """Fold the current scan in; return place novelty in [0, 1].
@@ -96,6 +107,13 @@ class PlaceMemory:
             # slow appearance changes (doors opening, furniture moved).
             self._weights[i] += dt
             self._fps[i] = 0.98 * self._fps[i] + 0.02 * fp
+            # Sustained novelty: a place is still "new" until enough presence
+            # has accumulated there. A freshly-created room decays from ~1 to
+            # 0 over fam_scale_s; a place not visited lately (weight decayed)
+            # reads novel again — exactly "rooms I've been in lately".
+            fresh = float(np.clip(1.0 - self._weights[i] / self.fam_scale_s,
+                                  0.0, 1.0))
+            self.novelty = max(self.novelty, fresh)
         else:
             self._fps.append(fp)
             self._weights.append(max(dt, 0.1))

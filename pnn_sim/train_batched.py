@@ -82,6 +82,12 @@ def main():
                       "into new rooms")
     expl.add_argument("--target-novelty", type=float, default=0.8,
                       help="preferred place-novelty level in [0,1]")
+    expl.add_argument("--babble-eps0", type=float, default=0.4,
+                      help="initial motor-babbling probability per re-decision "
+                      "(forced forward/spin coverage; decays to 0; training "
+                      "only). 0 disables")
+    expl.add_argument("--babble-decay-ticks", type=int, default=30_000,
+                      help="batch ticks over which babbling decays to 0")
     ap.add_argument("--torch-threads", type=int, default=0,
                     help="torch CPU threads (0 = torch default; set for "
                     "--device cpu runs)")
@@ -113,6 +119,8 @@ def main():
         novelty_pref_weight=args.novelty_pref_weight,
         hold_pref_weight=args.hold_pref_weight,
         target_novelty=args.target_novelty,
+        babble_eps0=args.babble_eps0,
+        babble_decay_ticks=args.babble_decay_ticks,
     ))
 
     max_ticks = args.ticks if args.ticks is not None \

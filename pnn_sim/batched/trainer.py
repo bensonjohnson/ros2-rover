@@ -81,6 +81,17 @@ class BatchedTrainConfig:
     seed: int = 0
     torch_threads: int = 0
 
+    # Motor babbling: a decaying forced-exploration schedule that breaks the
+    # chicken-and-egg of model-based exploration (the brain won't move to
+    # learn that moving is informative until it already knows that). Each
+    # re-decision, an env babbles with prob eps(t) = eps0*(1 - step/decay),
+    # executing a forward arc (or a spin when the gate blocks) instead of the
+    # actor's pick — so the transition model and the place memory see
+    # action-rich, varied-room data. Training-only (gated by `learn`); never
+    # affects eval or the rover. 0 = off.
+    babble_eps0: float = 0.4
+    babble_decay_ticks: int = 30_000
+
     switch_world_every: int = 27_000   # per env, staggered across the batch
     rover: RoverConfig = field(default_factory=RoverConfig)
     gate: GateConfig = field(default_factory=GateConfig)
@@ -149,6 +160,7 @@ class BatchedTrainer:
 
         self.place = BatchedPlaceMemory(B, device=cfg.device)
         self.nov_ema = torch.ones(B, device=self.device)
+        self._babble_rng = np.random.default_rng(cfg.seed + 12_345)
 
         self.last_action = torch.zeros(B, 2, device=self.device)
         self.exec_action = np.zeros((B, 2), dtype=np.float32)
@@ -307,6 +319,30 @@ class BatchedTrainer:
             slow_action=slow_act, slow_warm=slow_warm,
             forward_blocked=hold)
         action_np = action.cpu().numpy()
+
+        # Motor babbling: override the actor's pick for a decaying fraction of
+        # re-deciding envs (training only). Forward arc normally, spin when
+        # the gate blocks forward — coverage that feeds varied places/actions
+        # into learning. The executed (babbled) action is what flows into
+        # last_action and thus into the next tick's learn(), so the transition
+        # model sees the true action->effect.
+        if cfg.learn and cfg.babble_eps0 > 0.0:
+            eps = cfg.babble_eps0 * max(
+                0.0, 1.0 - self._step / max(1, cfg.babble_decay_ticks))
+            if eps > 0.0:
+                rng = self._babble_rng
+                bm = redecide & (rng.random(B) < eps)
+                if bm.any():
+                    f = rng.uniform(0.4, 1.0, B)
+                    d = rng.uniform(-0.4, 0.4, B)
+                    fwd = np.stack([f + d, f - d], axis=1)
+                    s = rng.uniform(0.5, 1.0, B) \
+                        * np.where(rng.random(B) < 0.5, 1.0, -1.0)
+                    spin = np.stack([s, -s], axis=1)
+                    bab = np.where(hold_np[:, None], spin, fwd)
+                    action_np = action_np.copy()
+                    action_np[bm] = np.clip(bab[bm], -1.0, 1.0)
+
         self.held_raw = np.where(redecide[:, None], action_np, self.held_raw)
         self.persist = np.where(redecide,
                                 max(1, cfg.action_persist) - 1,

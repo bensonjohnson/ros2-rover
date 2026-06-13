@@ -18,14 +18,17 @@ import torch
 
 class BatchedPlaceMemory:
     def __init__(self, batch: int, device: str = "cpu", n_freq: int = 10,
-                 match_thresh: float = 0.2, tau_s: float = 900.0,
-                 max_places: int = 64):
+                 match_thresh: float = 0.35, tau_s: float = 900.0,
+                 max_places: int = 64, shape_weight: float = 4.0,
+                 fam_scale_s: float = 20.0):
         self.B = batch
         self.device = torch.device(device)
         self.n_freq = n_freq
         self.match_thresh = match_thresh
         self.tau_s = tau_s
         self.P = max_places
+        self.shape_weight = shape_weight    # emphasize room SHAPE over size
+        self.fam_scale_s = fam_scale_s      # sustained-novelty timescale (s)
         F = 1 + (n_freq - 1)            # mean + harmonics 1..n_freq-1
         self.F = F
         self._fps = torch.zeros(batch, max_places, F, device=self.device)
@@ -37,7 +40,7 @@ class BatchedPlaceMemory:
         m = s.mean(dim=1, keepdim=True)
         harm = torch.fft.rfft(s - m, dim=1).abs()[:, 1:self.n_freq] \
             / (s.shape[1] / 2.0)
-        return torch.cat([m, harm], dim=1).float()
+        return torch.cat([m, self.shape_weight * harm], dim=1).float()
 
     @torch.no_grad()
     def update(self, scan: torch.Tensor, dt: float) -> torch.Tensor:
@@ -67,6 +70,10 @@ class BatchedPlaceMemory:
         mb = ar[matched]
         self._w[mb, mi] += dt
         self._fps[mb, mi] = 0.98 * self._fps[mb, mi] + 0.02 * fp[matched]
+        # Sustained novelty: matched place stays novel until fam_scale_s of
+        # presence accumulates there (see reference PlaceMemory.update).
+        fresh = (1.0 - self._w[mb, mi] / self.fam_scale_s).clamp(0.0, 1.0)
+        novelty[mb] = torch.maximum(novelty[mb], fresh)
 
         # New place: first free slot, else evict the lightest.
         new = ~matched
