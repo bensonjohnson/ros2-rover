@@ -62,6 +62,12 @@ class BatchedTrainConfig:
     target_novelty: float = 0.8
     novelty_pref_weight: float = 2.0
     hold_pref_weight: float = 2.0
+    # Confidence gate: the epistemic (curiosity) term is scaled by
+    # min(1, epi_max / epi_floor), so once the ensemble agrees (disagreement
+    # < epi_floor) curiosity gates OFF and the brain coasts on pragmatic
+    # preference alone — the dark-room trap in a familiar room. LOWER this to
+    # keep curiosity alive longer for a confident brain.
+    epi_floor: float = 0.02
     novelty_ema_tau_s: float = 1.0
     slow_enabled: bool = True
     slow_latent_dim: int = 16
@@ -125,7 +131,7 @@ class BatchedTrainer:
             num_bins=cfg.num_bins, use_proprio=True, n_intero=self.N_INTERO,
             target_novelty=cfg.target_novelty,
             novelty_pref_weight=cfg.novelty_pref_weight,
-            hold_pref_weight=cfg.hold_pref_weight,
+            hold_pref_weight=cfg.hold_pref_weight, epi_floor=cfg.epi_floor,
             slow_prior_weight=cfg.slow_prior_weight, seed=cfg.seed,
         ), batch=B, device=cfg.device)
         self.slow: BatchedSlowLayer | None = None

@@ -61,6 +61,27 @@ def main():
     ap.add_argument("--out-dir", default="sim_out_batched")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--action-scale", type=float, default=0.6)
+
+    # --- exploration / curiosity knobs (defaults match the rover) ----------
+    # These exist to fight the dark-room collapse (a brain that drives
+    # prediction error to zero by not moving). See pnn_sim/README.md.
+    expl = ap.add_argument_group("exploration drive")
+    expl.add_argument("--epi-floor", type=float, default=0.02,
+                      help="ensemble-disagreement level at which curiosity is "
+                      "at full weight; LOWER (e.g. 0.005) keeps a confident "
+                      "brain curious instead of coasting (dark room)")
+    expl.add_argument("--forward-bias", type=float, default=0.3,
+                      help="actor pragmatic_weight (0=pure curiosity, "
+                      "1=pure preference)")
+    expl.add_argument("--novelty-pref-weight", type=float, default=2.0,
+                      help="appetite for predicted-novel places; RAISE to pull "
+                      "harder toward new rooms")
+    expl.add_argument("--hold-pref-weight", type=float, default=2.0,
+                      help="aversion to tripping the safety gate; LOWER (e.g. "
+                      "1.0) lets the brain approach doorways/walls to cross "
+                      "into new rooms")
+    expl.add_argument("--target-novelty", type=float, default=0.8,
+                      help="preferred place-novelty level in [0,1]")
     ap.add_argument("--torch-threads", type=int, default=0,
                     help="torch CPU threads (0 = torch default; set for "
                     "--device cpu runs)")
@@ -88,6 +109,10 @@ def main():
         out_dir=args.out_dir, seed=args.seed,
         action_scale=args.action_scale, torch_threads=args.torch_threads,
         learn=not args.freeze, log_envs=args.log_envs,
+        epi_floor=args.epi_floor, forward_bias=args.forward_bias,
+        novelty_pref_weight=args.novelty_pref_weight,
+        hold_pref_weight=args.hold_pref_weight,
+        target_novelty=args.target_novelty,
     ))
 
     max_ticks = args.ticks if args.ticks is not None \
@@ -159,6 +184,17 @@ def _eval_and_pick_best(args):
         eval_seed=args.eval_seed, device=args.device,
         work_dir=os.path.join(args.out_dir, "eval_tmp")))
 
+    results_path = os.path.join(args.out_dir, "eval_results.json")
+    if best < 0:
+        # Dark-room collapse: do NOT write best_ — there's nothing safe to
+        # transfer. The table (with the loud warning) is already printed.
+        with open(results_path, "w") as f:
+            json.dump({"results": results, "best": None,
+                       "verdict": "no_transferable_brain"}, f, indent=2)
+        print(f"\nno best_pnn_brain.pt written; table -> eval_results.json",
+              flush=True)
+        return
+
     src = results[best]["ckpt"]
     dst = os.path.join(args.out_dir, "best_pnn_brain.pt")
     shutil.copy2(src, dst)
@@ -166,7 +202,7 @@ def _eval_and_pick_best(args):
     if os.path.exists(slow_src):
         shutil.copy2(slow_src,
                      os.path.join(args.out_dir, "best_pnn_brain_slow.pt"))
-    with open(os.path.join(args.out_dir, "eval_results.json"), "w") as f:
+    with open(results_path, "w") as f:
         json.dump({"results": results, "best": src}, f, indent=2)
     print(f"\nbest brain -> {dst} (from {os.path.basename(src)}); "
           f"table -> eval_results.json", flush=True)

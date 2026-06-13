@@ -106,6 +106,41 @@ Note: frozen mode advances the recurrent state explicitly (learn() is what
 normally advances it) — this fix also applies to `learn:=false` eval on
 the rover runner.
 
+### Dark-room collapse (read this before transferring)
+
+The eval **gates on exploration as a hard requirement, not just one term in
+a weighted sum**, and will refuse to pick a brain — printing `*** NO
+TRANSFERABLE BRAIN ***` and writing no `best_pnn_brain.pt` — when every
+trained snapshot explores *less* than the untrained baseline (the earliest
+snapshot). That is the classic active-inference failure: a brain minimizes
+prediction error by **not moving** (a stationary rover has perfectly
+predictable sensory input), so `err_late` looks great while the brain is
+useless on the rover. Watch the `Δdist` column — negative across the board
+is the tell, and `rooms` stuck at 1 (never crossed a doorway) confirms it.
+
+If you hit this, the drive to move is losing to the drive to predict. The
+knobs, in rough order of leverage (defaults match the rover; all are
+`train_batched` flags now):
+
+- `--epi-floor` (default 0.02): curiosity is scaled by
+  `min(1, disagreement/epi_floor)`, so once the transition ensemble agrees
+  it gates OFF and the brain coasts on preference alone. **Lower it**
+  (e.g. `0.005`) to keep a confident brain curious. Biggest single lever.
+- `--hold-pref-weight` (default 2.0): aversion to tripping the safety gate.
+  Equal to the novelty appetite, it pins the brain to open space away from
+  walls — i.e. away from the doorways it must cross. **Lower** (e.g. `1.0`).
+- `--novelty-pref-weight` (default 2.0): appetite for predicted-novel
+  places. **Raise** (e.g. `3.0`) to pull harder toward new rooms.
+- `--lr-scale`: high values drive the model to over-confidence fast, which
+  gates curiosity off early. Keep at `1` while debugging the collapse.
+- Fewer `--envs` (e.g. `2048`) buys more weight-update steps *and* longer
+  per-env lifetimes per wall-hour — more temporal depth for exploration to
+  pay off — at some cost to gradient batch size.
+
+The acceptance test for a transferable brain is "explores **more** than the
+untrained baseline," not "lowest err." Re-run, and only ship a snapshot the
+eval is willing to suggest.
+
 Only `numpy` and `torch` are imported (plus the brain modules); on the
 Spark, just `rsync` this repo (or only `pnn_sim/` + `src/tractor_bringup/`)
 and run.

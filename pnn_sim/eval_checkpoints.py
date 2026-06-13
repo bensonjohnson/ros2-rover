@@ -100,13 +100,28 @@ def eval_checkpoint(path: str, args) -> dict:
 
 
 def suggest(results: list[dict]) -> int:
-    """Composite: explore a lot, predict well, don't hit things.
+    """Pick the transfer brain — but ONLY among snapshots that actually
+    explore. Returns the chosen index, or -1 if nothing is transferable.
 
-    A metric only votes if its spread across checkpoints is meaningful
-    (>5% of its mean magnitude) — min-max normalization would otherwise
-    blow measurement noise up to a full point. Ties go to the lower
-    settled error.
+    The dark-room failure of frozen active inference is a brain that drives
+    its prediction error to zero by *not moving*: err_late looks great and
+    the brain is useless on the rover. err alone cannot catch this, so
+    exploration is a HARD GATE here, not just one term in a weighted sum.
+
+    Baseline = the earliest (least-trained) snapshot. A trained snapshot is
+    viable only if training did NOT suppress its exploration below that
+    baseline — it must cover at least as much ground (5% slack) OR discover
+    more rooms. If no trained snapshot clears that bar, the run collapsed
+    into the dark room and there is nothing safe to transfer (-1).
+
+    Among viable snapshots the composite still rewards exploring more and
+    predicting better; ties go to the lower settled error.
     """
+    base = results[0]                 # snapshots arrive sorted by step
+    base_dist = base["dist_m"]
+    base_rooms = base["rooms"]
+    tol = 0.05 * max(base_dist, 1e-9)
+
     def norm(key, invert=False):
         vals = np.array([r[key] for r in results], dtype=float)
         span = vals.max() - vals.min()
@@ -115,12 +130,26 @@ def suggest(results: list[dict]) -> int:
         n = (vals - vals.min()) / span
         return 1.0 - n if invert else n
 
+    # Exploration gate. The baseline (index 0) is the reference, not a
+    # candidate: it is excluded so the verdict reads "did *training* produce
+    # a brain that explores at least as much as the untrained one?"
+    viable = np.array([
+        (r["dist_m"] >= base_dist - tol) or (r["rooms"] > base_rooms)
+        for r in results])
+    viable[0] = False
+
     score = (norm("rooms") + norm("dist_m")
              + norm("err_late", invert=True) + norm("coll_h", invert=True))
-    for r, s in zip(results, score):
-        r["score"] = float(s)
+    for i, r in enumerate(results):
+        r["dist_gain"] = float(r["dist_m"] - base_dist)
+        r["viable"] = bool(viable[i])
+        r["score"] = float(score[i])
+
+    if not viable.any():
+        return -1                     # dark-room collapse — nothing to ship
     err = np.array([r["err_late"] for r in results])
-    order = np.lexsort((err, -score))           # max score, then min err
+    masked = np.where(viable, score, -np.inf)
+    order = np.lexsort((err, -masked))          # max viable score, then min err
     return int(order[0])
 
 
@@ -158,17 +187,38 @@ def run_eval(ckpts: list[str], args) -> tuple[list[dict], int]:
 
     best = suggest(results)
     hdr = (f"{'checkpoint':<42} {'err_early':>9} {'err_late':>8} "
-           f"{'stops/h':>8} {'coll/h':>7} {'rooms':>6} {'dist_m':>7} {'score':>6}")
+           f"{'stops/h':>8} {'coll/h':>7} {'rooms':>6} {'dist_m':>7} "
+           f"{'Δdist':>6} {'score':>6}")
     print("\n" + hdr)
     print("-" * len(hdr))
     for i, r in enumerate(results):
-        mark = "  <-- suggested" if i == best else ""
+        if i == best:
+            mark = "  <-- suggested"
+        elif i == 0:
+            mark = "  (baseline)"
+        elif not r.get("viable", True):
+            mark = "  (dark-room)"     # explored less than the baseline
+        else:
+            mark = ""
         print(f"{os.path.basename(r['ckpt']):<42} {r['err_early']:>9.3f} "
               f"{r['err_late']:>8.3f} {r['stops_h']:>8.1f} {r['coll_h']:>7.1f} "
-              f"{r['rooms']:>6.1f} {r['dist_m']:>7.1f} {r['score']:>6.2f}{mark}")
+              f"{r['rooms']:>6.1f} {r['dist_m']:>7.1f} {r['dist_gain']:>+6.1f} "
+              f"{r['score']:>6.2f}{mark}")
+
+    if best < 0:
+        print("\n*** NO TRANSFERABLE BRAIN ***")
+        print("Every trained snapshot explored LESS than the untrained "
+              "baseline (the Δdist column is negative across the board) — "
+              "this is the dark-room collapse: the brain minimized prediction "
+              "error by not moving. err_late looking good is the trap.")
+        print("Do NOT transfer any of these. Retune the exploration drive and "
+              "re-run (see pnn_sim/README.md 'Dark-room collapse').")
+        return results, best
+
     print(f"\nsuggested transfer brain: {results[best]['ckpt']}")
-    print("(score = normalized rooms + dist + low err_late + low coll/h; "
-          "sanity-check the raw columns before trusting it)")
+    print("(viable snapshots only — those exploring >= the untrained "
+          "baseline; score = normalized rooms + dist + low err_late + low "
+          "coll/h. Sanity-check the raw columns before trusting it.)")
     return results, best
 
 
