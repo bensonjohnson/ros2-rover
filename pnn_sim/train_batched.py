@@ -36,8 +36,16 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--envs", type=int, default=256)
-    ap.add_argument("--ticks", type=int, default=100_000,
-                    help="batch ticks; sim experience = ticks * envs / 15Hz")
+    ap.add_argument("--ticks", type=int, default=None,
+                    help="batch ticks; sim experience = ticks * envs / 15Hz "
+                    "(default 100k, or unlimited when --wall-hours is set)")
+    ap.add_argument("--wall-hours", type=float, default=0.0,
+                    help="stop after this much wall time (0 = tick-gated "
+                    "only); the post-run eval adds a few minutes on top")
+    ap.add_argument("--snapshot-every-min", type=float, default=0.0,
+                    help="wall minutes between snapshots (0 = tick-based "
+                    "--snapshot-every); use with --wall-hours so the eval "
+                    "field doesn't depend on hardware speed")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--lr-scale", type=float, default=1.0,
                     help="scale on the batch-averaged updates (the gradient "
@@ -73,18 +81,35 @@ def main():
     trainer = BatchedTrainer(BatchedTrainConfig(
         envs=args.envs, device=args.device, lr_scale=args.lr_scale,
         switch_world_every=args.switch_world_every,
-        load_path=args.load, snapshot_every=args.snapshot_every,
+        load_path=args.load,
+        # Wall-based snapshots replace tick-based ones when requested.
+        snapshot_every=(0 if args.snapshot_every_min > 0
+                        else args.snapshot_every),
         out_dir=args.out_dir, seed=args.seed,
         action_scale=args.action_scale, torch_threads=args.torch_threads,
         learn=not args.freeze, log_envs=args.log_envs,
     ))
 
+    max_ticks = args.ticks if args.ticks is not None \
+        else (sys.maxsize if args.wall_hours > 0 else 100_000)
+    deadline = time.time() + args.wall_hours * 3600 \
+        if args.wall_hours > 0 else None
+
     t0 = time.time()
     last = t0
+    last_snap = t0
     try:
-        for _ in range(args.ticks):
+        for _ in range(max_ticks):
             trainer.tick()
             now = time.time()
+            if deadline is not None and now >= deadline:
+                print(f"wall-time limit reached "
+                      f"({args.wall_hours:.2f} h)", flush=True)
+                break
+            if args.snapshot_every_min > 0 \
+                    and now - last_snap >= args.snapshot_every_min * 60:
+                last_snap = now
+                trainer.snapshot()
             if now - last >= args.report_s:
                 last = now
                 s = trainer.status()
@@ -99,7 +124,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if args.snapshot_every > 0 and trainer.status()["step"] > 0:
+        snapshots_on = args.snapshot_every > 0 or args.snapshot_every_min > 0
+        if snapshots_on and trainer.status()["step"] > 0:
             trainer.snapshot()        # final state always joins the lineup
         trainer.close()
         s = trainer.status()
@@ -109,7 +135,7 @@ def main():
               f"{wall / 60.0:.1f} min wall; brain -> {trainer.model_path}",
               flush=True)
 
-    if not args.no_eval_after and args.snapshot_every > 0:
+    if not args.no_eval_after and snapshots_on:
         _eval_and_pick_best(args)
 
 
