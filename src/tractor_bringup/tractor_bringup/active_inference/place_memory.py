@@ -31,15 +31,22 @@ import numpy as np
 class PlaceMemory:
     def __init__(self, n_freq: int = 10, match_thresh: float = 0.35,
                  tau_s: float = 900.0, max_places: int = 64,
-                 time_fn=time.monotonic, shape_weight: float = 4.0,
+                 time_fn=time.monotonic, shape_weight: float = 1.0,
                  fam_scale_s: float = 20.0):
         # time_fn: clock for the presence-decay. The rover uses wall time;
         # a faster-than-realtime simulator must pass its own sim clock or the
         # 15-min decay runs against the wrong timescale.
-        # shape_weight: the FFT *shape* harmonics (room geometry) are tiny
-        # next to channel-0 mean openness (room size), so similarly-open
-        # rooms collapse onto one fingerprint. Scaling shape up lets the
-        # descriptor tell rooms apart by their wall layout, not just size.
+        # shape_weight: emphasis on the FFT *shape* harmonics (room geometry)
+        # vs channel-0 mean openness (room size). Tempting to raise so
+        # similarly-open rooms separate by wall layout — and that works in
+        # clean sim — but on the REAL rover's lidar the shape harmonics are
+        # noise-dominated: within ONE room the fingerprint jitters (rotation +
+        # dropouts) ~5x more than in sim, and scaling shape up scales that
+        # noise too, shattering one room into many phantom places (novelty
+        # then false-fires while stationary, killing the drive to move).
+        # Keep at 1.0: lean on the stable mean-openness channel. Real
+        # room-to-room separation needs better-than-FFT-openness features or
+        # multi-room real calibration; see [[pnn-sim-harness]].
         # fam_scale_s: novelty of a matched place decays from 1 to 0 over
         # this many seconds of accumulated presence, so entering a new room
         # yields a SUSTAINED (learnable) novelty signal instead of a

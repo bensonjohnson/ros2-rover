@@ -19,7 +19,7 @@ import torch
 class BatchedPlaceMemory:
     def __init__(self, batch: int, device: str = "cpu", n_freq: int = 10,
                  match_thresh: float = 0.35, tau_s: float = 900.0,
-                 max_places: int = 64, shape_weight: float = 4.0,
+                 max_places: int = 64, shape_weight: float = 1.0,
                  fam_scale_s: float = 20.0):
         self.B = batch
         self.device = torch.device(device)
