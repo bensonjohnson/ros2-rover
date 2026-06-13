@@ -39,11 +39,22 @@ import torch
 
 def make_eval_args(envs=64, ticks=4500, early_ticks=900,
                    eval_seed=777_000, device="cuda",
-                   work_dir="/tmp/pnn_eval"):
-    """Namespace for eval_checkpoint() — lets train_batched reuse the eval."""
+                   work_dir="/tmp/pnn_eval", epi_floor=0.02, forward_bias=0.3,
+                   novelty_pref_weight=2.0, hold_pref_weight=2.0,
+                   target_novelty=0.8):
+    """Namespace for eval_checkpoint() — lets train_batched reuse the eval.
+
+    The exploration knobs are ACTOR (runtime policy) config, not saved in the
+    checkpoint, so the eval has to be told which policy to run under — and it
+    must match what you'll deploy on the rover, or the eval predicts the wrong
+    behavior. train_batched passes its training knobs through here."""
     return argparse.Namespace(envs=envs, ticks=ticks, early_ticks=early_ticks,
                               eval_seed=eval_seed, device=device,
-                              work_dir=work_dir)
+                              work_dir=work_dir, epi_floor=epi_floor,
+                              forward_bias=forward_bias,
+                              novelty_pref_weight=novelty_pref_weight,
+                              hold_pref_weight=hold_pref_weight,
+                              target_novelty=target_novelty)
 
 
 def eval_checkpoint(path: str, args) -> dict:
@@ -59,6 +70,13 @@ def eval_checkpoint(path: str, args) -> dict:
         load_path=path,
         out_dir=os.path.join(args.work_dir, "eval_tmp"),
         log_envs=0, save_interval_s=1e12, snapshot_every=0,
+        # Run under the deployment policy, not hardcoded defaults (these are
+        # actor knobs, not in the checkpoint).
+        epi_floor=getattr(args, "epi_floor", 0.02),
+        forward_bias=getattr(args, "forward_bias", 0.3),
+        novelty_pref_weight=getattr(args, "novelty_pref_weight", 2.0),
+        hold_pref_weight=getattr(args, "hold_pref_weight", 2.0),
+        target_novelty=getattr(args, "target_novelty", 0.8),
     ))
     # The trainer auto-loads <out_dir>/pnn_brain_slow.pt; for snapshots the
     # slow weights live next to the fast ones under the step-tagged name.
@@ -168,6 +186,13 @@ def main():
                     help="world seed; keep it far from training seeds")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--work-dir", default="/tmp/pnn_eval")
+    # Deployment policy to evaluate under (must match the rover's ActorConfig
+    # and what training used — these are runtime knobs, not in the checkpoint).
+    ap.add_argument("--epi-floor", type=float, default=0.02)
+    ap.add_argument("--forward-bias", type=float, default=0.3)
+    ap.add_argument("--novelty-pref-weight", type=float, default=2.0)
+    ap.add_argument("--hold-pref-weight", type=float, default=2.0)
+    ap.add_argument("--target-novelty", type=float, default=0.8)
     args = ap.parse_args()
 
     ckpts = sorted(c for c in args.checkpoints

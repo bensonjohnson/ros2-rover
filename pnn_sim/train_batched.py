@@ -182,7 +182,13 @@ def _eval_and_pick_best(args):
     results, best = run_eval(snaps, make_eval_args(
         envs=args.eval_envs, ticks=args.eval_ticks,
         eval_seed=args.eval_seed, device=args.device,
-        work_dir=os.path.join(args.out_dir, "eval_tmp")))
+        work_dir=os.path.join(args.out_dir, "eval_tmp"),
+        # Evaluate under the SAME policy the run trained with (and the one
+        # you'd then set on the rover) — not the hardcoded defaults.
+        epi_floor=args.epi_floor, forward_bias=args.forward_bias,
+        novelty_pref_weight=args.novelty_pref_weight,
+        hold_pref_weight=args.hold_pref_weight,
+        target_novelty=args.target_novelty))
 
     results_path = os.path.join(args.out_dir, "eval_results.json")
     if best < 0:
