@@ -115,19 +115,28 @@ def main():
     ap.add_argument("--lr", type=float, default=0.02)
     ap.add_argument("--n-feat", type=int, default=1024)
     ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--save", default="", help="path to save the trained policy")
+    ap.add_argument("--load", default="", help="skip training, load this policy")
     args = ap.parse_args()
 
     in_dim = 3 * P * P
     policy = PCPolicy(in_dim, n_feat=args.n_feat, lr=args.lr, seed=0)
 
-    print(f"training (teacher drives, student imitates) "
-          f"{args.epochs} epochs x {args.train_envs} envs x "
-          f"{args.train_ticks} ticks ...", flush=True)
-    for ep in range(args.epochs):
-        frac, vis, tot = rollout(args.train_envs, args.train_ticks, policy,
-                                 "teacher", seed=1000 + ep * 13, train=True)
-        print(f"  epoch {ep}: teacher rooms✓={vis:.2f}/{tot:.2f} "
-              f"(frac {frac:.2f})  |Wr|={policy.Wr.norm():.3f}", flush=True)
+    if args.load:
+        policy.load(args.load)
+        print(f"loaded policy from {args.load} (skipping training)", flush=True)
+    else:
+        print(f"training (teacher drives, student imitates) "
+              f"{args.epochs} epochs x {args.train_envs} envs x "
+              f"{args.train_ticks} ticks ...", flush=True)
+        for ep in range(args.epochs):
+            frac, vis, tot = rollout(args.train_envs, args.train_ticks, policy,
+                                     "teacher", seed=1000 + ep * 13, train=True)
+            print(f"  epoch {ep}: teacher rooms✓={vis:.2f}/{tot:.2f} "
+                  f"(frac {frac:.2f})  |Wr|={policy.Wr.norm():.3f}", flush=True)
+        if args.save:
+            policy.save(args.save)
+            print(f"saved policy -> {args.save}", flush=True)
 
     print("\neval in UNSEEN houses (seed 777000):", flush=True)
     tf, tv, tt = rollout(args.eval_envs, args.eval_ticks, FrontierExplorer,

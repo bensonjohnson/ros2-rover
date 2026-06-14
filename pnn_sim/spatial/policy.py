@@ -97,6 +97,16 @@ class PCPolicy:
         out = f @ self.Wr.t()                               # [B,2] = (cos,sin)
         return torch.atan2(out[:, 1], out[:, 0]), f
 
+    def save(self, path):
+        torch.save({"Wf": self.Wf.cpu(), "bf": self.bf.cpu(),
+                    "Wr": self.Wr.cpu(), "lr": self.lr}, path)
+
+    def load(self, path):
+        sd = torch.load(path, map_location="cpu", weights_only=False)
+        self.Wf = sd["Wf"].to(self.device)
+        self.bf = sd["bf"].to(self.device)
+        self.Wr = sd["Wr"].to(self.device)
+
     @torch.no_grad()
     def learn(self, feats, target_bearing, valid):
         """Local delta-rule update toward (cos,sin) of the teacher bearing.
