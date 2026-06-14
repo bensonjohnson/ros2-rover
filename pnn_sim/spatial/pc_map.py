@@ -84,6 +84,10 @@ class PCSpatialMap:
         s_star = (rng / self.res).round().long().clamp(0, S - 1)        # [B,K]
         hitmask = ranges < self.max_range
 
+        # The map-inference gradient is a single-layer local error signal;
+        # enable grad locally so the explorer can call this under no_grad.
+        cm = torch.enable_grad()
+        cm.__enter__()
         for _ in range(self.infer_iters):
             M = self.M.detach().requires_grad_(True)
             p = torch.sigmoid(M).view(B, -1)
@@ -102,6 +106,7 @@ class PCSpatialMap:
             loss = nll.sum()
             loss.backward()
             self.M = self.M - self.infer_lr * M.grad
+        cm.__exit__(None, None, None)
         # Readable metric: |observed openness - expected free distance|.
         with torch.no_grad():
             p = torch.sigmoid(self.M).view(B, -1)
@@ -112,36 +117,41 @@ class PCSpatialMap:
             pred_open = (reach.sum(dim=2) * self.res / self.max_range).clamp(0, 1)
             self.last_err = float((rng / self.max_range - pred_open).abs().mean())
 
-        # Confidence: count visits to the cells each beam actually traversed
-        # (up to its hit), so unobserved cells stay at logit~0 = unknown.
+        # Coverage: mark every cell each beam reached, INCLUDING its hit cell
+        # (step index <= s_star), so "unknown" means genuinely never sensed —
+        # not merely "logit still weak". Frontiers then sit at the real edge of
+        # explored space (doorways, unseen rooms), not in an under-confidence
+        # halo around the robot. The learned logit classifies free vs occupied;
+        # this count classifies explored vs unexplored.
         with torch.no_grad():
-            travelled = inb & (self._steps[None, None, :]
-                               < (ranges.clamp(0, self.max_range)[:, :, None]))
-            cidx = lin[travelled]
+            step_idx = torch.arange(S, device=self.device)
+            observed = inb & (step_idx[None, None, :] <= s_star[:, :, None])
+            cidx = lin[observed]
             if cidx.numel():
                 bb = torch.arange(B, device=self.device)[:, None, None] \
-                    .expand(B, K, S)[travelled]
+                    .expand(B, K, S)[observed]
                 self.cnt.view(-1).scatter_add_(
                     0, bb * self.n * self.n + cidx,
                     torch.ones(cidx.numel(), device=self.device))
 
     # ---- read-outs (mirror BatchedOccMap so validation/exploration share) ---
-    # Confidence IS |logit|: a cell is unknown until inference has pushed it
-    # toward free (logit<0) or occupied (logit>0). conf_thresh separates the
-    # explained cells from never-explained (frontier) ones.
-    conf_thresh = 0.4
+    # Explored = sensor coverage (cnt>0); the learned logit gives occupancy
+    # among explored cells (sign), unknown = never sensed.
+
+    def seen(self):
+        return self.cnt > 0
 
     def occupied(self):
-        return self.M > self.conf_thresh
+        return (self.cnt > 0) & (self.M > 0.0)
 
     def free(self):
-        return self.M < -self.conf_thresh
+        return (self.cnt > 0) & (self.M <= 0.0)
 
     def confidence(self):
         return self.M.abs()
 
     def frontier(self):
-        unk = self.M.abs() <= self.conf_thresh
+        unk = self.cnt == 0
         un = torch.zeros_like(unk)
         un[:, :-1] |= unk[:, 1:]; un[:, 1:] |= unk[:, :-1]
         un[:, :, :-1] |= unk[:, :, 1:]; un[:, :, 1:] |= unk[:, :, :-1]

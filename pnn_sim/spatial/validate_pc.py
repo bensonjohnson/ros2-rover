@@ -86,7 +86,7 @@ def main():
     go, gf, gs = (geo.occupied().cpu().numpy(), geo.free().cpu().numpy(),
                   geo.seen.cpu().numpy())
     po, pf = pc.occupied().cpu().numpy(), pc.free().cpu().numpy()
-    ps = (pc.M.abs().cpu().numpy() > pc.conf_thresh)
+    ps = pc.seen().cpu().numpy()
     occ_iou, free_iou = [], []
     for b in range(B):
         co = gs[b] & ps[b]
@@ -100,7 +100,7 @@ def main():
           f"pc={ps.reshape(B, -1).sum(1).mean():.0f}")
 
     b = 0
-    seen = pc.M.abs().cpu().numpy()[b] > 0.2
+    seen = pc.seen().cpu().numpy()[b]
     ys, xs = np.where(seen)
     if len(xs):
         i0, i1, j0, j1 = ys.min(), ys.max(), xs.min(), xs.max()
