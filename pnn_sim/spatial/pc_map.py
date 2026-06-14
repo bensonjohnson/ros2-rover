@@ -45,7 +45,11 @@ class PCSpatialMap:
         self.beam_stride = beam_stride
         self.M = torch.zeros(batch, size, size, device=self.device)   # logits
         self.cnt = torch.zeros(batch, size, size, device=self.device)  # obs count
-        self.origin = None
+        # Per-env odom-frame origin (world coord of cell 0), pinned at each
+        # env's first observation and re-pinnable per-env on reset — so an env
+        # that switches house (or the rover after a lift) re-centres cleanly.
+        self.origin = torch.zeros(batch, 2, device=self.device)
+        self._pinned = torch.zeros(batch, dtype=torch.bool, device=self.device)
         self._steps = torch.arange(0, max_range, res, device=self.device)
         self.last_err = 0.0
 
@@ -65,8 +69,12 @@ class PCSpatialMap:
 
     def update(self, pos, heading, ranges, bearings):
         """One observation: settle the visible map cells to predict this scan."""
-        if self.origin is None:
-            self.origin = pos - (self.n // 2) * self.res
+        # Pin any not-yet-pinned env's origin at its current pose (centre cell).
+        need_pin = ~self._pinned
+        if bool(need_pin.any()):
+            self.origin = torch.where(
+                need_pin[:, None], pos - (self.n // 2) * self.res, self.origin)
+            self._pinned |= need_pin
         if self.beam_stride > 1:
             ranges = ranges[:, ::self.beam_stride]
             bearings = bearings[::self.beam_stride]
@@ -159,6 +167,7 @@ class PCSpatialMap:
 
     def reset(self, idx=None):
         if idx is None:
-            self.M.zero_(); self.cnt.zero_(); self.origin = None
+            self.M.zero_(); self.cnt.zero_(); self._pinned.zero_()
         else:
             self.M[idx] = 0.0; self.cnt[idx] = 0.0
+            self._pinned[idx] = False     # re-pin at the next observation
