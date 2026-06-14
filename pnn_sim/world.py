@@ -46,13 +46,24 @@ def _wall_with_door(x1, y1, x2, y2, door_at: float, door_w: float) -> list:
 
 class World:
     def __init__(self, segments: np.ndarray, bounds: tuple,
-                 start_pose: tuple):
+                 start_pose: tuple, partitions: list | None = None):
         self.segments = np.asarray(segments, dtype=np.float64)  # [M, 4]
         self.bounds = bounds                  # (xmin, ymin, xmax, ymax)
         self.start_pose = start_pose          # (x, y, theta)
+        # Internal walls as full-span partition lines ('v', x) / ('h', y).
+        # A point's room is which side of each it lies on — GROUND-TRUTH room
+        # labels for honest exploration metrics, independent of the lidar
+        # place sensor (which can't separate real rooms; see place_memory).
+        self.partitions = list(partitions or [])
         # Precompute segment pieces for the raycaster.
         self._a = self.segments[:, 0:2]                       # [M, 2]
         self._e = self.segments[:, 2:4] - self.segments[:, 0:2]
+
+    def room_id(self, x: float, y: float) -> tuple:
+        """Ground-truth room label of (x, y): which side of each internal
+        wall. Crossing a doorway flips one bit -> a distinct room."""
+        return tuple((x > pos) if kind == "v" else (y > pos)
+                     for kind, pos in self.partitions)
 
     # ------------------------------------------------------------------
 
@@ -97,6 +108,7 @@ def make_house(rng: np.random.Generator) -> World:
     ]
 
     # Internal walls (alternating orientation), each with a doorway.
+    partitions: list = []
     n_walls = int(rng.integers(1, 4))
     for i in range(n_walls):
         door_w = float(rng.uniform(0.7, 1.0))
@@ -104,10 +116,12 @@ def make_house(rng: np.random.Generator) -> World:
             x = float(rng.uniform(0.25 * W, 0.75 * W))
             segs += _wall_with_door(x, 0, x, H,
                                     float(rng.uniform(0.2, 0.8)), door_w)
+            partitions.append(("v", x))
         else:
             y = float(rng.uniform(0.25 * H, 0.75 * H))
             segs += _wall_with_door(0, y, W, y,
                                     float(rng.uniform(0.2, 0.8)), door_w)
+            partitions.append(("h", y))
 
     # Furniture boxes, kept off the walls a little.
     for _ in range(int(rng.integers(3, 9))):
@@ -118,7 +132,8 @@ def make_house(rng: np.random.Generator) -> World:
         segs += _box_segments(cx, cy, bw, bh,
                               angle=float(rng.uniform(0, np.pi))).tolist()
 
-    world = World(np.asarray(segs), (0.0, 0.0, W, H), (0.0, 0.0, 0.0))
+    world = World(np.asarray(segs), (0.0, 0.0, W, H), (0.0, 0.0, 0.0),
+                  partitions=partitions)
 
     # Start pose: rejection-sample a spot with decent clearance.
     for _ in range(200):

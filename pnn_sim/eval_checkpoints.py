@@ -92,13 +92,31 @@ def eval_checkpoint(path: str, args) -> dict:
     err_sum_late = np.zeros(B)
     late_from = args.ticks // 2
     dist = np.zeros(B)
+    # GROUND-TRUTH rooms: which map-partition region each env occupies, counted
+    # distinctly per env. Independent of the lidar place sensor (which can't
+    # separate real rooms) — the honest exploration metric.
+    worlds = getattr(trainer.env, "_worlds", None)
+    visited = [set() for _ in range(B)]
+    total_rooms = np.zeros(B)
+    if worlds is not None:
+        for b in range(B):
+            xmin, ymin, xmax, ymax = worlds[b].bounds
+            gx = np.linspace(xmin + 0.4, xmax - 0.4, 24)
+            gy = np.linspace(ymin + 0.4, ymax - 0.4, 24)
+            rr = {worlds[b].room_id(float(x), float(y)) for x in gx for y in gy
+                  if worlds[b].clearance(float(x), float(y)) > 0.2}
+            total_rooms[b] = max(1, len(rr))
 
     for t in range(args.ticks):
         px = trainer.env.x.cpu().numpy().copy()
         py = trainer.env.y.cpu().numpy().copy()
         trainer.tick()
-        dist += np.hypot(trainer.env.x.cpu().numpy() - px,
-                         trainer.env.y.cpu().numpy() - py)
+        nx = trainer.env.x.cpu().numpy()
+        ny = trainer.env.y.cpu().numpy()
+        dist += np.hypot(nx - px, ny - py)
+        if worlds is not None and t % 3 == 0:        # rooms change slowly
+            for b in range(B):
+                visited[b].add(worlds[b].room_id(float(nx[b]), float(ny[b])))
         err = trainer.last_obs_err.cpu().numpy()
         if t < early_ticks:
             err_sum_early += err
@@ -113,6 +131,8 @@ def eval_checkpoint(path: str, args) -> dict:
         "stops_h": trainer.gate.stops / B / sim_hours,
         "coll_h": trainer._collisions / B / sim_hours,
         "rooms": float(trainer.place.n_places().float().mean()),
+        "rooms_truth": float(np.mean([len(v) for v in visited])) if worlds else 0.0,
+        "rooms_total": float(total_rooms.mean()),
         "dist_m": float(dist.mean()),
     }
 
@@ -211,10 +231,10 @@ def run_eval(ckpts: list[str], args) -> tuple[list[dict], int]:
         results.append(eval_checkpoint(c, args))
 
     best = suggest(results)
-    hdr = (f"{'checkpoint':<42} {'err_early':>9} {'err_late':>8} "
-           f"{'stops/h':>8} {'coll/h':>7} {'rooms':>6} {'dist_m':>7} "
-           f"{'Δdist':>6} {'score':>6}")
+    hdr = (f"{'checkpoint':<42} {'err_late':>8} {'stops/h':>8} {'coll/h':>7} "
+           f"{'rooms✓':>6} {'/tot':>5} {'dist_m':>7} {'Δdist':>6} {'score':>6}")
     print("\n" + hdr)
+    print("(rooms✓ = GROUND-TRUTH map rooms visited per env, /tot = reachable)")
     print("-" * len(hdr))
     for i, r in enumerate(results):
         if i == best:
@@ -225,9 +245,10 @@ def run_eval(ckpts: list[str], args) -> tuple[list[dict], int]:
             mark = "  (dark-room)"     # explored less than the baseline
         else:
             mark = ""
-        print(f"{os.path.basename(r['ckpt']):<42} {r['err_early']:>9.3f} "
+        print(f"{os.path.basename(r['ckpt']):<42} "
               f"{r['err_late']:>8.3f} {r['stops_h']:>8.1f} {r['coll_h']:>7.1f} "
-              f"{r['rooms']:>6.1f} {r['dist_m']:>7.1f} {r['dist_gain']:>+6.1f} "
+              f"{r.get('rooms_truth', 0):>6.2f} {r.get('rooms_total', 0):>5.1f} "
+              f"{r['dist_m']:>7.1f} {r['dist_gain']:>+6.1f} "
               f"{r['score']:>6.2f}{mark}")
 
     if best < 0:
