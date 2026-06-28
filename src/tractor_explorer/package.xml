@@ -4,7 +4,7 @@
   <name>tractor_explorer</name>
   <version>0.1.0</version>
   <description>Deep Exploration Network — autonomous home mapping with RKNN NPU inference, lidar SLAM, and remote GPU training</description>
-  <maintainer email="rover@local">rover</maintainer>
+  <maintainer email="rover@rover.local">rover</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
