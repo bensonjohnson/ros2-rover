@@ -5,26 +5,22 @@ Trains a DeepExplorerNetwork policy using TD-MPC2-style objective (temporal
 difference learning with a learned world model + actor-critic). Designed for
 GPUs (CUDA or ROCm).
 
-Architecture:
-  - World model: learns to predict next latent state and reward given (z, a)
-  - Actor (policy): learns to maximize discounted sum of rewards
-  - Value (critic): learns to estimate state value (TD(lambda))
-
 Training flow:
-  1. Rover sends experience chunks via ZMQ or saved locally and rsynced
+  1. Rover sends experience chunks via ZMQ PUSH -> server PULL (port 5557)
   2. Server loads chunks into a replay buffer
   3. Every N steps: sample batch, train world model, actor, critic
-  4. Periodically export ONNX, convert to RKNN, ship back to rover
+  4. Every 60s: save checkpoint; every 5min: export ONNX -> RKNN
+  5. Server PUBLISHES new RKNN model to rover via ZMQ (port 5558)
+  6. Rover receives model and hot-reloads it automatically
+
+No manual scp needed. Everything over ZMQ.
 
 Usage:
-  # Start server (waits for rover connection or local data)
+  # Start server (default: auto-save and auto-export)
   python3 explorer_trainer.py --port 5557 --checkpoint-dir ./checkpoints
 
-  # Train from local data (pre-collected chunks)
+  # Train from local data
   python3 explorer_trainer.py --data-dir ~/.ros/explorer_chunks/ --checkpoint-dir ./checkpoints
-
-  # Full training + export pipeline
-  python3 explorer_trainer.py --port 5557 --export --export-dir ./export
 """
 
 import os
@@ -383,6 +379,7 @@ class ExplorerTrainer:
         # ZMQ
         self.zmq_ctx = None
         self.pull_sock = None
+        self.pub_sock = None
 
         # Dashboard
         self._start_dashboard()
@@ -424,22 +421,33 @@ class ExplorerTrainer:
         print(f"Checkpoint saved: {latest} (v{self.model_version}, step={self.step})")
 
     def _export(self):
-        """Export the encoder + actor to ONNX, then RKNN."""
+        """Export encoder+actor to ONNX -> RKNN, then broadcast to rover via ZMQ."""
         from tractor_explorer.convert_to_rknn import export_onnx, convert_to_rknn
 
         onnx_path = Path(self.args.checkpoint_dir) / "explorer_model.onnx"
         rknn_path = Path(self.args.checkpoint_dir) / "explorer_model.rknn"
 
-        # Build a standalone inference network with current weights
         inference_net = DeepExplorerNetwork(self.cfg)
         inference_net.load_state_dict(self.agent.encoder.state_dict(), strict=False)
         inference_net.eval()
 
         export_onnx(str(onnx_path), str(onnx_path), self.cfg)
         convert_to_rknn(str(onnx_path), str(rknn_path))
-
         self.model_version += 1
         print(f"Exported model v{self.model_version}: {rknn_path}")
+
+        # Broadcast RKNN to rover over ZMQ PUB
+        if rknn_path.exists() and hasattr(self, 'pub_sock') and self.pub_sock is not None:
+            try:
+                with open(rknn_path, 'rb') as f:
+                    data = f.read()
+                topic = f"model_v{self.model_version}".encode()
+                self.pub_sock.send_multipart([topic, data], flags=zmq.NOBLOCK)
+                print(f"  -> Broadcast to rover: {len(data)} bytes")
+            except zmq.Again:
+                print("  -> PUB would block, skipped")
+            except Exception as e:
+                print(f"  -> PUB failed: {e}")
 
     def _start_dashboard(self):
         """Minimal HTTP dashboard."""
@@ -589,9 +597,14 @@ class ExplorerTrainer:
         if not HAS_ZMQ or not self.args.port:
             return
         self.zmq_ctx = zmq.asyncio.Context()
+        # PULL: receive chunks from rover
         self.pull_sock = self.zmq_ctx.socket(zmq.PULL)
         self.pull_sock.bind(f"tcp://*:{self.args.port}")
-        print(f"ZMQ PULL on tcp://*:{self.args.port}")
+        print(f"ZMQ PULL on tcp://*:{self.args.port} (rover -> server)")
+        # PUB: broadcast updated models to rover
+        self.pub_sock = self.zmq_ctx.socket(zmq.PUB)
+        self.pub_sock.bind(f"tcp://*:{self.args.pub_port}")
+        print(f"ZMQ PUB  on tcp://*:{self.args.pub_port} (server -> rover)")
 
     async def consume_chunks(self):
         if not self.pull_sock:
@@ -669,8 +682,8 @@ class ExplorerTrainer:
                               f"actor={losses['actor']:.4f} "
                               f"critic={losses['critic']:.4f}")
 
-                # Export periodically
-                if self.args.export and time.time() - last_export > self.args.export_interval:
+                # Export periodically (always on — auto-ships to rover via ZMQ)
+                if time.time() - last_export > self.args.export_interval:
                     self._export()
                     last_export = time.time()
 
@@ -687,8 +700,7 @@ class ExplorerTrainer:
             print("\nShutting down...")
         finally:
             self._save_checkpoint()
-            if self.args.export:
-                self._export()
+            self._export()
 
 
 def main():
@@ -700,10 +712,10 @@ def main():
                         help="Load pre-collected chunks from directory")
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints")
     parser.add_argument("--log-dir", type=str, default="./logs")
-    parser.add_argument("--export", action="store_true",
-                        help="Periodically export ONNX/RKNN")
+    parser.add_argument("--pub-port", type=int, default=5558,
+                        help="ZMQ PUB port for broadcasting models to rover")
     parser.add_argument("--export-interval", type=int, default=300,
-                        help="Seconds between exports")
+                        help="Seconds between ONNX/RKNN exports and broadcast")
     parser.add_argument("--dashboard-port", type=int, default=8085)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seq-len", type=int, default=32)

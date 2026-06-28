@@ -139,6 +139,15 @@ class ExplorerRunner(Node):
             self.get_logger().warn(
                 "ZMQ not available — install pyzmq and msgpack for chunk streaming")
 
+        # Model receiver: subscribe to server's ZMQ PUB for updated RKNN models
+        self._model_recv_thread: Optional[threading.Thread] = None
+        if self.server_addr and HAS_ZMQ and self.zmq_ctx is not None:
+            # Derive PUB port from PUSH address (e.g. tcp://1.2.3.4:5557 -> tcp://1.2.3.4:5558)
+            parts = self.server_addr.rsplit(":", 1)
+            if len(parts) == 2:
+                pub_addr = f"{parts[0]}:{int(parts[1]) + 1}"
+                self._start_model_receiver(pub_addr)
+
         # ---- Build network config ----
         self.net_cfg = ExplorerConfig(
             lidar_bins=self.lidar_bins,
@@ -413,6 +422,58 @@ class ExplorerRunner(Node):
         return crop.astype(np.float32)
 
     # ---- Random exploration (data collection without trained model) ----
+
+    # ---- Model receiver (ZMQ SUB from training server) ----
+
+    def _start_model_receiver(self, pub_addr: str):
+        """Start background thread that listens for model updates from server."""
+        self._model_recv_thread = threading.Thread(
+            target=self._model_receiver_loop, args=(pub_addr,), daemon=True)
+        self._model_recv_thread.start()
+        self.get_logger().info(f"Model receiver listening on {pub_addr}")
+
+    def _model_receiver_loop(self, pub_addr: str):
+        """Connect to server's ZMQ PUB, receive RKNN models, hot-reload."""
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.SUB)
+        sock.setsockopt_string(zmq.SUBSCRIBE, "model_v")  # subscribe to model topics
+        sock.setsockopt(zmq.RCVTIMEO, 5000)  # 5s timeout so we can check shutdown
+        sock.connect(pub_addr)
+        while True:
+            try:
+                topic, data = sock.recv_multipart()
+                version = topic.decode()
+                path = os.path.expanduser("~/.ros/explorer_brain.rknn")
+                # Write atomically
+                tmp = path + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, path)
+                self.get_logger().info(
+                    f"Received {version} ({len(data)} bytes) -> {path}")
+                # Hot-reload into RKNN runtime
+                if self.rknn is not None:
+                    self.rknn.release()
+                    self.rknn = None
+                if HAS_RKNN:
+                    try:
+                        new_rknn = RKNNLite()
+                        if new_rknn.load_rknn(path) == 0:
+                            new_rknn.init_runtime(core_mask=0b0011)
+                            self.rknn = new_rknn
+                            self.get_logger().info(
+                                f"Hot-reloaded RKNN model {version}")
+                    except Exception as e:
+                        self.get_logger().error(f"Hot-reload failed: {e}")
+                # Also save as .pt for PyTorch fallback
+                pt_path = os.path.expanduser("~/.ros/explorer_brain.pt")
+                if os.path.exists(pt_path):
+                    os.utime(pt_path, None)  # touch to mark as trained
+            except zmq.Again:
+                continue
+            except Exception as e:
+                self.get_logger().error(f"Model receiver error: {e}")
+                time.sleep(1.0)
 
     def _random_explore_action(self):
         """Structured random exploration for data collection.
