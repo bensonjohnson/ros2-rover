@@ -541,8 +541,14 @@ class ExplorerTrainer:
         }
 
     def train_step(self) -> dict:
-        if len(self.replay) < self.args.batch_size * self.args.seq_len:
+        needed = self.args.batch_size * self.args.seq_len
+        if len(self.replay) < needed:
+            if len(self.replay) % 100 < 10 and len(self.replay) > 0:
+                pct = len(self.replay) / needed * 100
+                print(f"Buffering: {len(self.replay)}/{needed} steps ({pct:.0f}%) — need ~{(needed - len(self.replay)) // 64 + 1} more chunks")
             return {}
+        if self.update_count == 0:
+            print(f"\n=== TRAINING STARTED! {len(self.replay)} steps buffered ===\n")
 
         batch = self.replay.sample(self.args.batch_size)
         losses = self.compute_loss(batch)
@@ -601,7 +607,9 @@ class ExplorerTrainer:
                 n = len(chunk["action"])
                 self.replay.add_chunk(chunk)
                 self.step += n
-                print(f"Chunk: {n} steps (replay: {len(self.replay)})")
+                needed = self.args.batch_size * self.args.seq_len
+                pct = len(self.replay) / needed * 100 if needed > 0 else 0
+                print(f"Chunk received: {n} steps (replay: {len(self.replay)}/{needed}, {pct:.0f}%)")
             except Exception as e:
                 print(f"ZMQ error: {e}")
                 await asyncio.sleep(1.0)
