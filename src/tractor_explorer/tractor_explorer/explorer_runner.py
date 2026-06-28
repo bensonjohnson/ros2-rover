@@ -464,9 +464,13 @@ class ExplorerRunner(Node):
         }
         L, R = strengths.get(self._rand_mode, (0.5, 0.5))
 
+        # Pre-scale by 1/action_scale so final output hits full motor range
+        scale = 1.0 / max(self.action_scale, 0.1)
+        L *= scale
+        R *= scale
         # Add jitter so the trajectory isn't perfectly repetitive
-        L += float(self._rand_rng.normal(0, 0.08))
-        R += float(self._rand_rng.normal(0, 0.08))
+        L += float(self._rand_rng.normal(0, 0.12))
+        R += float(self._rand_rng.normal(0, 0.12))
         action = np.clip([L, R], -1.0, 1.0).astype(np.float32)
 
         # Log mode changes occasionally
@@ -520,7 +524,6 @@ class ExplorerRunner(Node):
             # Check if model has meaningful weights (not fresh random)
             w = next(self.model.parameters())
             if w.abs().mean().item() < 0.01 and self._step < 500:
-                # Model is fresh/random — use structured random exploration instead
                 action_np, value_np = self._random_explore_action()
             else:
                 with torch.no_grad():
@@ -531,7 +534,6 @@ class ExplorerRunner(Node):
                 action_np = action_t[0].numpy()
                 value_np = float(value_t[0, 0])
         else:
-            # No model file at all — structured random exploration
             action_np, value_np = self._random_explore_action()
 
         # Shadow teleop override
@@ -542,10 +544,13 @@ class ExplorerRunner(Node):
         else:
             raw = action_np
 
-        # Smooth + scale
+        # Smooth + scale (use less smoothing for random exploration so it
+        # actually moves — friction kills heavily-smoothed low-power commands)
+        is_random = hasattr(self, '_rand_mode') and self._rand_ticks > 0
+        smoothing = 0.8 if is_random else self.action_smoothing
         self.exec_action = (
-            self.action_smoothing * raw
-            + (1.0 - self.action_smoothing) * self.exec_action)
+            smoothing * raw
+            + (1.0 - smoothing) * self.exec_action)
         out = np.clip(self.exec_action * self.action_scale, -1.0, 1.0)
         self._publish_track(float(out[0]), float(out[1]))
 
