@@ -174,6 +174,10 @@ LAUNCH_ARGS=(
   "rknn_model_path:=${HOME}/.ros/explorer_brain.rknn"
 )
 
+if [ -n "$SERVER_ADDR" ]; then
+  LAUNCH_ARGS+=("server_addr:=${SERVER_ADDR}")
+fi
+
 ros2 launch tractor_explorer explorer_nn.launch.py \
   "${LAUNCH_ARGS[@]}" \
   > >(tee "$LOG_FILE") 2>&1 &
