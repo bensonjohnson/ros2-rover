@@ -521,9 +521,10 @@ class ExplorerRunner(Node):
             action_np, value_np = self._rknn_infer(
                 self.latest_scan, occ, proprio[0].numpy(), depth_t)
         elif self.model is not None:
-            # Check if model has meaningful weights (not fresh random)
-            w = next(self.model.parameters())
-            if w.abs().mean().item() < 0.01 and self._step < 500:
+            # Use random exploration for first 3000 steps (~3 min of data
+            # collection) to bootstrap training data. The fresh model has
+            # orthogonal-init weights that produce near-zero tanh outputs.
+            if self._step < 3000:
                 action_np, value_np = self._random_explore_action()
             else:
                 with torch.no_grad():
