@@ -58,6 +58,8 @@ def generate_launch_description():
                               default_value=os.path.expanduser("~/.ros/explorer_brain.pt")),
         DeclareLaunchArgument("rknn_model_path",
                               default_value=os.path.expanduser("~/.ros/explorer_brain.rknn")),
+        DeclareLaunchArgument("server_addr", default_value="",
+                              description="ZMQ address for training server (tcp://IP:PORT)"),
     ]
 
     # ---- 1. Robot description (URDF) ----
@@ -159,6 +161,7 @@ def generate_launch_description():
             "model_path": LaunchConfiguration("model_path"),
             "rknn_model_path": LaunchConfiguration("rknn_model_path"),
             "dashboard_port": LaunchConfiguration("dashboard_port"),
+            "server_addr": LaunchConfiguration("server_addr"),
         }])
 
     # ---- 10. Explore Manager (frontier-driven coordination) ----

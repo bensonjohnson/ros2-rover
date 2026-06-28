@@ -40,6 +40,16 @@ try:
 except ImportError:
     HAS_RKNN = False
 
+# Try ZMQ for streaming chunks to training server
+try:
+    import zmq
+    import msgpack
+    import msgpack_numpy as mpn
+    mpn.patch()
+    HAS_ZMQ = True
+except ImportError:
+    HAS_ZMQ = False
+
 
 class ExplorerRunner(Node):
     """ROS2 node that fuses all sensors and runs the Deep Explorer Network.
@@ -84,6 +94,9 @@ class ExplorerRunner(Node):
         # Mapping mode: auto = full autonomous, explore = frontier-driven,
         # collect = human teleop data collection
         p("mode", "auto")
+        # ZMQ chunk streaming to remote training server
+        p("server_addr", "")
+        p("chunk_len", 64)
 
         g = self.get_parameter
         self.control_rate = float(g("control_rate_hz").value)
@@ -104,6 +117,27 @@ class ExplorerRunner(Node):
         self.experience_log_max_bytes = int(
             float(g("experience_log_max_mb").value) * 1024 * 1024)
         self.mode = g("mode").value
+        self.server_addr = g("server_addr").value
+        self.chunk_len = int(g("chunk_len").value)
+
+        # ZMQ chunk buffer for streaming to training server
+        self._chunk_buffer = []
+        self._chunks_sent = 0
+        self.zmq_ctx = None
+        self.zmq_pub = None
+        if self.server_addr and HAS_ZMQ:
+            try:
+                self.zmq_ctx = zmq.Context()
+                self.zmq_pub = self.zmq_ctx.socket(zmq.PUSH)
+                self.zmq_pub.set_hwm(10)
+                self.zmq_pub.connect(self.server_addr)
+                self.get_logger().info(f"ZMQ connected: {self.server_addr}")
+            except Exception as e:
+                self.get_logger().warn(f"ZMQ init failed: {e}")
+                self.zmq_pub = None
+        elif self.server_addr and not HAS_ZMQ:
+            self.get_logger().warn(
+                "ZMQ not available — install pyzmq and msgpack for chunk streaming")
 
         # ---- Build network config ----
         self.net_cfg = ExplorerConfig(
@@ -447,6 +481,21 @@ class ExplorerRunner(Node):
         out = np.clip(self.exec_action * self.action_scale, -1.0, 1.0)
         self._publish_track(float(out[0]), float(out[1]))
 
+        # Buffer step for ZMQ chunk streaming to training server
+        if self.zmq_pub is not None:
+            self._chunk_buffer.append({
+                "lidar": self.latest_scan.copy(),
+                "occ": occ.copy(),
+                "proprio": proprio[0].numpy().copy(),
+                "action": np.array(out, dtype=np.float32),
+                "reward": np.zeros(5, dtype=np.float32),
+                "done": False,
+                "is_first": len(self._chunk_buffer) == 0,
+            })
+            if len(self._chunk_buffer) >= self.chunk_len:
+                self._send_chunk()
+                self._chunk_buffer = []
+
         self._step += 1
         tick_time = time.monotonic() - tick_start
         if tick_time > 1.0 / self.control_rate:
@@ -469,6 +518,32 @@ class ExplorerRunner(Node):
                 f"{'[TELEOP]' if teleop else '[AUTO]'}")
 
         self._maybe_save()
+
+    def _send_chunk(self):
+        """Serialize and send a chunk of steps to the training server via ZMQ."""
+        if self.zmq_pub is None or not self._chunk_buffer:
+            return
+        try:
+            T = len(self._chunk_buffer)
+            chunk = {
+                "lidar": np.stack([s["lidar"] for s in self._chunk_buffer]),
+                "occ": np.stack([s["occ"] for s in self._chunk_buffer]),
+                "proprio": np.stack([s["proprio"] for s in self._chunk_buffer]),
+                "action": np.stack([s["action"] for s in self._chunk_buffer]),
+                "reward": np.stack([s["reward"] for s in self._chunk_buffer]),
+                "done": np.array([s["done"] for s in self._chunk_buffer], dtype=bool),
+                "is_first": np.array([s["is_first"] for s in self._chunk_buffer], dtype=bool),
+            }
+            payload = msgpack.dumps(chunk, default=mpn.encode)
+            self.zmq_pub.send(payload, flags=zmq.NOBLOCK)
+            self._chunks_sent += 1
+            self.get_logger().info(
+                f"Chunk #{self._chunks_sent} sent ({T} steps) via ZMQ",
+                throttle_duration_sec=5.0)
+        except zmq.Again:
+            self.get_logger().warning("ZMQ send would block — dropping chunk")
+        except Exception as e:
+            self.get_logger().error(f"ZMQ send failed: {e}")
 
     def _rknn_infer(self, lidar_np, occ_np, proprio_np, depth_np=None):
         """Run RKNN inference on the NPU.
@@ -522,6 +597,12 @@ class ExplorerRunner(Node):
             if hasattr(self, "logger_thread") and self.logger_thread is not None:
                 self.logger_thread.join(timeout=2.0)
         self._maybe_save(force=True)
+        # Flush remaining ZMQ chunk
+        if self.zmq_pub is not None and len(self._chunk_buffer) > 0:
+            self._send_chunk()
+            self._chunk_buffer = []
+        if self.zmq_ctx is not None:
+            self.zmq_ctx.destroy(linger=0.5)
         if self.rknn is not None:
             self.rknn.release()
         super().destroy_node()
