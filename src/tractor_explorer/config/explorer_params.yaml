@@ -1,0 +1,53 @@
+# Deep Explorer Network — configuration parameters
+# 
+# This file serves as documentation and manual override. In production,
+# parameters are set via the launch file or CLI.
+
+explorer_runner:
+  ros__parameters:
+    control_rate_hz: 15.0
+    action_scale: 0.6
+    action_smoothing: 0.35
+    exploration_noise: 0.05
+    lidar_bins: 72
+    max_lidar_range: 5.0
+    occ_crop_size: 64
+    occ_crop_meters: 4.0
+    use_depth: false
+    proprio_dim: 5
+    mode: "auto"        # auto | explore | collect
+    learn: false
+    model_path: "~/.ros/explorer_brain.pt"
+    rknn_model_path: "~/.ros/explorer_brain.rknn"
+    save_interval_s: 60.0
+    dashboard_port: 8083
+    log_experience: true
+    experience_log_path: "~/.ros/explorer_experience.jsonl"
+    experience_log_max_mb: 256.0
+
+explore_manager:
+  ros__parameters:
+    update_rate_hz: 5.0
+    map_topic: "/map"
+    coverage_threshold: 0.95
+    min_frontier_distance: 0.5
+    max_frontier_distance: 8.0
+    stuck_timeout_s: 30.0
+    progress_radius_m: 0.5
+    min_coverage_increase: 0.005
+
+map_integrator:
+  ros__parameters:
+    crop_size: 64
+    crop_half_meters: 2.0
+    update_rate_hz: 10.0
+
+data_collector:
+  ros__parameters:
+    chunk_len: 64
+    max_chunks_pending: 100
+    server_addr: "tcp://192.168.1.100:5557"
+    use_zmq: false
+    save_local: true
+    local_path: "~/.ros/explorer_chunks"
+    rate_hz: 15.0
