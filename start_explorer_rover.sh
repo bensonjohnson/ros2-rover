@@ -8,7 +8,7 @@
 #   - Add --depth to enable RealSense D435i (RGB-D RTAB-Map + NN depth stream).
 #
 # Sensor stack (default, no camera):
-#   LiDAR (STL19P) + IMU (LSM9DS1/BNO085) + wheel encoders
+#   LiDAR (STL19P) + IMU (BNO085) + wheel encoders
 #   slam_toolbox LiDAR SLAM → /map   ← metric occupancy grid
 #   RF2O scan matching → /odom_rf2o   ← drift-free odometry
 #   EKF fusion → /odometry/filtered   ← smoothed pose
