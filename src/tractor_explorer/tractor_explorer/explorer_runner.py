@@ -412,6 +412,69 @@ class ExplorerRunner(Node):
         crop[cy_s:cy_e, cx_s:cx_e] = norm
         return crop.astype(np.float32)
 
+    # ---- Random exploration (data collection without trained model) ----
+
+    def _random_explore_action(self):
+        """Structured random exploration for data collection.
+
+        Cycles through forward, turning, and recovery behaviors so the rover
+        actively covers space instead of sitting still. Uses the lidar safety
+        gate to detect obstacles and reverse out.
+
+        Returns (action_np, value_np) in track space [-1, 1].
+        """
+        if not hasattr(self, '_rand_mode'):
+            self._rand_mode = 'forward'
+            self._rand_ticks = 0
+            self._rand_duration = 30   # ~2 seconds at 15Hz
+            self._rand_rng = np.random.default_rng()
+
+        self._rand_ticks += 1
+
+        # Stuck detection: safety gate firing while trying to go forward
+        if self._safety_hold and self._rand_mode != 'reverse':
+            self._rand_mode = 'reverse'
+            self._rand_ticks = 0
+            self._rand_duration = int(15 + self._rand_rng.uniform(0, 20))  # 1-2.3s
+
+        # Time to pick a new action
+        if self._rand_ticks >= self._rand_duration:
+            self._rand_ticks = 0
+            # Pick a random mode
+            modes = ['forward', 'forward_left', 'forward_right',
+                     'turn_left', 'turn_right', 'slight_left', 'slight_right']
+            # Don't stay in reverse after recovering
+            if self._rand_mode == 'reverse':
+                modes = ['forward', 'forward_left', 'forward_right',
+                         'slight_left', 'slight_right']
+            self._rand_mode = str(self._rand_rng.choice(modes))
+            # Random duration: 0.5-3 seconds
+            self._rand_duration = int(8 + self._rand_rng.uniform(0, 37))
+
+        # Map mode to track commands
+        strengths = {
+            'forward':        (1.0, 1.0),
+            'forward_left':   (0.5, 1.0),
+            'forward_right':  (1.0, 0.5),
+            'slight_left':    (0.7, 1.0),
+            'slight_right':   (1.0, 0.7),
+            'turn_left':      (-0.6, 0.6),
+            'turn_right':     (0.6, -0.6),
+            'reverse':        (-0.6, -0.6),
+        }
+        L, R = strengths.get(self._rand_mode, (0.5, 0.5))
+
+        # Add jitter so the trajectory isn't perfectly repetitive
+        L += float(self._rand_rng.normal(0, 0.08))
+        R += float(self._rand_rng.normal(0, 0.08))
+        action = np.clip([L, R], -1.0, 1.0).astype(np.float32)
+
+        # Log mode changes occasionally
+        if self._rand_ticks < 3:
+            self.get_logger().info(f"RandExplore: {self._rand_mode} ({self._rand_duration} ticks)")
+
+        return action, 0.0
+
     # ---- Control step ----
 
     def _control_step(self):
@@ -449,22 +512,27 @@ class ExplorerRunner(Node):
                 "timestamp": time.time(),
             })
 
-        # Inference
+        # Inference — use trained model, or random exploration to collect data
         if self.rknn is not None:
             action_np, value_np = self._rknn_infer(
                 self.latest_scan, occ, proprio[0].numpy(), depth_t)
         elif self.model is not None:
-            with torch.no_grad():
-                action_t, value_t = self.model.step(
-                    lidar_t, occ_t, proprio,
-                    depth=depth_t,
-                    deterministic=(self.exploration_noise <= 0.0))
-            action_np = action_t[0].numpy()
-            value_np = float(value_t[0, 0])
+            # Check if model has meaningful weights (not fresh random)
+            w = next(self.model.parameters())
+            if w.abs().mean().item() < 0.01 and self._step < 500:
+                # Model is fresh/random — use structured random exploration instead
+                action_np, value_np = self._random_explore_action()
+            else:
+                with torch.no_grad():
+                    action_t, value_t = self.model.step(
+                        lidar_t, occ_t, proprio,
+                        depth=depth_t,
+                        deterministic=(self.exploration_noise <= 0.0))
+                action_np = action_t[0].numpy()
+                value_np = float(value_t[0, 0])
         else:
-            # No model — random walk (safe fallback)
-            action_np = np.random.uniform(-0.3, 0.3, 2).astype(np.float32)
-            value_np = 0.0
+            # No model file at all — structured random exploration
+            action_np, value_np = self._random_explore_action()
 
         # Shadow teleop override
         teleop = (self._teleop_action is not None
