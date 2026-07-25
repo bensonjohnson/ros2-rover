@@ -8,8 +8,10 @@ setup.py
 ../../build/tractor_sensors/tractor_sensors.egg-info/requires.txt
 ../../build/tractor_sensors/tractor_sensors.egg-info/top_level.txt
 ../../build/tractor_sensors/tractor_sensors.egg-info/zip-safe
+config/bno085_config.yaml
 config/lc29h_rtk_config.yaml
 config/lsm9ds1_config.yaml
+launch/bno085_imu.launch.py
 launch/lc29h_rtk.launch.py
 launch/lidar_foxglove.launch.py
 launch/lidar_odometry.launch.py
@@ -20,5 +22,6 @@ test/test_copyright.py
 test/test_flake8.py
 test/test_pep257.py
 tractor_sensors/__init__.py
+tractor_sensors/bno085_imu.py
 tractor_sensors/lc29h_rtk_gps.py
 tractor_sensors/lsm9ds1_imu.py

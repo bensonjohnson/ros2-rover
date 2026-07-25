@@ -103,8 +103,6 @@ def generate_launch_description():
             "config_file": os.path.join(
                 pkg_bringup, "config", "realsense_config.yaml"
             ),
-            "enable_pointcloud": "true",
-            "align_depth": "true",
         }.items(),
     )
 
@@ -116,14 +114,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             os.path.join(pkg_bringup, "config", "slam_toolbox_params.yaml"),
-            {
-                "use_sim_time": use_sim_time,
-                "mode": "mapping",
-                "scan_topic": "/scan",
-                "map_frame": "map",
-                "odom_frame": "odom",
-                "base_frame": "base_link",
-            },
+            {"use_sim_time": use_sim_time},
         ],
     )
 
@@ -369,6 +360,8 @@ def generate_launch_description():
                     "planner_server",
                     "behavior_server",
                     "bt_navigator",
+                    "local_costmap",
+                    "global_costmap",
                     "collision_monitor",
                 ],
                 "bond_timeout": 30.0,

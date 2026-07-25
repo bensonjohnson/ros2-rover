@@ -90,7 +90,7 @@ class FrontierExplorer(Node):
         )
         
         self.odom_sub = self.create_subscription(
-            Odometry, '/odom', self.odom_callback, 10,
+            Odometry, '/odometry/filtered', self.odom_callback, 10,
             callback_group=callback_group
         )
         
