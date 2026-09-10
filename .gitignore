@@ -1,76 +1,9 @@
-# Environment variables
-.env
-
-# Build directories
 build/
 install/
 log/
-
-# IDE and editor files
-*.swp
-*.swo
-*~
-.vscode/
-.idea/
-*.env
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-.coverage
-.pytest_cache/
-.pytest_cache_/
-.pytest_cache__/
-
-# ROS2 specific
-*.bag
-*.bag.active
-
-# Model files
-models/
-*.onnx
-*.rknn
-*.pth
-*.pt
-*.h5
-*.pkl
-*.model
-*.bin
-
-# Training logs and checkpoints
-remote_training_server/logs/
-remote_training_server/logs_sac/
-remote_training_server/logs_ppo/
-remote_training_server/logs_dreamer/
-remote_training_server/logs_rlpd/
-remote_training_server/checkpoints/
-remote_training_server/checkpoints_sac/
-remote_training_server/checkpoints_ppo/
-remote_training_server/checkpoints_dreamer/
-remote_training_server/checkpoints_rlpd/
-
-# TensorBoard event files (in case logs land elsewhere)
-events.out.tfevents.*
-
-# RKNN calibration captures (rover-side)
-calibration_data_dreamer/
-calibration_data_rlpd/
-
-# Numpy archives (replay buffers, demo dumps, training dataset shards)
-*.npz
-
-# Headless sim training outputs
-sim_out/
+*.sync-conflict-*
+sim_out*/
+*.tmp
+.DS_Store
