@@ -33,7 +33,15 @@ class PlaceMemory:
                  tau_s: float = 900.0, max_places: int = 64,
                  time_fn=time.monotonic, shape_weight: float = 1.0,
                  fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6,
-                 slot_blend: float = 0.02):
+                 slot_blend: float = 0.02, create_drift_gate: float = 0.0):
+        # create_drift_gate: only CREATE a new place when the (post-EMA)
+        # fingerprint is settled — per-tick drift below this value. Walking
+        # carries the view through doorway/corridor transients; creating a
+        # place mid-crossing stores a doorway reference that then ATTRACTS
+        # the rooms on both sides (they arrive matching the smeared transient)
+        # and the tour collapses to 1-2 places (house-tour bag analysis,
+        # pnn_sim/tools/tour_analyze.py). Settled-only creation makes every
+        # place a dwell center. 0 = off.
         # slot_blend: consolidation rate of a matched slot toward the live
         # fingerprint (the historical 0.98/0.02 tracking). At 0.02/tick the
         # stored reference CHASES a slowly drifting query — equilibrium
@@ -77,6 +85,8 @@ class PlaceMemory:
         self.fam_scale_s = float(fam_scale_s)
         self.fp_ema_tau_s = float(fp_ema_tau_s)
         self.slot_blend = float(slot_blend)
+        self.create_drift_gate = float(create_drift_gate)
+        self._prev_fp: np.ndarray | None = None
         self._fp_ema: np.ndarray | None = None
         self._fps: list[np.ndarray] = []     # unit-norm fingerprints
         self._weights: list[float] = []      # seconds of presence, decaying
@@ -125,6 +135,10 @@ class PlaceMemory:
                 a = min(1.0, dt / self.fp_ema_tau_s)
                 self._fp_ema += a * (fp - self._fp_ema)
             fp = self._fp_ema.copy()    # stored downstream; don't alias the EMA
+        # drift since last tick (settledness test for create gate)
+        drift = 0.0 if self._prev_fp is None else float(
+            np.linalg.norm(fp - self._prev_fp))
+        self._prev_fp = fp.copy()
         if not self._fps:
             self._fps.append(fp)
             self._weights.append(max(dt, 0.1))
@@ -152,6 +166,11 @@ class PlaceMemory:
             fresh = float(np.clip(1.0 - self._weights[i] / self.fam_scale_s,
                                   0.0, 1.0))
             self.novelty = max(self.novelty, fresh)
+        elif (self.create_drift_gate > 0.0
+              and drift > self.create_drift_gate):
+            # Mid-walk transient: novel but unsettled. High novelty (keeps
+            # the rover moving) but NO stored reference — see ctor doc.
+            pass
         else:
             self._fps.append(fp)
             self._weights.append(max(dt, 0.1))
@@ -169,4 +188,5 @@ class PlaceMemory:
         self._fps.clear()
         self._weights.clear()
         self._fp_ema = None
+        self._prev_fp = None
         self.novelty = 1.0

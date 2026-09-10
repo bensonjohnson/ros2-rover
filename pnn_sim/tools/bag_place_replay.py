@@ -58,6 +58,12 @@ def main():
     ap.add_argument("--bins", type=int, default=72)
     ap.add_argument("--max-range", type=float, default=12.0)
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--tau", type=float, nargs="*", default=(1.5, 3.0, 6.0))
+    ap.add_argument("--shape", type=float, nargs="*", default=(1.0, 2.0))
+    ap.add_argument("--thresh", type=float, nargs="*",
+                    default=(0.08, 0.12, 0.18, 0.35))
+    ap.add_argument("--blend", type=float, nargs="*", default=(0.02, 0.0))
+    ap.add_argument("--gate", type=float, nargs="*", default=(0.0,))
     args = ap.parse_args()
 
     ts, raw, meta = load_scans(args.bag)
@@ -102,32 +108,43 @@ def main():
               f"(whole-bag span {span:.3f})")
 
     rows = []
-    for thresh in (0.08, 0.12, 0.18, 0.35, 0.50, 0.70):
-        for tau in (1.5, 3.0):
-            for blend in (0.02, 0.0):
-                clk = Clock()
-                pm = PlaceMemory(match_thresh=thresh, shape_weight=1.0,
-                                 fp_ema_tau_s=tau, slot_blend=blend,
-                                 time_fn=clk)
-                novs = []
-                for t, s in zip(ts, s72):
-                    clk.t = float(t)
-                    novs.append(pm.update(s))
-                rows.append({"thresh": thresh, "tau": tau, "blend": blend,
-                             "places": pm.n_places(),
-                             "nov_first10": round(float(np.mean(novs[:10])), 3),
-                             "nov_last10": round(float(np.mean(novs[-10:])), 3)})
-    hdr = f"{'thresh':>6} {'tau':>5} {'blend':>5} {'places':>6} " \
-          f"{'nov_e10':>7} {'nov_l10':>7}"
-    print("\nSTATIONARY phantom-place test (want places<=1, nov_l10<0.05):")
+    for thresh in args.thresh:
+        for tau in args.tau:
+            for shape in args.shape:
+                for blend in args.blend:
+                    for gate in args.gate:
+                        clk = Clock()
+                        pm = PlaceMemory(match_thresh=thresh,
+                                         shape_weight=shape,
+                                         fp_ema_tau_s=tau, slot_blend=blend,
+                                         create_drift_gate=gate, time_fn=clk)
+                        novs = []
+                        for t, s in zip(ts, s72):
+                            clk.t = float(t)
+                            novs.append(pm.update(s))
+                        novs = np.asarray(novs)
+                        rows.append({
+                            "thresh": thresh, "tau": tau, "shape": shape,
+                            "blend": blend, "gate": gate,
+                            "places": pm.n_places(),
+                            "nov_mean_late": round(float(novs[60:].mean()), 3),
+                            "nov_max_late": round(float(novs[60:].max()), 3),
+                            "nov_last10": round(float(novs[-10:].mean()), 3)})
+    hdr = (f"{'thresh':>6} {'tau':>5} {'shape':>5} {'blend':>5} {'gate':>6} "
+           f"{'places':>6} {'nov_ml':>6} {'nov_mx':>6} {'nov_l10':>7}")
+    print(f"\n{args.bag} (stationary wants places<=1 & nov_ml<0.1; "
+          f"tour wants places~rooms):")
     print(hdr)
-    for r in sorted(rows, key=lambda r: (r["places"], r["nov_last10"])):
-        print(f"{r['thresh']:>6} {r['tau']:>5} {r['blend']:>5} "
-              f"{r['places']:>6} {r['nov_first10']:>7} {r['nov_last10']:>7}")
-    print("\nSTATIONARY VERDICT: " + (
-        "PASS" if all(r["places"] <= 1 and r["nov_last10"] < 0.05
-                      for r in rows) else
-        "config-dependent — pick rows with places==1 and nov_l10<0.05"))
+    for r in sorted(rows, key=lambda r: (r["places"], r["nov_mean_late"])):
+        print(f"{r['thresh']:>6} {r['tau']:>5} {r['shape']:>5} "
+              f"{r['blend']:>5} {r['gate']:>6} {r['places']:>6} "
+              f"{r['nov_mean_late']:>6} {r['nov_max_late']:>6} "
+              f"{r['nov_last10']:>7}")
+    if "stationary" in args.bag:
+        print("\nSTATIONARY VERDICT: " + (
+            "PASS" if all(r["places"] <= 1 and r["nov_last10"] < 0.05
+                          for r in rows) else
+            "config-dependent — pick rows with places==1 and nov_l10<0.05"))
 
 
 if __name__ == "__main__":

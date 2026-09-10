@@ -60,6 +60,17 @@ class PCActiveInferenceRunner(Node):
         p("control_rate_hz", 15.0)
         p("num_bins", 72)
         p("max_range", 5.0)
+        # --- place memory temperament (validated on real LD19 bags
+        # 2026-09-10, pnn_sim/tools/bag_place_replay.py joint acceptance:
+        # stationary dock bag -> 1 place / novelty<0.02, house tour -> 4-6
+        # places): frozen refs (blend 0) + long fingerprint EMA (tau 6 s)
+        # are mandatory — 0.02/tick slot chase absorbs whole rooms. The
+        # historical 0.35/1.0/0.6 defaults merged 4 real rooms into 1 place.
+        p("place_match_thresh", 0.15)
+        p("place_shape_weight", 2.0)
+        p("place_fp_ema_tau_s", 6.0)
+        p("place_slot_blend", 0.0)
+        p("place_create_drift_gate", 0.004)  # settle-only creation (0=off)
         # Proprioception: the rover senses its own motion (fixes the self-motion
         # blind spot — one scan can't tell you if you're moving, and the
         # commanded action != actual motion under slip / safety clamping).
@@ -224,7 +235,12 @@ class PCActiveInferenceRunner(Node):
         # Topological place memory (room fingerprints, pose-free, RAM-only).
         # Its novelty IS the interoceptive observation channel: smoothed by an
         # EMA so the brain sees a predictable signal, not fingerprint flicker.
-        self.place_memory = PlaceMemory()
+        self.place_memory = PlaceMemory(
+            match_thresh=float(g("place_match_thresh").value),
+            shape_weight=float(g("place_shape_weight").value),
+            fp_ema_tau_s=float(g("place_fp_ema_tau_s").value),
+            slot_blend=float(g("place_slot_blend").value),
+            create_drift_gate=float(g("place_create_drift_gate").value))
         self.novelty_ema_tau_s = float(g("novelty_ema_tau_s").value)
         self._nov_ema = 1.0
         self.lift_accel_dev = float(g("lift_accel_dev").value)
