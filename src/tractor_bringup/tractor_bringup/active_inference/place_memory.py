@@ -32,7 +32,17 @@ class PlaceMemory:
     def __init__(self, n_freq: int = 10, match_thresh: float = 0.35,
                  tau_s: float = 900.0, max_places: int = 64,
                  time_fn=time.monotonic, shape_weight: float = 1.0,
-                 fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6):
+                 fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6,
+                 slot_blend: float = 0.02):
+        # slot_blend: consolidation rate of a matched slot toward the live
+        # fingerprint (the historical 0.98/0.02 tracking). At 0.02/tick the
+        # stored reference CHASES a slowly drifting query — equilibrium
+        # dmin = fp drift rate / blend, comfortably under match_thresh —
+        # so a continuously walking rover matches ONE place forever and
+        # new places only appear on teleport-size jumps (the places-stuck-
+        # at-1 collapse; see pnn_sim/tools/t4_place_probe.py + rules).
+        # Per-scan jitter is already handled query-side by fp_ema_tau_s;
+        # 0.0 = frozen references. Validated in batched place.py replay.
         # time_fn: clock for the presence-decay. The rover uses wall time;
         # a faster-than-realtime simulator must pass its own sim clock or the
         # 15-min decay runs against the wrong timescale.
@@ -66,6 +76,7 @@ class PlaceMemory:
         self.shape_weight = float(shape_weight)
         self.fam_scale_s = float(fam_scale_s)
         self.fp_ema_tau_s = float(fp_ema_tau_s)
+        self.slot_blend = float(slot_blend)
         self._fp_ema: np.ndarray | None = None
         self._fps: list[np.ndarray] = []     # unit-norm fingerprints
         self._weights: list[float] = []      # seconds of presence, decaying
@@ -127,10 +138,13 @@ class PlaceMemory:
         self.novelty = float(np.clip(dmin / self.match_thresh, 0.0, 1.0))
 
         if dmin < self.match_thresh:
-            # Recognized: reinforce, and let the stored fingerprint track
-            # slow appearance changes (doors opening, furniture moved).
+            # Recognized: reinforce; optionally let the stored fingerprint
+            # track slow appearance changes (doors opening) — see slot_blend
+            # doc in __init__ for why 0.0 is the validated default.
             self._weights[i] += dt
-            self._fps[i] = 0.98 * self._fps[i] + 0.02 * fp
+            if self.slot_blend > 0.0:
+                self._fps[i] = ((1 - self.slot_blend) * self._fps[i]
+                                + self.slot_blend * fp)
             # Sustained novelty: a place is still "new" until enough presence
             # has accumulated there. A freshly-created room decays from ~1 to
             # 0 over fam_scale_s; a place not visited lately (weight decayed)
