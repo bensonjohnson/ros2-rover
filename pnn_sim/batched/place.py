@@ -20,7 +20,8 @@ class BatchedPlaceMemory:
     def __init__(self, batch: int, device: str = "cpu", n_freq: int = 10,
                  match_thresh: float = 0.35, tau_s: float = 900.0,
                  max_places: int = 64, shape_weight: float = 1.0,
-                 fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6):
+                 fam_scale_s: float = 20.0, fp_ema_tau_s: float = 0.6,
+                 slot_blend: float = 0.02):
         self.B = batch
         self.device = torch.device(device)
         self.n_freq = n_freq
@@ -30,6 +31,13 @@ class BatchedPlaceMemory:
         self.shape_weight = shape_weight    # emphasize room SHAPE over size
         self.fam_scale_s = fam_scale_s      # sustained-novelty timescale (s)
         self.fp_ema_tau_s = fp_ema_tau_s    # fingerprint denoise timescale (s)
+        # Slot consolidation rate on matched visits. At the historical 0.02
+        # the slot reference CHASES a slowly drifting query: equilibrium
+        # gap = fp drift rate / blend (~0.09 << thresh 0.2), so a continuous
+        # walk matches one place forever and new places only spawn on jumps
+        # (the places-stuck-at-1 collapse; see t4_place_probe/rules).
+        # Jitter is already handled query-side by fp_ema; 0.0 = frozen refs.
+        self.slot_blend = slot_blend
         F = 1 + (n_freq - 1)            # mean + harmonics 1..n_freq-1
         self.F = F
         self._fps = torch.zeros(batch, max_places, F, device=self.device)
@@ -96,11 +104,15 @@ class BatchedPlaceMemory:
         w_add = max(dt, 0.1)
         ar = torch.arange(self.B, device=self.device)
 
-        # Reinforce + blend matched slots.
+        # Reinforce + blend matched slots (blend=0 -> frozen reference;
+        # see __init__ doc on the chase pathology).
         mi = imin[matched]
         mb = ar[matched]
         self._w[mb, mi] += dt
-        self._fps[mb, mi] = 0.98 * self._fps[mb, mi] + 0.02 * fp[matched]
+        if self.slot_blend > 0.0:
+            self._fps[mb, mi] = ((1 - self.slot_blend)
+                                 * self._fps[mb, mi]
+                                 + self.slot_blend * fp[matched])
         # Sustained novelty: matched place stays novel until fam_scale_s of
         # presence accumulates there (see reference PlaceMemory.update).
         fresh = (1.0 - self._w[mb, mi] / self.fam_scale_s).clamp(0.0, 1.0)

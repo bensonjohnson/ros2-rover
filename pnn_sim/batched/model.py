@@ -256,9 +256,12 @@ class BatchedEFEActor:
                slow_action: torch.Tensor | None = None,
                slow_warm: torch.Tensor | None = None,
                forward_blocked: torch.Tensor | None = None,
-               cands: torch.Tensor | None = None):
+               cands: torch.Tensor | None = None,
+               action_bonus: torch.Tensor | None = None):
         """z_from [B,D]; prev_action/slow_action [B,2]; slow_warm /
-        forward_blocked bool [B]. Returns (action [B,2], info dict of [B])."""
+        forward_blocked bool [B]; action_bonus [B,N] optional pre-weighted
+        candidate bias (e.g. frontier steering). Returns (action [B,2],
+        info dict of [B])."""
         cfg = self.cfg
         H = cfg.horizon
         if cands is None:
@@ -324,6 +327,9 @@ class BatchedEFEActor:
             score = score - cfg.blocked_penalty \
                 * forward_blocked.to(score.dtype).unsqueeze(1) \
                 * torch.clamp(fwd, min=0.0)
+
+        if action_bonus is not None:
+            score = score + action_bonus
 
         if cfg.deterministic:
             idx = score.argmax(dim=1)

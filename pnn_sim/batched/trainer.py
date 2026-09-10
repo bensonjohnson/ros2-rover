@@ -35,6 +35,7 @@ from ..safety_gate import GateConfig
 from .model import BatchedPCWorldModel, BatchedEFEActor, BatchedSlowLayer
 from .env import BatchedEnv, BatchedGate, batched_preprocess
 from .place import BatchedPlaceMemory
+from ..spatial.pc_map import PCSpatialMap
 
 
 @dataclass
@@ -91,6 +92,35 @@ class BatchedTrainConfig:
     # affects eval or the rover. 0 = off.
     babble_eps0: float = 0.4
     babble_decay_ticks: int = 30_000
+
+    # Spatial frontier steering (Stage-1 fix for the places-stuck-at-1
+    # collapse): the PC spatial map's coverage-based frontier field biases
+    # actor candidates toward unexplored territory. 0 = off (behaviour
+    # byte-identical to pre-revival). The field is LOCAL evidence (frontier
+    # cells near the robot), so the agent earns it only by approaching
+    # unknown space — unlike global room-count rewards, no tail-chase.
+    frontier_weight: float = 0.0
+    frontier_bins: int = 16            # egocentric bearing histogram bins
+    frontier_near_m: float = 2.0       # exp(-d/near) weighting of frontier cells
+    pcmap_res: float = 0.15
+    pcmap_size: int = 200
+
+    # Place-memory calibration (see pnn_sim/tools/fp_grid.py): at the
+    # historical match_thresh=0.35 a whole procedural house collapses to ~7
+    # k-center places and a live trajectory reads ONE forever (the places-
+    # stuck-at-1 collapse). thresh 0.20 + shape_weight 2.0 resolves 27-31
+    # distinct places with zero phantom inflation under real lidar jitter
+    # (std 0.01m, dropout 2%). Defaults stay historical; pass explicitly.
+    place_match_thresh: float = 0.35
+    place_shape_weight: float = 1.0
+    # Skip place-memory folding while the nose is buried in a wall (scan
+    # min < 0.35 m): wall-facing scans are position-invariant and were
+    # merging every wall-hug into one mega-place. 0 = off (historical).
+    place_wall_guard: bool = False
+    # Slot consolidation rate (BatchedPlaceMemory.slot_blend). Historical
+    # 0.02 makes refs chase the agent (dmin equilibrates ~0.09 << thresh —
+    # see place.py). 0.0 = frozen refs; validated by t4_place_rules replay.
+    place_slot_blend: float = 0.02
 
     switch_world_every: int = 27_000   # per env, staggered across the batch
     rover: RoverConfig = field(default_factory=RoverConfig)
@@ -158,9 +188,21 @@ class BatchedTrainer:
                 seed=cfg.seed,
             ), batch=B, device=cfg.device)
 
-        self.place = BatchedPlaceMemory(B, device=cfg.device)
+        self.place = BatchedPlaceMemory(
+            B, device=cfg.device, match_thresh=cfg.place_match_thresh,
+            shape_weight=cfg.place_shape_weight,
+            slot_blend=cfg.place_slot_blend)
         self.nov_ema = torch.ones(B, device=self.device)
         self._babble_rng = np.random.default_rng(cfg.seed + 12_345)
+        # PC spatial map + egocentric frontier field (see BatchedTrainConfig).
+        self.pcmap: PCSpatialMap | None = None
+        self._frontier_field: torch.Tensor | None = None
+        if cfg.frontier_weight > 0.0:
+            self.pcmap = PCSpatialMap(
+                B, res=cfg.pcmap_res, size=cfg.pcmap_size,
+                max_range=cfg.rover.lidar_max_range, device=cfg.device)
+            self._frontier_field = torch.zeros(B, cfg.frontier_bins,
+                                               device=cfg.device)
 
         self.last_action = torch.zeros(B, 2, device=self.device)
         self.exec_action = np.zeros((B, 2), dtype=np.float32)
@@ -229,6 +271,77 @@ class BatchedTrainer:
 
     # ------------------------------------------------------------------
 
+    def _update_pcmap(self, ranges: torch.Tensor):
+        """Fold this tick's scan into the PC spatial map and rebuild the
+        egocentric frontier field [B, frontier_bins] (row-normalised)."""
+        if self.pcmap is None:
+            return
+        e = self.env
+        pos = torch.stack([e.x, e.y], dim=1)
+        bearings = e.angle_min + torch.arange(
+            ranges.shape[1], device=self.device,
+            dtype=torch.float32) * e.angle_increment
+        self.pcmap.update(pos, e.theta, ranges.clamp(
+            0.0, self.pcmap.max_range), bearings)
+        # Egocentric bearing histogram of frontier cells, near-weighted.
+        n, res = self.pcmap.n, self.pcmap.res
+        fr = self.pcmap.frontier()                          # [B, n, n]
+        if not bool(fr.any()):
+            self._frontier_field.zero_()
+            return
+        ii, b_cell, _ = torch.nonzero(fr, as_tuple=True)  # [env, cell] coords
+        b_env = ii
+        b_cell = b_cell.to(torch.int64)
+        wx = self.pcmap.origin[b_env, 0] + (b_cell // n + 0.5) * res
+        wy = self.pcmap.origin[b_env, 1] + (b_cell % n + 0.5) * res
+        dx = wx - e.x[b_env]
+        dy = wy - e.y[b_env]
+        d = torch.hypot(dx, dy)
+        # bearing relative to heading, wrapped to [0, 2pi) like scan bins
+        ang = torch.remainder(torch.atan2(dy, dx) - e.theta[b_env],
+                              2.0 * np.pi)
+        w = torch.exp(-d / max(self.cfg.frontier_near_m, 1e-3))
+        bins = (ang / (2.0 * np.pi) * self.cfg.frontier_bins).long() \
+            .clamp(max=self.cfg.frontier_bins - 1)
+        nb = self.cfg.frontier_bins
+        f = torch.zeros(self.cfg.envs * nb, device=self.device)
+        flat_idx = (b_env * nb + bins).to(torch.int64)
+        f.scatter_add_(0, flat_idx, w.float())
+        f = f.view(self.cfg.envs, nb)
+        m = f.max(dim=1, keepdim=True).values.clamp(min=1e-6)
+        self._frontier_field = f / m
+
+    def _frontier_bonus(self, cands: torch.Tensor) -> torch.Tensor | None:
+        """Score candidates by the frontier field along the arc they would
+        actually trace. cands [B,N,2] (constant per-step L/R commands over
+        the horizon) -> bonus [B,N]: yaw rate (r-l)*v_max/track_width
+        integrates to a swept heading per horizon step; read the egocentric
+        frontier field at that heading, weighted by commanded forward speed.
+        Pure spins (fwd≈0) earn nothing; a forward arc whose nose sweeps
+        toward unknown space earns the most — this is what breaks the
+        spin-everything degenerate basin."""
+        fb = self.cfg.frontier_weight
+        if fb <= 0.0 or self._frontier_field is None:
+            return None
+        c = self.env.cfg
+        H = self.actor.cfg.horizon
+        bins = self.cfg.frontier_bins
+        kv = c.v_max / c.track_width * self.tick_period    # rad per cmd-diff
+        fwd = (cands[..., 0] + cands[..., 1]) * 0.5        # [B,N]
+        yaw = (cands[..., 1] - cands[..., 0]) * kv         # [B,N] rad/step
+        steps = (torch.arange(1, H + 1, device=self.device,
+                              dtype=torch.float32)
+                 * yaw.unsqueeze(-1))                       # [B,N,H] dpsi
+        idx = torch.remainder((steps / (2.0 * np.pi) * bins).round().long(),
+                              bins)
+        field = self._frontier_field                       # [B,bins]
+        read = field.unsqueeze(1).expand(-1, cands.shape[1], -1) \
+            .gather(2, idx)                                # [B,N,H]
+        val = (read.mean(dim=-1)) * fwd.clamp(min=0.0)     # [B,N]
+        return fb * val
+
+    # ------------------------------------------------------------------
+
     def tick(self):
         cfg = self.cfg
         B = cfg.envs
@@ -246,6 +359,8 @@ class BatchedTrainer:
                 self.nov_ema[idx] = 1.0
                 if self.slow is not None:
                     self.slow.reset_env(idx)
+                if self.pcmap is not None:
+                    self.pcmap.reset(idx)   # new house: stale frontiers die
 
         # --- sense (device-resident: raycast, binning, gate) ---
         ranges = self.env.scan()                       # [B, beams] device
@@ -257,9 +372,20 @@ class BatchedTrainer:
                                self.env.angle_increment)
         hold = self.gate.front_blocked                 # [B] bool, device
         hold_np = hold.cpu().numpy()
+        if self.pcmap is not None:
+            self._update_pcmap(ranges)
 
         # --- interoceptive novelty (batched place memory, on device) ---
+        # Wall-facing scans are position-invariant (one flat wall at 20cm
+        # looks the same everywhere) — feeding them to place memory made
+        # every wall-hug the SAME place (pnn_sim/tools/fp_grid.py follow-up:
+        # live collapse despite discriminative static fingerprints). Skip
+        # the fold while the nose is buried: hold the last place state.
+        wall_facing = scan72.min(dim=1).values < (0.35 / cfg.max_range) \
+            if self.cfg.place_wall_guard else None
         nov_raw = self.place.update(scan72, self.tick_period)
+        if wall_facing is not None:
+            nov_raw = torch.where(wall_facing, self.nov_ema, nov_raw)
         alpha = min(1.0, self.tick_period
                     / max(cfg.novelty_ema_tau_s, self.tick_period))
         self.nov_ema += alpha * (nov_raw - self.nov_ema)
@@ -313,11 +439,13 @@ class BatchedTrainer:
         if self.slow is not None:
             slow_act = self.slow.macro_action
             slow_warm = self.slow.warm
+        cands = self.actor._candidates()
         action, info = self.actor.select(
             self.model, z,
             prev_action=torch.from_numpy(self.held_raw).to(self.device),
             slow_action=slow_act, slow_warm=slow_warm,
-            forward_blocked=hold)
+            forward_blocked=hold, cands=cands,
+            action_bonus=self._frontier_bonus(cands))
         action_np = action.cpu().numpy()
 
         # Motor babbling: override the actor's pick for a decaying fraction of

@@ -243,7 +243,18 @@ def t4_no_collapse(device: str, quick: bool) -> dict:
     cfg = BatchedTrainConfig(envs=B, device=device, seed=44,
                              out_dir=out_dir, switch_world_every=0,
                              snapshot_every=0, save_interval_s=1e9,
-                             log_envs=0)
+                             log_envs=0,
+                             # Validated temperament (t4_place_probe/rules):
+                             # frozen place refs (slot_blend 0 — 0.02 chase
+                             # made dmin equilibrate ~0.09 << thresh so a
+                             # continuous walk matched one place forever),
+                             # calibrated fingerprint match (thresh 0.20 +
+                             # shape 2.0 resolves 27-31 places/house, fp_grid),
+                             # frontier steering from the PC map (3x disp).
+                             place_slot_blend=0.0,
+                             place_match_thresh=0.20,
+                             place_shape_weight=2.0,
+                             frontier_weight=1.0)
     tr = BatchedTrainer(cfg)
     spawn = torch.stack([tr.env.x.clone(), tr.env.y.clone()], dim=1)
     t0 = time.time()

@@ -88,6 +88,10 @@ def main():
                       "only). 0 disables")
     expl.add_argument("--babble-decay-ticks", type=int, default=30_000,
                       help="batch ticks over which babbling decays to 0")
+    expl.add_argument("--frontier-weight", type=float, default=0.0,
+                      help="PC-map frontier steering on actor candidates "
+                      "(0 = off; 1.0 recommended starting value — see "
+                      "BatchedTrainConfig.frontier_weight)")
     ap.add_argument("--torch-threads", type=int, default=0,
                     help="torch CPU threads (0 = torch default; set for "
                     "--device cpu runs)")
@@ -121,6 +125,7 @@ def main():
         target_novelty=args.target_novelty,
         babble_eps0=args.babble_eps0,
         babble_decay_ticks=args.babble_decay_ticks,
+        frontier_weight=args.frontier_weight,
     ))
 
     max_ticks = args.ticks if args.ticks is not None \
