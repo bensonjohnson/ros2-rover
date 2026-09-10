@@ -37,6 +37,15 @@ class BatchedPlaceMemory:
         self._fp_ema = torch.zeros(batch, F, device=self.device)
         self._ema_valid = torch.zeros(batch, dtype=torch.bool,
                                       device=self.device)
+        # Learning-progress bookkeeping (see update(err=...)): per-slot model
+        # error EMA + visit count, so a REVISIT earns credit only when the
+        # model got measurably better there since the last visit. Circling in
+        # one familiar room earns nothing — the tail-chase starves.
+        self._errs = torch.zeros(batch, max_places, device=self.device)
+        self._visits = torch.zeros(batch, max_places, device=self.device)
+        self._err_valid = torch.zeros(batch, max_places, dtype=bool,
+                                      device=self.device)
+        self.last_lp = torch.zeros(batch, device=self.device)
 
     def fingerprint(self, scan: torch.Tensor) -> torch.Tensor:
         """scan [B, n] -> [B, F]; reference arithmetic, batched."""
@@ -47,8 +56,17 @@ class BatchedPlaceMemory:
         return torch.cat([m, self.shape_weight * harm], dim=1).float()
 
     @torch.no_grad()
-    def update(self, scan: torch.Tensor, dt: float) -> torch.Tensor:
-        """Fold scans in; return place novelty [B] in [0, 1]."""
+    def update(self, scan: torch.Tensor, dt: float,
+               err: torch.Tensor | None = None) -> torch.Tensor:
+        """Fold scans in; return place novelty [B] in [0, 1].
+
+        err (optional, [B] per-env model observation error, e.g.
+        obs_err/sqrt(obs_dim)): enables the LEARNING-PROGRESS channel. On a
+        REVISIT to a matched place, the returned novelty also requires that
+        the model's error there has DROPPED since the previous visit
+        (lp = max(0, prev_err_ema - err)). Without err (all existing callers)
+        behaviour is identical to the original place-novelty path.
+        """
         # Decay + prune (weight 0 = free slot).
         k = float(torch.exp(torch.tensor(-dt / self.tau_s)))
         self._w *= k
