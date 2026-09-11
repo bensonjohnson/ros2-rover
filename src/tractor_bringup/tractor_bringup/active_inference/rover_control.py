@@ -62,6 +62,9 @@ class HealthMonitor:
         self.available = False
         self.error = ""
         self._lock = threading.Lock()
+        self._watchdog_stop = False
+        self._spin_thread: threading.Thread | None = None
+        self._born = time.monotonic()
         self._t: dict = {
             k: {"last": None, "ts": deque(maxlen=64), "val": None}
             for k in ("scan", "imu", "battery", "safety", "estop", "track")}
@@ -104,12 +107,19 @@ class HealthMonitor:
             from std_msgs.msg import Bool, Float32, Float32MultiArray, String
         except Exception as e:  # noqa: BLE001
             self.error = f"rclpy unavailable: {e}"
+            # Maybe the ROS env wasn't ready at boot; _run_supervised will
+            # restart us — just wait out this cycle.
+            time.sleep(30.0)
             return
 
         class _Watch(Node):
             pass
 
-        rclpy.init(args=None)
+        # NOTE: rclpy.init() may already be up from a previous cycle; guard it.
+        try:
+            rclpy.init(args=None)
+        except RuntimeError:
+            pass
         node = _Watch("rover_control_health")
         Q = qos_profile_sensor_data  # best effort: matches reliable pubs too
         node.create_subscription(LaserScan, "/scan",
@@ -137,8 +147,56 @@ class HealthMonitor:
                 pass
             self.available = False
 
+    def _run_supervised(self):
+        """Keep _run() alive. A graph-state bug (seen on real hardware: the
+        spin wedging when the node subscribed before any publisher existed at
+        boot, leaving every card empty forever) self-heals in <=120 s: if no
+        watched topic has delivered anything for two minutes, invalidate the
+        ROS context (unblocks spin()), tear down, and rebuild the
+        subscriptions from scratch."""
+        consecutive_failures = 0
+        while not self._watchdog_stop:
+            self._spin_thread = threading.Thread(target=self._run, daemon=True)
+            self._spin_thread.start()
+            t_start = time.monotonic()
+            wedged = False
+            while self._spin_thread.is_alive() and not self._watchdog_stop:
+                time.sleep(5.0)
+                with self._lock:
+                    fresh = any(e["last"] and time.monotonic() - e["last"] < 120.0
+                                for e in self._t.values())
+                if not fresh and time.monotonic() - t_start > 120.0:
+                    wedged = True
+                    print("[rover-control] health watchdog: no traffic for "
+                          "120 s — rebuilding ROS subscriptions", flush=True)
+                    break
+            if self._watchdog_stop:
+                break
+            if wedged:
+                try:  # invalidate the context so spin() returns
+                    import rclpy
+                    rclpy.shutdown()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._spin_thread.join(timeout=15.0)
+            if self._spin_thread.is_alive():
+                consecutive_failures += 1   # couldn't unstick; back off
+                if consecutive_failures >= 3:
+                    print("[rover-control] health: giving up after 3 wedged "
+                          "cycles (cards stay '-')", flush=True)
+                    return
+                time.sleep(30.0)
+            else:
+                consecutive_failures = 0
+                if not self.available:
+                    time.sleep(5.0)  # crashed fast; don't spin CPU
+
     def start(self):
-        threading.Thread(target=self._run, daemon=True).start()
+        self._born = time.monotonic()
+        threading.Thread(target=self._run_supervised, daemon=True).start()
+
+    def shutdown(self):
+        self._watchdog_stop = True
 
 
 # --------------------------------------------------------------------------
@@ -538,6 +596,7 @@ def main(argv=None):
     def shutdown(signum, frame):
         print("[rover-control] shutting down (hardstop latch is file-backed "
               "and survives us)", flush=True)
+        health.shutdown()
         sup.stop()
         raise SystemExit(0)
 
