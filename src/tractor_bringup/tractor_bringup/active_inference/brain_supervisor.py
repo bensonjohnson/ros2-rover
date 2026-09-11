@@ -51,6 +51,10 @@ from tractor_bringup.active_inference.pc_dashboard import _PAGE
 class BrainSupervisor:
     BUILD_PACKAGES = ["tractor_bringup", "tractor_control", "tractor_sensors",
                       "rf2o_laser_odometry"]
+    # The startup pull races DNS coming up after a cold boot; retry rather
+    # than give up for the whole session.
+    UPDATE_RETRIES = 4
+    UPDATE_RETRY_DELAY = 10.0     # seconds, multiplied by the attempt number
 
     def __init__(self, args):
         self.args = args
@@ -239,8 +243,38 @@ class BrainSupervisor:
             head_before = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=ws,
                 capture_output=True, text=True, timeout=30).stdout.strip()
-            if run(["git", "pull", "--ff-only"], timeout=120) != 0:
-                self._finish_update(f"git pull failed — see {log_path}")
+            # Retry the pull. At boot this ran before DNS was up and failed
+            # with "Could not resolve hostname github.com" on EVERY boot the
+            # service ever had — network-online.target says an interface is
+            # configured, not that name resolution answers yet. One retry loop
+            # is the whole fix; the alternative (ordering the unit after
+            # nss-lookup.target) still races on a cold resolver.
+            rc = 1
+            for attempt in range(self.UPDATE_RETRIES):
+                rc = run(["git", "pull", "--ff-only"], timeout=120)
+                if rc == 0:
+                    break
+                if attempt + 1 < self.UPDATE_RETRIES:
+                    delay = self.UPDATE_RETRY_DELAY * (attempt + 1)
+                    with self._lock:
+                        self._note = (f"git pull failed, retrying in "
+                                      f"{delay:.0f}s "
+                                      f"({attempt + 1}/{self.UPDATE_RETRIES})")
+                    print(f"[supervisor] {self._note}", flush=True)
+                    time.sleep(delay)
+            if rc != 0:
+                # Distinguish "no network" from "your tree is dirty" — the
+                # workspace tracks build/ and install/, so it is ALWAYS dirty
+                # and a conflicting pull is a real possibility worth naming.
+                dirty = subprocess.run(
+                    ["git", "status", "--porcelain", "--untracked-files=no"],
+                    cwd=ws, capture_output=True, text=True,
+                    timeout=30).stdout.strip()
+                why = ("local modifications present" if dirty
+                       else "network/remote unreachable")
+                self._finish_update(
+                    f"git pull failed after {self.UPDATE_RETRIES} tries "
+                    f"({why}) — see {log_path}")
                 return
             head_after = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=ws,

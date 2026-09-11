@@ -15,8 +15,13 @@
 
 [Unit]
 Description=PC Rover Brain Supervisor (dashboard + awake/sleep control)
-After=network-online.target
-Wants=network-online.target
+# nss-lookup.target as well as network-online.target: the latter only promises
+# an interface is configured, not that name resolution answers. Without it the
+# startup `git pull` lost a DNS race and failed on every boot this service
+# ever had ("Could not resolve hostname github.com"). The supervisor also
+# retries the pull, since ordering alone still races a cold resolver.
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
 
 [Service]
 Type=simple
