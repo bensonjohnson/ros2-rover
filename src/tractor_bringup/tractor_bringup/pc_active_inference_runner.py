@@ -34,11 +34,13 @@ import torch
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import LaserScan, JointState, Imu
+from sensor_msgs.msg import LaserScan, JointState, Imu, Image
 from std_msgs.msg import Float32MultiArray, Float32, Bool
 from geometry_msgs.msg import Twist
 
 from tractor_bringup.active_inference.scan_preprocess import preprocess_scan
+from tractor_bringup.active_inference.vis_fingerprint import (
+    visual_fingerprint, VisFingerprintEMA)
 from tractor_bringup.active_inference.pc_world_model import (
     PCWorldModel, PCConfig, insert_obs_channel)
 from tractor_bringup.active_inference.efe_actor import EFEActor, ActorConfig
@@ -71,6 +73,20 @@ class PCActiveInferenceRunner(Node):
         p("place_fp_ema_tau_s", 6.0)
         p("place_slot_blend", 0.0)
         p("place_create_drift_gate", 0.004)  # settle-only creation (0=off)
+        # --- camera (ArduCam) / visual place channel ----------------------
+        # The ArduCam 1080P has been physically mounted the whole time but
+        # nothing consumed it until this wiring. use_camera=True subscribes
+        # and feeds the visual fingerprint to PlaceMemory; place_vis_weight
+        # is its strength in the place distance. BOTH default off: the
+        # lidar-only temperament is field-validated and stays byte-identical
+        # until bag_vis_replay.py calibrates a nonzero weight on house data
+        # (a too-hot vis channel phantom-fires places — the merge/chase
+        # failure already solved on the lidar side).
+        p("use_camera", False)
+        p("camera_topic", "/camera/image_raw")
+        p("place_vis_weight", 0.0)
+        p("vis_fp_ema_tau_s", 1.0)     # query-side smoothing, tick-rate call
+        p("camera_max_age_s", 2.0)     # stale frame -> lidar-only fallback
         # Proprioception: the rover senses its own motion (fixes the self-motion
         # blind spot — one scan can't tell you if you're moving, and the
         # commanded action != actual motion under slip / safety clamping).
@@ -240,7 +256,21 @@ class PCActiveInferenceRunner(Node):
             shape_weight=float(g("place_shape_weight").value),
             fp_ema_tau_s=float(g("place_fp_ema_tau_s").value),
             slot_blend=float(g("place_slot_blend").value),
-            create_drift_gate=float(g("place_create_drift_gate").value))
+            create_drift_gate=float(g("place_create_drift_gate").value),
+            vis_weight=float(g("place_vis_weight").value))
+        # Camera: query-side EMA of the visual fingerprint (same discipline
+        # as the lidar side — smoothing lives on the QUERY, stored refs stay
+        # frozen). Subscribed only when use_camera; frames are stamped in the
+        # callback and fingerprinted at the tick, never per-frame in ROS exec.
+        self.use_camera = bool(g("use_camera").value)
+        self.camera_topic = str(g("camera_topic").value)
+        self.camera_max_age_s = float(g("camera_max_age_s").value)
+        self._vis_ema = VisFingerprintEMA(
+            tau_s=float(g("vis_fp_ema_tau_s").value)) \
+            if self.use_camera or float(g("place_vis_weight").value) > 0 else None
+        self._cam_msg: Image | None = None     # freshest raw frame (tick-decoded)
+        self._cam_stamp: float | None = None   # monotonic ts of last frame
+        self._vis_frames = 0                   # frames received (observability)
         self.novelty_ema_tau_s = float(g("novelty_ema_tau_s").value)
         self._nov_ema = 1.0
         self.lift_accel_dev = float(g("lift_accel_dev").value)
@@ -304,6 +334,16 @@ class PCActiveInferenceRunner(Node):
         # Controller twists for shadow-teleop (deadman released = topic silent).
         self.create_subscription(
             Twist, g("teleop_topic").value, self._teleop_cb, 10)
+        # ArduCam: best-effort QoS like the lidar. The callback only keeps a
+        # reference + timestamp; the (cheap but not free) fingerprint runs at
+        # the control tick, so a 30 fps stream costs 15 fps of work at most.
+        if self.use_camera:
+            self.create_subscription(
+                Image, self.camera_topic, self._camera_cb,
+                qos_profile_sensor_data)
+            self.get_logger().info(
+                f"camera channel ON: {self.camera_topic} "
+                f"(vis_weight={self.place_memory.vis_weight})")
 
         # --- dashboard ---
         self.dash = None
@@ -332,6 +372,34 @@ class PCActiveInferenceRunner(Node):
             np.asarray(msg.ranges, dtype=np.float32),
             msg.angle_min, msg.angle_increment,
             num_bins=self.num_bins, max_range=self.max_range)
+
+    def _camera_cb(self, msg: Image):
+        # Stash the freshest frame only — decoding/fingerprinting happens at
+        # the control tick so a 30 fps camera never does 30 fps of numpy work.
+        self._cam_msg = msg
+        self._cam_stamp = time.monotonic()
+        self._vis_frames += 1
+
+    def _visual_fp(self) -> np.ndarray | None:
+        """EMA'd visual fingerprint of the freshest non-stale frame."""
+        if self._vis_ema is None:
+            return None
+        msg = getattr(self, "_cam_msg", None)
+        if msg is None or self._cam_stamp is None:
+            return None
+        if time.monotonic() - self._cam_stamp > self.camera_max_age_s:
+            return None                     # camera died: fall back to lidar
+        try:
+            fp = visual_fingerprint(msg)
+        except ValueError as e:
+            # Unsupported encoding: log once, disable the channel rather than
+            # throw on every tick.
+            if not getattr(self, "_vis_warned", False):
+                self.get_logger().warn(f"camera channel disabled: {e}")
+                self._vis_warned = True
+            self._vis_ema = None
+            return None
+        return self._vis_ema.update(fp, time.monotonic())
 
     def _joint_cb(self, msg: JointState):
         # hiwonder_motor_driver publishes actual wheel velocities under the
@@ -455,13 +523,17 @@ class PCActiveInferenceRunner(Node):
         # resets it — the rover may be somewhere new.
         if self.use_proprio and self._check_lifted():
             self.place_memory.clear()
+            if self._vis_ema is not None:
+                self._vis_ema = VisFingerprintEMA(
+                    tau_s=float(self.get_parameter("vis_fp_ema_tau_s").value))
             self._nov_ema = 1.0
             self._mem_clears += 1
             if self.slow is not None:
                 self.slow.reset_state()
             self.get_logger().info(
                 "Lift detected — place memory cleared, everywhere is new again")
-        nov_raw = self.place_memory.update(self.latest_scan)
+        nov_raw = self.place_memory.update(self.latest_scan,
+                                           vis_fp=self._visual_fp())
         alpha = min(1.0, self._tick_period
                     / max(self.novelty_ema_tau_s, self._tick_period))
         self._nov_ema += alpha * (nov_raw - self._nov_ema)
@@ -632,6 +704,12 @@ class PCActiveInferenceRunner(Node):
                 hold_pred=float(o_hat[-2]),
                 places_n=self.place_memory.n_places(),
                 mem_clears=self._mem_clears,
+                # Camera channel observability: frames/age/weight so a dead
+                # or uncalibrated camera is visible, not silently ignored.
+                cam_frames=self._vis_frames,
+                cam_age=(None if self._cam_stamp is None else float(
+                    time.monotonic() - self._cam_stamp)),
+                cam_vis_weight=self.place_memory.vis_weight,
                 proprio=o_t.numpy()[self.num_bins:self.num_bins + 8],
                 # Learned attention: precision multiplier per lidar bin
                 # (1 = at the prior, >1 = trusted, <1 = learned-noisy).

@@ -67,7 +67,8 @@ class HealthMonitor:
         self._born = time.monotonic()
         self._t: dict = {
             k: {"last": None, "ts": deque(maxlen=64), "val": None}
-            for k in ("scan", "imu", "battery", "safety", "estop", "track")}
+            for k in ("scan", "imu", "battery", "safety", "estop", "track",
+                      "camera")}
 
     def _hit(self, key, val=None):
         with self._lock:
@@ -87,7 +88,8 @@ class HealthMonitor:
         topics = {"scan": "/scan", "imu": "/imu/data",
                   "battery": "/battery_percentage",
                   "safety": "/safety_monitor_status",
-                  "estop": "/emergency_stop", "track": "/track_cmd"}
+                  "estop": "/emergency_stop", "track": "/track_cmd",
+                  "camera": "/camera/image_raw"}
         try:
             names = {n for n, _types in node.get_topic_names_and_types()}
             for t in topics.values():
@@ -124,6 +126,7 @@ class HealthMonitor:
             from sensor_msgs.msg import LaserScan
             from sensor_msgs.msg import Imu
             from sensor_msgs.msg import JointState
+            from sensor_msgs.msg import Image
             from std_msgs.msg import Bool, Float32, Float32MultiArray, String
         except Exception as e:  # noqa: BLE001
             self.error = f"rclpy unavailable: {e}"
@@ -154,6 +157,10 @@ class HealthMonitor:
                                  lambda m: self._hit("estop", bool(m.data)), Q)
         node.create_subscription(Float32MultiArray, "/track_cmd",
                                  lambda m: self._hit("track", [round(x, 2) for x in m.data[:2]]), Q)
+        # Camera: cheap hit — only header staleness matters, we never decode.
+        node.create_subscription(Image, "/camera/image_raw",
+                                 lambda m: self._hit("camera",
+                                                     f"{m.width}x{m.height}"), Q)
         self.available = True
         self._node = node        # exposed for the watchdog's graph queries
         try:
@@ -373,6 +380,7 @@ _PAGE = """<!doctype html>
   <div class="card"><div class="lab">BATTERY</div><div class="val" id="c_batt">-</div></div>
   <div class="card"><div class="lab">SAFETY MON</div><div class="val" id="c_safe">-</div></div>
   <div class="card"><div class="lab">ESTOP</div><div class="val" id="c_estop">-</div></div>
+  <div class="card"><div class="lab">CAMERA</div><div class="val" id="c_cam">-</div></div>
   <div class="card"><div class="lab">BRAIN</div><div class="val" id="c_brain">-</div></div>
 </div>
 <div class="sec">BRAIN (when awake) &nbsp;·&nbsp; <a id="brain_link" href="#">open brain dashboard →</a></div>
@@ -405,13 +413,15 @@ async function tick(){
   let s;try{s=await (await fetch('/state')).json();}catch(e){put('c_mode','OFFLINE','dead');return;}
   put('c_mode',s.mode||'?',s.mode==='awake'?'ok':(s.mode==='idle'?'dim':'warn'));
   const h=s.health||{};
-  const scan=h.scan||{},imu=h.imu||{},batt=h.battery||{},safe=h.safety||{},est=h.estop||{};
+  const scan=h.scan||{},imu=h.imu||{},batt=h.battery||{},safe=h.safety||{},est=h.estop||{},cam=h.camera||{};
   put('c_scan',scan.hz!=null?scan.hz.toFixed(1):'-',
       scan.hz==null?'dead':(Math.abs(scan.hz-10)<1.5?'ok':(scan.hz>7?'warn':'dead')));
   put('c_imu',imu.age!=null?(imu.age<2?'up':'stale'):'-',ago(imu.age,2,5));
   put('c_batt',batt.val!=null?batt.val+'%':'-',batt.val==null?'dead':(batt.val>20?'ok':'warn'));
   put('c_safe',safe.age!=null?(safe.age<3?'live':'stale'):'-',ago(safe.age,3,8));
   put('c_estop',est.val===true?'HELD':(est.age!=null?'clear':'-'),est.val===true?'dead':'dim');
+  put('c_cam',cam.hz!=null?(cam.hz.toFixed(0)+'fps '+(cam.val||'')):(cam.age!=null?'stale':'off'),
+      cam.hz!=null?(cam.hz>5?'ok':'warn'):(cam.age!=null?'warn':'dim'));
   put('c_brain',s.mode==='awake'?(s.brain&&s.brain.step!=null?'running':'starting'):'idle',
       s.mode==='awake'?'ok':'dim');
   const b=s.brain||{};
@@ -486,7 +496,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 state = {}
             # Slim brain summary for the control page (full page is on child port)
-            keep = ("step", "F", "novelty", "novelty_target", "places_n", "mode")
+            keep = ("step", "F", "novelty", "novelty_target", "places_n", "mode",
+                    "cam_frames", "cam_age", "cam_vis_weight")
             state["brain"] = {k: state.get(k) for k in keep if k in state}
             state["hardstop"] = self.hard.engaged
             state["health"] = self.health.snapshot()
@@ -575,6 +586,14 @@ def main(argv=None):
                                default="/dev/ttyUSB0")
     global_parser.add_argument("--imu-type", dest="imu_type", default="bno085",
                                choices=["lsm9ds1", "bno085"])
+    global_parser.add_argument("--camera", action="store_true",
+                               help="start the ArduCam v4l2 node + brain "
+                                    "camera subscription in awake mode")
+    global_parser.add_argument("--place-vis-weight", dest="place_vis_weight",
+                               default="0.0",
+                               help="visual channel weight in the place "
+                                    "distance (calibrate via pnn_sim/tools/"
+                                    "bag_vis_replay.py first)")
     global_parser.add_argument("--model-path", dest="model_path",
                                default=os.path.expanduser("~/.ros/pnn_brain.pt"))
     global_parser.add_argument("--experience-log-path", dest="experience_log_path",

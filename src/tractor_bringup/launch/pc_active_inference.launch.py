@@ -72,6 +72,17 @@ def generate_launch_description():
         description="Start Xbox joy nodes for shadow teleop: hold the deadman "
                     "(RB) to drive; the brain learns from your trajectories "
                     "and resumes autonomy when you let go")
+    camera_arg = DeclareLaunchArgument(
+        "camera", default_value="false",
+        description="Start the ArduCam v4l2 node and enable the brain's "
+                    "visual place channel (needs calibration via "
+                    "pnn_sim/tools/bag_vis_replay.py before place_vis_weight "
+                    "should go nonzero)")
+    place_vis_weight_arg = DeclareLaunchArgument(
+        "place_vis_weight", default_value="0.0",
+        description="Weight of the visual fingerprint in the place distance "
+                    "calibrated on house bags via pnn_sim/tools/"
+                    "bag_vis_replay.py; 0.0 = lidar-only (validated)")
 
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -141,6 +152,27 @@ def generate_launch_description():
         remappings=[("cmd_vel", "/cmd_vel_teleop")],
         condition=IfCondition(LaunchConfiguration("teleop")))
 
+    # ArduCam 1080P USB (v4l2_camera), same proven config as the NoMaD-era
+    # launch: publish RAW YUYV (output_encoding == capture format) so the
+    # node does zero per-frame CPU conversion — converting to rgb8 inside
+    # the node throttles this camera to ~6 Hz, raw YUYV keeps ~30 fps. The
+    # brain decodes YUYV itself, once per control tick.
+    camera_node = Node(
+        package="v4l2_camera",
+        executable="v4l2_camera_node",
+        name="v4l2_camera",
+        output="screen",
+        parameters=[{
+            "video_device": "/dev/video0",
+            "pixel_format": "YUYV",
+            "image_size": [640, 480],
+            "output_encoding": "yuv422_yuy2",
+            "camera_frame_id": "camera_optical_frame",
+        }],
+        remappings=[("/image_raw", "/camera/image_raw"),
+                    ("/camera_info", "/camera/camera_info")],
+        condition=IfCondition(LaunchConfiguration("camera")))
+
     # Track-space safety gate: /track_cmd_ai -> (clamp near obstacles) -> /track_cmd
     safety_monitor_node = Node(
         package="tractor_bringup",
@@ -183,6 +215,22 @@ def generate_launch_description():
             "action_persist": LaunchConfiguration("action_persist"),
             "learn": LaunchConfiguration("learn"),
             "use_proprio": True,
+            # Camera channel: the launch arg gates the v4l2 node AND the
+            # runner subscription together (one knob, no half-wired state).
+            # place_vis_weight is a separate knob and stays 0.0 until
+            # bag_vis_replay.py calibrates it on house bags — the node can
+            # run (frames observed, telemetry chip live) without vision
+            # influencing place decisions.
+            # (LaunchConfiguration substitutes a STRING; the runner declares
+            # use_camera as bool, so coerce via PythonExpression like the
+            # imu_type comparison above — a raw string override would be
+            # rejected as a type mismatch at startup.)
+            "use_camera": PythonExpression(
+                ["'", LaunchConfiguration("camera"), "' == 'true'"]),
+            "camera_topic": "/camera/image_raw",
+            # Same string-coercion story: declared float in the runner.
+            "place_vis_weight": PythonExpression(
+                ["float('", LaunchConfiguration("place_vis_weight"), "')"]),
             "imu_yaw_axis": LaunchConfiguration("imu_yaw_axis"),
             "imu_yaw_sign": LaunchConfiguration("imu_yaw_sign"),
             "max_yaw_rate": LaunchConfiguration("max_yaw_rate"),
@@ -212,6 +260,8 @@ def generate_launch_description():
         dashboard_port_arg,
         imu_type_arg,
         teleop_arg,
+        camera_arg,
+        place_vis_weight_arg,
 
         robot_description_launch,
         hiwonder_motor_node,
@@ -220,5 +270,8 @@ def generate_launch_description():
         TimerAction(period=4.0, actions=[imu_launch, bno085_launch]),
         TimerAction(period=5.0, actions=[safety_monitor_node,
                                          joy_node, teleop_twist_node]),
+        # Camera one beat before the brain so /camera/image_raw exists when
+        # the runner subscribes (the node itself is conditional on camera:=).
+        TimerAction(period=6.0, actions=[camera_node]),
         TimerAction(period=7.0, actions=[brain_node]),
     ])

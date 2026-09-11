@@ -144,6 +144,12 @@ class BrainSupervisor:
                     f"lidar_port:={self.args.lidar_port}",
                     f"dashboard_port:={self.args.child_port}",
                     f"imu_type:={self.args.imu_type}",
+                    # Camera opt-in (both default off -> lidar-only behavior
+                    # unchanged unless --camera/--place-vis-weight passed).
+                    "camera:=%s" % ("true" if getattr(
+                        self.args, "camera", False) else "false"),
+                    "place_vis_weight:=%s" % getattr(
+                        self.args, "place_vis_weight", "0.0"),
                 ]
             elif mode == "sleep":
                 cmd = [
@@ -428,6 +434,13 @@ def main(argv=None):
     parser.add_argument("--lidar-port", dest="lidar_port", default="/dev/ttyUSB0")
     parser.add_argument("--imu-type", dest="imu_type", default="bno085",
                         choices=["lsm9ds1", "bno085"])
+    parser.add_argument("--camera", action="store_true",
+                        help="start the ArduCam v4l2 node + brain camera "
+                             "subscription in awake mode")
+    parser.add_argument("--place-vis-weight", dest="place_vis_weight",
+                        default="0.0",
+                        help="visual channel weight in the place distance "
+                             "(calibrate via pnn_sim/tools/bag_vis_replay.py)")
     parser.add_argument("--model-path", dest="model_path",
                         default=os.path.expanduser("~/.ros/pnn_brain.pt"))
     parser.add_argument("--experience-log-path", dest="experience_log_path",

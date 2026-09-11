@@ -1049,10 +1049,17 @@ async function tick(){
     }
 
     // Room recognition: place novelty (fingerprint distance) and how many
-    // distinct-looking places are remembered. Gold = a new room.
+    // distinct-looking places are remembered. Gold = a new room. The camera
+    // chip shows frames received and vis_weight when the channel is on, so
+    // an uncalibrated/hidden camera is visible instead of silently ignored.
     const rEl=$('room');
     if(s.novelty!=null){
-      rEl.textContent=(s.novelty*100).toFixed(0)+'% · '+(s.places_n||0)+' seen';
+      let t=(s.novelty*100).toFixed(0)+'% · '+(s.places_n||0)+' seen';
+      if(s.cam_vis_weight!=null&&s.cam_frames!=null){
+        t+=' · '+(s.cam_vis_weight>0?('cam w'+s.cam_vis_weight):'cam off')
+          +'('+s.cam_frames+(s.cam_age!=null?', '+s.cam_age.toFixed(1)+'s':'')+')';
+      }
+      rEl.textContent=t;
       rEl.style.color = s.novelty>0.7 ? '#ffd043' : (s.novelty>0.4 ? '#ff9d3b' : '#00c88c');
     }else{
       rEl.textContent='-';rEl.style.color='';
@@ -1210,6 +1217,7 @@ class PCDashboardState:
                 novelty=None, novelty_pred=None, novelty_target=None,
                 hold_pred=None,
                 epi_gate=None, places_n=None, mem_clears=None,
+                cam_frames=None, cam_age=None, cam_vis_weight=None,
                 epi_spread=None, prag_spread=None,
                 epi_decides=None, prag_decides=None, corner=None,
                 proprio=None, pi=None,
@@ -1287,6 +1295,12 @@ class PCDashboardState:
                 state["places_n"] = int(places_n)
             if mem_clears is not None:
                 state["mem_clears"] = int(mem_clears)
+            if cam_frames is not None:
+                state["cam_frames"] = int(cam_frames)
+            if cam_age is not None:
+                state["cam_age"] = float(cam_age)
+            if cam_vis_weight is not None:
+                state["cam_vis_weight"] = float(cam_vis_weight)
             # Proprio channels as fed to the brain: [wl, wr, roll, pitch,
             # yaw, ax, ay, az] each normalized to [0,1] (0.5 = rest).
             if proprio is not None:
