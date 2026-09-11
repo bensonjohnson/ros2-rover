@@ -130,6 +130,20 @@ _PAGE = """<!doctype html>
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
   }
+  .drive-health { margin: 0 0 10px 0; padding: 8px 10px; border-radius: 8px;
+    background: #14171c; border: 1px solid #232830; }
+  .dh-title { font-size: 11px; letter-spacing: .08em; color: #9aa4b2; }
+  .dh-sub { display:block; font-size: 10px; letter-spacing: 0; color: #6b7480;
+    margin-top: 2px; }
+  .dh-grid { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .dh-card { flex: 1 1 88px; background: #0f1216; border-radius: 6px;
+    padding: 6px 8px; }
+  .dh-label { font-size: 9px; letter-spacing: .06em; color: #6b7480; }
+  .dh-value { font-size: 17px; font-variant-numeric: tabular-nums; color: #cfd6e0; }
+  .dh-value.ok   { color: #39ff14; }
+  .dh-value.warn { color: #ffd043; }
+  .dh-value.dead { color: #ff5b5b; }
+  .dh-note { margin-top: 6px; font-size: 11px; color: #ff9d3b; min-height: 14px; }
   .stat-card.color-blue .stat-value { color: #5bc0ff; }
   .stat-card.color-orange .stat-value { color: #ff9d3b; }
   .stat-card.color-gold .stat-value { color: #ffd043; }
@@ -359,6 +373,25 @@ _PAGE = """<!doctype html>
       </div>
     </div>
     
+    <div class="drive-health" id="drive_health">
+      <div class="dh-title">DRIVE HEALTH
+        <span class="dh-sub">spread across candidate actions &mdash; a drive
+        steers only through this, never through its value</span>
+      </div>
+      <div class="dh-grid">
+        <div class="dh-card"><div class="dh-label">EPI SPREAD</div>
+          <div class="dh-value" id="dh_epi_spread">-</div></div>
+        <div class="dh-card"><div class="dh-label">PRAG SPREAD</div>
+          <div class="dh-value" id="dh_prag_spread">-</div></div>
+        <div class="dh-card"><div class="dh-label">EPI WINS</div>
+          <div class="dh-value" id="dh_epi_win">-</div></div>
+        <div class="dh-card"><div class="dh-label">PRAG WINS</div>
+          <div class="dh-value" id="dh_prag_win">-</div></div>
+        <div class="dh-card"><div class="dh-label">CORNER RATE</div>
+          <div class="dh-value" id="dh_corner">-</div></div>
+      </div>
+      <div class="dh-note" id="dh_note">&nbsp;</div>
+    </div>
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-label">STEP</div>
@@ -827,6 +860,34 @@ function brainViz(s){
 function nnStatus(s){
   // Update the dedicated stat row under the neural net canvas.
   const te=s.trans_errors||[];
+  // DRIVE HEALTH. Thresholds are calibrated from the rover's own logs: a
+  // healthy epistemic spread under input-normalised disagreement sits around
+  // 0.005; the broken build measured 0.003 while still carrying ~60% of every
+  // decision, because each score block is min-max stretched to [0,1].
+  (function(){
+    var notes=[];
+    function put(id,v,dec,lo,hi,inv){
+      var el=$(id); if(el==null) return;
+      if(v==null){el.textContent='-';el.className='dh-value';return;}
+      el.textContent=v.toFixed(dec);
+      var cls='dh-value ';
+      var bad = inv ? (v>hi) : (v<lo);
+      var mid = inv ? (v>lo) : (v<hi);
+      el.className = cls + (bad?'dead':(mid?'warn':'ok'));
+    }
+    put('dh_epi_spread', s.epi_spread, 5, 0.004, 0.006, false);
+    put('dh_prag_spread', s.prag_spread, 4, 0.05, 0.2, false);
+    put('dh_epi_win', s.epi_win_rate, 2, 0.05, 0.15, false);
+    put('dh_prag_win', s.prag_win_rate, 2, 0.05, 0.15, false);
+    put('dh_corner', s.corner_rate, 2, 0.15, 0.4, true);
+    if(s.epi_spread!=null && s.epi_spread < 0.001)
+      notes.push('epistemic spread ~0: curiosity is not choosing, only being amplified');
+    if(s.corner_rate!=null && s.corner_rate > 0.4)
+      notes.push('slamming action-space corners '+(100*s.corner_rate).toFixed(0)+'% of ticks');
+    if(s.prag_spread!=null && s.prag_spread < 0.02)
+      notes.push('pragmatic spread ~0: preferences are not discriminating');
+    var n=$('dh_note'); if(n!=null) n.innerHTML = notes.length? notes.join(' &middot; ') : '&nbsp;';
+  })();
   if(s.step!=null)$('nn_step').textContent=s.step;
   const eZ=s.e_z_abs||[];
   if(eZ.length){
@@ -1125,6 +1186,12 @@ class PCDashboardState:
         self._epi = deque(maxlen=history)
         self._nov = deque(maxlen=history)
         self._nov_pred = deque(maxlen=history)
+        # Rolling drive-health windows (~30 s at 15 Hz): which drive actually
+        # won the decision, and how often the actor slams an action-space
+        # corner. Rates, not instantaneous values — a single tick says nothing.
+        self._epi_wins: deque = deque(maxlen=450)
+        self._prag_wins: deque = deque(maxlen=450)
+        self._corners: deque = deque(maxlen=450)
 
     def active(self, within: float = 5.0) -> bool:
         """True if a browser polled /state recently — producers use this to
@@ -1143,6 +1210,8 @@ class PCDashboardState:
                 novelty=None, novelty_pred=None, novelty_target=None,
                 hold_pred=None,
                 epi_gate=None, places_n=None, mem_clears=None,
+                epi_spread=None, prag_spread=None,
+                epi_decides=None, prag_decides=None, corner=None,
                 proprio=None, pi=None,
                 slow_epi=None, slow_nov_pred=None, slow_ticks=None,
                 slow_action=None, slow_s=None, slow_window=None,
@@ -1167,6 +1236,21 @@ class PCDashboardState:
             }
             if mode is not None:
                 state["mode"] = mode
+            # Drive health (see EFEActor.select): spread is what steers a
+            # choice; value is not.
+            if epi_spread is not None:
+                state["epi_spread"] = round(float(epi_spread), 6)
+            if prag_spread is not None:
+                state["prag_spread"] = round(float(prag_spread), 6)
+            if epi_decides is not None:
+                self._epi_wins.append(1.0 if epi_decides else 0.0)
+                state["epi_win_rate"] = round(float(np.mean(self._epi_wins)), 3)
+            if prag_decides is not None:
+                self._prag_wins.append(1.0 if prag_decides else 0.0)
+                state["prag_win_rate"] = round(float(np.mean(self._prag_wins)), 3)
+            if corner is not None:
+                self._corners.append(1.0 if corner else 0.0)
+                state["corner_rate"] = round(float(np.mean(self._corners)), 3)
             if epoch is not None:
                 state["epoch"] = int(epoch)
             if epoch_total is not None:

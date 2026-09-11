@@ -612,6 +612,15 @@ class PCActiveInferenceRunner(Node):
                 safety_hold=self._safety_hold,
                 teleop=teleop,
                 epi_gate=info.get("epi_gate"),
+                # Drive-health telemetry from EFEActor.select — spreads and
+                # winner flags. Without these forwarded, the dashboard's
+                # DRIVE HEALTH panel renders '-' forever (the bug the rover
+                # tree shipped with).
+                epi_spread=info.get("epi_spread"),
+                prag_spread=info.get("prag_spread"),
+                epi_decides=info.get("epi_decides"),
+                prag_decides=info.get("prag_decides"),
+                corner=info.get("corner"),
                 # Interoceptive channel observability: what the brain was fed
                 # vs what it predicted — the gap closing is the brain learning
                 # its own novelty dynamics.

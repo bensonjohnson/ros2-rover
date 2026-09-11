@@ -53,7 +53,15 @@ class ActorConfig:
     # the term by raw disagreement magnitude: below epi_floor the model is
     # confident and defers to pragmatic + novelty; genuine novelty spikes
     # disagreement and restores full curiosity weight.
-    epi_floor: float = 0.02     # summed-over-horizon disagreement at full gate
+    epi_floor: float = 0.02     # DEPRECATED: magnitude test, see epi_spread_floor
+    # Across-candidate SPREAD of the epistemic score at which curiosity runs at
+    # full weight. Below it the ensemble ranks all candidate actions about
+    # equally — it has no opinion — and curiosity is scaled down instead of
+    # being min-max amplified into the decision. Calibrated against the rover's
+    # own logs, where the healthy spread under the fixed normalisation is
+    # ~0.005; set to a little under that so a genuinely informative situation
+    # opens the gate fully.
+    epi_spread_floor: float = 0.004
     # Commitment: bonus for candidates near the currently-held action, so
     # re-decisions refine the move instead of twitching to a new one.
     smooth_weight: float = 0.25
@@ -151,8 +159,19 @@ class EFEActor:
             # Epistemic value: ensemble variance summed over latent dims,
             # normalized by mean prediction magnitude (matches
             # PCWorldModel.epistemic_value) so it stays scale-invariant. -> [N]
+            # Normalise by the INPUT magnitude, not the output. Across-member
+            # variance of a linear map is ~ sᵀCov(W)s, so it grows with ‖s_in‖²
+            # — and s_in = tanh([z; a]), so SATURATING THE ACTION inflates
+            # "disagreement" no matter how little is actually learnable there.
+            # Dividing by the output magnitude (the previous z_next term) does
+            # not cancel it. Measured on the rover's own logged run: the old
+            # form put 93% of its argmax on saturated corner actions and
+            # preferred FULL SPIN on 51% of steps — the pirouetting that
+            # forward_bias/action_persist were bolted on to mask. Normalising
+            # by ‖s_in‖² drops corner picks to 2.3% and yields moderate
+            # exploratory moves instead.
             disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)
-            scale = z_next.pow(2).sum(dim=1) + 1.0
+            scale = s_in.pow(2).sum(dim=1) + 1.0
             total_epistemic += disagreement / scale
 
             # 2. Decode the next mean state to check proprioception alignment:
@@ -195,8 +214,16 @@ class EFEActor:
         epi_min, epi_max = total_epistemic.min(), total_epistemic.max()
         epi_norm = (total_epistemic - epi_min) / (epi_max - epi_min + 1e-6)
 
-        # Confidence gate (see ActorConfig.epi_floor).
-        epi_gate = min(1.0, float(epi_max) / max(self.cfg.epi_floor, 1e-9))
+        # Confidence gate. It must test the SPREAD across candidates, not the
+        # magnitude of disagreement: epi_norm min-max stretches whatever spread
+        # exists to [0,1], so a term that ranks all candidates nearly equally
+        # still arrives at full strength. Measured on the rover's logged run,
+        # the old magnitude test (mean 0.073 vs epi_floor 0.02) read "fully
+        # open" on 100% of steps while the actual across-candidate spread was
+        # 0.003 — 230x smaller than the proprio term — so ~60% of every
+        # decision was amplified noise.
+        epi_spread = float(total_epistemic.std())
+        epi_gate = min(1.0, epi_spread / max(self.cfg.epi_spread_floor, 1e-9))
 
         prag_min, prag_max = total_pragmatic.min(), total_pragmatic.max()
         prag_norm = (total_pragmatic - prag_min) / (prag_max - prag_min + 1e-6)
@@ -237,11 +264,29 @@ class EFEActor:
 
         # MPC: select the FIRST action of the chosen sequence
         action = cands[idx, 0, :]
+        # DRIVE HEALTH. A term steers the choice only through how much it
+        # VARIES across candidates — both blocks are min-max normalised, so
+        # absolute values cancel. Reporting the value of the winning candidate
+        # (epistemic/pragmatic above) cannot distinguish a live drive from one
+        # that ranks every action the same and is then amplified to full range.
+        # That blind spot hid a pirouetting actor for months. These spreads are
+        # the honest signal, and they cost nothing — the tensors are in hand.
+        epi_argmax = int(torch.argmax(epi_norm))
+        prag_argmax = int(torch.argmax(prag_norm))
         info = {
             "epistemic": float(total_epistemic[idx]),
             "epistemic_max": float(total_epistemic.max()),
             "epistemic_mean": float(total_epistemic.mean()),
             "pragmatic": float(total_pragmatic[idx]),
             "epi_gate": epi_gate,
+            # Across-candidate spreads: near zero == that drive is not choosing.
+            "epi_spread": epi_spread,
+            "prag_spread": float(total_pragmatic.std()),
+            # Who won: does the blended pick match what each drive alone wanted?
+            "epi_decides": bool(epi_argmax == idx),
+            "prag_decides": bool(prag_argmax == idx),
+            # Is the actor slamming action-space corners (the old failure mode)?
+            "corner": bool(float(action.abs().min()) > 0.99),
+            "n_candidates": int(cands.shape[0]),
         }
         return action, info

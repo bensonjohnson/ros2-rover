@@ -295,8 +295,13 @@ class PCWorldModel:
         # relative ignorance rather than raw weight scale (which grows over
         # the brain's lifetime). The +1 keeps tiny early-life latents from
         # exploding the ratio.
+        # Normalised by the INPUT magnitude, matching EFEActor.select. Member
+        # variance of a linear map scales with ‖s_in‖², so normalising by the
+        # OUTPUT (the old preds.mean() term) leaves a systematic preference for
+        # saturated actions — measured on the rover, 93% of argmax picks were
+        # corner actions and full spin won 51% of steps.
         disagreement = preds.var(dim=0, unbiased=False).sum(dim=1)   # [N]
-        scale = preds.mean(dim=0).pow(2).sum(dim=1) + 1.0            # [N]
+        scale = s_in.pow(2).sum(dim=1) + 1.0                         # [N]
         return disagreement / scale
 
     # ---- persistence -------------------------------------------------------
