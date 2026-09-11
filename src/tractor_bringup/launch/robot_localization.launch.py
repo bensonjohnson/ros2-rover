@@ -8,8 +8,12 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def launch_setup(context, *args, **kwargs):
-    # Get parameters
-    config_file = LaunchConfiguration('config_file')
+    # Resolve the params path NOW. Passing the bare LaunchConfiguration through
+    # `parameters=[...]` left it unresolved, so ekf_node started with an empty
+    # parameter set: no odom0/odom1/imu0 inputs, base_link_frame defaulting to
+    # base_link instead of base_footprint, and /odometry/filtered silent. The
+    # EKF looked healthy in `ros2 node list` the whole time.
+    config_file = LaunchConfiguration('config_file').perform(context)
     use_gps = LaunchConfiguration('use_gps')
     
     nodes = []
