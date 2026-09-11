@@ -1,4 +1,0 @@
-pynmea2
-pyserial
-setuptools
-smbus2

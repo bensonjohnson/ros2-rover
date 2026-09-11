@@ -1,4 +1,0 @@
-[console_scripts]
-hiwonder_motor_driver = tractor_control.hiwonder_motor_driver:main
-velocity_feedback_controller = tractor_control.velocity_feedback_controller:main
-xbox_controller_teleop = tractor_control.xbox_controller_teleop:main

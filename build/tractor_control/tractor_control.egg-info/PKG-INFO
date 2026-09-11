@@ -1,7 +1,0 @@
-Metadata-Version: 2.1
-Name: tractor-control
-Version: 0.0.0
-Summary: Tank steering control package for tractor robot with I2C motor control
-Maintainer: benson
-Maintainer-email: benson@todo.todo
-License: MIT
