@@ -77,6 +77,26 @@ class HealthMonitor:
             if val is not None:
                 e["val"] = val
 
+    def _any_publisher_alive(self) -> bool:
+        """True if the DDS graph shows a publisher on any watched topic.
+        Distinguishes 'nothing is running' (idle rover — normal, don't
+        rebuild) from 'publisher up but our subscription is deaf' (wedge)."""
+        node = getattr(self, "_node", None)
+        if node is None:
+            return False
+        topics = {"scan": "/scan", "imu": "/imu/data",
+                  "battery": "/battery_percentage",
+                  "safety": "/safety_monitor_status",
+                  "estop": "/emergency_stop", "track": "/track_cmd"}
+        try:
+            names = {n for n, _types in node.get_topic_names_and_types()}
+            for t in topics.values():
+                if t in names and node.count_publishers(t) > 0:
+                    return True
+        except Exception:  # noqa: BLE001  (graph query raced a teardown)
+            return False
+        return False
+
     def snapshot(self) -> dict:
         now = time.monotonic()
         out = {"rclpy": self.available}
@@ -135,11 +155,13 @@ class HealthMonitor:
         node.create_subscription(Float32MultiArray, "/track_cmd",
                                  lambda m: self._hit("track", [round(x, 2) for x in m.data[:2]]), Q)
         self.available = True
+        self._node = node        # exposed for the watchdog's graph queries
         try:
             rclpy.spin(node)
         except (ExternalShutdownException, KeyboardInterrupt):
             pass
         finally:
+            self._node = None
             try:
                 node.destroy_node()
                 rclpy.shutdown()
@@ -153,8 +175,14 @@ class HealthMonitor:
         boot, leaving every card empty forever) self-heals in <=120 s: if no
         watched topic has delivered anything for two minutes, invalidate the
         ROS context (unblocks spin()), tear down, and rebuild the
-        subscriptions from scratch."""
-        consecutive_failures = 0
+        subscriptions from scratch.
+
+        NOTE: 'no traffic' is NORMAL while the rover is idle (lidar and motor
+        driver are down between modes), so an un-stuck rebuild is not a
+        failure — giving up would kill the cards when AWAKE later brings
+        traffic back. We only give up on a truly unbreakable spin (the thread
+        cannot be released despite rclpy.shutdown(), 5x in a row)."""
+        unbreakable = 0
         while not self._watchdog_stop:
             self._spin_thread = threading.Thread(target=self._run, daemon=True)
             self._spin_thread.start()
@@ -165,11 +193,19 @@ class HealthMonitor:
                 with self._lock:
                     fresh = any(e["last"] and time.monotonic() - e["last"] < 120.0
                                 for e in self._t.values())
-                if not fresh and time.monotonic() - t_start > 120.0:
-                    wedged = True
-                    print("[rover-control] health watchdog: no traffic for "
-                          "120 s — rebuilding ROS subscriptions", flush=True)
-                    break
+                if fresh or time.monotonic() - t_start <= 120.0:
+                    continue
+                # No traffic for 2 minutes. That is NORMAL while the rover is
+                # idle (lidar/motor drivers are down between modes) — only
+                # rebuild when the graph says someone IS publishing and we
+                # still hear nothing (a real wedge).
+                if not self._any_publisher_alive():
+                    continue
+                wedged = True
+                print("[rover-control] health watchdog: publishers up but no "
+                      "traffic for 120 s — rebuilding ROS subscriptions",
+                      flush=True)
+                break
             if self._watchdog_stop:
                 break
             if wedged:
@@ -180,14 +216,14 @@ class HealthMonitor:
                     pass
             self._spin_thread.join(timeout=15.0)
             if self._spin_thread.is_alive():
-                consecutive_failures += 1   # couldn't unstick; back off
-                if consecutive_failures >= 3:
-                    print("[rover-control] health: giving up after 3 wedged "
-                          "cycles (cards stay '-')", flush=True)
+                unbreakable += 1
+                if unbreakable >= 5:
+                    print("[rover-control] health: spin unbreakable after 5 "
+                          "attempts (cards stay '-')", flush=True)
                     return
-                time.sleep(30.0)
+                time.sleep(30.0)     # couldn't unstick; back off before retry
             else:
-                consecutive_failures = 0
+                unbreakable = 0      # clean teardown: idle or healed
                 if not self.available:
                     time.sleep(5.0)  # crashed fast; don't spin CPU
 
