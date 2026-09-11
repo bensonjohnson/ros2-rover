@@ -55,6 +55,8 @@ setup(
             "pc_cognitive_map_runner = tractor_bringup.pc_cognitive_map_runner:main",
             "sleep_consolidator = tractor_bringup.active_inference.sleep_consolidator:main",
             "brain_supervisor = tractor_bringup.active_inference.brain_supervisor:main",
+            "rover_control = tractor_bringup.active_inference.rover_control:main",
+            "hardstop_hold = tractor_bringup.hardstop_hold:main",
         ],
     },
 )

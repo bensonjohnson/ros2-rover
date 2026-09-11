@@ -1,0 +1,32 @@
+# Rover Control — boot-time start/stop/HARDSTOP dashboard on :8090
+#
+# Install with deploy/install_rover_control.sh (fills placeholders) — it also
+# stops+disables the legacy pc-brain-supervisor so the two dashboards never
+# fight over ports.
+#
+# The control page owns :8090. The brain's rich dashboard binds :8082 only
+# while AWAKE (spawned by this service), so a plain `ros2 launch
+# pc_active_inference.launch.py` by hand still works exactly as before.
+#
+# HARDSTOP state lives in ~/.ros/pc_brain_hardstop.latch: if the service or
+# the hold process dies while latched, the next start re-engages it.
+
+[Unit]
+Description=Rover Control (start/stop/HARDSTOP dashboard on :8090)
+# nss-lookup.target: network-online alone races DNS on cold boot and the
+# startup git pull fails (learned the hard way with pc-brain-supervisor).
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@WORKSPACE@
+# Add ROS env specifics here if you use them, e.g.:
+# Environment=ROS_DOMAIN_ID=0
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source @WORKSPACE@/install/setup.bash && exec ros2 run tractor_bringup rover_control --workspace @WORKSPACE@'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
