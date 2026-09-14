@@ -112,12 +112,14 @@ def main():
     ap.add_argument("--ticks", type=int, default=3600)
     ap.add_argument("--holdout-seed", type=int, default=777_000)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--genome", default="evo_out/best_genome.npz")
     ap.add_argument("--population", default="",
                     help="optional final_population.npz: score all, report best/median")
     args = ap.parse_args()
 
-    arena = Arena(1, args.games, seed=args.holdout_seed, device=args.device)
+    arena = Arena(1, args.games, seed=args.holdout_seed, device=args.device,
+                  fp16=args.fp16)
     rows = [run_named(fn, arena, args.ticks) for fn in BASELINES.values()]
     import os
     if os.path.exists(args.genome):
@@ -125,7 +127,8 @@ def main():
     if args.population and os.path.exists(args.population):
         d = np.load(args.population)
         P = d["thetas"].shape[0]
-        a2 = Arena(P, args.games, seed=args.holdout_seed, device=args.device)
+        a2 = Arena(P, args.games, seed=args.holdout_seed, device=args.device,
+                   fp16=args.fp16)
         r = run_genome(args.population, a2, args.ticks)
         from .evolve import evaluate as _ev
         th = torch.as_tensor(d["thetas"], device=args.device)

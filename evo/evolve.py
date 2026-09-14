@@ -60,9 +60,11 @@ def evolve(args):
         sample_population(P, OBS_DIM, hidden, rng), device=dev)
     sigma = torch.full((P, 1), args.sigma0, device=dev)
 
-    train_arenas = [Arena(P, G, seed=args.train_seed + k, device=dev)
+    train_arenas = [Arena(P, G, seed=args.train_seed + k, device=dev,
+                          fp16=args.fp16)
                     for k in range(args.train_rotations)]
-    holdout = Arena(P, G, seed=args.holdout_seed, device=dev)
+    holdout = Arena(P, G, seed=args.holdout_seed, device=dev,
+                    fp16=args.fp16)
 
     os.makedirs(args.out_dir, exist_ok=True)
     log_f = open(os.path.join(args.out_dir, "evolution.jsonl"), "a")
@@ -183,6 +185,9 @@ def main():
                     help="distance term weight; LOWER (e.g. 0.005) if the "
                     "run plateaus as a fast wall-hugger — rooms dominates then")
     ap.add_argument("--w-coll", type=float, default=0.25)
+    ap.add_argument("--fp16", action="store_true",
+                    help="fp16 raycast (GB10/Spark fast path; ~2x on the "
+                    "bandwidth-bound scan, sensing-only)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out-dir", default="evo_out")
     ap.add_argument("--seed", type=int, default=0)

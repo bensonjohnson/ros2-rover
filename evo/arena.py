@@ -8,6 +8,21 @@ is one bit in a per-env int64 bitmask, so fitness needs zero CPU syncs.
 
 Same-G houses are shared across individuals (paired comparison); worlds
 come from a fixed eval seed the evolution never sees elsewhere.
+
+GB10 fast path (Arena(fp16=True)) — three optimizations for the Spark:
+  1. fp16 raycast: the per-tick scan is six [B, 360, M] intermediates —
+     bandwidth-bound, and the GB10 pays ~2x on half-precision traffic.
+     Dummy segments (1e6) round to inf in fp16 and drop out via the
+     isfinite hit-mask, same exclusion as fp32. Everything stateful stays
+     fp32: pose integration (0.01 m steps would quantize), the gate's
+     1e6 sentinels (fp16 max 65504), noise.
+  2. NoSyncGate: the stock BatchedGate does `int(block.sum())` every tick
+     — a forced GPU->CPU sync that serializes the whole pipeline. stops is
+     never used for fitness, so accumulate it as a device tensor instead.
+  3. Batch size is the free lunch: 128 GB unified means thousands more
+     envs than the fp32 working set suggests.
+Selection never compares across worlds/precisions: a run uses one arena
+config for train and holdout.
 """
 
 from __future__ import annotations
@@ -44,22 +59,99 @@ def _proprio(env: BatchedEnv) -> torch.Tensor:
     ], dim=1)
 
 
+class Fp16Env(BatchedEnv):
+    """BatchedEnv with the raycast in fp16 (GB10: bandwidth-bound, ~2x).
+    ONLY scan() runs half-precision: poses/velocities/proprio and the
+    collision check (_clearance) stay fp32, so ground truth stays exact and
+    fitness cannot be inflated by precision artifacts — fp16 can only make
+    the *sensing* slightly wrong, identically for every individual.
+    Dummy pad segments overflow to inf in fp16 and drop out through the
+    isfinite hit-mask, exactly as their 1e6 peers do in fp32."""
+
+    def _build_segments(self):
+        super()._build_segments()                    # fp32 truth kept
+        self._a_h = self._a.half()
+        self._e_h = self._e.half()
+
+    @torch.no_grad()
+    def scan(self) -> torch.Tensor:
+        c = self.cfg
+        ang = self.theta.unsqueeze(1) + self._beam_offsets   # [B, nb] fp32
+        d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
+        d_h = d.half()
+        p = torch.stack([self.x, self.y], dim=1).half()
+        q = self._a_h - p.unsqueeze(1)                     # [B, M, 2]
+        e = self._e_h
+
+        cross_eq = e[:, :, 0] * q[:, :, 1] - e[:, :, 1] * q[:, :, 0]
+        cross_ed = (e[:, None, :, 0] * d_h[:, :, None, 1]
+                    - e[:, None, :, 1] * d_h[:, :, None, 0])  # [B,nb,M]
+        cross_dq = (d_h[:, :, None, 0] * q[:, None, :, 1]
+                    - d_h[:, :, None, 1] * q[:, None, :, 0])
+        t = cross_eq.unsqueeze(1) / cross_ed
+        s = cross_dq / cross_ed
+        hit = (t > 1e-9) & (s >= 0.0) & (s <= 1.0) & torch.isfinite(t)
+        t = torch.where(hit, t, torch.full_like(t, torch.inf))
+        r = t.min(dim=2).values.float().clamp(max=c.lidar_max_range)
+
+        # noise/dropout in fp32 — same RNG draw order as the fp32 env
+        r = r + self.noise(c.lidar_noise_std, self.B, c.n_beams)
+        drop = torch.rand(self.B, c.n_beams, generator=self._g,
+                          device=self.device) < c.lidar_dropout_p
+        return torch.where(drop, torch.full_like(r, torch.inf),
+                           r.clamp(min=0.02))
+
+
+class NoSyncGate(BatchedGate):
+    """BatchedGate minus its per-tick GPU->CPU sync: `stops +=
+    int(block.sum())` forces a device-host round trip EVERY tick, draining
+    the launch pipeline. stops is never used for fitness, so accumulate it
+    on-device instead (reported per env in run_games for forensics)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stops_dev = torch.zeros(self.B, dtype=torch.int64,
+                                     device=self.device)
+
+    def _update_front_blocked(self):
+        c = self.cfg
+        now = self._now()
+        resume = self._front_path_dist > c.stop_distance + c.hysteresis
+        held_long = (self._front_blocked_time < 0) \
+            | (now - self._front_blocked_time >= c.min_block_duration)
+        release = self.front_blocked & resume & held_long
+        self.front_blocked = self.front_blocked & ~release
+        self._front_blocked_time = torch.where(
+            release, torch.full_like(self._front_blocked_time, -1.0),
+            self._front_blocked_time)
+        block = (~self.front_blocked
+                 & (self._front_path_dist < c.stop_distance)
+                 & (self._front_streak >= c.block_scans))
+        self.stops_dev += block.to(torch.int64)
+        self.front_blocked = self.front_blocked | block
+        self._front_blocked_time = torch.where(
+            block, torch.full_like(self._front_blocked_time, now),
+            self._front_blocked_time)
+
+
 class Arena:
     """P*G envs laid out as individual-major rows p*G+g; house g is shared
     by every individual (paired fitness across identical worlds)."""
 
     def __init__(self, P: int, G: int, seed: int = 777_000,
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
-                 gate_cfg: GateConfig | None = None):
+                 gate_cfg: GateConfig | None = None, fp16: bool = False):
         self.P, self.G = P, G
         self.B = P * G
         self.device = torch.device(device)
         self.dt = 1.0 / CONTROL_HZ
+        self.fp16 = bool(fp16 and str(device).startswith("cuda"))
         self._gate_cfg = gate_cfg or GateConfig()
 
         rng = np.random.default_rng(seed)
         houses = [make_house(rng) for _ in range(G)]
-        self.env = BatchedEnv(self.B, rover_cfg, seed=seed, device=device)
+        env_cls = Fp16Env if self.fp16 else BatchedEnv
+        self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)
         self.env._worlds = [houses[(b) % G] for b in range(self.B)]
         self.env._build_segments()
 
@@ -101,9 +193,9 @@ class Arena:
         e.wheel_l.zero_(); e.wheel_r.zero_(); e.yaw_rate.zero_()
         e.accel = torch.zeros(self.B, 3, device=self.device)
         e.accel[:, 2] = e.cfg.gravity
-        self.gate = BatchedGate(self._gate_cfg, self.B,
-                                lambda: self._t * self.dt,
-                                device=str(self.device))
+        self.gate = NoSyncGate(self._gate_cfg, self.B,
+                               lambda: self._t * self.dt,
+                               device=str(self.device))
         self._t = 0
 
     def _room_code(self) -> torch.Tensor:
@@ -153,8 +245,7 @@ class Arena:
             device=self.device, dtype=torch.float32)
         return {"rooms": rooms, "rooms_total": self.rooms_total,
                 "dist_m": dist, "collisions": coll,
-                "stops": torch.full((self.B,), float(self.gate.stops),
-                                    device=self.device)}
+                "stops": self.gate.stops_dev.to(torch.float32)}
 
 
 def fitness(metrics: dict, w_dist: float = 0.03,
