@@ -30,7 +30,8 @@ from .policy import (PopulationNet, genome_size, per_gene_scale,
 
 
 def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
-             ticks: int) -> tuple[torch.Tensor, dict]:
+             ticks: int, w_dist: float = 0.03,
+             w_coll: float = 0.25) -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
     P, G = arena.P, arena.G
@@ -44,7 +45,7 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
         return a.view(P * G, 2)
 
     metrics = arena.run_games(policy_step, ticks)
-    fit = fitness(metrics).view(P, G).mean(dim=1)      # [P]
+    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll).view(P, G).mean(dim=1)
     return fit, metrics
 
 
@@ -72,7 +73,8 @@ def evolve(args):
 
     for gen in range(args.gens):
         arena = train_arenas[gen % len(train_arenas)]
-        fit, metrics = evaluate(arena, thetas, hidden, args.ticks)
+        fit, metrics = evaluate(arena, thetas, hidden, args.ticks,
+                                w_dist=args.w_dist, w_coll=args.w_coll)
         fit_np = fit.cpu().numpy()
 
         order = np.argsort(-fit_np)
@@ -85,7 +87,8 @@ def evolve(args):
 
         # --- report every --report-every gens (holdout score included) ----
         if gen % args.report_every == 0 or gen == args.gens - 1:
-            hf, hm = evaluate(holdout, thetas, hidden, args.ticks)
+            hf, hm = evaluate(holdout, thetas, hidden, args.ticks,
+                              w_dist=args.w_dist, w_coll=args.w_coll)
             b = int(hf.argmax())
             rec = {
                 "gen": gen, "elapsed_s": round(time.time() - t0, 1),
@@ -176,6 +179,10 @@ def main():
     ap.add_argument("--holdout-seed", type=int, default=777_000,
                     help="never used for selection; match eval_checkpoints")
     ap.add_argument("--report-every", type=int, default=5)
+    ap.add_argument("--w-dist", type=float, default=0.03,
+                    help="distance term weight; LOWER (e.g. 0.005) if the "
+                    "run plateaus as a fast wall-hugger — rooms dominates then")
+    ap.add_argument("--w-coll", type=float, default=0.25)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out-dir", default="evo_out")
     ap.add_argument("--seed", type=int, default=0)
