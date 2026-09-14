@@ -70,6 +70,7 @@ class FlyBrainNode(Node):
         p("diagnostics_topic", "/flygm/diagnostics")
         p("teleop_cmd_topic", "/cmd_vel_teleop")
         p("action_persist", 5)
+        p("autonomous", True)   # false = propose-only (fly never drives)
 
         g = self.get_parameter
         self.graph_npz = str(g("graph_npz").value)
@@ -109,6 +110,10 @@ class FlyBrainNode(Node):
             Float32MultiArray, str(g("track_cmd_topic").value), 10)
         self.diag_pub = self.create_publisher(
             Float32MultiArray, str(g("diagnostics_topic").value), 10)
+        # proposed-but-not-executed actions (teleop capture / propose-only)
+        self.proposed_pub = self.create_publisher(
+            Float32MultiArray, "/flygm/proposed", 10)
+        self.autonomous = bool(g("autonomous").value)
         # teleop override: any nonzero twist on /cmd_vel_teleop (xbox deadman)
         # takes over for action_persist ticks (same rule as the PCN runner)
         self._teleop_left = np.zeros(2, dtype=np.float32)
@@ -151,7 +156,10 @@ class FlyBrainNode(Node):
         vl = v - 0.5 * w * self._kin_w
         vr = v + 0.5 * w * self._kin_w
         post = np.array([vl, vr], dtype=np.float32) / max(self._kin_vmax, 1e-6)
-        self._teleop_left = np.clip(post, -1.0, 1.0)
+        # same envelope as the PCN runner: clip then scale (0.25 m/s twist
+        # -> 1.25 raw -> clip 1.0 -> x0.6 = 0.6 track = 0.12 m/s, identical
+        # to what autonomy would have been allowed)
+        self._teleop_left = np.clip(post, -1.0, 1.0) * self.action_scale
         self._persist = self._persist_n
 
     # ------------------------------------------------------------- graph --
@@ -172,12 +180,6 @@ class FlyBrainNode(Node):
         if os.path.exists(self.hardstop_path):
             self._publish(0.0, 0.0, mode=3)
             return
-        if self._persist > 0:
-            self._persist -= 1
-            l, r = self._teleop_left
-            self._publish(float(l), float(r), mode=1)
-            self._step_graph_obs_only()   # keep the graph observing
-            return
         if (self.scan is None or
                 now - self.scan_t > self.stale_timeout):
             self._publish(0.0, 0.0, mode=2)
@@ -192,6 +194,27 @@ class FlyBrainNode(Node):
         eff_vec = self._step_graph(obs)
         raw = self.R @ eff_vec
         raw = np.clip(raw, -1.0, 1.0) * self.action_scale
+        # ALWAYS publish what the fly proposes (propose-only mode = the fly
+        # never drives; teleop capture = human drives, fly logged alongside)
+        pmsg = Float32MultiArray()
+        pmsg.data = [float(raw[0]), float(raw[1])]
+        self.proposed_pub.publish(pmsg)
+
+        if not self.autonomous:
+            # propose-only: human drives via deadman (same gated path),
+            # zero when no teleop; fly's proposal is on /flygm/proposed
+            if self._persist > 0:
+                self._persist -= 1
+                l, r = self._teleop_left
+                self._publish(float(l), float(r), mode=1)
+            else:
+                self._publish(0.0, 0.0, mode=4)
+            return
+        if self._persist > 0:
+            self._persist -= 1
+            l, r = self._teleop_left
+            self._publish(float(l), float(r), mode=1)
+            return
         self._publish(float(raw[0]), float(raw[1]), mode=0)
 
     def _step_graph_obs_only(self):
