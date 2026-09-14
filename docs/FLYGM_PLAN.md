@@ -1,13 +1,38 @@
 # FLYGM Tier-2 Spike — Fly Connectome as Rover Policy Graph
 
-**Status: SCOPED, NOT STARTED.** Bounded spike with a go/no-go verdict gate — NOT a new
-long-running stack. The PCN pet-brain line stays the primary mission (see REVIVAL_PLAN.md
-and the ros2-rover-revival skill). Historical failure mode was new stacks every 4–8 weeks;
-this spike is deliberately time-boxed and verdict-gated before any on-rover autonomy.
+**Status: LIVE WIRED & TESTED (2026-09-14).** Stage 0 done (graph built,
+spot-checks pass). Stage 1: bag-replay gate + 30 s LIVE run on the rover.
+Results below; stage 2 (training) is the open gate. NOT a new long-running
+stack — verdict-gated per the original scoping.
 
-Goal: run the MaleCNS male fly connectome (166,700 neurons, ~125M synapses) as a
-message-passing policy graph (FlyGM recipe, arXiv 2602.17997) driving the rover's
-track_cmd/cmd_vel interface — the "tier 2" option discussed 2026-09-13.
+## Stage-1 results (2026-09-14, real bags + live rover)
+- Gate A bag replay (stationary dock, 668 ticks): "silence at rest" FAILED —
+  real-W readout drift 0.231 vs shuffled-W 0.081 (real wiring sustains
+  ongoing internal dynamics). World-lockedness: corr(dcmd,dobs) +0.040 real
+  vs -0.033 shuffled; gain hi/lo 1.18 vs 0.98 — real-W marginally
+  world-locked. Interpretation: wiring gives a small real edge but NO free
+  controller; FlyGM's paper agrees — the bias pays off through training.
+  NOTE: first shuffled-control run was broken (no-op shuffle → identical
+  outputs to 7 decimals); only trust the asserted >90% rewired runs.
+- Live wiring: `tractor_bringup/fly_brain_node.py` publishes /track_cmd_ai
+  (Float32MultiArray [L,R]) exactly like the PCN runner → safety monitor →
+  motor driver. HARDSTOP latch honored (mode=3 zeroed 1054/1354 msgs).
+  Xbox deadman override wired (/cmd_vel_teleop, 5-tick persist, graph keeps
+  observing during override).
+- Live deploy artifact = pruned graph: ol_intrinsic dropped, then edges
+  <5 syn dropped (25% of edges, ~73% of synapse weight), 72,900 nodes /
+  3.48M edges / C=4 → **38 ms/tick single-thread on RK3588 A76** (C=32 full
+  graph is 226 ms — torch-CPU-sparse overhead; scipy CSR is the live path).
+- 30 s live run (HARDSTOP released 04:32:08–04:32:38 UTC): 300/300 fly
+  ticks, zero stale, no obstacle within 0.15 m (safety never fired).
+  Behavior: UNTRAINED readout saturates both rails (L +0.567±0.06, R
+  -0.598±0.03 ≈ ±cap) → persistent spin-in-place, v≈0, w=-0.13±0.24,
+  0 direction flips, corr(|dcmd|,|dmin_scan|) −0.03. Degenerate fixed
+  action = expected pre-training pathology (FlyGM fixed it with imitation
+  pretraining). Bag: rover:/tmp/flygm_livetest.
+- Conclusion: the loop is safe, realtime, and wired end-to-end; behavior is
+  degenerate-but-bounded until stage-2 training (IL on teleop + PPO on the
+  Spark, decoder R + encoder enc_P + eta trainable, W frozen).
 
 ## Verified data access (2026-09-13)
 
