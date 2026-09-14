@@ -59,7 +59,48 @@ def _proprio(env: BatchedEnv) -> torch.Tensor:
     ], dim=1)
 
 
-class Fp16Env(BatchedEnv):
+class _DefaultRNGMixin:
+    """Route all randomness through the DEFAULT CUDA generator (registered
+    natively for CUDA-graph capture; custom generators need
+    register_generator_state and error out otherwise). Arena determinism
+    comes from torch.manual_seed at reset when noise_seed is set."""
+
+    def noise(self, std: float, *shape) -> torch.Tensor:
+        sh = shape if shape else (self.B,)
+        return torch.randn(*sh, device=self.device) * std
+
+    def _dropout(self, r: torch.Tensor, p: float) -> torch.Tensor:
+        drop = torch.rand(r.shape, device=self.device) < p
+        return torch.where(drop, torch.full_like(r, torch.inf),
+                           r.clamp(min=0.02))
+
+
+class Fp32Env(_DefaultRNGMixin, BatchedEnv):
+    """BatchedEnv with generator-free scan (graph-capturable)."""
+
+    @torch.no_grad()
+    def scan(self) -> torch.Tensor:
+        c = self.cfg
+        ang = self.theta.unsqueeze(1) + self._beam_offsets
+        d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
+        p = torch.stack([self.x, self.y], dim=1)
+        q = self._a - p.unsqueeze(1)
+        cross_eq = (self._e[:, :, 0] * q[:, :, 1]
+                    - self._e[:, :, 1] * q[:, :, 0])
+        cross_ed = (self._e[:, None, :, 0] * d[:, :, None, 1]
+                    - self._e[:, None, :, 1] * d[:, :, None, 0])
+        cross_dq = (d[:, :, None, 0] * q[:, None, :, 1]
+                    - d[:, :, None, 1] * q[:, None, :, 0])
+        t = cross_eq.unsqueeze(1) / cross_ed
+        s = cross_dq / cross_ed
+        hit = (t > 1e-9) & (s >= 0.0) & (s <= 1.0) & torch.isfinite(t)
+        t = torch.where(hit, t, torch.full_like(t, torch.inf))
+        r = t.min(dim=2).values.clamp(max=c.lidar_max_range)
+        r = r + self.noise(c.lidar_noise_std, self.B, c.n_beams)
+        return self._dropout(r, c.lidar_dropout_p)
+
+
+class Fp16Env(_DefaultRNGMixin, BatchedEnv):
     """BatchedEnv with the raycast in fp16 (GB10: bandwidth-bound, ~2x).
     ONLY scan() runs half-precision: poses/velocities/proprio and the
     collision check (_clearance) stay fp32, so ground truth stays exact and
@@ -94,12 +135,8 @@ class Fp16Env(BatchedEnv):
         t = torch.where(hit, t, torch.full_like(t, torch.inf))
         r = t.min(dim=2).values.float().clamp(max=c.lidar_max_range)
 
-        # noise/dropout in fp32 — same RNG draw order as the fp32 env
         r = r + self.noise(c.lidar_noise_std, self.B, c.n_beams)
-        drop = torch.rand(self.B, c.n_beams, generator=self._g,
-                          device=self.device) < c.lidar_dropout_p
-        return torch.where(drop, torch.full_like(r, torch.inf),
-                           r.clamp(min=0.02))
+        return self._dropout(r, c.lidar_dropout_p)
 
 
 class NoSyncGate(BatchedGate):
@@ -173,7 +210,7 @@ class Arena:
 
         rng = np.random.default_rng(seed)
         houses = [make_house(rng) for _ in range(G)]
-        env_cls = Fp16Env if self.fp16 else BatchedEnv
+        env_cls = Fp16Env if self.fp16 else Fp32Env
         self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)
         self.env._worlds = [houses[(b) % G] for b in range(self.B)]
         self.env._build_segments()
@@ -230,8 +267,9 @@ class Arena:
         e.accel.zero_()
         e.accel[:, 2] = e.cfg.gravity
         self.gate.reset_state()
-        if self._noise_seed is not None:
-            self.env._g.manual_seed(self._noise_seed)
+        if (self._noise_seed is not None
+                and not torch.cuda.is_current_stream_capturing()):
+            torch.manual_seed(self._noise_seed)
         self._t = 0
         for hook in self._reset_hooks:
             hook()

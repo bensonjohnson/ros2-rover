@@ -66,19 +66,19 @@ class GraphRunner:
         self.net.bind(P, arena.G)
         self.h = torch.zeros(P, arena.G, hidden, device=arena.device)
         arena._reset_hooks.append(self.h.zero_)
-        # custom CUDA generators need registering to be graph-safe, or the
-        # lidar-noise rand during capture aborts the capture
-        reg = getattr(torch.cuda.graphs, "register_generator_state", None)
-        if reg is not None:
-            try:
-                reg(arena.env._g)
-            except Exception:                        # noqa: BLE001
-                pass
+        # NOTE: env randomness goes through the DEFAULT CUDA generator
+        # (see _DefaultRNGMixin) — natively graph-safe; on replay each game
+        # sees the same captured noise stream, which is what we want
+        # (paired comparison across individuals).
         self._built = False
 
     def _step(self, obs, prev_act):
-        a, self.h = self.net.step(
+        a, h_new = self.net.step(
             obs.view(self.P, self.arena.G, OBS_DIM), self.h)
+        self.h.copy_(h_new)   # in-place: keeps the hidden-state address
+                              # stable across graph replays (a rebind would
+                              # leak state between games and orphan the
+                              # reset hook)
         return a.view(self.P * self.arena.G, 2)
 
     def run(self, thetas: torch.Tensor, ticks: int,
