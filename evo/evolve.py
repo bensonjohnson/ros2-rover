@@ -49,6 +49,47 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
     return fit, metrics
 
 
+class GraphRunner:
+    """CUDA-graph evaluator for one arena: the whole rollout — physics,
+    gate, policy — is captured ONCE and replayed per generation. The
+    launch-bound regime on the GB10 is thousands of tiny kernels per game
+    (raycast is only ~30 segments wide); replay replaces them with one
+    graphLaunch. Weights flow through a STATIC buffer (copy_ outside the
+    graph), which is the only way a parameter-changing graph is legal."""
+
+    def __init__(self, arena: Arena, P: int, hidden: int):
+        from .policy import genome_size
+        self.arena, self.P, self.hidden = arena, P, hidden
+        N = genome_size(OBS_DIM, hidden)
+        self.theta_buf = torch.zeros(P, N, device=arena.device)
+        self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden)
+        self.net.bind(P, arena.G)
+        self.h = torch.zeros(P, arena.G, hidden, device=arena.device)
+        arena._reset_hooks.append(self.h.zero_)
+        # custom CUDA generators need registering to be graph-safe, or the
+        # lidar-noise rand during capture aborts the capture
+        reg = getattr(torch.cuda.graphs, "register_generator_state", None)
+        if reg is not None:
+            try:
+                reg(arena.env._g)
+            except Exception:                        # noqa: BLE001
+                pass
+        self._built = False
+
+    def _step(self, obs, prev_act):
+        a, self.h = self.net.step(
+            obs.view(self.P, self.arena.G, OBS_DIM), self.h)
+        return a.view(self.P * self.arena.G, 2)
+
+    def run(self, thetas: torch.Tensor, ticks: int,
+            w_dist: float, w_coll: float):
+        self.theta_buf.copy_(thetas)
+        metrics = self.arena.run_games(self._step, ticks, graph=True)
+        fit = fitness(metrics, w_dist=w_dist,
+                      w_coll=w_coll).view(self.P, self.arena.G).mean(dim=1)
+        return fit, metrics
+
+
 def evolve(args):
     dev = args.device
     hidden, P, G = args.hidden, args.pop, args.games
@@ -66,6 +107,22 @@ def evolve(args):
     holdout = Arena(P, G, seed=args.holdout_seed, device=dev,
                     fp16=args.fp16)
 
+    if args.graph:
+        runners = [GraphRunner(a, P, hidden) for a in train_arenas]
+        ho_runner = GraphRunner(holdout, P, hidden)
+
+        def score(arena_ix, th):
+            if arena_ix < 0:
+                return ho_runner.run(th, args.ticks, args.w_dist,
+                                     args.w_coll)
+            return runners[arena_ix].run(th, args.ticks, args.w_dist,
+                                         args.w_coll)
+    else:
+        def score(arena_ix, th):
+            a = holdout if arena_ix < 0 else train_arenas[arena_ix]
+            return evaluate(a, th, hidden, args.ticks, w_dist=args.w_dist,
+                            w_coll=args.w_coll)
+
     os.makedirs(args.out_dir, exist_ok=True)
     log_f = open(os.path.join(args.out_dir, "evolution.jsonl"), "a")
 
@@ -74,9 +131,7 @@ def evolve(args):
     best_fit_ever, best_theta = -np.inf, thetas[0].cpu().clone()
 
     for gen in range(args.gens):
-        arena = train_arenas[gen % len(train_arenas)]
-        fit, metrics = evaluate(arena, thetas, hidden, args.ticks,
-                                w_dist=args.w_dist, w_coll=args.w_coll)
+        fit, metrics = score(gen % len(train_arenas), thetas)
         fit_np = fit.cpu().numpy()
 
         order = np.argsort(-fit_np)
@@ -89,8 +144,7 @@ def evolve(args):
 
         # --- report every --report-every gens (holdout score included) ----
         if gen % args.report_every == 0 or gen == args.gens - 1:
-            hf, hm = evaluate(holdout, thetas, hidden, args.ticks,
-                              w_dist=args.w_dist, w_coll=args.w_coll)
+            hf, hm = score(-1, thetas)
             b = int(hf.argmax())
             rec = {
                 "gen": gen, "elapsed_s": round(time.time() - t0, 1),
@@ -188,6 +242,9 @@ def main():
     ap.add_argument("--fp16", action="store_true",
                     help="fp16 raycast (GB10/Spark fast path; ~2x on the "
                     "bandwidth-bound scan, sensing-only)")
+    ap.add_argument("--graph", action="store_true",
+                    help="capture the full rollout as a CUDA graph (one "
+                    "replay per generation; removes kernel-launch overhead)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out-dir", default="evo_out")
     ap.add_argument("--seed", type=int, default=0)

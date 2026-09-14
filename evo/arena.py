@@ -112,26 +112,45 @@ class NoSyncGate(BatchedGate):
         super().__init__(*args, **kwargs)
         self.stops_dev = torch.zeros(self.B, dtype=torch.int64,
                                      device=self.device)
+        # Device-side clock (Arena._tdev): a Python counter would be baked
+        # as a constant into a captured CUDA graph, freezing the hold-timer.
+        self._tick = torch.zeros((), device=self.device)
+        self._neg1 = torch.full((), -1.0, device=self.device)
 
     def _update_front_blocked(self):
         c = self.cfg
-        now = self._now()
+        now = self._tick
         resume = self._front_path_dist > c.stop_distance + c.hysteresis
         held_long = (self._front_blocked_time < 0) \
             | (now - self._front_blocked_time >= c.min_block_duration)
         release = self.front_blocked & resume & held_long
         self.front_blocked = self.front_blocked & ~release
         self._front_blocked_time = torch.where(
-            release, torch.full_like(self._front_blocked_time, -1.0),
-            self._front_blocked_time)
+            release, self._neg1, self._front_blocked_time)
         block = (~self.front_blocked
                  & (self._front_path_dist < c.stop_distance)
                  & (self._front_streak >= c.block_scans))
         self.stops_dev += block.to(torch.int64)
         self.front_blocked = self.front_blocked | block
         self._front_blocked_time = torch.where(
-            block, torch.full_like(self._front_blocked_time, now),
-            self._front_blocked_time)
+            block, now, self._front_blocked_time)
+
+    def reset_state(self):
+        """In-place state zero for arena re-runs / CUDA-graph replay
+        (allocating a fresh gate per game would be illegal inside a graph
+        capture)."""
+        self.front_blocked.zero_()
+        self._rear_blocked.zero_()
+        self._front_blocked_time.fill_(-1.0)
+        self._front_streak.zero_()
+        self._rear_streak.zero_()
+        self._front_path_dist.fill_(self.cfg.max_eval_distance)
+        for t in (self._left, self._right, self._rear):
+            t.fill_(self.cfg.max_eval_distance)
+        self._cmd_lin.zero_()
+        self._cmd_ang.zero_()
+        self.stops_dev.zero_()
+        self._tick.zero_()
 
 
 class Arena:
@@ -140,13 +159,17 @@ class Arena:
 
     def __init__(self, P: int, G: int, seed: int = 777_000,
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
-                 gate_cfg: GateConfig | None = None, fp16: bool = False):
+                 gate_cfg: GateConfig | None = None, fp16: bool = False,
+                 noise_seed: int | None = None):
         self.P, self.G = P, G
         self.B = P * G
         self.device = torch.device(device)
         self.dt = 1.0 / CONTROL_HZ
         self.fp16 = bool(fp16 and str(device).startswith("cuda"))
         self._gate_cfg = gate_cfg or GateConfig()
+        self._noise_seed = noise_seed   # set = every game replays ONE
+                                        # shared noise stream (paired eval;
+                                        # also the CUDA-graph capture mode)
 
         rng = np.random.default_rng(seed)
         houses = [make_house(rng) for _ in range(G)]
@@ -184,44 +207,56 @@ class Arena:
             [totals[b % G] for b in range(self.B)], device=self.device,
             dtype=torch.float32)
 
-    def reset(self):
-        e = self.env
-        e.x, e.y, e.theta = self._pose[:, 0].clone(), \
-            self._pose[:, 1].clone(), self._pose[:, 2].clone()
-        e.v_left.zero_(); e.v_right.zero_(); e._prev_v.zero_()
-        e.collided.zero_()
-        e.wheel_l.zero_(); e.wheel_r.zero_(); e.yaw_rate.zero_()
-        e.accel = torch.zeros(self.B, 3, device=self.device)
-        e.accel[:, 2] = e.cfg.gravity
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
                                device=str(self.device))
         self._t = 0
+        # static buffers so the whole rollout is CUDA-graph capturable
+        self._shift = torch.arange(self.maxp, device=self.device,
+                                   dtype=torch.int64)
+        self._one64 = torch.ones((), dtype=torch.int64, device=self.device)
+        self._acc = None
+        self._reset_hooks = []      # e.g. zero the policy's hidden state
+
+    def reset(self):
+        """Allocation-free: copy_ / zero_ / fill_ only, so this is legal
+        inside CUDA-graph capture and cheap to replay."""
+        e = self.env
+        e.x.copy_(self._pose[:, 0]); e.y.copy_(self._pose[:, 1])
+        e.theta.copy_(self._pose[:, 2])
+        e.v_left.zero_(); e.v_right.zero_(); e._prev_v.zero_()
+        e.collided.zero_()
+        e.wheel_l.zero_(); e.wheel_r.zero_(); e.yaw_rate.zero_()
+        e.accel.zero_()
+        e.accel[:, 2] = e.cfg.gravity
+        self.gate.reset_state()
+        if self._noise_seed is not None:
+            self.env._g.manual_seed(self._noise_seed)
+        self._t = 0
+        for hook in self._reset_hooks:
+            hook()
 
     def _room_code(self) -> torch.Tensor:
         e = self.env
         xv = (e.x.unsqueeze(1) > self._pp) & (self._pk == 1.0)
         yh = (e.y.unsqueeze(1) > self._pp) & (self._pk == 2.0)
         bit = (xv | yh).to(torch.int64)
-        shift = torch.arange(self.maxp, device=self.device,
-                             dtype=torch.int64)
-        return (bit << shift).sum(dim=1)          # [B]
+        return (bit << self._shift).sum(dim=1)          # [B]
 
     @torch.no_grad()
-    def run_games(self, policy_step, ticks: int,
-                  every_room_sample: int = 3) -> dict:
-        """policy_step(obs [B, OBS_DIM], prev_act [B, 2]) -> raw cmd [B, 2]
-        (anything is clamped). Returns per-env metrics as [B] tensors."""
+    def _rollout_body(self, policy_step, ticks, every_room_sample, acc):
+        """One full game from reset. Every op is device-only (no CPU sync,
+        no host control flow on tensor values), so this is legal inside a
+        CUDA-graph capture AND for eager replay. `now` for the gate is the
+        device tick counter advanced by add_ (a Python counter would bake a
+        constant into the graph)."""
         self.reset()
+        prev_act, seen, dist, coll = acc
+        prev_act.zero_()
+        seen.zero_(); dist.zero_(); coll.zero_()
         e = self.env
-        prev_act = torch.zeros(self.B, 2, device=self.device)
-        seen = torch.zeros(self.B, dtype=torch.int64, device=self.device)
-        one64 = torch.ones((), dtype=torch.int64, device=self.device)
-        dist = torch.zeros(self.B, device=self.device)
-        coll = torch.zeros(self.B, device=self.device)
-
         for t in range(ticks):
-            self._t = t
+            self.gate._tick.add_(self.dt)          # device-side clock
             ranges = e.scan()
             scan72 = batched_preprocess(ranges, e.angle_min,
                                         e.angle_increment,
@@ -237,15 +272,74 @@ class Arena:
             dist += torch.hypot(e.x - px, e.y - py)
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
-                seen |= (one64 << self._room_code())
+                seen |= (self._one64 << self._room_code())
             prev_act = gated
 
+    def run_games(self, policy_step, ticks: int,
+                  every_room_sample: int = 3, graph: bool = False) -> dict:
+        """policy_step(obs [B, OBS_DIM], prev_act [B, 2]) -> raw cmd [B, 2]
+        (anything is clamped). Returns per-env metrics as [B] tensors.
+
+        graph=True captures the whole rollout as one CUDA graph (replay
+        skips the ~ticks*50 kernel launches — we are launch-bound at these
+        batch sizes). The policy closure must then read ONLY stable buffers
+        (values refreshed by copy_ outside the graph) — see evolve.evaluate.
+        Falls back to eager once with a warning if capture fails."""
+        if graph and str(self.device).startswith("cuda"):
+            key = (ticks, every_room_sample)
+            if not hasattr(self, "_graphs"):
+                self._graphs = {}
+            if key in self._graphs:
+                self._graphs[key].replay()
+            elif getattr(self, "_graph_broken", False):
+                graph = False
+            else:
+                try:
+                    self._graphs[key] = self._capture(
+                        policy_step, ticks, every_room_sample)
+                    self._graphs[key].replay()
+                except Exception as ex:              # noqa: BLE001
+                    print(f"(arena: graph capture failed -> eager: "
+                          f"{type(ex).__name__}: {ex})", flush=True)
+                    self._graph_broken = True
+                    graph = False
+        if not graph:
+            acc = self._make_acc()
+            self._rollout_body(policy_step, ticks, every_room_sample, acc)
+            _, seen, dist, coll = acc
+        else:
+            _, seen, dist, coll = self._acc           # static buffers
+        seen = seen.clone()                           # detach from graph pool
         rooms = torch.tensor(
             [bin(int(m)).count("1") for m in seen.cpu().tolist()],
             device=self.device, dtype=torch.float32)
         return {"rooms": rooms, "rooms_total": self.rooms_total,
-                "dist_m": dist, "collisions": coll,
-                "stops": self.gate.stops_dev.to(torch.float32)}
+                "dist_m": dist.clone(), "collisions": coll.clone(),
+                "stops": self.gate.stops_dev.to(torch.float32).clone()}
+
+    def _make_acc(self):
+        return (torch.zeros(self.B, 2, device=self.device),
+                torch.zeros(self.B, dtype=torch.int64, device=self.device),
+                torch.zeros(self.B, device=self.device),
+                torch.zeros(self.B, device=self.device))
+
+    def _capture(self, policy_step, ticks, every_room_sample):
+        import torch.cuda
+        if self._acc is None:
+            self._acc = self._make_acc()
+        # warmup on a side stream (allocs settle, cudnn picks kernels)
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            for _ in range(3):
+                self._rollout_body(policy_step, ticks, every_room_sample,
+                                   self._acc)
+        torch.cuda.current_stream().wait_stream(s)
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            self._rollout_body(policy_step, ticks, every_room_sample,
+                               self._acc)
+        return g
 
 
 def fitness(metrics: dict, w_dist: float = 0.03,
