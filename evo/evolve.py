@@ -34,18 +34,19 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              w_coll: float = 0.25) -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
-    P, G = arena.P, arena.G
+    P = arena.P
+    G_eff = arena.G * arena.G_sets
     net = PopulationNet(thetas, OBS_DIM, hidden)
-    net.bind(P, G)
-    state = {"h": torch.zeros(P, G, hidden, device=thetas.device)}
+    net.bind(P, G_eff)
+    state = {"h": torch.zeros(P, G_eff, hidden, device=thetas.device)}
 
     def policy_step(obs, prev_act):
-        o = obs.view(P, G, OBS_DIM)
+        o = obs.view(P, G_eff, OBS_DIM)
         a, state["h"] = net.step(o, state["h"])
-        return a.view(P * G, 2)
+        return a.view(P * G_eff, 2)
 
     metrics = arena.run_games(policy_step, ticks)
-    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll).view(P, G).mean(dim=1)
+    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll).view(P, G_eff).mean(dim=1)
     return fit, metrics
 
 
@@ -60,11 +61,12 @@ class GraphRunner:
     def __init__(self, arena: Arena, P: int, hidden: int):
         from .policy import genome_size
         self.arena, self.P, self.hidden = arena, P, hidden
+        self.G_eff = arena.G * arena.G_sets      # envs per individual
         N = genome_size(OBS_DIM, hidden)
         self.theta_buf = torch.zeros(P, N, device=arena.device)
         self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden)
-        self.net.bind(P, arena.G)
-        self.h = torch.zeros(P, arena.G, hidden, device=arena.device)
+        self.net.bind(P, self.G_eff)
+        self.h = torch.zeros(P, self.G_eff, hidden, device=arena.device)
         arena._reset_hooks.append(self.h.zero_)
         # NOTE: env randomness goes through the DEFAULT CUDA generator
         # (see _DefaultRNGMixin) — natively graph-safe; on replay each game
@@ -74,19 +76,19 @@ class GraphRunner:
 
     def _step(self, obs, prev_act):
         a, h_new = self.net.step(
-            obs.view(self.P, self.arena.G, OBS_DIM), self.h)
+            obs.view(self.P, self.G_eff, OBS_DIM), self.h)
         self.h.copy_(h_new)   # in-place: keeps the hidden-state address
                               # stable across graph replays (a rebind would
                               # leak state between games and orphan the
                               # reset hook)
-        return a.view(self.P * self.arena.G, 2)
+        return a.view(self.P * self.G_eff, 2)
 
     def run(self, thetas: torch.Tensor, ticks: int,
             w_dist: float, w_coll: float):
         self.theta_buf.copy_(thetas)
         metrics = self.arena.run_games(self._step, ticks, graph=True)
         fit = fitness(metrics, w_dist=w_dist,
-                      w_coll=w_coll).view(self.P, self.arena.G).mean(dim=1)
+                      w_coll=w_coll).view(self.P, self.G_eff).mean(dim=1)
         return fit, metrics
 
 
@@ -101,25 +103,27 @@ def evolve(args):
         sample_population(P, OBS_DIM, hidden, rng), device=dev)
     sigma = torch.full((P, 1), args.sigma0, device=dev)
 
-    train_arenas = [Arena(P, G, seed=args.train_seed + k, device=dev,
-                          fp16=args.fp16)
-                    for k in range(args.train_rotations)]
+    # ONE merged train arena (P x [K sets x G] houses) + graph: this stack
+    # faults with >1 live CUDA graph (gmbisect T3-T5), so house rotation
+    # happens INSIDE the graph as extra env columns, not as separate arenas.
+    train = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
+                  merged_houses=args.train_rotations)
+    G_eff = G * args.train_rotations
+    # holdout stays eager (scored 1-in-N gens — cheap) on its own worlds
     holdout = Arena(P, G, seed=args.holdout_seed, device=dev,
                     fp16=args.fp16)
 
     if args.graph:
-        runners = [GraphRunner(a, P, hidden) for a in train_arenas]
-        ho_runner = GraphRunner(holdout, P, hidden)
+        runner = GraphRunner(train, P, hidden)
 
-        def score(arena_ix, th):
-            if arena_ix < 0:
-                return ho_runner.run(th, args.ticks, args.w_dist,
-                                     args.w_coll)
-            return runners[arena_ix].run(th, args.ticks, args.w_dist,
-                                         args.w_coll)
+        def score(is_train, th):
+            if is_train:
+                return runner.run(th, args.ticks, args.w_dist, args.w_coll)
+            return evaluate(holdout, th, hidden, args.ticks,
+                            w_dist=args.w_dist, w_coll=args.w_coll)
     else:
-        def score(arena_ix, th):
-            a = holdout if arena_ix < 0 else train_arenas[arena_ix]
+        def score(is_train, th):
+            a = train if is_train else holdout
             return evaluate(a, th, hidden, args.ticks, w_dist=args.w_dist,
                             w_coll=args.w_coll)
 
@@ -131,7 +135,7 @@ def evolve(args):
     best_fit_ever, best_theta = -np.inf, thetas[0].cpu().clone()
 
     for gen in range(args.gens):
-        fit, metrics = score(gen % len(train_arenas), thetas)
+        fit, metrics = score(True, thetas)
         fit_np = fit.cpu().numpy()
 
         order = np.argsort(-fit_np)
@@ -144,20 +148,18 @@ def evolve(args):
 
         # --- report every --report-every gens (holdout score included) ----
         if gen % args.report_every == 0 or gen == args.gens - 1:
-            hf, hm = score(-1, thetas)
+            hf, hm = score(False, thetas)
             b = int(hf.argmax())
+            sl = slice(b * G, (b + 1) * G)          # holdout: G_sets=1
             rec = {
                 "gen": gen, "elapsed_s": round(time.time() - t0, 1),
                 "fit_best": round(float(fit_np[order[0]]), 4),
                 "fit_med": round(float(np.median(fit_np)), 4),
                 "sigma_mean": round(float(sigma.mean()), 5),
                 "holdout_best": round(float(hf[b]), 4),
-                "holdout_rooms": round(float(hm["rooms"][b * G:(b + 1) * G]
-                                             .mean()), 2),
-                "holdout_dist": round(float(hm["dist_m"][b * G:(b + 1) * G]
-                                            .mean()), 1),
-                "holdout_coll": round(float(hm["collisions"]
-                                            [b * G:(b + 1) * G].mean()), 1),
+                "holdout_rooms": round(float(hm["rooms"][sl].mean()), 2),
+                "holdout_dist": round(float(hm["dist_m"][sl].mean()), 1),
+                "holdout_coll": round(float(hm["collisions"][sl].mean()), 1),
             }
             print(f"gen {gen:>4d}  best={rec['fit_best']:.4f} "
                   f"med={rec['fit_med']:.4f}  "

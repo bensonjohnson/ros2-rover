@@ -194,12 +194,21 @@ class Arena:
     """P*G envs laid out as individual-major rows p*G+g; house g is shared
     by every individual (paired fitness across identical worlds)."""
 
+    # one CUDA graph memory pool shared by every Arena in the process
+    # (set on first capture); None = private pools
+    _pool = None
+
     def __init__(self, P: int, G: int, seed: int = 777_000,
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
-                 noise_seed: int | None = None):
+                 noise_seed: int | None = None, merged_houses: int = 1):
+        """merged_houses=K: play each individual in K*G houses (one set per
+        seed offset) inside ONE arena — lets the whole run need a single
+        CUDA graph (separate live graphs fault on this stack; see
+        gmbisect) and gives fitness over K x more worlds for free."""
         self.P, self.G = P, G
-        self.B = P * G
+        self.G_sets = merged_houses
+        self.B = P * G * merged_houses
         self.device = torch.device(device)
         self.dt = 1.0 / CONTROL_HZ
         self.fp16 = bool(fp16 and str(device).startswith("cuda"))
@@ -209,10 +218,15 @@ class Arena:
                                         # also the CUDA-graph capture mode)
 
         rng = np.random.default_rng(seed)
-        houses = [make_house(rng) for _ in range(G)]
+        houses = []
+        for k in range(merged_houses):
+            rng_k = np.random.default_rng(seed + 1_000_003 * k)
+            houses += [make_house(rng_k) for _ in range(G)]
+        # env layout: b = p*(G*K) + k*G + g  (individual-major, then set)
         env_cls = Fp16Env if self.fp16 else Fp32Env
         self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)
-        self.env._worlds = [houses[(b) % G] for b in range(self.B)]
+        self.env._worlds = [houses[b % (G * merged_houses)]
+                            for b in range(self.B)]
         self.env._build_segments()
 
         # Cache start poses + partition geometry as device tensors.
@@ -240,8 +254,9 @@ class Arena:
             rr = {w.room_id(float(x), float(y)) for x in gx for y in gy
                   if w.clearance(float(x), float(y)) > 0.2}
             totals.append(max(1, len(rr)))
+        HG = G * merged_houses
         self.rooms_total = torch.tensor(
-            [totals[b % G] for b in range(self.B)], device=self.device,
+            [totals[b % HG] for b in range(self.B)], device=self.device,
             dtype=torch.float32)
 
         self.gate = NoSyncGate(self._gate_cfg, self.B,
@@ -365,6 +380,12 @@ class Arena:
         import torch.cuda
         if self._acc is None:
             self._acc = self._make_acc()
+        # ONE pool handle shared by every Arena's graphs: private pools
+        # faulted (illegal memory access) once >1 graph was live and
+        # interleaved on GB10/torch2.11; sharing a pool is the sanctioned
+        # pattern for graphs replayed sequentially (one per generation).
+        if Arena._pool is None:
+            Arena._pool = torch.cuda.graph_pool_handle()
         # warmup on a side stream (allocs settle, cudnn picks kernels)
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
@@ -374,7 +395,7 @@ class Arena:
                                    self._acc)
         torch.cuda.current_stream().wait_stream(s)
         g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
+        with torch.cuda.graph(g, pool=Arena._pool):
             self._rollout_body(policy_step, ticks, every_room_sample,
                                self._acc)
         return g
