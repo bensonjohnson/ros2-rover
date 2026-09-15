@@ -202,11 +202,13 @@ class Arena:
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
                  noise_seed: int | None = None, merged_houses: int = 1,
-                 door_w_range: tuple = (0.7, 1.0)):
+                 door_w_range: tuple = (0.7, 1.0), cells: bool = True):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
-        gmbisect) and gives fitness over K x more worlds for free."""
+        gmbisect) and gives fitness over K x more worlds for free.
+        cells=False disables the novelty accumulator entirely (bisect)."""
+        self.cells_on = bool(cells)
         self.P, self.G = P, G
         self.G_sets = merged_houses
         self.B = P * G * merged_houses
@@ -373,9 +375,10 @@ class Arena:
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
                 seen |= (self._one64 << self._room_code())
-                # in-place scatter of literal 1 (alloc-free, graph-safe);
-                # duplicate indices all write the same value -> no race
-                cells.scatter_(1, self._cell_index().unsqueeze(1), 1)
+                if self.cells_on:
+                    # in-place scatter of literal 1 (alloc-free, graph-safe;
+                    # duplicate indices all write the same value -> no race)
+                    cells.scatter_(1, self._cell_index().unsqueeze(1), 1)
             prev_act = gated
 
     def run_games(self, policy_step, ticks: int,
@@ -428,8 +431,8 @@ class Arena:
                 torch.zeros(self.B, dtype=torch.int64, device=self.device),
                 torch.zeros(self.B, device=self.device),
                 torch.zeros(self.B, device=self.device),
-                torch.zeros(self.B, self.cell_nx * self.cell_ny,
-                            device=self.device))
+                torch.zeros(self.B, self.cell_nx * self.cell_ny
+                            if self.cells_on else 1, device=self.device))
 
     def drop_graphs(self):
         """Explicitly reset captured graphs BEFORE letting them go: the

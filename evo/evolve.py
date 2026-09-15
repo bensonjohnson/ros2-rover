@@ -133,9 +133,10 @@ def evolve(args):
         # arenas. Caller must drop the previous arena/runner BEFORE calling.
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
-                   door_w_range=(door_w, door_w) if door_w else (0.7, 1.0))
+                   door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
+                   cells=not args.no_cells)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev, fp16=args.fp16,
-                   door_w_range=holdout_door)
+                   door_w_range=holdout_door, cells=not args.no_cells)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train else ho
@@ -308,6 +309,9 @@ def main():
                     "distinct 0.8 m cells visited, saturating. 0 = off "
                     "(identical to runs 1-4). ~0.3 = coverage buys one "
                     "room crossing")
+    ap.add_argument("--no-cells", action="store_true",
+                    help="do not even allocate/accumulate the coverage "
+                    "buffer (fault bisect: byte-proven runs 1-4 kernels)")
     ap.add_argument("--fp16", action="store_true",
                     help="fp16 raycast (GB10/Spark fast path; ~2x on the "
                     "bandwidth-bound scan, sensing-only)")
