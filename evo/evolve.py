@@ -168,11 +168,12 @@ def evolve(args):
                      fitness=best_fit_ever, gen=gen - 1, door_w=args.door_w)
             print(f"[curriculum] gen {gen}: door {args.door_w} -> "
                   f"{args.anneal_door_w} m; recapturing graph", flush=True)
-            # Drop all refs to the old arena+graph FIRST (the live graph is
-            # reachable only through score's closure; two live graphs fault
-            # on this stack — gmbisect T3-T5), then rebuild. `fit`/`metrics`
-            # are last iteration's tensors, allocated from the old graph's
-            # pool — they must die too or the pool stays pinned.
+            # Release the live graph EXPLICITLY first: the default CUDA
+            # generator stays graph-registered until CUDAGraph.reset(), or
+            # the next eager randn (warmup) dies with "Offset increment
+            # outside graph capture". Then drop all refs (the graph is also
+            # reachable via score's closure) so the pool is reclaimable.
+            train.drop_graphs()
             del train, holdout, score
             del fit, metrics, fit_np, order
             import gc
@@ -308,7 +309,9 @@ def main():
                     help="override doorway width (m) for TRAIN houses;"
                          " 0 = natural (0.7-1.0). Holdout is always natural.")
     ap.add_argument("--anneal-gen", type=int, default=0,
-                    help="at this gen rebuild train arenas at --anneal-door-w")
+                    help="DEPRECATED (torch 2.11 allocator assert on graph "
+                         "recapture): prefer chaining two runs via "
+                         "--seed-from. If used, run WITHOUT --graph.")
     ap.add_argument("--anneal-door-w", type=float, default=0.94,
                     help="door width (m) after --anneal-gen (real-ish 0.94)")
     args = ap.parse_args()

@@ -378,6 +378,18 @@ class Arena:
                 torch.zeros(self.B, device=self.device),
                 torch.zeros(self.B, device=self.device))
 
+    def drop_graphs(self):
+        """Explicitly reset captured graphs BEFORE letting them go: the
+        default CUDA generator stays 'graph-registered' until reset(), and a
+        later eager randn (arena warmup!) errors with 'Offset increment
+        outside graph capture' if it isn't cleared."""
+        for g in list(self._graphs.values()):
+            try:
+                g.reset()
+            except Exception:
+                pass
+        self._graphs.clear()
+
     def _capture(self, policy_step, ticks, every_room_sample):
         import torch.cuda
         if self._acc is None:
