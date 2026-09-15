@@ -99,8 +99,13 @@ class World:
         return float(np.sqrt(((p - closest) ** 2).sum(axis=1)).min())
 
 
-def make_house(rng: np.random.Generator) -> World:
-    """Random single-floor house: shell, internal walls with doors, furniture."""
+def make_house(rng: np.random.Generator,
+               door_w_range: tuple = (0.7, 1.0)) -> World:
+    """Random single-floor house: shell, internal walls with doors, furniture.
+
+    door_w_range overrides the doorway width draw — wide arches (e.g.
+    (2.0, 2.0)) turn crossing into a discoverable behavior basin for
+    curriculum evolution; the real house is (0.7, 1.0)."""
     W = float(rng.uniform(6.0, 11.0))
     H = float(rng.uniform(5.0, 9.0))
     segs: list = [
@@ -111,7 +116,7 @@ def make_house(rng: np.random.Generator) -> World:
     partitions: list = []
     n_walls = int(rng.integers(1, 4))
     for i in range(n_walls):
-        door_w = float(rng.uniform(0.7, 1.0))
+        door_w = float(rng.uniform(*door_w_range))
         if (i + int(rng.integers(0, 2))) % 2 == 0:
             x = float(rng.uniform(0.25 * W, 0.75 * W))
             segs += _wall_with_door(x, 0, x, H,

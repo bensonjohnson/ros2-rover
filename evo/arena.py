@@ -201,7 +201,8 @@ class Arena:
     def __init__(self, P: int, G: int, seed: int = 777_000,
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
-                 noise_seed: int | None = None, merged_houses: int = 1):
+                 noise_seed: int | None = None, merged_houses: int = 1,
+                 door_w_range: tuple = (0.7, 1.0)):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -221,7 +222,8 @@ class Arena:
         houses = []
         for k in range(merged_houses):
             rng_k = np.random.default_rng(seed + 1_000_003 * k)
-            houses += [make_house(rng_k) for _ in range(G)]
+            houses += [make_house(rng_k, door_w_range=door_w_range)
+                       for _ in range(G)]
         # env layout: b = p*(G*K) + k*G + g  (individual-major, then set)
         env_cls = Fp16Env if self.fp16 else Fp32Env
         self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)

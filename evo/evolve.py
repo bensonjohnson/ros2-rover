@@ -103,29 +103,54 @@ def evolve(args):
         sample_population(P, OBS_DIM, hidden, rng), device=dev)
     sigma = torch.full((P, 1), args.sigma0, device=dev)
 
-    # ONE merged train arena (P x [K sets x G] houses) + graph: this stack
-    # faults with >1 live CUDA graph (gmbisect T3-T5), so house rotation
-    # happens INSIDE the graph as extra env columns, not as separate arenas.
-    train = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
-                  merged_houses=args.train_rotations)
-    G_eff = G * args.train_rotations
-    # holdout stays eager (scored 1-in-N gens — cheap) on its own worlds
-    holdout = Arena(P, G, seed=args.holdout_seed, device=dev,
-                    fp16=args.fp16)
+    if args.seed_from:
+        # Curriculum/warm-restart hookup: final_population.npz (thetas
+        # [P,N], sigma) or best_genome.npz (single row) from an earlier run.
+        d = np.load(args.seed_from)
+        assert int(d["hidden"]) == hidden, \
+            f"--hidden {hidden} != file hidden {int(d['hidden'])}"
+        seed_th = torch.as_tensor(d["thetas"], device=dev)
+        if seed_th.ndim == 1:
+            seed_th = seed_th.unsqueeze(0)
+        n_seed = min(P, seed_th.shape[0])
+        if seed_th.shape[0] > P:
+            raise SystemExit(f"--seed-from has {seed_th.shape[0]} rows "
+                             f"(>pop {P}); match --pop to the source run")
+        thetas[:n_seed] = seed_th[:n_seed]
+        if "sigma" in d and d["sigma"].shape[0] >= n_seed:
+            sigma[:n_seed] = torch.as_tensor(
+                d["sigma"][:n_seed], device=dev).view(n_seed, 1)
+        print(f"[warm-start] {n_seed}/{P} from {args.seed_from} "
+              f"(rest fresh, sigma carried over)", flush=True)
 
-    if args.graph:
-        runner = GraphRunner(train, P, hidden)
+    def build_arenas(door_w, holdout_door=(0.7, 1.0)):
+        # ONE merged train arena (P x [K sets x G] houses) + graph: this stack
+        # faults with >1 live CUDA graph (gmbisect T3-T5), so house rotation
+        # happens INSIDE the graph as extra env columns, not as separate
+        # arenas. Caller must drop the previous arena/runner BEFORE calling.
+        tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
+                   merged_houses=args.train_rotations,
+                   door_w_range=(door_w, door_w) if door_w else (0.7, 1.0))
+        ho = Arena(P, G, seed=args.holdout_seed, device=dev, fp16=args.fp16,
+                   door_w_range=holdout_door)
+        if not args.graph:
+            def score(is_train, th):
+                a = tr if is_train else ho
+                return evaluate(a, th, hidden, args.ticks,
+                                w_dist=args.w_dist, w_coll=args.w_coll)
+            return tr, ho, score
+
+        rn = GraphRunner(tr, P, hidden)
 
         def score(is_train, th):
             if is_train:
-                return runner.run(th, args.ticks, args.w_dist, args.w_coll)
-            return evaluate(holdout, th, hidden, args.ticks,
+                return rn.run(th, args.ticks, args.w_dist, args.w_coll)
+            return evaluate(ho, th, hidden, args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll)
-    else:
-        def score(is_train, th):
-            a = train if is_train else holdout
-            return evaluate(a, th, hidden, args.ticks, w_dist=args.w_dist,
-                            w_coll=args.w_coll)
+        return tr, ho, score
+
+    train, holdout, score = build_arenas(args.door_w)
+    G_eff = G * args.train_rotations
 
     os.makedirs(args.out_dir, exist_ok=True)
     log_f = open(os.path.join(args.out_dir, "evolution.jsonl"), "a")
@@ -135,6 +160,30 @@ def evolve(args):
     best_fit_ever, best_theta = -np.inf, thetas[0].cpu().clone()
 
     for gen in range(args.gens):
+        # --- doorway curriculum: rebuild arenas + graph at the phase cut --
+        if (args.anneal_gen and gen == args.anneal_gen
+                and args.door_w != args.anneal_door_w):
+            np.savez(os.path.join(args.out_dir, "phase1_best_genome.npz"),
+                     thetas=best_theta.numpy(), hidden=hidden,
+                     fitness=best_fit_ever, gen=gen - 1, door_w=args.door_w)
+            print(f"[curriculum] gen {gen}: door {args.door_w} -> "
+                  f"{args.anneal_door_w} m; recapturing graph", flush=True)
+            # Drop all refs to the old arena+graph FIRST (the live graph is
+            # reachable only through score's closure; two live graphs fault
+            # on this stack — gmbisect T3-T5), then rebuild. `fit`/`metrics`
+            # are last iteration's tensors, allocated from the old graph's
+            # pool — they must die too or the pool stays pinned.
+            del train, holdout, score
+            del fit, metrics, fit_np, order
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            args.door_w = args.anneal_door_w
+            train, holdout, score = build_arenas(args.door_w)
+            # fitness across door widths is not comparable: restart tracker
+            best_fit_ever = -np.inf
+
         fit, metrics = score(True, thetas)
         fit_np = fit.cpu().numpy()
 
@@ -153,8 +202,10 @@ def evolve(args):
             sl = slice(b * G, (b + 1) * G)          # holdout: G_sets=1
             rec = {
                 "gen": gen, "elapsed_s": round(time.time() - t0, 1),
+                "door_w": args.door_w,
                 "fit_best": round(float(fit_np[order[0]]), 4),
                 "fit_med": round(float(np.median(fit_np)), 4),
+                "train_rooms": round(float(metrics["rooms"].mean()), 2),
                 "sigma_mean": round(float(sigma.mean()), 5),
                 "holdout_best": round(float(hf[b]), 4),
                 "holdout_rooms": round(float(hm["rooms"][sl].mean()), 2),
@@ -250,6 +301,16 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out-dir", default="evo_out")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seed-from", default="",
+                    help="final_population.npz / best_genome.npz from an"
+                         " earlier run: warm-start the population (+sigma)")
+    ap.add_argument("--door-w", type=float, default=0.0,
+                    help="override doorway width (m) for TRAIN houses;"
+                         " 0 = natural (0.7-1.0). Holdout is always natural.")
+    ap.add_argument("--anneal-gen", type=int, default=0,
+                    help="at this gen rebuild train arenas at --anneal-door-w")
+    ap.add_argument("--anneal-door-w", type=float, default=0.94,
+                    help="door width (m) after --anneal-gen (real-ish 0.94)")
     args = ap.parse_args()
     evolve(args)
 
