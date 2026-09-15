@@ -261,6 +261,41 @@ class Arena:
             [totals[b % HG] for b in range(self.B)], device=self.device,
             dtype=torch.float32)
 
+        # --- cell-coverage novelty geometry (run 5) ----------------------
+        # The novelty the rooms term CANNOT give: rooms is a sparse cliff
+        # (pays only on the tick you cross), so nothing pulls the policy
+        # toward the unknown space behind a wall. Coverage of ~0.8 m cells
+        # pays per new cell from the very first tick and SATURATES (a bit
+        # is set once per game — count per place, never per tick, so no
+        # infinite novelty fountain). Self-computable — no room_id() — so
+        # the deployed analogue is place memory on real lidar. Accumulator
+        # is [B, nx*ny] set by in-place scatter_ (alloc-free, graph-safe;
+        # duplicate indices all write the same 1 so order doesn't matter).
+        # ATTRIBUTION: nearest-centre on this lattice == floor bucketing
+        # (boundaries land on 0.0/0.8/1.6...), so a cell is credited only
+        # when the rover's centre physically enters its box — a wall-clamp
+        # can never credit a box across a wall. Boxes that straddle a
+        # partition leak a BOUNDED amount of through-wall credit (a hugger
+        # at the 0.2 m gate standoff stands inside the box whose centre is
+        # across the wall), but deep-room cells still require a real
+        # crossing, so coverage cannot be farmed by wall-hugging.
+        gx_all = np.arange(0.4, 11.61, 0.8)      # cell CENTRES, 0.8 m boxes
+        gy_all = np.arange(0.4, 11.61, 0.8)
+        self.cell_nx, self.cell_ny = len(gx_all), len(gy_all)
+        cell_totals = []
+        for w in houses:
+            xmin, ymin, xmax, ymax = w.bounds
+            n = sum(1 for xg in gx_all for yg in gy_all
+                    if xmin + 0.2 <= xg <= xmax - 0.2
+                    and ymin + 0.2 <= yg <= ymax - 0.2
+                    and w.clearance(float(xg), float(yg)) > 0.2)
+            cell_totals.append(max(1, n))        # >=1: start cell always
+        self.cells_total = torch.tensor(
+            [cell_totals[b % HG] for b in range(self.B)],
+            device=self.device, dtype=torch.float32)
+        self._cx = torch.as_tensor(gx_all, device=self.device)
+        self._cy = torch.as_tensor(gy_all, device=self.device)
+
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
                                device=str(self.device))
@@ -298,6 +333,16 @@ class Arena:
         bit = (xv | yh).to(torch.int64)
         return (bit << self._shift).sum(dim=1)          # [B]
 
+    def _cell_index(self) -> torch.Tensor:
+        """Per-env index of the lattice cell CONTAINING the current pose
+        (nearest centre == floor bucket on this lattice) -> [B] long.
+        Outside-lattice poses saturate to the end buckets — impossible in
+        practice (outer shell) but keeps the index in range."""
+        e = self.env
+        ix = (e.x.unsqueeze(1) - self._cx).abs().argmin(dim=1)
+        iy = (e.y.unsqueeze(1) - self._cy).abs().argmin(dim=1)
+        return iy * self.cell_nx + ix                   # [B]
+
     @torch.no_grad()
     def _rollout_body(self, policy_step, ticks, every_room_sample, acc):
         """One full game from reset. Every op is device-only (no CPU sync,
@@ -306,9 +351,9 @@ class Arena:
         device tick counter advanced by add_ (a Python counter would bake a
         constant into the graph)."""
         self.reset()
-        prev_act, seen, dist, coll = acc
+        prev_act, seen, dist, coll, cells = acc
         prev_act.zero_()
-        seen.zero_(); dist.zero_(); coll.zero_()
+        seen.zero_(); dist.zero_(); coll.zero_(); cells.zero_()
         e = self.env
         for t in range(ticks):
             self.gate._tick.add_(self.dt)          # device-side clock
@@ -328,6 +373,9 @@ class Arena:
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
                 seen |= (self._one64 << self._room_code())
+                # in-place scatter of literal 1 (alloc-free, graph-safe);
+                # duplicate indices all write the same value -> no race
+                cells.scatter_(1, self._cell_index().unsqueeze(1), 1)
             prev_act = gated
 
     def run_games(self, policy_step, ticks: int,
@@ -361,22 +409,27 @@ class Arena:
         if not graph:
             acc = self._make_acc()
             self._rollout_body(policy_step, ticks, every_room_sample, acc)
-            _, seen, dist, coll = acc
+            _, seen, dist, coll, cells = acc
         else:
-            _, seen, dist, coll = self._acc           # static buffers
+            _, seen, dist, coll, cells = self._acc           # static buffers
         seen = seen.clone()                           # detach from graph pool
         rooms = torch.tensor(
             [bin(int(m)).count("1") for m in seen.cpu().tolist()],
             device=self.device, dtype=torch.float32)
+        cov = cells.sum(dim=1).clone() if graph else cells.sum(dim=1)
         return {"rooms": rooms, "rooms_total": self.rooms_total,
                 "dist_m": dist.clone(), "collisions": coll.clone(),
+                "cells": torch.minimum(cov, self.cells_total),
+                "cells_total": self.cells_total,
                 "stops": self.gate.stops_dev.to(torch.float32).clone()}
 
     def _make_acc(self):
         return (torch.zeros(self.B, 2, device=self.device),
                 torch.zeros(self.B, dtype=torch.int64, device=self.device),
                 torch.zeros(self.B, device=self.device),
-                torch.zeros(self.B, device=self.device))
+                torch.zeros(self.B, device=self.device),
+                torch.zeros(self.B, self.cell_nx * self.cell_ny,
+                            device=self.device))
 
     def drop_graphs(self):
         """Explicitly reset captured graphs BEFORE letting them go: the
@@ -416,12 +469,22 @@ class Arena:
 
 
 def fitness(metrics: dict, w_dist: float = 0.03,
-            w_coll: float = 0.25) -> torch.Tensor:
+            w_coll: float = 0.25, w_cov: float = 0.0) -> torch.Tensor:
     """Per-env scalar: fraction of reachable rooms visited (the honest
     target), distance as a small tiebreaker (stops are zero-effort rooms),
     collisions penalized (the gate is there; brute-forcing it shouldn't pay).
-    """
+
+    w_cov > 0 adds the novelty term (run 5): fraction of reachable 0.8 m
+    cells visited. Rooms is a sparse cliff that pays only on the crossing
+    tick and gives the wall-hugger plateau nothing to steer on; coverage
+    pays densely from tick one and saturates at the house ceiling (no
+    novelty fountain). At w_cov ~0.3 coverage can buy one room crossing'
+    worth of fitness — enough to pull a policy toward a door, not enough
+    to replace the rooms term."""
     frac = metrics["rooms"] / metrics["rooms_total"].clamp(min=1.0)
-    return (frac
-            + w_dist * metrics["dist_m"] / 10.0
-            - w_coll * metrics["collisions"] / 100.0)
+    out = (frac
+           + w_dist * metrics["dist_m"] / 10.0
+           - w_coll * metrics["collisions"] / 100.0)
+    if w_cov:
+        out = out + w_cov * metrics["cells"] / metrics["cells_total"].clamp(min=1.0)
+    return out

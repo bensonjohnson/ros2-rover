@@ -31,7 +31,8 @@ from .policy import (PopulationNet, genome_size, per_gene_scale,
 
 def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              ticks: int, w_dist: float = 0.03,
-             w_coll: float = 0.25) -> tuple[torch.Tensor, dict]:
+             w_coll: float = 0.25,
+             w_cov: float = 0.0) -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
     P = arena.P
@@ -46,7 +47,8 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
         return a.view(P * G_eff, 2)
 
     metrics = arena.run_games(policy_step, ticks)
-    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll).view(P, G_eff).mean(dim=1)
+    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll,
+                  w_cov=w_cov).view(P, G_eff).mean(dim=1)
     return fit, metrics
 
 
@@ -84,11 +86,12 @@ class GraphRunner:
         return a.view(self.P * self.G_eff, 2)
 
     def run(self, thetas: torch.Tensor, ticks: int,
-            w_dist: float, w_coll: float):
+            w_dist: float, w_coll: float, w_cov: float = 0.0):
         self.theta_buf.copy_(thetas)
         metrics = self.arena.run_games(self._step, ticks, graph=True)
         fit = fitness(metrics, w_dist=w_dist,
-                      w_coll=w_coll).view(self.P, self.G_eff).mean(dim=1)
+                      w_coll=w_coll,
+                      w_cov=w_cov).view(self.P, self.G_eff).mean(dim=1)
         return fit, metrics
 
 
@@ -137,16 +140,19 @@ def evolve(args):
             def score(is_train, th):
                 a = tr if is_train else ho
                 return evaluate(a, th, hidden, args.ticks,
-                                w_dist=args.w_dist, w_coll=args.w_coll)
+                                w_dist=args.w_dist, w_coll=args.w_coll,
+                                w_cov=args.w_cov)
             return tr, ho, score
 
         rn = GraphRunner(tr, P, hidden)
 
         def score(is_train, th):
             if is_train:
-                return rn.run(th, args.ticks, args.w_dist, args.w_coll)
+                return rn.run(th, args.ticks, args.w_dist, args.w_coll,
+                              args.w_cov)
             return evaluate(ho, th, hidden, args.ticks,
-                            w_dist=args.w_dist, w_coll=args.w_coll)
+                            w_dist=args.w_dist, w_coll=args.w_coll,
+                            w_cov=args.w_cov)
         return tr, ho, score
 
     train, holdout, score = build_arenas(args.door_w)
@@ -207,9 +213,13 @@ def evolve(args):
                 "fit_best": round(float(fit_np[order[0]]), 4),
                 "fit_med": round(float(np.median(fit_np)), 4),
                 "train_rooms": round(float(metrics["rooms"].mean()), 2),
+                "train_cells": round(float(
+                    (metrics["cells"] / metrics["cells_total"]).mean()), 3),
                 "sigma_mean": round(float(sigma.mean()), 5),
                 "holdout_best": round(float(hf[b]), 4),
                 "holdout_rooms": round(float(hm["rooms"][sl].mean()), 2),
+                "holdout_cells": round(float(
+                    (hm["cells"] / hm["cells_total"])[sl].mean()), 3),
                 "holdout_dist": round(float(hm["dist_m"][sl].mean()), 1),
                 "holdout_coll": round(float(hm["collisions"][sl].mean()), 1),
             }
@@ -293,6 +303,11 @@ def main():
                     help="distance term weight; LOWER (e.g. 0.005) if the "
                     "run plateaus as a fast wall-hugger — rooms dominates then")
     ap.add_argument("--w-coll", type=float, default=0.25)
+    ap.add_argument("--w-cov", type=float, default=0.0,
+                    help="cell-coverage novelty weight (run 5): pays for "
+                    "distinct 0.8 m cells visited, saturating. 0 = off "
+                    "(identical to runs 1-4). ~0.3 = coverage buys one "
+                    "room crossing")
     ap.add_argument("--fp16", action="store_true",
                     help="fp16 raycast (GB10/Spark fast path; ~2x on the "
                     "bandwidth-bound scan, sensing-only)")
