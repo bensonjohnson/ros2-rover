@@ -202,13 +202,20 @@ class Arena:
                  device: str = "cuda", rover_cfg: RoverConfig | None = None,
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
                  noise_seed: int | None = None, merged_houses: int = 1,
-                 door_w_range: tuple = (0.7, 1.0), cells: bool = True):
+                 door_w_range: tuple = (0.7, 1.0), cells: bool = True,
+                 every_cover: int = 24):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
         gmbisect) and gives fitness over K x more worlds for free.
-        cells=False disables the novelty accumulator entirely (bisect)."""
+        cells=False disables the novelty accumulator entirely (bisect).
+        every_cover: coverage sample stride (ticks). At v_max 0.2 m/s /
+        15 Hz a 24-tick gap moves the rover 0.32 m — under half a 0.8 m
+        cell, so no cell can be skipped — and it keeps the graph ~8x
+        smaller than sampling with the rooms cadence (node-count pressure
+        is the run-5 Xid-43 fault class on this stack)."""
         self.cells_on = bool(cells)
+        self.every_cover = int(every_cover)
         self.P, self.G = P, G
         self.G_sets = merged_houses
         self.B = P * G * merged_houses
@@ -305,6 +312,29 @@ class Arena:
         self._cx = torch.as_tensor(gx_all, device=self.device)
         self._cy = torch.as_tensor(gy_all, device=self.device)
         self._ncell_words = max(1, -(-self.cell_nx * self.cell_ny // 63))
+        # ZERO-ALLOC scratch for _cells_or: every intermediate is a static
+        # buffer driven by out=/in-place ops. Fresh allocations inside the
+        # captured rollout are pooled by the CUDA graph allocator and come
+        # LIVE (retained) for every replay — the run-5 fault (Xid 43,
+        # illegal memory access at production size, both the scatter_ and
+        # the elementwise rewrite, while --no-cells passed) is exactly the
+        # graph-pool-pressure failure class this stack is known for
+        # (torch 2.11 allocator asserts/GB10 illegal-access notes). The
+        # proven room counter allocates ~5/sampled-tick; the W-word
+        # coverage version must add ZERO.
+        if self.cells_on:
+            z = dict(device=self.device)
+            self._tf1 = torch.zeros(self.B, **z)
+            self._tf2 = torch.zeros(self.B, **z)
+            self._tf3 = torch.zeros(self.B, **z)
+            self._cidx = torch.zeros(self.B, dtype=torch.int64, **z)
+            self._cinr = torch.zeros(self.B, dtype=torch.bool, **z)
+            self._clt = torch.zeros(self.B, dtype=torch.bool, **z)
+            self._cbits = torch.zeros(self.B, dtype=torch.int64, **z)
+            self._cbcast = torch.zeros(self.B, dtype=torch.int64, **z)
+            self._cwhere = torch.zeros(self.B, dtype=torch.int64, **z)
+            self._los = torch.arange(self._ncell_words, dtype=torch.int64,
+                                     device=self.device) * 63
 
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
@@ -345,25 +375,42 @@ class Arena:
         return (bit << self._shift).sum(dim=1)          # [B]
 
     def _cells_or(self, cells) -> None:
-        """Mark the cell containing each env's pose in the [B, W] int64
+        """Mark the cell containing each env's pose in the [W, B] int64
         visited-word matrix. floor(x/0.8) is EXACTLY the nearest-centre
-        bucket for centres 0.4+0.8k (boundaries land on 0.0/0.8/1.6...).
-        63 cells per signed-int64 word (bit 63 left clear). EVERY op here
-        is from the proven captured-kernel family (compare/clamp/where/
-        shift/bitwise_or on [B]-shaped tensors, exactly the room counter's
-        `seen |= (one64 << room_code)`): argmin + scatter_ were the
-        illegal-memory-access culprits at production size (gen-1 replay,
-        torch 2.11/GB10) — no index kernels may enter the graph."""
+        bucket for centres 0.4+0.8k (boundaries land on 0.0/0.8/1.6...);
+        63 cells per signed-int64 word (bit 63 left clear).
+
+        TWO hard constraints from the run-5 fault class (Xid 43 illegal
+        access at production size, only with the accumulator enabled):
+        (1) every OP is from the capture-proven elementwise family (the
+        room counter's compare/shift/bitwise_or shapes — no index kernels:
+        argmin+scatter_ were the first reproducible fault); (2) every
+        INTERMEDIATE is a static scratch buffer via out=/in-place — zero
+        fresh allocations per sampled tick, because graph-pool
+        allocations stay live across replays on this torch 2.11/GB10
+        stack."""
         e = self.env
-        ix = (e.x / self._cell).floor().clamp(0, self.cell_nx - 1)
-        iy = (e.y / self._cell).floor().clamp(0, self.cell_ny - 1)
-        idx = (iy * self.cell_nx + ix).to(torch.int64)   # [B]
+        torch.div(e.x, self._cell, out=self._tf1)
+        torch.floor(self._tf1, out=self._tf1)
+        self._tf1.clamp_(0, self.cell_nx - 1)
+        torch.div(e.y, self._cell, out=self._tf2)
+        torch.floor(self._tf2, out=self._tf2)
+        self._tf2.clamp_(0, self.cell_ny - 1)
+        torch.mul(self._tf2, self.cell_nx, out=self._tf3)
+        torch.add(self._tf3, self._tf1, out=self._tf3)
+        self._cidx.copy_(self._tf3)                    # [B] int64
         for w in range(self._ncell_words):
             lo = 63 * w
-            inr = (idx >= lo) & (idx < lo + 63)
-            bits = (idx - lo).clamp(0, 63)
-            cells[w].bitwise_or_(
-                torch.where(inr, self._one64 << bits, self._zero64))
+            torch.ge(self._cidx, lo, out=self._cinr)
+            torch.lt(self._cidx, lo + 63, out=self._clt)
+            torch.bitwise_and(self._cinr, self._clt, out=self._cinr)
+            torch.sub(self._cidx, lo, out=self._cbits)
+            self._cbits.clamp_(0, 63)
+            torch.bitwise_left_shift(self._one64, self._cbits,
+                                      out=self._cbcast)
+            torch.where(self._cinr, self._cbcast, self._zero64,
+                        out=self._cwhere)
+            cells[w].bitwise_or_(self._cwhere)
 
     @torch.no_grad()
     def _rollout_body(self, policy_step, ticks, every_room_sample, acc):
@@ -395,8 +442,8 @@ class Arena:
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
                 seen |= (self._one64 << self._room_code())
-                if self.cells_on:
-                    self._cells_or(cells)
+            if self.cells_on and t % self.every_cover == 0:
+                self._cells_or(cells)
             prev_act = gated
 
     def run_games(self, policy_step, ticks: int,
@@ -410,7 +457,8 @@ class Arena:
         (values refreshed by copy_ outside the graph) — see evolve.evaluate.
         Falls back to eager once with a warning if capture fails."""
         if graph and str(self.device).startswith("cuda"):
-            key = (ticks, every_room_sample)
+            key = (ticks, every_room_sample, self.every_cover,
+                   self.cells_on)
             if not hasattr(self, "_graphs"):
                 self._graphs = {}
             if key in self._graphs:

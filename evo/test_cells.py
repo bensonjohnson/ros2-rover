@@ -81,7 +81,8 @@ def main():
     arena = Arena(P, G, seed=4242, device=dev, fp16=False, noise_seed=7)
     step = lambda obs, prev: wall_follower(obs, prev)
     m1 = arena.run_games(step, ticks)
-    traj = manual_rollout(arena, step, ticks, every=3)
+    # record poses at the SAME stride the accumulator samples at
+    traj = manual_rollout(arena, step, ticks, every=arena.every_cover)
     # poses must match bit-for-bit (same policy, same noise stream):
     arena.reset()  # noqa - keep arena state sane afterwards
     ref = cpu_cell_count(traj, arena._cx.cpu().numpy(),

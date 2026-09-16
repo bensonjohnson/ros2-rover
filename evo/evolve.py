@@ -134,9 +134,10 @@ def evolve(args):
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
-                   cells=not args.no_cells)
-        ho = Arena(P, G, seed=args.holdout_seed, device=dev, fp16=args.fp16,
-                   door_w_range=holdout_door, cells=not args.no_cells)
+                   cells=not args.no_cells, every_cover=args.every_cover)
+        ho = Arena(P, G, seed=args.holdout_seed, device=dev,
+                   fp16=args.fp16, door_w_range=holdout_door,
+                   cells=not args.no_cells, every_cover=args.every_cover)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train else ho
@@ -312,6 +313,10 @@ def main():
     ap.add_argument("--no-cells", action="store_true",
                     help="do not even allocate/accumulate the coverage "
                     "buffer (fault bisect: byte-proven runs 1-4 kernels)")
+    ap.add_argument("--every-cover", type=int, default=24,
+                    help="coverage sample stride in ticks (0.32 m at "
+                    "v_max < half a cell -> no cell skippable; smaller "
+                    "graphs: the run-5 Xid-43 fault class)")
     ap.add_argument("--fp16", action="store_true",
                     help="fp16 raycast (GB10/Spark fast path; ~2x on the "
                     "bandwidth-bound scan, sensing-only)")
