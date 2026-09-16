@@ -22,9 +22,9 @@ COMMON="--pop 128 --games 16 --hidden 64 --ticks 5400 --w-dist 0.005
 # 5a FIRST (the clean control): can novelty BOOTSTRAP room exploration
 # from a fresh population at all? (40 gens ~4.4 h)
 OUT=evo_runs/greenfield5a
-mkdir -p $OUT
+rm -rf $OUT; mkdir -p $OUT
 echo "=== 5a (fresh pop + w_cov 0.3) start $(date) ===" | tee -a $OUT/run.log
-python3 -m evo.evolve $COMMON --gens 40 \
+python3 -u -m evo.evolve $COMMON --gens 40 \
     --train-seed 62000 --seed 6 \
     --out-dir $OUT >> $OUT/run.log 2>&1
 RC1=$?
@@ -33,9 +33,9 @@ echo "=== 5a rc=$RC1 done $(date) ===" | tee -a $OUT/run.log
 # 5b SECOND (continuation test): does novelty reward push the run-4
 # champion population (trained w_cov=0) past its plateau? (20 gens ~2 h)
 OUT=evo_runs/greenfield5b
-mkdir -p $OUT
+rm -rf $OUT; mkdir -p $OUT
 echo "=== 5b (warm-start from run4 phase2 pop + w_cov 0.3) start $(date) ===" | tee -a $OUT/run.log
-python3 -m evo.evolve $COMMON --gens 20 \
+python3 -u -m evo.evolve $COMMON --gens 20 \
     --train-seed 62000 --seed 7 \
     --seed-from evo_runs/greenfield4/phase2/final_population.npz \
     --out-dir $OUT >> $OUT/run.log 2>&1
