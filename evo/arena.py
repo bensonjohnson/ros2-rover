@@ -284,6 +284,13 @@ class Arena:
         gx_all = np.arange(0.4, 11.61, 0.8)      # cell CENTRES, 0.8 m boxes
         gy_all = np.arange(0.4, 11.61, 0.8)
         self.cell_nx, self.cell_ny = len(gx_all), len(gy_all)
+        self._cell = 0.8
+        # GB10/torch2.11 CUDA-graph fault (run5): argmin+scatter_ inside the
+        # captured rollout reproducible illegal-memory-access on gen-1
+        # replay at production size; --no-cells control (identical runs 1-4
+        # kernels) passes clean. Coverage therefore uses ONLY the proven
+        # elementwise family: floor bucketing + broadcast ==/&/|= (same
+        # in-place bitwise op as the room counter). No index kernels.
         cell_totals = []
         for w in houses:
             xmin, ymin, xmax, ymax = w.bounds
@@ -297,6 +304,7 @@ class Arena:
             device=self.device, dtype=torch.float32)
         self._cx = torch.as_tensor(gx_all, device=self.device)
         self._cy = torch.as_tensor(gy_all, device=self.device)
+        self._ncell_words = max(1, -(-self.cell_nx * self.cell_ny // 63))
 
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
@@ -306,6 +314,7 @@ class Arena:
         self._shift = torch.arange(self.maxp, device=self.device,
                                    dtype=torch.int64)
         self._one64 = torch.ones((), dtype=torch.int64, device=self.device)
+        self._zero64 = torch.zeros((), dtype=torch.int64, device=self.device)
         self._acc = None
         self._reset_hooks = []      # e.g. zero the policy's hidden state
 
@@ -335,15 +344,26 @@ class Arena:
         bit = (xv | yh).to(torch.int64)
         return (bit << self._shift).sum(dim=1)          # [B]
 
-    def _cell_index(self) -> torch.Tensor:
-        """Per-env index of the lattice cell CONTAINING the current pose
-        (nearest centre == floor bucket on this lattice) -> [B] long.
-        Outside-lattice poses saturate to the end buckets — impossible in
-        practice (outer shell) but keeps the index in range."""
+    def _cells_or(self, cells) -> None:
+        """Mark the cell containing each env's pose in the [B, W] int64
+        visited-word matrix. floor(x/0.8) is EXACTLY the nearest-centre
+        bucket for centres 0.4+0.8k (boundaries land on 0.0/0.8/1.6...).
+        63 cells per signed-int64 word (bit 63 left clear). EVERY op here
+        is from the proven captured-kernel family (compare/clamp/where/
+        shift/bitwise_or on [B]-shaped tensors, exactly the room counter's
+        `seen |= (one64 << room_code)`): argmin + scatter_ were the
+        illegal-memory-access culprits at production size (gen-1 replay,
+        torch 2.11/GB10) — no index kernels may enter the graph."""
         e = self.env
-        ix = (e.x.unsqueeze(1) - self._cx).abs().argmin(dim=1)
-        iy = (e.y.unsqueeze(1) - self._cy).abs().argmin(dim=1)
-        return iy * self.cell_nx + ix                   # [B]
+        ix = (e.x / self._cell).floor().clamp(0, self.cell_nx - 1)
+        iy = (e.y / self._cell).floor().clamp(0, self.cell_ny - 1)
+        idx = (iy * self.cell_nx + ix).to(torch.int64)   # [B]
+        for w in range(self._ncell_words):
+            lo = 63 * w
+            inr = (idx >= lo) & (idx < lo + 63)
+            bits = (idx - lo).clamp(0, 63)
+            cells[w].bitwise_or_(
+                torch.where(inr, self._one64 << bits, self._zero64))
 
     @torch.no_grad()
     def _rollout_body(self, policy_step, ticks, every_room_sample, acc):
@@ -376,9 +396,7 @@ class Arena:
             if t % every_room_sample == 0:
                 seen |= (self._one64 << self._room_code())
                 if self.cells_on:
-                    # in-place scatter of literal 1 (alloc-free, graph-safe;
-                    # duplicate indices all write the same value -> no race)
-                    cells.scatter_(1, self._cell_index().unsqueeze(1), 1)
+                    self._cells_or(cells)
             prev_act = gated
 
     def run_games(self, policy_step, ticks: int,
@@ -419,7 +437,11 @@ class Arena:
         rooms = torch.tensor(
             [bin(int(m)).count("1") for m in seen.cpu().tolist()],
             device=self.device, dtype=torch.float32)
-        cov = cells.sum(dim=1).clone() if graph else cells.sum(dim=1)
+        cw = (cells.clone() if graph else cells).cpu().tolist()   # [W, B]
+        cov = torch.tensor(
+            [sum(bin(int(cw[w][b])).count("1")
+                 for w in range(len(cw))) for b in range(self.B)],
+            device=self.device, dtype=torch.float32)
         return {"rooms": rooms, "rooms_total": self.rooms_total,
                 "dist_m": dist.clone(), "collisions": coll.clone(),
                 "cells": torch.minimum(cov, self.cells_total),
@@ -431,8 +453,8 @@ class Arena:
                 torch.zeros(self.B, dtype=torch.int64, device=self.device),
                 torch.zeros(self.B, device=self.device),
                 torch.zeros(self.B, device=self.device),
-                torch.zeros(self.B, self.cell_nx * self.cell_ny
-                            if self.cells_on else 1, device=self.device))
+                torch.zeros(self._ncell_words if self.cells_on else 1,
+                            self.B, dtype=torch.int64, device=self.device))
 
     def drop_graphs(self):
         """Explicitly reset captured graphs BEFORE letting them go: the
