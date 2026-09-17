@@ -5,6 +5,17 @@
 # Same config, engine selection and pre-registered criteria as evo/run11.sh;
 # the curriculum verdict now uses BOTH seeds (8, 9) per mode: mean
 # hob_elite_cross_rate at gen 39, and each seed pair must agree in direction.
+#
+# w_coll 1.0 (was 0.25 in runs 1-11a): the first run 11 attempt (seed 8,
+# killed at gen 11, evo_runs/greenfield11_wc025_aborted) grew collision
+# brute-forcers on the holdouts (building-holdout champion 624 collisions at
+# gen 10, legacy-holdout champion fitness -0.38 at gen 5). Collisions count
+# per tick in contact (~15 per second pushing a wall): at 0.25 a one-second
+# shove cost 0.04 fitness, at 1.0 it costs 0.15 ~ one extra room in a
+# six-room house. Deep-eval (baselines) keeps its default fitness so its
+# numbers stay comparable with runs 5-10; collisions are reported alongside.
+# Added pre-registered guard: gen-39 hob_champ_coll <= 20 and elite train
+# coll <= 3 in all four runs, else collision shaping is still insufficient.
 set -u
 NAME=$1; SEED=$2; MODE=$3
 source /home/benson/venv/bin/activate
@@ -25,7 +36,7 @@ else
 fi
 echo "[engine] $FLAGS  [world] $WORLD" | tee -a $OUT/run.log
 COMMON="--pop 128 --games 16 --hidden 128 --ticks 5400 --w-dist 0.005 \
-    --w-cov 0.3 --device cuda --train-rotations 4 --report-every 5 --gens 40 \
+    --w-cov 0.3 --w-coll 1.0 --device cuda --train-rotations 4 --report-every 5 --gens 40 \
     --train-seed 63000 --holdout-seed 777000 --seed $SEED --sigma0 0.05 \
     --sigma-max 0.15 --pool 1024 --resample-every 1 $WORLD"
 python3 -u -m evo.evolve --out-dir $OUT $COMMON $FLAGS >> $OUT/run.log 2>&1
