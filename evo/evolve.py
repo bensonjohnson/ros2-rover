@@ -39,19 +39,20 @@ import numpy as np
 import torch
 
 from .arena import Arena, OBS_DIM, fitness
-from .policy import (PopulationNet, genome_size, per_gene_scale,
-                     sample_population)
+from .policy import (PopulationNet, genome_meta, genome_size,
+                     per_gene_scale, read_meta, sample_population)
 
 
 def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              ticks: int, w_dist: float = 0.03,
              w_coll: float = 0.25,
-             w_cov: float = 0.0) -> tuple[torch.Tensor, dict]:
+             w_cov: float = 0.0, obs: str = "v1",
+             action: str = "lr") -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
     P = arena.P
     G_eff = arena.G * arena.G_sets
-    net = PopulationNet(thetas, OBS_DIM, hidden)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
     net.bind(P, G_eff)
     state = {"h": torch.zeros(P, G_eff, hidden, device=thetas.device)}
 
@@ -74,13 +75,15 @@ class GraphRunner:
     graphLaunch. Weights flow through a STATIC buffer (copy_ outside the
     graph), which is the only way a parameter-changing graph is legal."""
 
-    def __init__(self, arena: Arena, P: int, hidden: int):
+    def __init__(self, arena: Arena, P: int, hidden: int, obs: str = "v1",
+                 action: str = "lr"):
         from .policy import genome_size
         self.arena, self.P, self.hidden = arena, P, hidden
         self.G_eff = arena.G * arena.G_sets      # envs per individual
         N = genome_size(OBS_DIM, hidden)
         self.theta_buf = torch.zeros(P, N, device=arena.device)
-        self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden)
+        self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden, obs=obs,
+                                 action=action)
         self.net.bind(P, self.G_eff)
         self.h = torch.zeros(P, self.G_eff, hidden, device=arena.device)
         arena._reset_hooks.append(self.h.zero_)
@@ -160,6 +163,7 @@ def evolve(args):
     hidden, P, G = args.hidden, args.pop, args.games
     N = genome_size(OBS_DIM, hidden)
     scale = torch.as_tensor(per_gene_scale(OBS_DIM, hidden), device=dev)
+    meta = genome_meta(args.obs, args.action)
 
     rng = np.random.default_rng(args.seed)
     thetas = torch.as_tensor(
@@ -180,6 +184,8 @@ def evolve(args):
         d = np.load(args.seed_from)
         assert int(d["hidden"]) == hidden, \
             f"--hidden {hidden} != file hidden {int(d['hidden'])}"
+        assert read_meta(d) == (args.obs, args.action), \
+            f"--seed-from genome modes {read_meta(d)} != run modes"
         seed_th = torch.as_tensor(d["thetas"], device=dev)
         if seed_th.ndim == 1:
             seed_th = seed_th.unsqueeze(0)
@@ -208,6 +214,8 @@ def evolve(args):
         d = np.load(args.bc_from)
         assert int(d["hidden"]) == hidden, \
             f"--hidden {hidden} != bc file hidden {int(d['hidden'])}"
+        assert read_meta(d) == (args.obs, args.action), \
+            f"--bc-from genome modes {read_meta(d)} != run modes"
         assert int(d.get("train_seed", args.train_seed)) == args.train_seed, \
             "bc file distilled on a different train seed — match --train-seed"
         bc = torch.as_tensor(d["thetas"], device=dev)
@@ -231,20 +239,23 @@ def evolve(args):
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
                    cells=not args.no_cells, every_cover=args.every_cover,
-                   fused=args.fused)
+                   fused=args.fused, compile=args.compile,
+                   gate_obs=args.obs == "v2")
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
-                   fused=args.fused)
+                   fused=args.fused, compile=args.compile,
+                   gate_obs=args.obs == "v2")
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train else ho
                 return evaluate(a, th, hidden, args.ticks,
                                 w_dist=args.w_dist, w_coll=args.w_coll,
-                                w_cov=args.w_cov)
+                                w_cov=args.w_cov, obs=args.obs,
+                                action=args.action)
             return tr, ho, score
 
-        rn = GraphRunner(tr, P, hidden)
+        rn = GraphRunner(tr, P, hidden, obs=args.obs, action=args.action)
 
         def score(is_train, th):
             if is_train:
@@ -252,7 +263,8 @@ def evolve(args):
                               args.w_cov)
             return evaluate(ho, th, hidden, args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll,
-                            w_cov=args.w_cov)
+                            w_cov=args.w_cov, obs=args.obs,
+                            action=args.action)
         return tr, ho, score
 
     train, holdout, score = build_arenas(args.door_w)
@@ -276,7 +288,7 @@ def evolve(args):
         if (args.anneal_gen and gen == args.anneal_gen
                 and args.door_w != args.anneal_door_w):
             np.savez(os.path.join(args.out_dir, "phase1_best_genome.npz"),
-                     thetas=best_theta.numpy(), hidden=hidden,
+                     thetas=best_theta.numpy(), hidden=hidden, **meta,
                      fitness=best_fit_ever, gen=gen - 1, door_w=args.door_w)
             print(f"[curriculum] gen {gen}: door {args.door_w} -> "
                   f"{args.anneal_door_w} m; recapturing graph", flush=True)
@@ -313,7 +325,7 @@ def evolve(args):
             best_fit_ever = float(fit_np[order[0]])
             best_theta = thetas[order[0]].cpu().clone()
             np.savez(os.path.join(args.out_dir, "best_genome.npz"),
-                     thetas=best_theta.numpy(), hidden=hidden,
+                     thetas=best_theta.numpy(), hidden=hidden, **meta,
                      fitness=best_fit_ever, gen=gen)
 
         # --- honest per-gen train readout (free: metrics already on hand) --
@@ -415,7 +427,7 @@ def evolve(args):
 
     np.savez(os.path.join(args.out_dir, "final_population.npz"),
              thetas=thetas.cpu().numpy(), sigma=sigma.cpu().numpy(),
-             hidden=hidden)
+             hidden=hidden, **meta)
     log_f.close()
     gen_f.close()
     print(f"\nbest fitness seen: {best_fit_ever:.4f} -> "
@@ -478,6 +490,15 @@ def main():
                     "~20x faster scan on GB10; parity-gated (99.8% beams "
                     "<0.05m), deterministic, graph-capture-safe (static "
                     "out buffer)")
+    ap.add_argument("--compile", action="store_true",
+                    help="torch.compile the per-tick [B,360] chains (noise/"
+                    "dropout, preprocess, gate, physics) — see "
+                    "Arena._compile_tick; validate with a 3-gen smoke")
+    ap.add_argument("--obs", choices=("v1", "v2"), default="v1",
+                    help="v2: gate-flag channels replace the two pure-noise "
+                    "proprio channels, inputs centred to [-1, 1]")
+    ap.add_argument("--action", choices=("lr", "vw"), default="lr",
+                    help="vw: net outputs (forward, turn) mixed to tracks")
     ap.add_argument("--graph", action="store_true",
                     help="capture the full rollout as a CUDA graph (one "
                     "replay per generation; removes kernel-launch overhead)")

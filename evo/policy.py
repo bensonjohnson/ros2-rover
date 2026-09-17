@@ -53,16 +53,46 @@ def sample_population(P: int, n_in: int, hidden: int,
             * scales[None, :])
 
 
-class PopulationNet:
-    """[P individuals] x [G envs] batched forward. All tensors on device."""
+OBS_MODES = ("v1", "v2")      # v2: gate-flag channels + inputs centred
+ACTION_MODES = ("lr", "vw")   # vw: outputs (v, w) mixed to tracks
 
-    def __init__(self, thetas: torch.Tensor, n_in: int, hidden: int):
+
+def genome_meta(obs: str = "v1", action: str = "lr") -> dict:
+    """npz fields every saved genome/population carries (absent = v1/lr)."""
+    assert obs in OBS_MODES and action in ACTION_MODES
+    return {"obs_mode": obs, "action_mode": action}
+
+
+def read_meta(d) -> tuple[str, str]:
+    """(obs_mode, action_mode) of a loaded npz; files from runs <= 9 have
+    no fields and are v1/lr."""
+    obs = str(d["obs_mode"]) if "obs_mode" in d else "v1"
+    act = str(d["action_mode"]) if "action_mode" in d else "lr"
+    return obs, act
+
+
+class PopulationNet:
+    """[P individuals] x [G envs] batched forward. All tensors on device.
+
+    obs="v2": the first n_in-2 inputs (scan bins + proprio, all in [0, 1])
+    are centred to [-1, 1] before the net — raw [0, 1] scans sit near 1 in
+    open space, a large DC drive into tanh units whose biases also init at
+    0.5 (evolved controllers came out bang-bang, |a| ~0.97). last-action
+    inputs are already in [-1, 1]. (The gate-flag channels themselves are
+    produced by Arena(gate_obs=True).)
+    action="vw": outputs are (forward, turn), tracks = clamp(v -/+ w): going
+    straight / turning are single-output changes instead of a coordinated
+    left/right pair (left_trim 0.8 makes 'straight' an asymmetric L/R)."""
+
+    def __init__(self, thetas: torch.Tensor, n_in: int, hidden: int,
+                 obs: str = "v1", action: str = "lr"):
         """thetas [P, N] on device."""
         self.P, self.N = thetas.shape
         self.n_in, self.hidden = n_in, hidden
         self.thetas = thetas
+        self.obs_center = obs == "v2"
+        self.action_vw = action == "vw"
         self._views = None
-        self._split = None
 
     def bind(self, P: int, G: int):
         """(Re)bind views after thetas changed. P may differ from thetas'
@@ -79,17 +109,18 @@ class PopulationNet:
         self._G = G
 
     def step(self, o: torch.Tensor, h: torch.Tensor):
-        """o [P, G, n_in], h [P, G, hidden] -> (action [P,G,2], h)."""
+        """o [P, G, n_in], h [P, G, hidden] -> (action [P,G,2], h).
+        Batched over individuals with bmm (row-vector convention, same
+        maths as the old expand+einsum, without expanded weight views)."""
         v = self._views
-        G = self._G
-        # expand params over the env dim (stride-0, no copy until einsum)
-        Wx = v["Wx"].unsqueeze(1).expand(-1, G, -1, -1)
-        Wh = v["Wh"].unsqueeze(1).expand(-1, G, -1, -1)
-        bh = v["bh"].unsqueeze(1).expand(-1, G, -1)
-        Wo = v["Wo"].unsqueeze(1).expand(-1, G, -1, -1)
-        bo = v["bo"].unsqueeze(1).expand(-1, G, -1)
-        pre = (torch.einsum("pgi,pgih->pgh", o, Wx)
-               + torch.einsum("pgh,pghk->pgk", h, Wh) + bh)
+        if self.obs_center:
+            k = self.n_in - 2
+            o = torch.cat([o[..., :k] * 2.0 - 1.0, o[..., k:]], dim=-1)
+        pre = (torch.bmm(o, v["Wx"]) + torch.bmm(h, v["Wh"])
+               + v["bh"].unsqueeze(1))
         h_new = torch.tanh(pre)
-        act = torch.tanh(torch.einsum("pgh,pgHK->pgK", h_new, Wo) + bo)
+        act = torch.tanh(torch.bmm(h_new, v["Wo"]) + v["bo"].unsqueeze(1))
+        if self.action_vw:
+            fwd, turn = act[..., 0:1], act[..., 1:2]
+            act = torch.cat([fwd - turn, fwd + turn], dim=-1).clamp(-1, 1)
         return act, h_new

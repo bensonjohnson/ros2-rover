@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from .arena import Arena, OBS_DIM, NUM_BINS, fitness
-from .policy import PopulationNet
+from .policy import PopulationNet, read_meta
 
 
 def _scan(obs: torch.Tensor) -> torch.Tensor:
@@ -80,6 +80,9 @@ def run_named(fn, arena: Arena, ticks: int) -> dict:
 
 def run_genome(path: str, arena: Arena, ticks: int) -> dict:
     d = np.load(path)
+    obs, action = read_meta(d)
+    assert arena.gate_obs == (obs == "v2"), \
+        f"{path}: obs {obs} needs Arena(gate_obs={obs == 'v2'})"
     thetas = torch.as_tensor(d["thetas"], device=arena.device)
     if thetas.ndim == 1:                    # best_genome.npz (single row)
         thetas = thetas.unsqueeze(0)
@@ -87,7 +90,7 @@ def run_genome(path: str, arena: Arena, ticks: int) -> dict:
     P = thetas.shape[0]
     G = arena.B // P
     assert arena.B % P == 0
-    net = PopulationNet(thetas, OBS_DIM, hidden)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
     net.bind(P, G)
     state = {"h": torch.zeros(P, G, hidden, device=arena.device)}
 
@@ -123,16 +126,22 @@ def main():
     rows = [run_named(fn, arena, args.ticks) for fn in BASELINES.values()]
     import os
     if os.path.exists(args.genome):
-        rows.append(run_genome(args.genome, arena, args.ticks))
+        obs_g = read_meta(np.load(args.genome))[0]
+        ga = arena if obs_g == "v1" else Arena(
+            1, args.games, seed=args.holdout_seed, device=args.device,
+            fp16=args.fp16, gate_obs=True)
+        rows.append(run_genome(args.genome, ga, args.ticks))
     if args.population and os.path.exists(args.population):
         d = np.load(args.population)
         P = d["thetas"].shape[0]
+        obs_p, act_p = read_meta(d)
         a2 = Arena(P, args.games, seed=args.holdout_seed, device=args.device,
-                   fp16=args.fp16)
+                   fp16=args.fp16, gate_obs=obs_p == "v2")
         r = run_genome(args.population, a2, args.ticks)
         from .evolve import evaluate as _ev
         th = torch.as_tensor(d["thetas"], device=args.device)
-        fitp, _ = _ev(a2, th, int(d["hidden"]), args.ticks)
+        fitp, _ = _ev(a2, th, int(d["hidden"]), args.ticks, obs=obs_p,
+                      action=act_p)
         r["name"] = "population(best)"
         r["fitness"] = float(fitp.max())
         r2 = dict(r); r2["name"] = "population(median)"

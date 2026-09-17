@@ -221,7 +221,8 @@ class Arena:
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
                  noise_seed: int | None = None, merged_houses: int = 1,
                  door_w_range: tuple = (0.7, 1.0), cells: bool = True,
-                 every_cover: int = 24, fused: bool = False):
+                 every_cover: int = 24, fused: bool = False,
+                 compile: bool = False, gate_obs: bool = False):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -361,6 +362,10 @@ class Arena:
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
                                device=str(self.device))
+        self._preprocess = batched_preprocess
+        self.gate_obs = bool(gate_obs)
+        if compile:
+            self._compile_tick()
         self._t = 0
         # static buffers so the whole rollout is CUDA-graph capturable
         self._shift = torch.arange(self.maxp, device=self.device,
@@ -370,6 +375,26 @@ class Arena:
         self._acc = None
         self._reset_hooks = []      # e.g. zero the policy's hidden state
         self._rec = None            # set to dict to record (obs, cmd) streams
+
+    def _compile_tick(self):
+        """torch.compile the per-tick [B, 360] elementwise chains (lidar
+        noise/dropout, preprocess, gate scan logic, physics step): Inductor
+        fuses them into a few Triton kernels instead of ~30 materialized
+        [B, 360] temporaries per tick — the traffic class the fused raycast
+        removed from the scan itself. fallback_random keeps eager aten RNG
+        (default CUDA generator, same call order -> graph-capture-safe and
+        the paired-noise semantics unchanged). dynamic=False: shapes are
+        fixed for an arena's lifetime."""
+        import torch._inductor.config as ic
+        ic.fallback_random = True
+        opts = dict(dynamic=False, fullgraph=False)
+        e = self.env
+        e.step = torch.compile(e.step, **opts)
+        e._dropout = torch.compile(e._dropout, **opts)
+        self.gate.process_scan = torch.compile(self.gate.process_scan,
+                                               **opts)
+        self.gate.gate = torch.compile(self.gate.gate, **opts)
+        self._preprocess = torch.compile(batched_preprocess, **opts)
 
     def reset(self):
         """Allocation-free: copy_ / zero_ / fill_ only, so this is legal
@@ -450,12 +475,21 @@ class Arena:
         for t in range(ticks):
             self.gate._tick.add_(self.dt)          # device-side clock
             ranges = e.scan()
-            scan72 = batched_preprocess(ranges, e.angle_min,
+            scan72 = self._preprocess(ranges, e.angle_min,
                                         e.angle_increment,
                                         num_bins=NUM_BINS,
                                         max_range=MAX_RANGE)
             self.gate.process_scan(ranges, e.angle_min, e.angle_increment)
-            obs = torch.cat([scan72, _proprio(e), prev_act], dim=1)
+            prop = _proprio(e)
+            if self.gate_obs:
+                # obs v2: proprio channels 2/3 were pure gyro NOISE (no
+                # signal); carry the gate's latched blocks instead — the
+                # policy otherwise only sees overrides through prev_act.
+                prop = torch.cat([prop[:, :2],
+                                  self.gate.front_blocked[:, None].float(),
+                                  self.gate._rear_blocked[:, None].float(),
+                                  prop[:, 4:]], dim=1)
+            obs = torch.cat([scan72, prop, prev_act], dim=1)
 
             cmd = policy_step(obs, prev_act).clamp(-1.0, 1.0)
             if self._rec is not None:
