@@ -38,16 +38,31 @@ import numpy as np
 import torch
 
 from .arena import Arena, NUM_BINS, OBS_DIM
-from .policy import _param_shapes, genome_size, per_gene_scale
+from .policy import (_param_shapes, genome_size, per_gene_scale,
+                     PopulationNet)
 from .evolve import evaluate   # the EXACT eval path evolution uses
 
 
+# fixed projection for the scan-hash "RNG": given obs, the draw is
+# DETERMINISTIC — a clock-timer/RNG-driven expert is unimitable (keeper-0
+# lesson: mse 0.0022 yet replay froze; the MLP cannot see the expert's
+# internal timer, so it averages its commits to ~0 = standstill).
+_HASH_W = None
+
+
 def make_scripted(per: dict, reps: int, device: str):
-    """Parameterized version of explore_probe.make_scripted: personality
-    params are caller-provided [N] tensors so keepers can be replayed for
-    data collection; each personality is replicated over `reps` envs
-    (same personality, different houses). Behaviour is verbatim from the
-    probe (the expert whose coverage we must reproduce)."""
+    """Parameterized MARKOVIAN expert: cmd = f(current scan72; personality
+    constants). No timers, no RNG, no prev-scan state — everything the
+    labels depend on is in the current observation, so a feedforward-back-
+    boned student CAN represent it exactly (keeper-0 lesson: a clock-timer
+    expert is unimitable, mse 0.0022 yet replay froze — the MLP averages
+    unobservable commits to zero = standstill). Commitment is environmental:
+    while a wall is near, 'blocked' stays true, so pivoting persists until
+    the scan opens (the world clocks the policy, not hidden state).
+    Personality (bias, mode) is constant per individual -> the distilled
+    genome encodes it in its own weights.
+    Modes: 0 cruise (openness+bias steering), 1 seek-openness (turn toward
+    the more open side hard), 2 biased-orbit (constant differential)."""
     dev = torch.device(device)
     N = int(per["bias"].shape[0])
     B = N * reps
@@ -55,41 +70,40 @@ def make_scripted(per: dict, reps: int, device: str):
     def rep(x):
         return torch.as_tensor(x, device=dev).repeat_interleave(reps)
 
-    bias, commit_T, mode_i = rep(per["bias"]), rep(per["commit_T"]), rep(per["mode_i"])
-    timer = torch.zeros(B, device=dev)
-    hold = torch.stack([rep(per["cmd0L"]), rep(per["cmd0R"])], dim=1).clone()
-    zero = torch.zeros(B, device=dev)
+    bias, mode_i = rep(per["bias"]), rep(per["mode_i"])
 
     def step(obs, prev):
         s = obs[:, :NUM_BINS]
         front = s[:, :8].min(dim=1).values
         left = s[:, 9:36].mean(dim=1)
         right = s[:, 36:63].mean(dim=1)
-        timer2 = timer + 1
-        fire = timer2 >= commit_T
-        newL = torch.rand(B, device=dev) * 2 - 1
-        newR = torch.rand(B, device=dev) * 2 - 1
+        # low-noise deterministic hash of the observable geometry: flips
+        # sign with room structure, stable while standing still
+        hsh = torch.sin(37.13 * front) + 0.5 * torch.sin(11.7 * (left - right))
+        piv_dir = torch.sign(hsh + 0.05 * bias)
         open_diff = (left - right).clamp(-1, 1)
         steer = 0.5 * open_diff + 0.5 * bias
         f = 0.4 + 0.6 * front.clamp(0, 1)
-        m0 = torch.stack([f - steer, f + steer], dim=1)                 # cruise
-        m1 = torch.stack([torch.full_like(bias, 0.15), torch.ones_like(bias)], dim=1)
-        m1b = torch.stack([torch.ones_like(bias), torch.full_like(bias, 0.15)], dim=1)
-        m1s = torch.where((bias > 0).unsqueeze(1), m1, m1b)              # arc
-        m2 = torch.stack([newL, newR], dim=1)                            # random
-        pick = torch.where(mode_i.unsqueeze(1) == 0, m0,
-                           torch.where(mode_i.unsqueeze(1) == 1, m1s, m2))
-        holdNew = torch.where(fire.unsqueeze(1), pick, hold)
-        # wedged override: front closed AND both sides closed -> back up
+        m0 = torch.stack([f - steer, f + steer], dim=1)                  # cruise
+        m1 = torch.stack([f + 0.8 * open_diff.clamp(min=0),
+                          f + 0.8 * (-open_diff).clamp(min=0)], dim=1)    # seek open
+        m2 = torch.stack([f + 0.35 * bias.clamp(min=0),
+                          f + 0.35 * (-bias).clamp(min=0)], dim=1)        # orbit
+        cmd = torch.where(mode_i.unsqueeze(1) == 0, m0,
+                          torch.where(mode_i.unsqueeze(1) == 1, m1, m2))
+        # blocked ahead -> pivot in place (persists while scan says so)
+        blocked = front < 0.12
+        pivot = torch.stack([0.15 * (piv_dir > 0) + (-0.15) * (piv_dir < 0),
+                             -0.15 * (piv_dir > 0) + 0.15 * (piv_dir < 0)], dim=1)
+        cmd = torch.where(blocked.unsqueeze(1), pivot, cmd)
+        # wedged: front closed AND both sides closed -> back up
         wedged = (front < 0.06) & (torch.maximum(left, right) < 0.12)
         back = torch.stack([torch.full_like(bias, -0.5), torch.full_like(bias, 0.5)], dim=1)
         back2 = torch.stack([torch.full_like(bias, 0.5), torch.full_like(bias, -0.5)], dim=1)
-        holdNew = torch.where(wedged.unsqueeze(1),
-                              torch.where((bias > 0).unsqueeze(1), back, back2),
-                              holdNew)
-        hold.copy_(holdNew)
-        timer.copy_(torch.where(fire, zero, timer2))
-        return hold.clamp(-1, 1)
+        cmd = torch.where(wedged.unsqueeze(1),
+                          torch.where((bias > 0).unsqueeze(1), back, back2),
+                          cmd)
+        return cmd.clamp(-1, 1)
 
     return step
 
@@ -102,11 +116,13 @@ def pack_theta(named: dict, n_in: int, hidden: int) -> np.ndarray:
 
 def distill(o: torch.Tensor, a: torch.Tensor, hidden: int,
             rng: np.random.Generator, epochs: int = 60, seg: int = 180,
-            bs: int = 256, lr: float = 3e-3) -> tuple[np.ndarray, float]:
+            bs: int = 256, lr: float = 3e-3,
+            init_theta: np.ndarray | None = None) -> tuple[np.ndarray, float]:
     """o [T,B,n_in], a [T,B,2] expert stream -> packed genome + final MSE.
     Student rolls its OWN hidden state over the expert observation stream
     (open-loop BC); obs already carries last action, so between command
-    changes the student just needs to echo prev_act through recurrence."""
+    changes the student just needs to echo prev_act through recurrence.
+    init_theta: packed genome to warm-start from (DAgger rounds retrain)."""
     T, B, _ = o.shape
     nseg_t = T // seg
     o_s = (o[:nseg_t * seg].view(nseg_t, seg, B, -1)
@@ -115,13 +131,20 @@ def distill(o: torch.Tensor, a: torch.Tensor, hidden: int,
            .permute(2, 0, 1, 3).reshape(B * nseg_t, seg, -1))
     M = B * nseg_t
 
-    scales = torch.as_tensor(per_gene_scale(OBS_DIM, hidden),
-                             device=o.device)
     named = {}
-    for name, shape, scale in _param_shapes(OBS_DIM, hidden):
-        init = torch.as_tensor(
-            rng.standard_normal(shape).astype(np.float32), device=o.device)
-        named[name] = (init * float(scale) * 0.1).requires_grad_(True)
+    if init_theta is not None:
+        off = 0
+        for name, shape, _ in _param_shapes(OBS_DIM, hidden):
+            numel = int(np.prod(shape))
+            named[name] = torch.as_tensor(
+                init_theta[off:off + numel].reshape(shape).copy(),
+                device=o.device).requires_grad_(True)
+            off += numel
+    else:
+        for name, shape, scale in _param_shapes(OBS_DIM, hidden):
+            init = torch.as_tensor(
+                rng.standard_normal(shape).astype(np.float32), device=o.device)
+            named[name] = (init * float(scale) * 0.1).requires_grad_(True)
     opt = torch.optim.Adam(list(named.values()), lr=lr)
 
     idx = np.arange(M)
@@ -142,7 +165,7 @@ def distill(o: torch.Tensor, a: torch.Tensor, hidden: int,
             opt.zero_grad()
             (loss / seg).backward()
             opt.step()
-            tot += float(loss) / seg
+            tot += loss.detach().item() / seg
     mse = tot / max(1, M // bs)
     return pack_theta(named, OBS_DIM, hidden), mse
 
@@ -170,6 +193,10 @@ def main():
     ap.add_argument("--hidden", type=int, default=64)
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--seg", type=int, default=180)
+    ap.add_argument("--dagger", type=int, default=2,
+                    help="DAgger rounds: roll the student, relabel with the "
+                         "expert, retrain (fixes covariate shift; keeper-0 "
+                         "froze despite mse 0.0022)")
     ap.add_argument("--min-cov", type=float, default=0.09,
                     help="KEEP only if MLP replay coverage >= this in train "
                          "houses (cruise band is 0.063-0.066, scripted "
@@ -231,16 +258,60 @@ def main():
     del rec
     import gc; gc.collect()
 
-    # ---- 3. distill each keeper, 4. verify replay ------------------------
+    # ---- 3. distill each keeper (BC -> DAgger), 4. verify replay --------
     ho = Arena(len(keep), args.data_games, seed=args.holdout_seed,
                device=dev, fp16=args.fp16)
+    tr_a = Arena(len(keep), args.data_games, seed=args.train_seed,
+                 device=dev, fp16=args.fp16, merged_houses=args.data_sets)
+    # expert is a pure function of obs -> can LABEL student-visited states
+    expert_fn = make_scripted(keep_per, rows, dev)
+
+    def student_roll(th_j: np.ndarray):
+        """roll the current student (its OWN commands) through the train
+        houses; return its (obs, student_cmd) stream for expert relabeling."""
+        TH1 = torch.as_tensor(th_j[None, :], device=dev)
+        net_state = {"net": None}
+
+        def s_step(obs, prev):
+            if net_state["net"] is None:
+                net = PopulationNet(TH1, OBS_DIM, args.hidden)
+                net.bind(1, rows)
+                net_state["net"] = net
+                net_state["h"] = torch.zeros(1, rows, args.hidden, device=dev)
+
+            def one(o, p):
+                a, h_new = net_state["net"].step(
+                    o.view(1, rows, OBS_DIM), net_state["h"])
+                net_state["h"].copy_(h_new)
+                return a.view(rows, 2)
+            return one(obs, prev)
+        r2 = {"obs": [], "cmd": []}
+        tr_a.run_games(s_step, args.ticks, rec=r2)
+        O2 = torch.stack(r2["obs"])              # [T, rows, n_in]
+        A2 = torch.stack(r2["cmd"])
+        with torch.no_grad():
+            # expert ignores prev_act (Markovian): label every obs directly
+            L2 = expert_fn(O2.reshape(-1, OBS_DIM), None).view(
+                O2.shape[0], -1, 2)
+        return O2, A2, L2
+
     thetas, meta = [], []
     for j, kp in enumerate(keep):
         o_j = O[:, j * rows:(j + 1) * rows].contiguous()   # [T, rows, n_in]
         a_j = A[:, j * rows:(j + 1) * rows].contiguous()
         th, mse = distill(o_j, a_j, args.hidden, rng, epochs=args.epochs,
                           seg=args.seg)
-        thetas.append(th)
+        # DAgger rounds: student visits states, expert labels them, retrain
+        for dround in range(args.dagger):
+            O2, _, L2 = student_roll(th)
+            o_mix = torch.cat([o_j, O2], dim=1)
+            a_mix = torch.cat([a_j, L2], dim=1)
+            th, mse = distill(o_mix, a_mix, args.hidden, rng,
+                              epochs=max(15, args.epochs // 2), seg=args.seg,
+                              init_theta=th)
+            del O2, L2, o_mix, a_mix
+        th_j = th
+        thetas.append(th_j)
         meta.append({"script_cov": float(cov[kp]), "mse": mse})
         print(f"[distill] keeper {j} (script cov {cov[kp]:.3f}) "
               f"mse={mse:.4f} ({time.time()-t0:.0f}s)", flush=True)
