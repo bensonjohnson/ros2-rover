@@ -288,25 +288,63 @@ def evolve(args):
         print(f"[bc-seed] {n_bc}/{P} distilled explorers in slot 0..{n_bc-1} "
               f"(rest fresh random)", flush=True)
 
+    # ---- building mode: per-level house pools + curriculum state --------
+    HG = G * args.train_rotations
+    level = args.level
+    pools, caps, ho_worlds = {}, None, None
+    world_rng = np.random.default_rng(args.seed + 99)
+    if args.world == "buildings":
+        from pnn_sim.buildings import LEVELS
+        from .arena import world_caps
+        from .worlds import (HOLDOUT_SEED, build_pool, level_seed,
+                             summarize)
+        top = max(LEVELS) if args.curriculum else level
+        for lv in range(level, top + 1):
+            pools[lv] = build_pool(lv, args.pool, level_seed(args.train_seed,
+                                                             lv),
+                                   workers=args.pool_workers)
+            print(f"[worlds] L{lv} pool: {summarize(pools[lv])}", flush=True)
+        ho_worlds = build_pool(max(LEVELS), G, HOLDOUT_SEED,
+                               workers=args.pool_workers)
+        allw = [w for p_ in pools.values() for w in p_]
+        caps = world_caps(allw)
+        print(f"[worlds] caps (segments, rects, doors) = {caps}; building "
+              f"holdout: {summarize(ho_worlds)}", flush=True)
+
+    def sample_houses(lv):
+        idx = world_rng.choice(len(pools[lv]), size=HG,
+                               replace=len(pools[lv]) < HG)
+        return [pools[lv][i] for i in idx]
+
     def build_arenas(door_w, holdout_door=(0.7, 1.0)):
         # ONE merged train arena (P x [K sets x G] houses) + graph: this stack
         # faults with >1 live CUDA graph (gmbisect T3-T5), so house rotation
         # happens INSIDE the graph as extra env columns, not as separate
         # arenas. Caller must drop the previous arena/runner BEFORE calling.
+        bkw = {}
+        if args.world == "buildings":
+            bkw = dict(worlds=sample_houses(level), caps=caps)
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
-                   gate_obs=args.obs == "v2")
+                   gate_obs=args.obs == "v2", **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
                    gate_obs=args.obs == "v2")
+        if ho_worlds is not None:
+            # building holdout (level 3, never selected on): eager side eval
+            hob = Arena(P, G, seed=args.holdout_seed, device=dev,
+                        fp16=args.fp16, cells=not args.no_cells,
+                        every_cover=args.every_cover, fused=args.fused,
+                        gate_obs=args.obs == "v2", worlds=ho_worlds)
         if not args.graph:
             def score(is_train, th):
-                a = tr if is_train else ho
+                a = tr if is_train is True else (
+                    hob if is_train == "hob" else ho)
                 return evaluate(a, th, hidden, args.ticks,
                                 w_dist=args.w_dist, w_coll=args.w_coll,
                                 w_cov=args.w_cov, obs=args.obs,
@@ -316,10 +354,11 @@ def evolve(args):
         rn = GraphRunner(tr, P, hidden, obs=args.obs, action=args.action)
 
         def score(is_train, th):
-            if is_train:
+            if is_train is True:
                 return rn.run(th, args.ticks, args.w_dist, args.w_coll,
                               args.w_cov)
-            return evaluate(ho, th, hidden, args.ticks,
+            return evaluate(hob if is_train == "hob" else ho, th, hidden,
+                            args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll,
                             w_cov=args.w_cov, obs=args.obs,
                             action=args.action)
@@ -350,6 +389,7 @@ def evolve(args):
     n_immigrant = max(1, P // 10)
     n_child = P - n_elite - n_immigrant
     child_stats = []        # per gen since last report: (win frac, d median)
+    streak = 0              # curriculum: consecutive gens over advance_at
 
     for gen in range(args.gens):
         # --- doorway curriculum: rebuild arenas + graph at the phase cut --
@@ -377,6 +417,9 @@ def evolve(args):
             # fitness across door widths is not comparable: restart tracker
             best_fit_ever = -np.inf
 
+        if (args.world == "buildings" and gen > 0
+                and gen % args.resample_every == 0):
+            train.load_worlds(sample_houses(level))   # same buffers: graph ok
         fit, metrics = score(True, thetas)
         fit_np = fit.cpu().numpy()
 
@@ -427,6 +470,38 @@ def evolve(args):
         elif gen > 0:
             trec["child_win"] = round(child_stats[-1][0], 3)
             trec["child_dmed"] = round(child_stats[-1][1], 4)
+        if args.world == "buildings":
+            rooms_env = metrics["rooms"].view(P, G_eff)[el]
+            cross_rate = float((rooms_env >= 2).float().mean())
+            dc = metrics["door_crossings"].view(P, G_eff)[el]
+            du = (metrics["doors_used"] / metrics["doors_total"].clamp(min=1)
+                  ).view(P, G_eff)[el]
+            rf = (metrics["rooms"] / metrics["rooms_total"]).view(
+                P, G_eff)[el]
+            trec.update({"level": level,
+                         "elite_cross_rate": round(cross_rate, 3),
+                         "elite_rooms_frac": round(float(rf.mean()), 4),
+                         "elite_door_crossings": round(float(dc.mean()), 2),
+                         "elite_doors_used_frac": round(float(du.mean()), 4)})
+            print(f"      L{level} elite cross_rate={cross_rate:.3f} "
+                  f"rooms_frac={float(rf.mean()):.3f} "
+                  f"door_x={float(dc.mean()):.2f} "
+                  f"doors_used={float(du.mean()):.3f}", flush=True)
+            if args.curriculum and level < max(pools):
+                streak = streak + 1 if cross_rate >= args.advance_at else 0
+                if streak >= args.advance_patience:
+                    np.savez(os.path.join(args.out_dir,
+                                          f"level{level}_best_genome.npz"),
+                             thetas=best_theta.numpy(), hidden=hidden,
+                             **meta, fitness=best_fit_ever, gen=gen)
+                    print(f"[curriculum] gen {gen}: L{level} cross_rate >= "
+                          f"{args.advance_at} for {streak} gens -> "
+                          f"L{level + 1}", flush=True)
+                    trec["advance_to"] = level + 1
+                    level += 1
+                    streak = 0
+                    best_fit_ever = -np.inf     # fitness not comparable
+                    train.load_worlds(sample_houses(level))
         gen_f.write(json.dumps(trec) + "\n")
         gen_f.flush()
         print(f"  g{gen:>3d} elite fit={trec['fit_elite']:.4f} "
@@ -478,6 +553,31 @@ def evolve(args):
             if cs is not None:
                 rec["child_win"] = round(float(cs[:, 0].mean()), 3)
                 rec["child_dmed"] = round(float(cs[:, 1].mean()), 4)
+            if ho_worlds is not None:
+                bf, bm = score("hob", thetas)
+                bi = per_ind(bm, G)
+                brc = (bm["rooms"].view(P, G) >= 2).float().mean(1) \
+                    .cpu().numpy()
+                bdx = bm["door_crossings"].view(P, G).mean(1).cpu().numpy()
+                rec.update({
+                    "level": level,
+                    "hob_champ_fit": round(float(bf[champ]), 4),
+                    "hob_champ_rooms": round(float(bi["rooms"][champ]), 2),
+                    "hob_champ_cross_rate": round(float(brc[champ]), 3),
+                    "hob_champ_cells": round(float(bi["cells"][champ]), 3),
+                    "hob_champ_coll": round(float(bi["coll"][champ]), 1),
+                    "hob_elite_fit": round(float(bf[el].mean()), 4),
+                    "hob_elite_rooms": round(float(bi["rooms"][el].mean()), 3),
+                    "hob_elite_cross_rate": round(float(brc[el].mean()), 3),
+                    "hob_elite_door_crossings": round(float(bdx[el].mean()), 2),
+                    "hob_elite_coll": round(float(bi["coll"][el].mean()), 2)})
+                print(f"      BUILDING HOLDOUT (L3 mix) champ fit="
+                      f"{rec['hob_champ_fit']:.4f} rooms="
+                      f"{rec['hob_champ_rooms']:.2f} cross="
+                      f"{rec['hob_champ_cross_rate']:.2f} coll="
+                      f"{rec['hob_champ_coll']:.1f} | elite cross="
+                      f"{rec['hob_elite_cross_rate']:.3f} door_x="
+                      f"{rec['hob_elite_door_crossings']:.2f}", flush=True)
             print(f"gen {gen:>4d}  best={rec['fit_best']:.4f} "
                   f"med={rec['fit_med']:.4f}  "
                   f"HOLDOUT champ={rec['ho_champ_fit']:.4f} "
@@ -572,6 +672,28 @@ def main():
                     "~20x faster scan on GB10; parity-gated (99.8% beams "
                     "<0.05m), deterministic, graph-capture-safe (static "
                     "out buffer)")
+    ap.add_argument("--world", choices=("legacy", "buildings"),
+                    default="legacy",
+                    help="buildings: pnn_sim.buildings pools (rooms/door "
+                    "thresholds, resampled train houses, L3 building "
+                    "holdout). legacy: runs 1-9 make_house arena")
+    ap.add_argument("--level", type=int, default=3,
+                    help="building curriculum level to start at (0 easy: "
+                    "2-3 rooms, wide doors, start facing a door .. 3 full "
+                    "mix incl. halls + mazes)")
+    ap.add_argument("--curriculum", action="store_true",
+                    help="auto-advance levels when the elite's cross rate "
+                    "(games with >= 2 rooms) >= --advance-at for "
+                    "--advance-patience consecutive gens")
+    ap.add_argument("--advance-at", type=float, default=0.5)
+    ap.add_argument("--advance-patience", type=int, default=2)
+    ap.add_argument("--pool", type=int, default=1024,
+                    help="buildings per level pool")
+    ap.add_argument("--pool-workers", type=int, default=0,
+                    help="pool generation processes (0 = cpu_count - 1)")
+    ap.add_argument("--resample-every", type=int, default=1,
+                    help="draw a fresh train house set from the pool every "
+                    "N gens (elites are re-scored on the same new set)")
     ap.add_argument("--algo", choices=("ga", "oes"), default="ga",
                     help="ga: truncation GA (runs 1-9); oes: OpenAI-ES with "
                     "mirrored sampling + rank shaping + Adam (class OES)")

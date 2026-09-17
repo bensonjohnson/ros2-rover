@@ -65,6 +65,13 @@ BASELINES = {"random_walk": random_walk, "go_forward": go_forward,
              "wall_follower": wall_follower}
 
 
+def _door_cols(m) -> dict:
+    if "door_crossings" not in m:
+        return {}
+    return {"cross_rate": float((m["rooms"] >= 2).float().mean()),
+            "door_x": float(m["door_crossings"].mean())}
+
+
 def run_named(fn, arena: Arena, ticks: int) -> dict:
     def step(obs, prev):
         return fn(obs, prev)
@@ -75,7 +82,7 @@ def run_named(fn, arena: Arena, ticks: int) -> dict:
             "rooms": float(m["rooms"].mean()),
             "rooms_total": float(m["rooms_total"].mean()),
             "dist_m": float(m["dist_m"].mean()),
-            "collisions": float(m["collisions"].mean())}
+            "collisions": float(m["collisions"].mean()), **_door_cols(m)}
 
 
 def run_genome(path: str, arena: Arena, ticks: int) -> dict:
@@ -105,7 +112,7 @@ def run_genome(path: str, arena: Arena, ticks: int) -> dict:
             "rooms": float(m["rooms"].mean()),
             "rooms_total": float(m["rooms_total"].mean()),
             "dist_m": float(m["dist_m"].mean()),
-            "collisions": float(m["collisions"].mean())}
+            "collisions": float(m["collisions"].mean()), **_door_cols(m)}
 
 
 def main():
@@ -119,24 +126,36 @@ def main():
     ap.add_argument("--genome", default="evo_out/best_genome.npz")
     ap.add_argument("--population", default="",
                     help="optional final_population.npz: score all, report best/median")
+    ap.add_argument("--world", choices=("legacy", "buildings"),
+                    default="legacy",
+                    help="buildings: score on the building holdout "
+                    "(evo.worlds.HOLDOUT_SEED, level --level) instead of "
+                    "the legacy make_house holdout")
+    ap.add_argument("--level", type=int, default=3)
     args = ap.parse_args()
 
+    bkw = {}
+    if args.world == "buildings":
+        from .worlds import HOLDOUT_SEED, build_pool, summarize
+        hw = build_pool(args.level, args.games, HOLDOUT_SEED)
+        print(f"building holdout L{args.level}: {summarize(hw)}")
+        bkw = dict(worlds=hw)
     arena = Arena(1, args.games, seed=args.holdout_seed, device=args.device,
-                  fp16=args.fp16)
+                  fp16=args.fp16, **bkw)
     rows = [run_named(fn, arena, args.ticks) for fn in BASELINES.values()]
     import os
     if os.path.exists(args.genome):
         obs_g = read_meta(np.load(args.genome))[0]
         ga = arena if obs_g == "v1" else Arena(
             1, args.games, seed=args.holdout_seed, device=args.device,
-            fp16=args.fp16, gate_obs=True)
+            fp16=args.fp16, gate_obs=True, **bkw)
         rows.append(run_genome(args.genome, ga, args.ticks))
     if args.population and os.path.exists(args.population):
         d = np.load(args.population)
         P = d["thetas"].shape[0]
         obs_p, act_p = read_meta(d)
         a2 = Arena(P, args.games, seed=args.holdout_seed, device=args.device,
-                   fp16=args.fp16, gate_obs=obs_p == "v2")
+                   fp16=args.fp16, gate_obs=obs_p == "v2", **bkw)
         r = run_genome(args.population, a2, args.ticks)
         from .evolve import evaluate as _ev
         th = torch.as_tensor(d["thetas"], device=args.device)
@@ -149,13 +168,17 @@ def main():
         rows += [r, r2]
 
     hdr = (f"{'controller':<28} {'fitness':>8} {'rooms':>6} {'/tot':>5} "
-           f"{'dist_m':>7} {'coll':>6}")
+           f"{'dist_m':>7} {'coll':>6}"
+           + (f" {'cross':>6} {'door_x':>6}" if args.world == "buildings"
+              else ""))
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
+        extra = (f" {r['cross_rate']:>6.3f} {r['door_x']:>6.2f}"
+                 if "cross_rate" in r else "")
         print(f"{r['name']:<28} {r['fitness']:>8.4f} {r['rooms']:>6.2f} "
               f"{r['rooms_total']:>5.1f} {r['dist_m']:>7.1f} "
-              f"{r['collisions']:>6.1f}")
+              f"{r['collisions']:>6.1f}{extra}")
 
 
 if __name__ == "__main__":

@@ -7,3 +7,5 @@ __pycache__/
 sim_out*/
 *.tmp
 .DS_Store
+
+evo_runs/world_cache/

@@ -208,6 +208,44 @@ class NoSyncGate(BatchedGate):
         self._tick.zero_()
 
 
+class _PaddedWorld:
+    """Segment view of a Building padded to a fixed segment cap, so
+    BatchedEnv._build_segments allocates [B, cap] once (load_worlds keeps
+    that shape). Everything else delegates to the wrapped world."""
+
+    _DUMMY = np.asarray([1e6, 1e6, 1e6 + 0.1, 1e6])
+
+    def __init__(self, w, cap: int):
+        self._w = w
+        n = w.segments.shape[0]
+        assert n <= cap, f"{n} segments > cap {cap}"
+        self.segments = np.concatenate(
+            [w.segments, np.tile(self._DUMMY, (cap - n, 1))], 0)
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+
+def world_caps(houses) -> tuple:
+    """(segments, rects, doors) capacity covering every house."""
+    return (max(w.segments.shape[0] for w in houses),
+            max(max(1, w.room_rects.shape[0]) for w in houses),
+            max(max(1, int(((w.doors[:, 4] >= 0) & (w.doors[:, 5] >= 0)).sum()))
+                for w in houses))
+
+
+def cell_ceiling(w, gx_all, gy_all, half: float = 0.4) -> int:
+    """Coverage ceiling of a Building: lattice boxes the rover centre can
+    actually enter (reachability raster), cached per lattice."""
+    key = (len(gx_all), len(gy_all), float(gx_all[0]))
+    cache = w.__dict__.setdefault("_cell_ceiling", {})
+    if key not in cache:
+        cache[key] = max(1, sum(
+            1 for gy in gy_all for gx in gx_all
+            if w.reachable_in_box(gx - half, gy - half, gx + half, gy + half)))
+    return cache[key]
+
+
 class Arena:
     """P*G envs laid out as individual-major rows p*G+g; house g is shared
     by every individual (paired fitness across identical worlds)."""
@@ -222,7 +260,9 @@ class Arena:
                  noise_seed: int | None = None, merged_houses: int = 1,
                  door_w_range: tuple = (0.7, 1.0), cells: bool = True,
                  every_cover: int = 24, fused: bool = False,
-                 compile: bool = False, gate_obs: bool = False):
+                 compile: bool = False, gate_obs: bool = False,
+                 worlds: list | None = None, caps: tuple | None = None,
+                 extent: float = 16.0, every_door: int = 6):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -232,7 +272,16 @@ class Arena:
         15 Hz a 24-tick gap moves the rover 0.32 m — under half a 0.8 m
         cell, so no cell can be skipped — and it keeps the graph ~8x
         smaller than sampling with the rooms cadence (node-count pressure
-        is the run-5 Xid-43 fault class on this stack)."""
+        is the run-5 Xid-43 fault class on this stack).
+
+        worlds: G*K pnn_sim.buildings.Building objects -> BUILDING MODE
+        (house k*G+g at column g of set k). Rooms come from explicit room
+        rects, door thresholds add door_crossings/doors_used metrics, the
+        coverage lattice spans `extent` m, and load_worlds() swaps in new
+        houses by copy_ into fixed-capacity buffers (caps = (segments,
+        rects, doors)) — legal between CUDA-graph replays, so the train
+        set can be resampled every generation without recapture. Legacy
+        mode (worlds=None) is byte-for-byte the runs 1-9 arena."""
         self.cells_on = bool(cells)
         self.every_cover = int(every_cover)
         self.P, self.G = P, G
@@ -246,12 +295,21 @@ class Arena:
                                         # shared noise stream (paired eval;
                                         # also the CUDA-graph capture mode)
 
-        rng = np.random.default_rng(seed)
-        houses = []
-        for k in range(merged_houses):
-            rng_k = np.random.default_rng(seed + 1_000_003 * k)
-            houses += [make_house(rng_k, door_w_range=door_w_range)
-                       for _ in range(G)]
+        self.building_mode = worlds is not None
+        self.every_door = int(every_door)
+        HG = G * merged_houses
+        if self.building_mode:
+            houses = list(worlds)
+            assert len(houses) == HG, f"need {HG} worlds, got {len(houses)}"
+            self.caps = caps or world_caps(houses)
+            houses_env = [_PaddedWorld(w, self.caps[0]) for w in houses]
+        else:
+            houses = []
+            for k in range(merged_houses):
+                rng_k = np.random.default_rng(seed + 1_000_003 * k)
+                houses += [make_house(rng_k, door_w_range=door_w_range)
+                           for _ in range(G)]
+            houses_env = houses
         # env layout: b = p*(G*K) + k*G + g  (individual-major, then set)
         env_cls = Fp16Env if self.fp16 else Fp32Env
         if fused:
@@ -259,7 +317,7 @@ class Arena:
                 raise SystemExit("--fused requires fp16 raycast config")
             env_cls = type("FusedEnv", (Fp16Env,), {"fused": True})
         self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)
-        self.env._worlds = [houses[b % (G * merged_houses)]
+        self.env._worlds = [houses_env[b % (G * merged_houses)]
                             for b in range(self.B)]
         self.env._build_segments()
 
@@ -267,11 +325,11 @@ class Arena:
         pose = np.array([w.start_pose for w in self.env._worlds],
                         dtype=np.float32)
         self._pose = torch.as_tensor(pose, device=self.device)
-        maxp = max(1, max(len(w.partitions) for w in self.env._worlds))
+        maxp = max(1, max(len(w.partitions) for w in houses))
         kind = np.zeros((self.B, maxp))
         pos = np.full((self.B, maxp), np.inf)   # pads: kind 0 masks them out
-        for b, w in enumerate(self.env._worlds):
-            for k, (kd, p) in enumerate(w.partitions):
+        for b in range(self.B):
+            for k, (kd, p) in enumerate(houses[b % HG].partitions):
                 kind[b, k] = 1.0 if kd == "v" else 2.0
                 pos[b, k] = p
         self._pk = torch.as_tensor(kind, device=self.device)
@@ -282,13 +340,15 @@ class Arena:
         # eval_checkpoints), tiled to envs.
         totals = []
         for w in houses:
+            if self.building_mode:
+                totals.append(max(1, len(w.rooms_reachable)))
+                continue
             xmin, ymin, xmax, ymax = w.bounds
             gx = np.linspace(xmin + 0.4, xmax - 0.4, 24)
             gy = np.linspace(ymin + 0.4, ymax - 0.4, 24)
             rr = {w.room_id(float(x), float(y)) for x in gx for y in gy
                   if w.clearance(float(x), float(y)) > 0.2}
             totals.append(max(1, len(rr)))
-        HG = G * merged_houses
         self.rooms_total = torch.tensor(
             [totals[b % HG] for b in range(self.B)], device=self.device,
             dtype=torch.float32)
@@ -311,8 +371,9 @@ class Arena:
         # at the 0.2 m gate standoff stands inside the box whose centre is
         # across the wall), but deep-room cells still require a real
         # crossing, so coverage cannot be farmed by wall-hugging.
-        gx_all = np.arange(0.4, 11.61, 0.8)      # cell CENTRES, 0.8 m boxes
-        gy_all = np.arange(0.4, 11.61, 0.8)
+        top = (extent - 0.39) if self.building_mode else 11.61
+        gx_all = np.arange(0.4, top, 0.8)        # cell CENTRES, 0.8 m boxes
+        gy_all = np.arange(0.4, top, 0.8)
         self.cell_nx, self.cell_ny = len(gx_all), len(gy_all)
         self._cell = 0.8
         # GB10/torch2.11 CUDA-graph fault (run5): argmin+scatter_ inside the
@@ -321,8 +382,12 @@ class Arena:
         # kernels) passes clean. Coverage therefore uses ONLY the proven
         # elementwise family: floor bucketing + broadcast ==/&/|= (same
         # in-place bitwise op as the room counter). No index kernels.
+        self._gx_all, self._gy_all = gx_all, gy_all
         cell_totals = []
         for w in houses:
+            if self.building_mode:
+                cell_totals.append(cell_ceiling(w, gx_all, gy_all))
+                continue
             xmin, ymin, xmax, ymax = w.bounds
             n = sum(1 for xg in gx_all for yg in gy_all
                     if xmin + 0.2 <= xg <= xmax - 0.2
@@ -373,8 +438,130 @@ class Arena:
         self._one64 = torch.ones((), dtype=torch.int64, device=self.device)
         self._zero64 = torch.zeros((), dtype=torch.int64, device=self.device)
         self._acc = None
+        if self.building_mode:
+            self._init_building_buffers(houses)
         self._reset_hooks = []      # e.g. zero the policy's hidden state
         self._rec = None            # set to dict to record (obs, cmd) streams
+
+    # ------------------------------------------------ building mode
+
+    def _building_arrays(self, houses):
+        """numpy [HG, cap, ...] geometry of the house list (padded)."""
+        Mc, Rc, Dc = self.caps
+        HG = len(houses)
+        segs = np.tile(np.asarray([1e6, 1e6, 1e6 + 0.1, 1e6], np.float32),
+                       (HG, Mc, 1))
+        rects = np.zeros((HG, Rc, 5), np.float32)
+        rects[:, :, 0] = rects[:, :, 1] = np.inf    # never inside
+        rects[:, :, 2] = rects[:, :, 3] = -np.inf
+        doors = np.zeros((HG, Dc, 6), np.float32)
+        dvalid = np.zeros((HG, Dc), bool)
+        pose = np.zeros((HG, 3), np.float32)
+        for h, w in enumerate(houses):
+            segs[h, :w.segments.shape[0]] = w.segments
+            rects[h, :w.room_rects.shape[0]] = w.room_rects
+            d = w.doors[(w.doors[:, 4] >= 0) & (w.doors[:, 5] >= 0)]
+            doors[h, :d.shape[0]] = d
+            dvalid[h, :d.shape[0]] = True
+            pose[h] = w.start_pose
+        return segs, rects, doors, dvalid, pose
+
+    def _init_building_buffers(self, houses):
+        z = dict(device=self.device)
+        _, rects, doors, dvalid, _ = self._building_arrays(houses)
+        B = self.B
+        tile = lambda a: torch.as_tensor(
+            a[np.arange(B) % len(houses)], **z)
+        self._rx0, self._ry0 = tile(rects[:, :, 0]), tile(rects[:, :, 1])
+        self._rx1, self._ry1 = tile(rects[:, :, 2]), tile(rects[:, :, 3])
+        self._rid1 = tile(rects[:, :, 4]).to(torch.int64) + 1
+        ax, ay = doors[:, :, 0], doors[:, :, 1]
+        dx, dy = doors[:, :, 2] - ax, doors[:, :, 3] - ay
+        L = np.maximum(np.hypot(dx, dy), 1e-6)
+        self._dax, self._day = tile(ax), tile(ay)
+        self._ddx, self._ddy = tile(dx), tile(dy)
+        self._dlen2 = tile(L * L)
+        # along-threshold window with a 0.12 m margin past each jamb
+        self._dtlo, self._dthi = tile(-0.12 / L), tile(1.0 + 0.12 / L)
+        self._dvalid = tile(dvalid)
+        self.doors_total = self._dvalid.sum(dim=1).to(torch.float32)
+        Dc = doors.shape[1]
+        self._dprev = torch.zeros(B, Dc, **z)
+        self._dused = torch.zeros(B, Dc, dtype=torch.bool, **z)
+        self._dcross = torch.zeros(B, **z)
+
+    def load_worlds(self, houses) -> None:
+        """Swap in a new G*K house list IN PLACE (copy_ only: every tensor
+        keeps its address, so a captured rollout graph replays on the new
+        geometry). Caps must cover the new houses."""
+        assert self.building_mode, "load_worlds needs building mode"
+        HG = self.G * self.G_sets
+        assert len(houses) == HG
+        caps = world_caps(houses)
+        assert all(a <= b for a, b in zip(caps, self.caps)), \
+            f"houses need caps {caps} > arena caps {self.caps}"
+        segs, rects, doors, dvalid, pose = self._building_arrays(houses)
+        idx = np.arange(self.B) % HG
+        dev = self.device
+
+        def put(dst, src, dtype=None):
+            t = torch.as_tensor(src[idx], device=dev)
+            dst.copy_(t.to(dst.dtype) if dtype is None else t.to(dtype))
+
+        e = self.env
+        a = segs[:, :, 0:2]
+        ee = segs[:, :, 2:4] - segs[:, :, 0:2]
+        put(e._a, a)
+        put(e._e, ee)
+        put(e._ee, (ee * ee).sum(axis=2))
+        if hasattr(e, "_a_h"):
+            e._a_h.copy_(e._a.half())
+            e._e_h.copy_(e._e.half())
+        put(self._pose, pose)
+        put(self._rx0, rects[:, :, 0]); put(self._ry0, rects[:, :, 1])
+        put(self._rx1, rects[:, :, 2]); put(self._ry1, rects[:, :, 3])
+        put(self._rid1, rects[:, :, 4] + 1)
+        ax, ay = doors[:, :, 0], doors[:, :, 1]
+        dx, dy = doors[:, :, 2] - ax, doors[:, :, 3] - ay
+        L = np.maximum(np.hypot(dx, dy), 1e-6)
+        put(self._dax, ax); put(self._day, ay)
+        put(self._ddx, dx); put(self._ddy, dy)
+        put(self._dlen2, L * L)
+        put(self._dtlo, -0.12 / L); put(self._dthi, 1.0 + 0.12 / L)
+        put(self._dvalid, dvalid)
+        self.doors_total.copy_(self._dvalid.sum(dim=1).to(torch.float32))
+        put(self.rooms_total, np.array(
+            [max(1, len(w.rooms_reachable)) for w in houses], np.float32))
+        put(self.cells_total, np.array(
+            [cell_ceiling(w, self._gx_all, self._gy_all) for w in houses],
+            np.float32))
+        self.env._worlds = [_PaddedWorld(houses[i], self.caps[0])
+                            for i in idx]
+
+    def _room_code_rects(self) -> torch.Tensor:
+        """Room index (-1 outside every rect) by elementwise containment
+        over the padded rect list — no gather/index kernels."""
+        e = self.env
+        x, y = e.x.unsqueeze(1), e.y.unsqueeze(1)
+        inside = (x >= self._rx0) & (x < self._rx1) \
+            & (y >= self._ry0) & (y < self._ry1)
+        return (inside.to(torch.int64) * self._rid1).sum(dim=1) - 1
+
+    def _doors_step(self) -> None:
+        """Threshold crossings: the rover centre changes side of a door
+        segment while inside its along-threshold window (+/-0.12 m past the
+        jambs). Sampled every `every_door` ticks (<= 0.08 m of travel at
+        v_max). _dprev == 0 (reset) only initialises."""
+        e = self.env
+        qx = e.x.unsqueeze(1) - self._dax
+        qy = e.y.unsqueeze(1) - self._day
+        side = torch.sign(self._ddx * qy - self._ddy * qx)
+        t = (qx * self._ddx + qy * self._ddy) / self._dlen2
+        crossed = ((side * self._dprev) < 0) & (t > self._dtlo) \
+            & (t < self._dthi) & self._dvalid
+        self._dused |= crossed
+        self._dcross += crossed.sum(dim=1).to(torch.float32)
+        self._dprev.copy_(torch.where(side != 0, side, self._dprev))
 
     def _compile_tick(self):
         """torch.compile the per-tick [B, 360] elementwise chains (lidar
@@ -471,6 +658,8 @@ class Arena:
         prev_act, seen, dist, coll, cells = acc
         prev_act.zero_()
         seen.zero_(); dist.zero_(); coll.zero_(); cells.zero_()
+        if self.building_mode:
+            self._dprev.zero_(); self._dused.zero_(); self._dcross.zero_()
         e = self.env
         for t in range(ticks):
             self.gate._tick.add_(self.dt)          # device-side clock
@@ -503,7 +692,15 @@ class Arena:
             dist += torch.hypot(e.x - px, e.y - py)
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
-                seen |= (self._one64 << self._room_code())
+                if self.building_mode:
+                    rc = self._room_code_rects()
+                    seen |= torch.where(rc >= 0,
+                                        self._one64 << rc.clamp(min=0),
+                                        self._zero64)
+                else:
+                    seen |= (self._one64 << self._room_code())
+            if self.building_mode and t % self.every_door == 0:
+                self._doors_step()
             if self.cells_on and t % self.every_cover == 0:
                 self._cells_or(cells)
             prev_act = gated
@@ -555,11 +752,16 @@ class Arena:
             [sum(bin(int(cw[w][b])).count("1")
                  for w in range(len(cw))) for b in range(self.B)],
             device=self.device, dtype=torch.float32)
-        return {"rooms": rooms, "rooms_total": self.rooms_total,
-                "dist_m": dist.clone(), "collisions": coll.clone(),
-                "cells": torch.minimum(cov, self.cells_total),
-                "cells_total": self.cells_total,
-                "stops": self.gate.stops_dev.to(torch.float32).clone()}
+        out = {"rooms": rooms, "rooms_total": self.rooms_total.clone(),
+               "dist_m": dist.clone(), "collisions": coll.clone(),
+               "cells": torch.minimum(cov, self.cells_total),
+               "cells_total": self.cells_total.clone(),
+               "stops": self.gate.stops_dev.to(torch.float32).clone()}
+        if self.building_mode:
+            out["door_crossings"] = self._dcross.clone()
+            out["doors_used"] = self._dused.sum(dim=1).to(torch.float32)
+            out["doors_total"] = self.doors_total.clone()
+        return out
 
     def _make_acc(self):
         return (torch.zeros(self.B, 2, device=self.device),
