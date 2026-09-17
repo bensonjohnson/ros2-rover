@@ -347,6 +347,7 @@ class Arena:
         self._zero64 = torch.zeros((), dtype=torch.int64, device=self.device)
         self._acc = None
         self._reset_hooks = []      # e.g. zero the policy's hidden state
+        self._rec = None            # set to dict to record (obs, cmd) streams
 
     def reset(self):
         """Allocation-free: copy_ / zero_ / fill_ only, so this is legal
@@ -435,6 +436,11 @@ class Arena:
             obs = torch.cat([scan72, _proprio(e), prev_act], dim=1)
 
             cmd = policy_step(obs, prev_act).clamp(-1.0, 1.0)
+            if self._rec is not None:
+                # BC data collection: pre-gate command (student learns the
+                # pre-gate map; the arena re-gates at deploy time)
+                self._rec["obs"].append(obs.clone())
+                self._rec["cmd"].append(cmd.clone())
             gated = self.gate.gate(cmd)
             px, py = e.x.clone(), e.y.clone()
             e.step(gated, self.dt)
@@ -447,7 +453,8 @@ class Arena:
             prev_act = gated
 
     def run_games(self, policy_step, ticks: int,
-                  every_room_sample: int = 3, graph: bool = False) -> dict:
+                  every_room_sample: int = 3, graph: bool = False,
+                  rec: dict | None = None) -> dict:
         """policy_step(obs [B, OBS_DIM], prev_act [B, 2]) -> raw cmd [B, 2]
         (anything is clamped). Returns per-env metrics as [B] tensors.
 
@@ -476,8 +483,10 @@ class Arena:
                     self._graph_broken = True
                     graph = False
         if not graph:
+            self._rec = rec
             acc = self._make_acc()
             self._rollout_body(policy_step, ticks, every_room_sample, acc)
+            self._rec = None
             _, seen, dist, coll, cells = acc
         else:
             _, seen, dist, coll, cells = self._acc           # static buffers

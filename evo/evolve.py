@@ -126,6 +126,27 @@ def evolve(args):
         print(f"[warm-start] {n_seed}/{P} from {args.seed_from} "
               f"(rest fresh, sigma carried over)", flush=True)
 
+    if getattr(args, "bc_from", ""):
+        # BC seeding (run 8): scripted-explorer distilled genomes occupy the
+        # FIRST slots of the initial population — fresh samples fill the
+        # rest. Unlike --seed_from this REPLACES random rows (the point is
+        # to seed the search inside the explorer basin, not extend an old
+        # run), and sigma gets a modest floor so the seeds do not freeze.
+        d = np.load(args.bc_from)
+        assert int(d["hidden"]) == hidden, \
+            f"--hidden {hidden} != bc file hidden {int(d['hidden'])}"
+        assert int(d.get("train_seed", args.train_seed)) == args.train_seed, \
+            "bc file distilled on a different train seed — match --train-seed"
+        bc = torch.as_tensor(d["thetas"], device=dev)
+        n_bc = min(P, bc.shape[0])
+        if bc.shape[0] == 0:
+            raise SystemExit("bc file has 0 kept members (min-cov gate "
+                             "rejected all — inspect bc_seed output)")
+        thetas[:n_bc] = bc[:n_bc]
+        sigma[:n_bc] = max(args.sigma0, 0.15)   # keep seeds mutable
+        print(f"[bc-seed] {n_bc}/{P} distilled explorers in slot 0..{n_bc-1} "
+              f"(rest fresh random)", flush=True)
+
     def build_arenas(door_w, holdout_door=(0.7, 1.0)):
         # ONE merged train arena (P x [K sets x G] houses) + graph: this stack
         # faults with >1 live CUDA graph (gmbisect T3-T5), so house rotation
@@ -329,6 +350,10 @@ def main():
     ap.add_argument("--seed-from", default="",
                     help="final_population.npz / best_genome.npz from an"
                          " earlier run: warm-start the population (+sigma)")
+    ap.add_argument("--bc-from", default="",
+                    help="bc_thetas.npz from evo.bc_seed: distilled "
+                         "scripted-explorer genomes occupy the first pop "
+                         "slots (run-8 behavior-cloned seeding)")
     ap.add_argument("--door-w", type=float, default=0.0,
                     help="override doorway width (m) for TRAIN houses;"
                          " 0 = natural (0.7-1.0). Holdout is always natural.")
