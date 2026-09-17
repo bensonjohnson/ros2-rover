@@ -34,20 +34,36 @@ def batched_preprocess(ranges: torch.Tensor, angle_min: float,
     B, n = ranges.shape
     dev = ranges.device
 
-    clean = ranges.clone()
-    invalid = ~torch.isfinite(clean) | (clean <= 0.0) | (clean < min_range)
-    clean[invalid] = max_range
+    invalid = ~torch.isfinite(ranges) | (ranges <= 0.0) | (ranges < min_range)
+    clean = torch.where(invalid, torch.full_like(ranges, max_range), ranges)
     clean.clamp_(min_range, max_range)
 
-    angles = angle_min + torch.arange(n, device=dev,
-                                      dtype=torch.float32) * angle_increment
-    frac = torch.remainder(angles, 2.0 * np.pi) / (2.0 * np.pi)
-    bins = (frac * num_bins).long().clamp(max=num_bins - 1)   # [n]
+    bins = _bin_index(n, angle_min, angle_increment, num_bins, dev)
 
     out = torch.full((B, num_bins), max_range, device=dev)
     out.scatter_reduce_(1, bins.unsqueeze(0).expand(B, n), clean,
                         reduce="amin")
     return out / max_range
+
+
+# Beam geometry is identical every tick; recomputing arange/remainder/trig
+# per call was pure per-tick traffic at B=8192. Keyed caches, values
+# bit-identical to the inline computation (pnn_sim.batched.test_geom_cache).
+_BIN_CACHE: dict = {}
+
+
+def _bin_index(n, angle_min, angle_increment, num_bins, dev):
+    key = (n, float(angle_min), float(angle_increment), num_bins, str(dev))
+    bins = _BIN_CACHE.get(key)
+    if bins is None:
+        angles = angle_min + torch.arange(n, device=dev,
+                                          dtype=torch.float32) * angle_increment
+        frac = torch.remainder(angles, 2.0 * np.pi) / (2.0 * np.pi)
+        # NB float rounding puts some multiples-of-5 beams in the previous
+        # bin — kept as-is: the rover's preprocess_scan does the same.
+        bins = (frac * num_bins).long().clamp(max=num_bins - 1)   # [n]
+        _BIN_CACHE[key] = bins
+    return bins
 
 
 class BatchedEnv:
@@ -222,15 +238,31 @@ class BatchedGate:
         self._cmd_ang = torch.zeros(batch, device=dev)
         self.stops = 0
 
+    def _scan_geom(self, n: int, angle_min: float, angle_increment: float):
+        """Per-beam constants ([1, n] trig, [n] sector masks), built once
+        per scan geometry (was recomputed every tick)."""
+        key = (n, float(angle_min), float(angle_increment))
+        g = getattr(self, "_geom", None)
+        if g is None or g[0] != key:
+            dev = self.device
+            angles = torch.arange(n, device=dev, dtype=torch.float32) \
+                * angle_increment + angle_min
+            angles = torch.remainder(angles + np.pi, 2 * np.pi) - np.pi
+            g = (key, (torch.cos(angles).unsqueeze(0),
+                       torch.sin(angles).unsqueeze(0),
+                       (angles > _SIDE_MIN) & (angles < _SIDE_MAX),
+                       (angles < -_SIDE_MIN) & (angles > -_SIDE_MAX),
+                       angles.abs() >= _REAR_MIN))
+            self._geom = g
+        return g[1]
+
     @torch.no_grad()
     def process_scan(self, ranges: torch.Tensor, angle_min: float,
                      angle_increment: float):
         c = self.cfg
         B, n = ranges.shape
-        dev = self.device
-        angles = torch.arange(n, device=dev, dtype=torch.float32) \
-            * angle_increment + angle_min
-        angles = torch.remainder(angles + np.pi, 2 * np.pi) - np.pi
+        cos_a, sin_a, left_m, right_m, rear_m = self._scan_geom(
+            n, angle_min, angle_increment)
 
         valid = (torch.isfinite(ranges)
                  & (ranges > c.min_valid_range)
@@ -238,8 +270,8 @@ class BatchedGate:
         # Large-but-finite for invalid beams: every consumer masks on
         # `valid`, and inf would 0*inf -> nan in the arc-shift math.
         r = torch.where(valid, ranges, torch.full_like(ranges, 1e6))
-        x = r * torch.cos(angles).unsqueeze(0)
-        y = r * torch.sin(angles).unsqueeze(0)
+        x = r * cos_a
+        y = r * sin_a
         x_bumper = x - c.robot_front_offset
 
         # Front corridor with per-env arc shift.
@@ -262,10 +294,6 @@ class BatchedGate:
         self._front_streak = torch.where(qual, self._front_streak + 1,
                                          torch.zeros_like(self._front_streak))
         self._update_front_blocked()
-
-        left_m = (angles > _SIDE_MIN) & (angles < _SIDE_MAX)
-        right_m = (angles < -_SIDE_MIN) & (angles > -_SIDE_MAX)
-        rear_m = angles.abs() >= _REAR_MIN
 
         def sector_min(mask):
             rr = torch.where(valid & mask.unsqueeze(0), r,
