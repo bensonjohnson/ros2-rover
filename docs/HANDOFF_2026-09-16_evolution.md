@@ -12,7 +12,7 @@ Sweep machine: DGX Spark `benson@172.0.0.201`, repo at `~/projects/ros2-rover`,
 is NOT a git clone — ship code with rsync, never `git pull` there.**
 Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
-## TL;DR (2026-09-17 00:45)
+## TL;DR (2026-09-17 09:20)
 
 1. **Runs 1–9 were void** — two bugs, both fixed and covered by tests:
    - *Reproduction:* children were built from the parent **index**, not the
@@ -32,41 +32,63 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
    = **12.7 s/gen** (was 164 s) — compile replaces the graph capture ROCm can't do.
 4. **Procedural buildings + curriculum** (`d82b843`): 6 building families with
    explicit rooms and door thresholds, resampled 1024-house pools per level,
-   auto-advancing levels 0→3. Run 11 family (curriculum vs direct, 2 seeds,
-   `w_coll 1.0`) is **running now**.
+   auto-advancing levels 0→3. **Run 11 verdict:** buildings training raises the
+   unseen-building cross rate 5–7×; the curriculum adds nothing over training
+   on the full mix; `w_coll 1.0` removed the collision brute-forcers.
+5. **Now:** run 12 splits the run-10 genome bundle on buildings (Spark only).
 
-## Live now (Spark + V620)
+## Live now (Spark only — V620 paused, too loud)
 
-All four run-11 jobs use the same config (9b genome: h128, obs v1, action lr,
-fixed ES; pop 128 × 16 houses × 4 rotations, 5400 ticks, `--w-dist 0.005
---w-cov 0.3 --w-coll 1.0`, 40 gens, pool 1024, fresh houses every gen). Seed 8
-runs on the Spark (`--fused --compile --graph`, `evo/run11_variant.sh`), seed 9
-on the V620 (eager `--fp16 --fused --compile`, `evo/run11_variant620.sh`, both
-in parallel on one GPU):
+**Run 12 queue** (`evo/queue12.sh`, launched 2026-09-17 ~09:20): split the
+run-10 genome bundle on buildings. Base = run 11c config (9b genome h128, obs
+v1, action lr, fixed ES, direct level 3, pool 1024 resampled every gen,
+`w_coll 1.0`, 40 gens, `--fused --compile --graph`) + validation-set champion.
+One change per variant, seeds 8 and 9:
 
-| # | Machine | Out dir | Seed | Mode | State (01:15) |
-|---|---|---|---|---|---|
-| 1 | Spark | `evo_runs/greenfield11` | 8 | curriculum: level 0 → 3, advance at elite cross rate ≥ 0.5 for 2 gens | **done** — L1→L2 at gen 12, L2→L3 at gen 24; not yet scored |
-| 2 | Spark | `evo_runs/greenfield11c` | 8 | direct: level 3 from gen 0 | running |
-| 3 | V620 | `/root/evo620-src/evo_runs/greenfield11_s9` | 9 | curriculum | running (started 01:11) |
-| 4 | V620 | `/root/evo620-src/evo_runs/greenfield11c_s9` | 9 | direct | running (started 01:11) |
+| Order | Out dir | Change |
+|---|---|---|
+| 1 | `greenfield12_ctl_s9` | none — Spark rerun of the seed-9 control (seed-8 control = `greenfield11c`) |
+| 2–4 | `greenfield12_{obs,act,h64}_s8` | `--obs v2` / `--action vw` / `--hidden 64` |
+| 5–7 | `greenfield12_{obs,act,h64}_s9` | same, seed 9 |
 
-Completion marker per run: `RUN-COMPLETE <name>` in its `run.log`.
-Per-generation readouts: `gens.jsonl`; report gens (every 5) with holdouts:
-`evolution.jsonl`. Seeds 8 and 9 run on different engines (graph vs eager);
-9b/9b_r already showed graph and eager runs agree in direction.
+~12 min per run → ≈ 90 min total. Marker `QUEUE12-COMPLETE` in
+`evo_runs/queue12.log`.
 
-**Pre-registered criteria** (stated before launch, in `evo/run11.sh` and
-`evo/run11_variant.sh`):
-- *Curriculum run PASS* if at gen 39: level ≥ 2 reached; `hob_elite_cross_rate`
-  (level-3 building holdout, never selected on) ≥ 1.5× its gen-0 value; and ≥
-  the direct run's.
-- *Curriculum verdict*: mean over seeds 8 and 9 of `hob_elite_cross_rate` at
-  gen 39 — curriculum ≥ 1.2× direct → curriculum helps; ≤ direct → spreading
-  from gen 0 is as good; each seed pair must agree in direction.
-- *Transfer guard*: legacy deep-eval `best_genome` ≥ 0.37 (9b: 0.3948).
-- *Collision guard* (added with w_coll 1.0): gen-39 `hob_champ_coll` ≤ 20 and
-  elite train collisions ≤ 3 in all four runs.
+**Pre-registered** (in `evo/run12_variant.sh`): primary metric
+`hob_elite_cross_rate` at gen 39. A change **helps** if its mean over seeds 8/9
+≥ 1.1× the control mean and each seed ≥ its control; **hurts** if ≤ 0.9×;
+otherwise neutral. Secondary: deep-evals of `val_best_genome` (legacy and
+buildings); collision guard as run 11.
+
+## Run 11 family — verdicts (all complete; scored 2026-09-17 09:15)
+
+Config: 9b genome, buildings, `w_coll 1.0`, 40 gens. Seed 8 on the Spark
+(graph), seed 9 on the V620 (eager). Summary JSON:
+`evo_runs/run11_family_summary.json` on the Spark.
+
+| Criterion | 11 (s8, curriculum) | 11c (s8, direct) | 11_s9 (curriculum) | 11c_s9 (direct) |
+|---|---|---|---|---|
+| Level reached ≥ 2 | ✓ L3 (gens 3/12/24) | n/a | ✗ stuck at L1 from gen 3 | n/a |
+| Building-holdout elite cross rate g0 → g39 | 0.082 → 0.412 | 0.090 → 0.410 | 0.076 → 0.510 | 0.090 → 0.523 |
+| Curriculum ≥ direct (same seed) | ✓ (tie) | — | ✗ | — |
+| Collision guard (hob champ ≤ 20, elite train ≤ 3) | ✓ 2.2 / 2.4 | ✓ 0.9 / 0.1 | ✓ 0.2 / 0.0 | ✓ 0.0 / 0.0 |
+| Legacy deep-eval `best_genome` ≥ 0.37 | ✗ 0.140 (90.8 coll) | ✗ 0.357 | ✗ 0.325 | ✓ 0.375 |
+
+- **Buildings training works:** elite cross rate on unseen level-3 buildings
+  rose 5–7× in every run.
+- **Curriculum: no benefit.** Mean over seeds 0.461 curriculum vs 0.467 direct
+  (0.99×; "helps" needed 1.2×). Run 11 passes its own criteria (tie with 11c);
+  11_s9 fails (its cross rate hovered around the 0.5 advance gate).
+- **Collision guard passes in all four** — `w_coll 1.0` fixed the holdout
+  brute-forcers.
+- **Transfer guard fails 3/4 because of the champion pick**, not the
+  population: `best_genome` was the train-fitness argmax on one generation's
+  random 64 houses. Population best on legacy houses: 0.39–0.40 in all four.
+  Fixed in `5014920`: champion = best on a fixed validation set
+  (`val_best_genome.npz`, seed 779000).
+- **Building deep-eval (32 unseen level-3 houses):** `best_genome` crosses
+  rooms in 31–59% of games vs ≤ 16% for the best scripted controller. Run 11's
+  genome: 2.09 rooms, cross 0.594, 1.5 collisions, fitness 0.459 vs 0.272.
 
 **Why w_coll went 0.25 → 1.0:** the first run-11 attempt (kept as
 `evo_runs/greenfield11_wc025_aborted`, killed at gen 11) grew collision
