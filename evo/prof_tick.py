@@ -30,7 +30,8 @@ def profile(arena: Arena, net: PopulationNet, h: torch.Tensor, ticks: int):
                         device=arena.device)
     P, G = net.P, arena.B // net.P
     acc = defaultdict(float)
-    sync = torch.cuda.synchronize
+    sync = (torch.cuda.synchronize if arena.device.type == "cuda"
+            else (lambda: None))
 
     def lap(name, t0):
         sync()
@@ -42,14 +43,14 @@ def profile(arena: Arena, net: PopulationNet, h: torch.Tensor, ticks: int):
     t = time.perf_counter()
     for k in range(ticks):
         g._tick.add_(arena.dt)
-        if e.fused:
+        if getattr(e, "fused", False):
             from .fused_scan import fused_scan
             r = fused_scan(e, out=e._scan_buf)
         else:
             # raycast only: reuse the class scan minus noise by timing whole
             r = type(e).scan(e)
         t = lap("raycast(+noise if unfused)", t)
-        if e.fused:
+        if getattr(e, "fused", False):
             r = r + e.noise(e.cfg.lidar_noise_std, e.B, e.cfg.n_beams)
             r = e._dropout(r, e.cfg.lidar_dropout_p)
             t = lap("noise+dropout", t)
@@ -107,7 +108,8 @@ def main():
             print(f"  {k:28s} {1e3 * v / args.ticks:7.2f} ms  "
                   f"{100 * v / tot:5.1f}%")
         del ar, net, h
-        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 if __name__ == "__main__":

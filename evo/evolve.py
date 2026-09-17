@@ -158,6 +158,64 @@ def reproduce(thetas: torch.Tensor, sigma: torch.Tensor, fit_np: np.ndarray,
             torch.cat([sigma[survivors], s_child, sig_imm], dim=0))
 
 
+class OES:
+    """OpenAI-ES (Salimans et al. 2017) over the flat genome, as an
+    alternative to the truncation GA (--algo oes).
+
+    Population slot 0 = the centre mu; slots 1..2n = mirrored pairs
+    mu +/- sigma*scale*eps (antithetic sampling cancels the fitness
+    baseline); a leftover odd slot re-scores the best genome seen. All 2n
+    perturbed scores become centred ranks in [-0.5, 0.5] (fitness shaping:
+    invariant to the w_cov/w_dist scale, robust to collision outliers), and
+    the search-gradient estimate g = sum_i (r+_i - r-_i) eps_i / (2 n sigma)
+    drives Adam on z = mu / scale (per-gene init-scale units, like the GA's
+    sigma) with L2 decay. Every one of the P rollouts feeds one gradient —
+    the GA keeps the top quarter and discards the rest."""
+
+    def __init__(self, mu: torch.Tensor, scale: torch.Tensor, P: int,
+                 sigma: float, lr: float, l2: float = 0.005):
+        self.z = (mu / scale).clone()
+        self.scale, self.P = scale, P
+        self.sigma, self.lr, self.l2 = sigma, lr, l2
+        self.n = (P - 1) // 2
+        self.m = torch.zeros_like(self.z)
+        self.v = torch.zeros_like(self.z)
+        self.t = 0
+        self.eps = None
+
+    @property
+    def mu(self) -> torch.Tensor:
+        return self.z * self.scale
+
+    def ask(self, best: torch.Tensor | None) -> torch.Tensor:
+        N = self.z.numel()
+        self.eps = torch.randn(self.n, N, device=self.z.device)
+        d = self.sigma * self.eps * self.scale
+        rows = [self.mu[None], self.mu + d, self.mu - d]
+        if self.P - 1 - 2 * self.n:
+            rows.append((best if best is not None else self.mu)[None])
+        return torch.cat(rows, dim=0)
+
+    def tell(self, fit_np: np.ndarray) -> float:
+        n = self.n
+        f = fit_np[1:1 + 2 * n]
+        ranks = np.empty(2 * n, dtype=np.float32)
+        ranks[np.argsort(f)] = np.arange(2 * n, dtype=np.float32)
+        ranks = ranks / (2 * n - 1) - 0.5
+        w = torch.as_tensor(ranks[:n] - ranks[n:], device=self.z.device)
+        g = (w[:, None] * self.eps).sum(0) / (2 * n * self.sigma)
+        g = g - self.l2 * self.z                 # ascent + decay
+        self.t += 1
+        b1, b2 = 0.9, 0.999
+        self.m.mul_(b1).add_(g, alpha=1 - b1)
+        self.v.mul_(b2).addcmul_(g, g, value=1 - b2)
+        mh = self.m / (1 - b1 ** self.t)
+        vh = self.v / (1 - b2 ** self.t)
+        step = self.lr * mh / (vh.sqrt() + 1e-8)
+        self.z.add_(step)
+        return float(step.norm() / (self.z.norm() + 1e-12))
+
+
 def evolve(args):
     dev = args.device
     hidden, P, G = args.hidden, args.pop, args.games
@@ -270,6 +328,16 @@ def evolve(args):
     train, holdout, score = build_arenas(args.door_w)
     G_eff = G * args.train_rotations
 
+    oes = None
+    if args.algo == "oes":
+        # centre = slot 0 of the (possibly warm-started) population
+        oes = OES(thetas[0].clone(), scale, P, sigma=args.oes_sigma,
+                  lr=args.oes_lr, l2=args.oes_l2)
+        thetas = oes.ask(None)
+        sigma.fill_(args.oes_sigma)
+        print(f"[oes] pairs={oes.n} sigma={args.oes_sigma} lr={args.oes_lr}"
+              f" l2={args.oes_l2}", flush=True)
+
     os.makedirs(args.out_dir, exist_ok=True)
     log_f = open(os.path.join(args.out_dir, "evolution.jsonl"), "a")
     gen_f = open(os.path.join(args.out_dir, "gens.jsonl"), "a")
@@ -313,7 +381,7 @@ def evolve(args):
         fit_np = fit.cpu().numpy()
 
         order = np.argsort(-fit_np)
-        if gen > 0:
+        if gen > 0 and oes is None:
             # offspring quality on the SAME houses/noise as the re-scored
             # survivors: are mutants neighbours of their parents, or noise?
             f_surv = fit_np[:n_elite]
@@ -353,7 +421,10 @@ def evolve(args):
                 "elite_coll": round(float(tr["coll"][el].mean()), 2),
                 "champ_cells": round(float(tr["cells"][champ]), 4),
                 "sigma_med": round(float(sigma.median()), 4)}
-        if gen > 0:
+        if oes is not None:
+            trec["center_fit"] = round(float(fit_np[0]), 4)
+            trec["center_cells"] = round(float(tr["cells"][0]), 4)
+        elif gen > 0:
             trec["child_win"] = round(child_stats[-1][0], 3)
             trec["child_dmed"] = round(child_stats[-1][1], 4)
         gen_f.write(json.dumps(trec) + "\n")
@@ -362,7 +433,9 @@ def evolve(args):
               f"cells={trec['elite_cells']:.4f} rooms={trec['elite_rooms']:.3f} "
               f"dist={trec['elite_dist']:.1f} coll={trec['elite_coll']:.2f} "
               f"sigma~{trec['sigma_med']:.4f} "
-              f"child_win={trec.get('child_win', float('nan')):.3f}",
+              + (f"center fit={trec['center_fit']:.4f} "
+                 f"cells={trec['center_cells']:.4f}" if oes is not None else
+                 f"child_win={trec.get('child_win', float('nan')):.3f}"),
               flush=True)
 
         # --- report every --report-every gens (holdout score included) ----
@@ -419,12 +492,21 @@ def evolve(args):
             log_f.flush()
 
         # ---------------- reproduction -----------------------------------
+        if oes is not None:
+            rel = oes.tell(fit_np)
+            gen_f.write(json.dumps({"gen": gen, "oes_rel_step":
+                                    round(rel, 6)}) + "\n")
+            thetas = oes.ask(best_theta.to(dev) if gen > 0 else None)
+            continue
         thetas, sigma = reproduce(
             thetas, sigma, fit_np, order, scale, rng,
             n_elite=n_elite, n_immigrant=n_immigrant, tau=tau,
             sigma_max=sigma_max, sigma0=args.sigma0, hidden=hidden,
             legacy=args.legacy_mutation)
 
+    if oes is not None:
+        np.savez(os.path.join(args.out_dir, "oes_center.npz"),
+                 thetas=oes.mu.cpu().numpy(), hidden=hidden, **meta)
     np.savez(os.path.join(args.out_dir, "final_population.npz"),
              thetas=thetas.cpu().numpy(), sigma=sigma.cpu().numpy(),
              hidden=hidden, **meta)
@@ -490,6 +572,14 @@ def main():
                     "~20x faster scan on GB10; parity-gated (99.8% beams "
                     "<0.05m), deterministic, graph-capture-safe (static "
                     "out buffer)")
+    ap.add_argument("--algo", choices=("ga", "oes"), default="ga",
+                    help="ga: truncation GA (runs 1-9); oes: OpenAI-ES with "
+                    "mirrored sampling + rank shaping + Adam (class OES)")
+    ap.add_argument("--oes-sigma", type=float, default=0.03,
+                    help="OES perturbation std in init-scale units")
+    ap.add_argument("--oes-lr", type=float, default=0.01,
+                    help="OES Adam step (init-scale units)")
+    ap.add_argument("--oes-l2", type=float, default=0.005)
     ap.add_argument("--compile", action="store_true",
                     help="torch.compile the per-tick [B,360] chains (noise/"
                     "dropout, preprocess, gate, physics) — see "
