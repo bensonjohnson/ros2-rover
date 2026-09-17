@@ -107,16 +107,34 @@ class Fp16Env(_DefaultRNGMixin, BatchedEnv):
     fitness cannot be inflated by precision artifacts — fp16 can only make
     the *sensing* slightly wrong, identically for every individual.
     Dummy pad segments overflow to inf in fp16 and drop out through the
-    isfinite hit-mask, exactly as their 1e6 peers do in fp32."""
+    isfinite hit-mask, exactly as their 1e6 peers do in fp32.
+
+    fused=True swaps the fp16 op-chain for the single fused Triton kernel
+    (evo.fused_scan): no [B, 360, M] intermediates at all — measured 31 ms
+    -> 1.5 ms per tick at B=8192 on GB10, parity 99.83% of beams < 0.05 m
+    (grazing-ray fp16 differences; deterministic across calls). The output
+    is a STATIC buffer (out=): fresh allocations inside a captured graph
+    are the run-5 Xid-43 fault class — zero-alloc is mandatory here."""
+
+    fused = False                       # Arena sets per config
 
     def _build_segments(self):
         super()._build_segments()                    # fp32 truth kept
         self._a_h = self._a.half()
         self._e_h = self._e.half()
+        if self.fused:
+            self._scan_buf = torch.zeros(
+                self.B, self.cfg.n_beams, device=self.device,
+                dtype=torch.float32)
 
     @torch.no_grad()
     def scan(self) -> torch.Tensor:
         c = self.cfg
+        if self.fused:
+            from .fused_scan import fused_scan
+            r = fused_scan(self, out=self._scan_buf)   # clean, static buf
+            r = r + self.noise(c.lidar_noise_std, self.B, c.n_beams)
+            return self._dropout(r, c.lidar_dropout_p)
         ang = self.theta.unsqueeze(1) + self._beam_offsets   # [B, nb] fp32
         d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
         d_h = d.half()
@@ -203,7 +221,7 @@ class Arena:
                  gate_cfg: GateConfig | None = None, fp16: bool = False,
                  noise_seed: int | None = None, merged_houses: int = 1,
                  door_w_range: tuple = (0.7, 1.0), cells: bool = True,
-                 every_cover: int = 24):
+                 every_cover: int = 24, fused: bool = False):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -235,6 +253,10 @@ class Arena:
                        for _ in range(G)]
         # env layout: b = p*(G*K) + k*G + g  (individual-major, then set)
         env_cls = Fp16Env if self.fp16 else Fp32Env
+        if fused:
+            if not self.fp16:
+                raise SystemExit("--fused requires fp16 raycast config")
+            env_cls = type("FusedEnv", (Fp16Env,), {"fused": True})
         self.env = env_cls(self.B, rover_cfg, seed=seed, device=device)
         self.env._worlds = [houses[b % (G * merged_houses)]
                             for b in range(self.B)]

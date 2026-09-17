@@ -155,10 +155,12 @@ def evolve(args):
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
-                   cells=not args.no_cells, every_cover=args.every_cover)
+                   cells=not args.no_cells, every_cover=args.every_cover,
+                   fused=args.fused)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    fp16=args.fp16, door_w_range=holdout_door,
-                   cells=not args.no_cells, every_cover=args.every_cover)
+                   cells=not args.no_cells, every_cover=args.every_cover,
+                   fused=args.fused)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train else ho
@@ -341,6 +343,12 @@ def main():
     ap.add_argument("--fp16", action="store_true",
                     help="fp16 raycast (GB10/Spark fast path; ~2x on the "
                     "bandwidth-bound scan, sensing-only)")
+    ap.add_argument("--fused", action="store_true",
+                    help="fused Triton raycast kernel (implies --fp16): "
+                    "single kernel, zero [B,360,M] intermediates — "
+                    "~20x faster scan on GB10; parity-gated (99.8% beams "
+                    "<0.05m), deterministic, graph-capture-safe (static "
+                    "out buffer)")
     ap.add_argument("--graph", action="store_true",
                     help="capture the full rollout as a CUDA graph (one "
                     "replay per generation; removes kernel-launch overhead)")
@@ -364,6 +372,8 @@ def main():
     ap.add_argument("--anneal-door-w", type=float, default=0.94,
                     help="door width (m) after --anneal-gen (real-ish 0.94)")
     args = ap.parse_args()
+    if args.fused:
+        args.fp16 = True       # fused kernel lives on the fp16 env class
     evolve(args)
 
 
