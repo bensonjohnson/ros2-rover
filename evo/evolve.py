@@ -2,10 +2,24 @@
 """Greenfield evolutionary run: evolve MLP policies from random noise to
 room-explorers.
 
-ES recipe: elitist (mu+lambda)-style loop — tournament selection, uniform
-crossover, per-gene Gaussian mutation with per-individual log-normal
-self-adapted sigma (in init-scale units), plus random immigrants each
-generation to fight premature convergence. Fitness = mean over G paired
+ES recipe: elitist (mu+lambda)-style loop — tournament selection (the child
+copies ONE parent; there is no crossover), per-gene Gaussian mutation with
+per-individual log-normal self-adapted sigma (in init-scale units), plus
+random immigrants each generation to fight premature convergence.
+
+Mutation size (run 9 fix): runs 1-8 used sigma0 0.25, tau 0.4, sigma'
+inherited as max(parent sigmas), clamp 1.0 — an upward-ratcheting step
+that reached a median 0.36 (quartile 0.81) init-sigmas on EVERY gene. The
+evolved controllers are bang-bang (|a| ~0.97) and cliff between sigma 0.1
+(open-loop action change 0.03) and 0.25 (0.27; 0.5 -> 0.62), so most
+children were behaviourally unrelated to their parent = random search
+around untouched elites. Defaults now: sigma0 0.03, sigma <= 0.15,
+tau = 1/sqrt(N), sigma inherited from the copied parent. --legacy-mutation
+restores the runs 1-8 step-size rule (NOT the parent-gather bug below).
+
+Inheritance (run 9 fix): runs 1-8 built children from the parent INDEX
+instead of the parent genome, so nothing was ever inherited — see the
+reproduction block. Fitness = mean over G paired
 houses of ground-truth room coverage (+dist, -collisions); all individuals
 see the SAME houses and noise streams within a generation (paired test),
 train houses rotate among K seeds across generations, and a fixed holdout
@@ -95,6 +109,52 @@ class GraphRunner:
         return fit, metrics
 
 
+def reproduce(thetas: torch.Tensor, sigma: torch.Tensor, fit_np: np.ndarray,
+              order: np.ndarray, scale: torch.Tensor,
+              rng: np.random.Generator, *, n_elite: int, n_immigrant: int,
+              tau: float, sigma_max: float, sigma0: float, hidden: int,
+              legacy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    """Next population, laid out [survivors | children | immigrants].
+
+    Survivors = top n_elite untouched. Each child copies ONE tournament
+    parent's genome and gets per-gene Gaussian mutation in init-scale
+    units with a log-normal self-adapted per-individual sigma.
+
+    Runs 1-8 built children as `p1.unsqueeze(1).expand(-1, N) * mix`, i.e.
+    the parent INDEX (0..P-1) broadcast as every gene: children were
+    constant vectors + noise, nothing was inherited, and the ES reduced to
+    elitism over gen-0 samples and random immigrants (evo.test_reproduce).
+    """
+    P, N = thetas.shape
+    dev = thetas.device
+    n_child = P - n_elite - n_immigrant
+    survivors = torch.as_tensor(order[:n_elite], device=dev)
+
+    def tournament(k=3):
+        cand = rng.integers(0, P, size=(n_child, k))
+        return cand[np.arange(n_child), fit_np[cand].argmax(axis=1)]
+
+    par = torch.as_tensor(tournament(), device=dev)
+    if legacy:
+        # runs 1-8 step-size rule (max of two parents, tau 0.4, <= 1.0)
+        par2 = torch.as_tensor(tournament(), device=dev)
+        s_child = sigma[par].maximum(sigma[par2]) * torch.exp(
+            tau * torch.randn(n_child, 1, device=dev)
+            + 0.1 * torch.randn(n_child, 1, device=dev))
+    else:
+        s_child = sigma[par] * torch.exp(
+            tau * torch.randn(n_child, 1, device=dev))
+    s_child = s_child.clamp(1e-4, sigma_max)
+    child = thetas[par] + s_child * scale.unsqueeze(0) \
+        * torch.randn(n_child, N, device=dev)
+
+    immigrants = torch.as_tensor(
+        sample_population(n_immigrant, OBS_DIM, hidden, rng), device=dev)
+    sig_imm = torch.full((n_immigrant, 1), sigma0, device=dev)
+    return (torch.cat([thetas[survivors], child, immigrants], dim=0),
+            torch.cat([sigma[survivors], s_child, sig_imm], dim=0))
+
+
 def evolve(args):
     dev = args.device
     hidden, P, G = args.hidden, args.pop, args.games
@@ -105,6 +165,14 @@ def evolve(args):
     thetas = torch.as_tensor(
         sample_population(P, OBS_DIM, hidden, rng), device=dev)
     sigma = torch.full((P, 1), args.sigma0, device=dev)
+    if args.legacy_mutation:
+        tau, sigma_max = 0.4, 1.0
+    else:
+        tau = args.tau if args.tau > 0 else 1.0 / np.sqrt(N)
+        sigma_max = args.sigma_max
+    print(f"[mutation] {'legacy' if args.legacy_mutation else 'v9'}: "
+          f"N={N} sigma0={args.sigma0} tau={tau:.4f} sigma_max={sigma_max}",
+          flush=True)
 
     if args.seed_from:
         # Curriculum/warm-restart hookup: final_population.npz (thetas
@@ -120,11 +188,16 @@ def evolve(args):
             raise SystemExit(f"--seed-from has {seed_th.shape[0]} rows "
                              f"(>pop {P}); match --pop to the source run")
         thetas[:n_seed] = seed_th[:n_seed]
-        if "sigma" in d and d["sigma"].shape[0] >= n_seed:
+        carried = (args.keep_seed_sigma and "sigma" in d
+                   and d["sigma"].shape[0] >= n_seed)
+        if carried:
             sigma[:n_seed] = torch.as_tensor(
-                d["sigma"][:n_seed], device=dev).view(n_seed, 1)
+                d["sigma"][:n_seed], device=dev).view(n_seed, 1) \
+                .clamp(max=sigma_max)
         print(f"[warm-start] {n_seed}/{P} from {args.seed_from} "
-              f"(rest fresh, sigma carried over)", flush=True)
+              f"(rest fresh, sigma "
+              f"{'carried over' if carried else f'reset to {args.sigma0}'})",
+              flush=True)
 
     if getattr(args, "bc_from", ""):
         # BC seeding (run 8): scripted-explorer distilled genomes occupy the
@@ -143,7 +216,9 @@ def evolve(args):
             raise SystemExit("bc file has 0 kept members (min-cov gate "
                              "rejected all — inspect bc_seed output)")
         thetas[:n_bc] = bc[:n_bc]
-        sigma[:n_bc] = max(args.sigma0, 0.15)   # keep seeds mutable
+        # runs 1-8 floored seeds at 0.15 — past the behaviour cliff
+        sigma[:n_bc] = (max(args.sigma0, 0.15) if args.legacy_mutation
+                        else args.sigma0)
         print(f"[bc-seed] {n_bc}/{P} distilled explorers in slot 0..{n_bc-1} "
               f"(rest fresh random)", flush=True)
 
@@ -185,10 +260,16 @@ def evolve(args):
 
     os.makedirs(args.out_dir, exist_ok=True)
     log_f = open(os.path.join(args.out_dir, "evolution.jsonl"), "a")
+    gen_f = open(os.path.join(args.out_dir, "gens.jsonl"), "a")
 
-    tau = 0.4
     t0 = time.time()
     best_fit_ever, best_theta = -np.inf, thetas[0].cpu().clone()
+
+    # population layout after reproduction: [survivors | children | immigrants]
+    n_elite = max(2, P // 4)
+    n_immigrant = max(1, P // 10)
+    n_child = P - n_elite - n_immigrant
+    child_stats = []        # per gen since last report: (win frac, d median)
 
     for gen in range(args.gens):
         # --- doorway curriculum: rebuild arenas + graph at the phase cut --
@@ -220,6 +301,14 @@ def evolve(args):
         fit_np = fit.cpu().numpy()
 
         order = np.argsort(-fit_np)
+        if gen > 0:
+            # offspring quality on the SAME houses/noise as the re-scored
+            # survivors: are mutants neighbours of their parents, or noise?
+            f_surv = fit_np[:n_elite]
+            f_child = fit_np[n_elite:n_elite + n_child]
+            child_stats.append((
+                float((f_child > np.median(f_surv)).mean()),
+                float(np.median(f_child) - np.median(f_surv))))
         if fit_np[order[0]] > best_fit_ever:
             best_fit_ever = float(fit_np[order[0]])
             best_theta = thetas[order[0]].cpu().clone()
@@ -227,11 +316,54 @@ def evolve(args):
                      thetas=best_theta.numpy(), hidden=hidden,
                      fitness=best_fit_ever, gen=gen)
 
+        # --- honest per-gen train readout (free: metrics already on hand) --
+        # The ELITE (top n_elite by train fitness) is what selection keeps;
+        # train_rooms/train_cells below average the WHOLE pop (immigrants +
+        # mutants) and hide elite movement.
+        def per_ind(m, n_env):
+            """per-individual means [P] of rooms/cells-frac/dist/coll"""
+            def mean(v):
+                return v.view(P, n_env).mean(dim=1).cpu().numpy()
+            return {"rooms": mean(m["rooms"]),
+                    "cells": mean(m["cells"] / m["cells_total"]),
+                    "dist": mean(m["dist_m"]),
+                    "coll": mean(m["collisions"])}
+        el = order[:n_elite]
+        champ = int(order[0])
+        tr = per_ind(metrics, G_eff)
+        trec = {"gen": gen, "elapsed_s": round(time.time() - t0, 1),
+                "fit_best": round(float(fit_np[champ]), 4),
+                "fit_elite": round(float(fit_np[el].mean()), 4),
+                "fit_med": round(float(np.median(fit_np)), 4),
+                "elite_cells": round(float(tr["cells"][el].mean()), 4),
+                "elite_rooms": round(float(tr["rooms"][el].mean()), 3),
+                "elite_dist": round(float(tr["dist"][el].mean()), 1),
+                "elite_coll": round(float(tr["coll"][el].mean()), 2),
+                "champ_cells": round(float(tr["cells"][champ]), 4),
+                "sigma_med": round(float(sigma.median()), 4)}
+        if gen > 0:
+            trec["child_win"] = round(child_stats[-1][0], 3)
+            trec["child_dmed"] = round(child_stats[-1][1], 4)
+        gen_f.write(json.dumps(trec) + "\n")
+        gen_f.flush()
+        print(f"  g{gen:>3d} elite fit={trec['fit_elite']:.4f} "
+              f"cells={trec['elite_cells']:.4f} rooms={trec['elite_rooms']:.3f} "
+              f"dist={trec['elite_dist']:.1f} coll={trec['elite_coll']:.2f} "
+              f"sigma~{trec['sigma_med']:.4f} "
+              f"child_win={trec.get('child_win', float('nan')):.3f}",
+              flush=True)
+
         # --- report every --report-every gens (holdout score included) ----
         if gen % args.report_every == 0 or gen == args.gens - 1:
             hf, hm = score(False, thetas)
             b = int(hf.argmax())
             sl = slice(b * G, (b + 1) * G)          # holdout: G_sets=1
+            # holdout_* keys pick the argmax ON holdout (selection on test,
+            # kept for comparability with runs 1-8); ho_champ_* is the
+            # train champion, ho_elite_* the train elite — the honest ones.
+            ho = per_ind(hm, G)
+            cs = np.array(child_stats) if child_stats else None
+            child_stats.clear()
             rec = {
                 "gen": gen, "elapsed_s": round(time.time() - t0, 1),
                 "door_w": args.door_w,
@@ -247,60 +379,45 @@ def evolve(args):
                     (hm["cells"] / hm["cells_total"])[sl].mean()), 3),
                 "holdout_dist": round(float(hm["dist_m"][sl].mean()), 1),
                 "holdout_coll": round(float(hm["collisions"][sl].mean()), 1),
+                "elite_cells": trec["elite_cells"],
+                "elite_rooms": trec["elite_rooms"],
+                "ho_champ_fit": round(float(hf[champ]), 4),
+                "ho_champ_rooms": round(float(ho["rooms"][champ]), 2),
+                "ho_champ_cells": round(float(ho["cells"][champ]), 3),
+                "ho_champ_dist": round(float(ho["dist"][champ]), 1),
+                "ho_champ_coll": round(float(ho["coll"][champ]), 1),
+                "ho_elite_fit": round(float(hf[el].mean()), 4),
+                "ho_elite_rooms": round(float(ho["rooms"][el].mean()), 3),
+                "ho_elite_cells": round(float(ho["cells"][el].mean()), 4),
             }
+            if cs is not None:
+                rec["child_win"] = round(float(cs[:, 0].mean()), 3)
+                rec["child_dmed"] = round(float(cs[:, 1].mean()), 4)
             print(f"gen {gen:>4d}  best={rec['fit_best']:.4f} "
                   f"med={rec['fit_med']:.4f}  "
-                  f"HOLDOUT best={rec['holdout_best']:.4f} "
-                  f"rooms={rec['holdout_rooms']:.2f} "
-                  f"dist={rec['holdout_dist']:.1f}m "
-                  f"coll={rec['holdout_coll']:.1f}  "
+                  f"HOLDOUT champ={rec['ho_champ_fit']:.4f} "
+                  f"rooms={rec['ho_champ_rooms']:.2f} "
+                  f"cells={rec['ho_champ_cells']:.3f} "
+                  f"dist={rec['ho_champ_dist']:.1f}m "
+                  f"coll={rec['ho_champ_coll']:.1f} | elite "
+                  f"fit={rec['ho_elite_fit']:.4f} "
+                  f"cells={rec['ho_elite_cells']:.4f}  "
                   f"({rec['elapsed_s']:.0f}s)", flush=True)
             log_f.write(json.dumps(rec) + "\n")
             log_f.flush()
 
         # ---------------- reproduction -----------------------------------
-        n_elite = max(2, P // 4)
-        elite_idx = order[:n_elite]
-        mu = max(2, P // 4)                        # recombination parents
-        survivors = torch.as_tensor(elite_idx, device=dev)
-
-        n_immigrant = max(1, P // 10)
-        n_child = P - n_elite - n_immigrant
-
-        # tournament selection from the whole scored pop (elitism already
-        # guarantees the top mu survive untouched)
-        def tournament(k=3):
-            cand = rng.integers(0, P, size=(n_child, k))
-            return cand[np.arange(n_child),
-                        fit_np[cand].argmax(axis=1)]
-
-        p1 = torch.as_tensor(tournament(), device=dev)
-        p2 = torch.as_tensor(tournament(), device=dev)
-        mix = (torch.rand(n_child, 1, device=dev) < 0.5).float()
-        child = p1.unsqueeze(1).expand(-1, N) * mix \
-            + p2.unsqueeze(1).expand(-1, N) * (1 - mix)
-
-        # self-adapted mutation: sigma' = sigma * exp(tau*N + tauN*N_i)
-        s_p = sigma[p1].maximum(sigma[p2])
-        s_child = s_p * torch.exp(tau * torch.randn(n_child, 1, device=dev)
-                                  + 0.1 * torch.randn(n_child, 1,
-                                                       device=dev))
-        s_child = s_child.clamp(1e-4, 1.0)
-        child = child + s_child * scale.unsqueeze(0) \
-            * torch.randn(n_child, N, device=dev)
-
-        immigrants = torch.as_tensor(
-            sample_population(n_immigrant, OBS_DIM, hidden, rng),
-            device=dev)
-        sig_imm = torch.full((n_immigrant, 1), args.sigma0, device=dev)
-
-        thetas = torch.cat([thetas[survivors], child, immigrants], dim=0)
-        sigma = torch.cat([sigma[survivors], s_child, sig_imm], dim=0)
+        thetas, sigma = reproduce(
+            thetas, sigma, fit_np, order, scale, rng,
+            n_elite=n_elite, n_immigrant=n_immigrant, tau=tau,
+            sigma_max=sigma_max, sigma0=args.sigma0, hidden=hidden,
+            legacy=args.legacy_mutation)
 
     np.savez(os.path.join(args.out_dir, "final_population.npz"),
              thetas=thetas.cpu().numpy(), sigma=sigma.cpu().numpy(),
              hidden=hidden)
     log_f.close()
+    gen_f.close()
     print(f"\nbest fitness seen: {best_fit_ever:.4f} -> "
           f"{args.out_dir}/best_genome.npz", flush=True)
     return best_theta, best_fit_ever
@@ -316,8 +433,20 @@ def main():
     ap.add_argument("--ticks", type=int, default=3600,
                     help="sim ticks per game (3600 = 4 sim-min)")
     ap.add_argument("--gens", type=int, default=40)
-    ap.add_argument("--sigma0", type=float, default=0.25,
-                    help="initial mutation size in init-sigma units")
+    ap.add_argument("--sigma0", type=float, default=0.03,
+                    help="initial mutation size in init-sigma units "
+                    "(runs 1-8: 0.25 — past the behaviour cliff ~0.1)")
+    ap.add_argument("--sigma-max", type=float, default=0.15,
+                    help="upper clamp on self-adapted sigma (legacy: 1.0)")
+    ap.add_argument("--tau", type=float, default=0.0,
+                    help="log-normal self-adaptation rate; 0 = 1/sqrt(N)")
+    ap.add_argument("--legacy-mutation", action="store_true",
+                    help="runs 1-8 step-size rule: sigma' from max of two "
+                    "parents, tau 0.4, clamp 1.0 (pass --sigma0 0.25). The "
+                    "parent-gather bug fix applies either way")
+    ap.add_argument("--keep-seed-sigma", action="store_true",
+                    help="--seed-from: carry the file's sigma (clamped to "
+                    "--sigma-max) instead of resetting to --sigma0")
     ap.add_argument("--train-rotations", type=int, default=4,
                     help="train-house seed rotation length")
     ap.add_argument("--train-seed", type=int, default=40_000)
