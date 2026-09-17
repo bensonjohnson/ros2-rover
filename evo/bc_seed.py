@@ -298,6 +298,13 @@ def main():
         a_j = A[:, j * rows:(j + 1) * rows].contiguous()
         th, mse = distill(o_j, a_j, args.hidden, rng, epochs=args.epochs,
                           seg=args.seg)
+        # KEEP-BEST across stages: closed-loop coverage is cliffy (keeper-0:
+        # mse 0.0036, script 0.170, replay 0.048 — one flipped pivot at a
+        # choke tick sinks the run; a DAgger retrain can sink it further).
+        # Verify by replay after every stage; ship the best genome seen.
+        best_th, best_cov = th, replay_cov(
+            torch.as_tensor(th[None, :], device=dev), roll_a,
+            args.hidden, args.ticks)[0]
         # DAgger rounds: student visits states, expert labels them, retrain
         for dround in range(args.dagger):
             O2, L2 = student_roll(th, expert_j)
@@ -307,11 +314,16 @@ def main():
                               epochs=max(15, args.epochs // 2), seg=args.seg,
                               init_theta=th)
             del O2, L2, o_mix, a_mix
-        th_j = th
-        thetas.append(th_j)
+            c2 = replay_cov(torch.as_tensor(th[None, :], device=dev),
+                            roll_a, args.hidden, args.ticks)[0]
+            if c2 > best_cov:
+                best_th, best_cov = th, c2
+        th = best_th
+        thetas.append(th)
         meta.append({"script_cov": float(cov[kp]), "mse": mse})
         print(f"[distill] keeper {j} (script cov {cov[kp]:.3f}) "
-              f"mse={mse:.4f} ({time.time()-t0:.0f}s)", flush=True)
+              f"mse={mse:.4f} best-roll-cov={best_cov:.3f} "
+              f"({time.time()-t0:.0f}s)", flush=True)
 
     TH = torch.as_tensor(np.stack(thetas), device=dev)
     tr_cov, tr_rooms = None, None
