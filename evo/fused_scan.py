@@ -42,6 +42,7 @@ def _ray_scan(A, E, X, Y, TH, OUT,
     b = tl.program_id(0)
     pib = tl.program_id(1)
     beams = pib * BB + tl.arange(0, BB)
+    b_ok = beams < n_beams
     theta = tl.load(TH + b)
     px = tl.load(X + b)
     py = tl.load(Y + b)
@@ -74,7 +75,7 @@ def _ray_scan(A, E, X, Y, TH, OUT,
         t = tl.where(hit, t, float("inf"))
         tmin = tl.minimum(tmin, tl.min(t, axis=1))
     r = tl.minimum(tmin, max_range)
-    tl.store(OUT + b * n_beams + beams, r)
+    tl.store(OUT + b * n_beams + beams, r, mask=b_ok)
 
 
 def fused_scan(env: Fp16Env, out: torch.Tensor | None = None) -> torch.Tensor:
@@ -85,8 +86,7 @@ def fused_scan(env: Fp16Env, out: torch.Tensor | None = None) -> torch.Tensor:
     r = torch.empty(B, nb, device=env.x.device, dtype=torch.float32) \
         if out is None else out
     BB, BM = 64, 32
-    assert nb % BB == 0
-    _ray_scan[(B, nb // BB)](
+    _ray_scan[(B, triton.cdiv(nb, BB))](
         env._a, env._e, env.x, env.y, env.theta, r,
         M, M, 1.0 / nb, env.cfg.lidar_max_range, nb,
         BB=BB, BM=BM)
