@@ -12,7 +12,7 @@ Sweep machine: DGX Spark `benson@172.0.0.201`, repo at `~/projects/ros2-rover`,
 is NOT a git clone — ship code with rsync, never `git pull` there.**
 Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
-## TL;DR (2026-09-17 09:20)
+## TL;DR (2026-09-17 13:25)
 
 1. **Runs 1–9 were void** — two bugs, both fixed and covered by tests:
    - *Reproduction:* children were built from the parent **index**, not the
@@ -35,30 +35,61 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
    auto-advancing levels 0→3. **Run 11 verdict:** buildings training raises the
    unseen-building cross rate 5–7×; the curriculum adds nothing over training
    on the full mix; `w_coll 1.0` removed the collision brute-forcers.
-5. **Now:** run 12 splits the run-10 genome bundle on buildings (Spark only).
+5. **Run 12 verdict:** obs v2 / action vw / hidden 64 are all neutral — the
+   base genome stands, and a validation-set champion (`val_best_genome.npz`)
+   replaced the noisy train-argmax pick.
+6. **Now:** run 13 tests whether the base config plateaus (120 gens, 32 houses
+   per genome). At gen 64 it is still climbing — the old 40-gen horizon was
+   stopping runs early.
 
 ## Live now (Spark only — V620 paused, too loud)
 
-**Run 12 queue** (`evo/queue12.sh`, launched 2026-09-17 ~09:20): split the
-run-10 genome bundle on buildings. Base = run 11c config (9b genome h128, obs
-v1, action lr, fixed ES, direct level 3, pool 1024 resampled every gen,
-`w_coll 1.0`, 40 gens, `--fused --compile --graph`) + validation-set champion.
-One change per variant, seeds 8 and 9:
+**Run 13** (`evo/queue13.sh`, launched 2026-09-17 12:42): the base genome on
+buildings, but longer and with less noise — **120 gens, 32 houses per genome**
+(B = 16384, ~1.6× the tick cost). Seeds 8 then 9, ~70 min each,
+`--fused --compile --graph`. Marker `QUEUE13-COMPLETE` in
+`evo_runs/queue13.log`.
 
-| Order | Out dir | Change |
-|---|---|---|
-| 1 | `greenfield12_ctl_s9` | none — Spark rerun of the seed-9 control (seed-8 control = `greenfield11c`) |
-| 2–4 | `greenfield12_{obs,act,h64}_s8` | `--obs v2` / `--action vw` / `--hidden 64` |
-| 5–7 | `greenfield12_{obs,act,h64}_s9` | same, seed 9 |
+**Pre-registered plateau test** (`evo/run13_variant.sh`), on
+`hob_elite_cross_rate`: A = mean of gens 75–89, B = mean of gens 105–119.
+- **PLATEAU** if B − A < 0.02 → the base recurrent MLP has converged and the
+  memory-genome branch is finally justified by evidence.
+- **CLIMBING** if B − A ≥ 0.05 → extend the run instead of changing the genome.
+- **AMBIGUOUS** in between → add seeds before any structural decision.
+Both seeds must agree. Collision and transfer guards as run 11/12.
 
-~12 min per run → ≈ 90 min total. Marker `QUEUE12-COMPLETE` in
-`evo_runs/queue12.log`.
+**Progress (seed 8, gen 64 of 120):** building-holdout elite cross rate 0.100
+(g0) → 0.354 (g20) → 0.507 (g40) → 0.616 (g60); validation champion 0.355
+(g35) → 0.494 (g60); train elite cross rate 0.766. It flattened near 0.507 at
+gens 40–50 — exactly where run 12 ended — then climbed again, so **the 40-gen
+horizon was cutting runs off early**. Watch: train elite collisions 3.59 vs the
+≤ 3 guard (the holdout champion stays near 0); judged at gen 119.
 
-**Pre-registered** (in `evo/run12_variant.sh`): primary metric
-`hob_elite_cross_rate` at gen 39. A change **helps** if its mean over seeds 8/9
-≥ 1.1× the control mean and each seed ≥ its control; **hurts** if ≤ 0.9×;
-otherwise neutral. Secondary: deep-evals of `val_best_genome` (legacy and
-buildings); collision guard as run 11.
+## Run 12 family — verdicts (7 runs, done 2026-09-17 11:36)
+
+Bundle split on buildings (direct level 3, 40 gens, seeds 8/9, validation-set
+champion). Primary metric `hob_elite_cross_rate` at gen 39; controls: seed 8
+`greenfield11c` 0.410, seed 9 `greenfield12_ctl_s9` 0.510 (mean 0.460).
+Summary: `evo_runs/run12_family_summary.json`.
+
+| Change | Seed 8 | Seed 9 | Mean | vs control | Verdict |
+|---|---|---|---|---|---|
+| `--obs v2` | 0.453 | 0.436 | 0.445 | 0.97× | NEUTRAL |
+| `--action vw` | 0.496 | 0.490 | 0.493 | 1.07× | NEUTRAL (needed 1.1× **and** both seeds over control) |
+| `--hidden 64` | 0.484 | 0.438 | 0.461 | 1.00× | NEUTRAL |
+
+- **The base genome stands** (obs v1, action lr, h128); run 10's bundle PASS was
+  noise.
+- **`--obs v2` has a downside:** its champion barely moves (7–8 m vs ~15 m) and
+  took 12.3 collisions in the building deep-eval; every other champion 0–1.
+- **Weak power:** the two controls differ by 0.10 while the effects are
+  0.03–0.08 — hence run 13's 32 houses per genome.
+- **Validation champion works:** the legacy transfer guard now passes **6 of 7**
+  runs (run 11: 1 of 4).
+- **Best genome to date** — `greenfield12_obs_s9` validation champion, on 32
+  unseen level-3 buildings: fitness 0.3827, rooms 1.59, cross rate **0.500**,
+  **0 collisions**; legacy 0.416. Best scripted: 0.272 buildings / 0.355 legacy.
+- Spark (graph) and V620 (eager) agree: seed-9 control 0.510 vs 0.523.
 
 ## Run 11 family — verdicts (all complete; scored 2026-09-17 09:15)
 
@@ -213,20 +244,21 @@ time again — not adopted yet.
 
 ## Next actions, in priority order
 
-1. **Read the run-11 family** when `QUEUE11-COMPLETE` appears: apply the
-   pre-registered criteria (curriculum vs direct over both seeds, transfer and
-   collision guards) and record the verdict in the skill.
-2. **If collisions still fail the guard:** raise `w_coll` further or cap per-game
-   collision credit; consider making the gate stop collisions rather than
-   only penalizing them.
-3. **If the curriculum advanced too fast** (levels in 2–3 gens): raise
-   `--advance-at` (e.g. 0.7) or `--advance-patience`.
-4. **Split the genome-v2 bundle** (run 10): obs v2 / action vw / h64 one at a
-   time on buildings — cheap now at 13 s/gen.
-5. **Half-length early generations** (2700 ticks) as a speed option, chained
-   via `--seed-from`.
-6. **Memory genome** only if a working ES with a working readout plateaus on
-   buildings — the earlier case for it came from bugged runs.
+1. **Score run 13** when `QUEUE13-COMPLETE` appears: apply the plateau test on
+   both seeds, plus the collision and transfer guards. Record in the skill.
+2. **If CLIMBING:** extend (240 gens, or warm-start via `--seed-from`) before
+   any genome change — the cheapest remaining lever.
+3. **If PLATEAU:** build the **memory genome** (memory vector + read/write
+   heads in `evo/policy.py`, ES recipe untouched). This is the first honest
+   case for it; the earlier one came from bugged runs.
+4. **Collisions:** if the train elite stays above the ≤ 3 guard while the
+   holdout champion is clean, prefer capping per-game collision credit over
+   raising `w_coll` again (a heavier penalty also suppresses doorway attempts).
+5. **Cheaper reports:** the three side evals now run 32-house arenas (~55 s per
+   report gen, ~22 min per run). Drop them to 16 houses or report every 10
+   gens if run time binds.
+6. **Half-length early generations** (2700 ticks; rank correlation 0.93) as a
+   speed option, chained via `--seed-from`.
 7. `bc_seed.py`'s scripted expert still has a noise-like pivot direction
    (`sign(sin(37·front))`) and a one-sided "front" sector (bins 0–7); fix
    before any BC work.
