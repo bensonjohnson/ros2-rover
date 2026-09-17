@@ -27,32 +27,34 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 2. **Working ES confirmed on two seeds** (runs 9b Spark seed 8, 9b_r V620
    seed 9 — both PASS all pre-registered criteria). First runs where the
    population climbs steadily and room crossings rise.
-3. **Spark is ~20× faster**: `--fused --compile --graph` = **13 s/gen** vs
-   261 s before. The V620 is retired for evo (user decision).
+3. **~20× faster on both GPUs**: Spark `--fused --compile --graph` = **13 s/gen**
+   (was 261 s); the 32 GB V620 matches it eager with `--fp16 --fused --compile`
+   = **12.7 s/gen** (was 164 s) — compile replaces the graph capture ROCm can't do.
 4. **Procedural buildings + curriculum** (`d82b843`): 6 building families with
    explicit rooms and door thresholds, resampled 1024-house pools per level,
    auto-advancing levels 0→3. Run 11 family (curriculum vs direct, 2 seeds,
    `w_coll 1.0`) is **running now**.
 
-## Live now (Spark only)
+## Live now (Spark + V620)
 
-`evo/queue11.sh` runs four jobs back to back, all with the same config
-(9b genome: h128, obs v1, action lr, fixed ES; pop 128 × 16 houses × 4
-rotations, 5400 ticks, `--w-dist 0.005 --w-cov 0.3 --w-coll 1.0`,
-`--fused --compile --graph`, 40 gens, pool 1024, fresh houses every gen):
+All four run-11 jobs use the same config (9b genome: h128, obs v1, action lr,
+fixed ES; pop 128 × 16 houses × 4 rotations, 5400 ticks, `--w-dist 0.005
+--w-cov 0.3 --w-coll 1.0`, 40 gens, pool 1024, fresh houses every gen). Seed 8
+runs on the Spark (`--fused --compile --graph`, `evo/run11_variant.sh`), seed 9
+on the V620 (eager `--fp16 --fused --compile`, `evo/run11_variant620.sh`, both
+in parallel on one GPU):
 
-| # | Out dir | Seed | Mode | State |
-|---|---|---|---|---|
-| 1 | `evo_runs/greenfield11` | 8 | curriculum: level 0 → 3, advance at elite cross rate ≥ 0.5 for 2 gens | started 00:43, gen 0 done at 62 s |
-| 2 | `evo_runs/greenfield11c` | 8 | direct: level 3 from gen 0 | queued |
-| 3 | `evo_runs/greenfield11_s9` | 9 | curriculum | queued |
-| 4 | `evo_runs/greenfield11c_s9` | 9 | direct | queued |
+| # | Machine | Out dir | Seed | Mode | State (01:15) |
+|---|---|---|---|---|---|
+| 1 | Spark | `evo_runs/greenfield11` | 8 | curriculum: level 0 → 3, advance at elite cross rate ≥ 0.5 for 2 gens | **done** — L1→L2 at gen 12, L2→L3 at gen 24; not yet scored |
+| 2 | Spark | `evo_runs/greenfield11c` | 8 | direct: level 3 from gen 0 | running |
+| 3 | V620 | `/root/evo620-src/evo_runs/greenfield11_s9` | 9 | curriculum | running (started 01:11) |
+| 4 | V620 | `/root/evo620-src/evo_runs/greenfield11c_s9` | 9 | direct | running (started 01:11) |
 
-~20–25 min per run including holdout evals and two deep-evals (legacy houses,
-building holdout) → all four done ≈ 02:15–02:30. Completion marker per run:
-`RUN-COMPLETE <name>` in its `run.log`; queue marker `QUEUE11-COMPLETE` in
-`evo_runs/queue11.log`. Per-generation readouts: `gens.jsonl`; report gens
-(every 5) with holdouts: `evolution.jsonl`.
+Completion marker per run: `RUN-COMPLETE <name>` in its `run.log`.
+Per-generation readouts: `gens.jsonl`; report gens (every 5) with holdouts:
+`evolution.jsonl`. Seeds 8 and 9 run on different engines (graph vs eager);
+9b/9b_r already showed graph and eager runs agree in direction.
 
 **Pre-registered criteria** (stated before launch, in `evo/run11.sh` and
 `evo/run11_variant.sh`):
@@ -116,7 +118,14 @@ Per-tick profile, eager, B = 8192 (`python3 -m evo.prof_tick`):
 Production generation time (train only, from 3-gen smokes, rc 0, no Xid, no
 capture failures): fp16+graph **261 s** → `--fused --graph` **34 s** →
 `--fused --compile --graph` **13 s**; startup (capture + gen-0 holdout) 1062 s →
-63 s. V620 eager fp16 was 164 s/gen.
+63 s.
+
+V620 (32 GB, ROCm 7.1, torch 2.12.1, Triton 3.7.1), eager only: fused kernel
+parity 99.86%, scan 1.16 ms/tick; profile fp16 31.1 → fused 5.17 → fused+compile
+3.18 ms/tick; production smoke **12.7 s/gen**, startup 17 s (was 164 s/gen eager
+fp16). MIOpen is irrelevant (no conv/BN/RNN ops). Batch scaling with
+fused+compile: 16384 envs 1.58× the time of 8192, 32768 envs 2.8× — doubling
+houses per genome is cheap.
 
 Short-game proxy (`python3 -m evo.tick_rankcorr` on 9b's population): 2700
 ticks ranks like 5400 (Spearman fitness 0.93, top-32 overlap 84%); 1800 is
@@ -215,8 +224,12 @@ time again — not adopted yet.
   coarse metrics (rooms, collisions) are.
 - **Hermes shares this checkout and the Spark** — check `git status` and
   running processes before launching or committing.
-- V620 (root@172.0.0.19): retired for evo. Eager-only (graph capture
-  segfaults); 164 s/gen vs the Spark's 13 s.
+- V620 (root@172.0.0.19, 32 GB): run from `/root/evo620-src` with
+  `source /root/evo620/bin/activate` and `--fp16 --fused --compile` — **never
+  `--graph`** (ROCm graph capture segfaults). Temporarily drained from k8s by
+  the user; microk8s containerd/cilium and a Ceph OSD still run on it. Build
+  pools once before launching parallel runs (concurrent builds race on the
+  cache file).
 
 ## File map (evo/)
 
@@ -251,5 +264,4 @@ Verify before claiming (processes, metrics, external state). Terse updates.
 Git-pull/sync before touching projects; commit work as you go; push GitHub
 origin. Pre-registered hypotheses get stated BEFORE the run, verdicts recorded
 in the skill so they're never relitigated. Budget-conscious: prefer cheap
-decisive diagnostics (probe, smoke) over expensive full runs. Use the Spark
-only (V620 retired for evo, 2026-09-17).
+decisive diagnostics (probe, smoke) over expensive full runs.
