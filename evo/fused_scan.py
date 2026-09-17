@@ -70,8 +70,8 @@ def _ray_scan(A, E, X, Y, TH, OUT,
                - dy[:, None] * qax[None, :])
         t = ceq[None, :] / ced
         s = cdq / ced
-        hit = ((t > 1e-9) & (s >= 0.0) & (s <= 1.0)
-               & tl.isfinite(t) & m_ok[None, :])
+        hit = ((t > 1e-9) & (t < 1e30) & (s >= 0.0) & (s <= 1.0)
+               & m_ok[None, :])
         t = tl.where(hit, t, float("inf"))
         tmin = tl.minimum(tmin, tl.min(t, axis=1))
     r = tl.minimum(tmin, max_range)
