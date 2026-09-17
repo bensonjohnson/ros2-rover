@@ -263,47 +263,44 @@ def main():
                device=dev, fp16=args.fp16)
     tr_a = Arena(len(keep), args.data_games, seed=args.train_seed,
                  device=dev, fp16=args.fp16, merged_houses=args.data_sets)
-    # expert is a pure function of obs -> can LABEL student-visited states
-    expert_fn = make_scripted(keep_per, rows, dev)
+    # single-individual roll arena: same houses/layout as one keeper's block
+    roll_a = Arena(1, args.data_games, seed=args.train_seed, device=dev,
+                   fp16=args.fp16, merged_houses=args.data_sets)
 
-    def student_roll(th_j: np.ndarray):
+    def student_roll(th_j: np.ndarray, expert_j):
         """roll the current student (its OWN commands) through the train
-        houses; return its (obs, student_cmd) stream for expert relabeling."""
+        houses; return (student obs stream, expert labels on those states)."""
         TH1 = torch.as_tensor(th_j[None, :], device=dev)
-        net_state = {"net": None}
+        net = PopulationNet(TH1, OBS_DIM, args.hidden)
+        net.bind(1, rows)
+        hbuf = torch.zeros(1, rows, args.hidden, device=dev)
 
         def s_step(obs, prev):
-            if net_state["net"] is None:
-                net = PopulationNet(TH1, OBS_DIM, args.hidden)
-                net.bind(1, rows)
-                net_state["net"] = net
-                net_state["h"] = torch.zeros(1, rows, args.hidden, device=dev)
-
-            def one(o, p):
-                a, h_new = net_state["net"].step(
-                    o.view(1, rows, OBS_DIM), net_state["h"])
-                net_state["h"].copy_(h_new)
-                return a.view(rows, 2)
-            return one(obs, prev)
+            a, h_new = net.step(obs.view(1, rows, OBS_DIM), hbuf)
+            hbuf.copy_(h_new)
+            return a.view(rows, 2)
         r2 = {"obs": [], "cmd": []}
-        tr_a.run_games(s_step, args.ticks, rec=r2)
+        roll_a.run_games(s_step, args.ticks, rec=r2)
         O2 = torch.stack(r2["obs"])              # [T, rows, n_in]
-        A2 = torch.stack(r2["cmd"])
+        del r2
         with torch.no_grad():
-            # expert ignores prev_act (Markovian): label every obs directly
-            L2 = expert_fn(O2.reshape(-1, OBS_DIM), None).view(
-                O2.shape[0], -1, 2)
-        return O2, A2, L2
+            # label one tick at a time: expert personality is per-env
+            # [rows]; obs rows == envs at a fixed tick (Markovian: no prev)
+            L2 = torch.stack([expert_j(O2[t], None)
+                              for t in range(O2.shape[0])])
+        return O2, L2
 
     thetas, meta = [], []
     for j, kp in enumerate(keep):
+        single = {k: keep_per[k][j:j + 1] for k in keep_per}
+        expert_j = make_scripted(single, rows, dev)
         o_j = O[:, j * rows:(j + 1) * rows].contiguous()   # [T, rows, n_in]
         a_j = A[:, j * rows:(j + 1) * rows].contiguous()
         th, mse = distill(o_j, a_j, args.hidden, rng, epochs=args.epochs,
                           seg=args.seg)
         # DAgger rounds: student visits states, expert labels them, retrain
         for dround in range(args.dagger):
-            O2, _, L2 = student_roll(th)
+            O2, L2 = student_roll(th, expert_j)
             o_mix = torch.cat([o_j, O2], dim=1)
             a_mix = torch.cat([a_j, L2], dim=1)
             th, mse = distill(o_mix, a_mix, args.hidden, rng,
