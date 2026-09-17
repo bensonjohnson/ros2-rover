@@ -1,5 +1,17 @@
 # Greenfield ES Rover Brain — Status & Plan (handoff, 2026-09-16 ~21:40 MDT)
 
+> **UPDATE 2026-09-16 22:00 — read first.** Runs 1-8 had a reproduction bug:
+> children were built from the parent *index*, not the parent genome
+> (`p1.unsqueeze(1).expand(-1, N) * mix`), so nothing was inherited and the
+> ES was elitism over random samples. The "falsified" table below tested
+> random search, not evolution. Fixed in 62f412d (`evolve.reproduce`,
+> `evo.test_reproduce`), together with the mutation step size (old sigma sat
+> past a measured behaviour cliff) and the readouts (population-mean
+> `train_cells`, argmax-on-holdout). Run 8's BC failure is confounded by the
+> expert's noise-like pivot direction. Run 9 (`evo/run9.sh`) = 6a replica
+> with the fixed operator, verdicts stated in advance in the script header.
+> The memory-genome plan below is on hold pending run 9.
+
 Repo: `~/projects/ros2-rover` (GitHub `bensonjohnson/ros2-rover`, branch `main`).
 Sweep machine: DGX Spark `benson@172.0.0.201`, repo at `~/projects/ros2-rover`,
 `source /home/benson/venv/bin/activate` (torch 2.11+cu130). **The Spark checkout
