@@ -23,6 +23,7 @@ from pnn_sim.buildings import make_level
 
 POOL_VERSION = 1           # bump when generator output changes
 HOLDOUT_SEED = 778_000
+VAL_SEED = 779_000          # champion selection set (level 3); never holdout
 EXTENT = 16.0              # Arena(extent=) lattice the ceilings are cached for
 CACHE_DIR = os.path.join("evo_runs", "world_cache")
 

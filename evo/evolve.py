@@ -291,12 +291,13 @@ def evolve(args):
     # ---- building mode: per-level house pools + curriculum state --------
     HG = G * args.train_rotations
     level = args.level
-    pools, caps, ho_worlds = {}, None, None
+    pools, caps, ho_worlds, val_worlds = {}, None, None, None
+    best_val, best_val_theta = -np.inf, None
     world_rng = np.random.default_rng(args.seed + 99)
     if args.world == "buildings":
         from pnn_sim.buildings import LEVELS
         from .arena import world_caps
-        from .worlds import (HOLDOUT_SEED, build_pool, level_seed,
+        from .worlds import (HOLDOUT_SEED, VAL_SEED, build_pool, level_seed,
                              summarize)
         top = max(LEVELS) if args.curriculum else level
         for lv in range(level, top + 1):
@@ -306,6 +307,12 @@ def evolve(args):
             print(f"[worlds] L{lv} pool: {summarize(pools[lv])}", flush=True)
         ho_worlds = build_pool(max(LEVELS), G, HOLDOUT_SEED,
                                workers=args.pool_workers)
+        # VALIDATION set (level 3, own seed): picks the champion. Train
+        # fitness on a fresh 64-house draw per gen is too noisy to pick one
+        # (run 11: train argmax deep-eval'd at 0.14 with 90.8 collisions)
+        # and the holdout must stay unselected.
+        val_worlds = build_pool(max(LEVELS), G, VAL_SEED,
+                                workers=args.pool_workers)
         allw = [w for p_ in pools.values() for w in p_]
         caps = world_caps(allw)
         print(f"[worlds] caps (segments, rects, doors) = {caps}; building "
@@ -341,10 +348,15 @@ def evolve(args):
                         fp16=args.fp16, cells=not args.no_cells,
                         every_cover=args.every_cover, fused=args.fused,
                         gate_obs=args.obs == "v2", worlds=ho_worlds)
+            hval = Arena(P, G, seed=args.holdout_seed, device=dev,
+                         fp16=args.fp16, cells=not args.no_cells,
+                         every_cover=args.every_cover, fused=args.fused,
+                         gate_obs=args.obs == "v2", worlds=val_worlds)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train is True else (
-                    hob if is_train == "hob" else ho)
+                    hob if is_train == "hob" else
+                    hval if is_train == "val" else ho)
                 return evaluate(a, th, hidden, args.ticks,
                                 w_dist=args.w_dist, w_coll=args.w_coll,
                                 w_cov=args.w_cov, obs=args.obs,
@@ -357,7 +369,8 @@ def evolve(args):
             if is_train is True:
                 return rn.run(th, args.ticks, args.w_dist, args.w_coll,
                               args.w_cov)
-            return evaluate(hob if is_train == "hob" else ho, th, hidden,
+            return evaluate(hob if is_train == "hob" else
+                            hval if is_train == "val" else ho, th, hidden,
                             args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll,
                             w_cov=args.w_cov, obs=args.obs,
@@ -553,6 +566,20 @@ def evolve(args):
             if cs is not None:
                 rec["child_win"] = round(float(cs[:, 0].mean()), 3)
                 rec["child_dmed"] = round(float(cs[:, 1].mean()), 4)
+            if val_worlds is not None:
+                vf, _ = score("val", thetas)
+                vb = int(vf.argmax())
+                rec["val_best_fit"] = round(float(vf[vb]), 4)
+                rec["val_champ_fit"] = round(float(vf[champ]), 4)
+                if float(vf[vb]) > best_val:
+                    best_val = float(vf[vb])
+                    best_val_theta = thetas[vb].cpu().clone()
+                    np.savez(os.path.join(args.out_dir, "val_best_genome.npz"),
+                             thetas=best_val_theta.numpy(), hidden=hidden,
+                             **meta, val_fitness=best_val, gen=gen)
+                print(f"      VALIDATION best={rec['val_best_fit']:.4f} "
+                      f"(train champ {rec['val_champ_fit']:.4f}; best ever "
+                      f"{best_val:.4f})", flush=True)
             if ho_worlds is not None:
                 bf, bm = score("hob", thetas)
                 bi = per_ind(bm, G)
