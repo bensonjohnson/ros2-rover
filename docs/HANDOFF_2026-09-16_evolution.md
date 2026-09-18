@@ -50,13 +50,16 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
    champion (run 14) takes 620 collisions with balanced tracks. Trim
    randomization (run 17) makes champions collision-robust (≤ 10 at every
    trim) at some cost in rooms.
-10. **Now:** run 18 evolves forward explorers under a sim-only "doorway" gate
-    prototype.
+10. **Run 18 verdict:** the doorway gate does NOT unlock forward exploring —
+    cross rate 0.524 at gen 119 (H18a/b FAIL). Every forward arm (15f, 16sr,
+    18d) plateaus 0.30–0.52 while reverse arms reach 0.86–0.89. The forward
+    rules are not the doorway bottleneck; **do not change the real monitor**.
+    **Nothing is running now** — Spark idle since 11:32.
 
-## Live now (Spark only — V620 paused, too loud)
+## Run 18 — doorway forward gate (complete 2026-09-18 11:32, VERDICT: FAIL)
 
-**Run 18** (`evo/run18_variant.sh`, `evo_runs/greenfield18d_s8`, launched
-2026-09-18 ~09:55, ~75 min): run 15f's config (fresh seed 8, `--w-rev 0.3`,
+(`evo/run18_variant.sh`, `evo_runs/greenfield18d_s8`, Spark, launched
+2026-09-18 ~09:55, rc=0): run 15f's config (fresh seed 8, `--w-rev 0.3`,
 legacy trims) with one change, **`--gate doorway`** — a sim-only forward-gate
 prototype (`arena.GATE_PRESETS`):
 
@@ -73,6 +76,27 @@ building-holdout elite cross rate ≥ 0.770 **and** reverse fraction ≤ 0.30 at
 gen 119; H18b — a clear improvement: cross ≥ 0.633 (1.3× run 15f's 0.487)
 with reverse ≤ 0.30. Collision guard as before. Deep-evals run on the **legacy**
 gate (the real rover's) and `evo.gate_rescore` compares both gates.
+
+**RESULT — H18a FAIL, H18b FAIL.** g119 `hob_elite_cross_rate` 0.524 (need
+0.770 / 0.633); reverse 0.014 ✓ — the penalty did make it drive forward, but
+forward exploring still plateaus at run-15f level (0.487 → 0.524 = +8%, noise
+at this seed spread). Cross rate climbed 0.057 → ~0.50 by gen 60 then went
+flat (hob champion stuck at exactly 0.500 from gen 60 on; rooms/game 1.65).
+Collision guard PASS (elite train coll 1.38, hob champ coll 0.0). Legacy-gate
+deep-eval of the validation champion: fit 0.417 rooms 1.16 (vs scripted 0.36);
+buildings deep-eval rooms 1.56/6, cross 0.469, coll 0.0. Gate rescore: legacy
+vs doorway nearly identical (fit 0.410/0.413, cross 0.500/0.500) — the champion
+is not gate-limited either way.
+
+**Conclusion:** the forward safety rules are NOT the doorway bottleneck.
+Across three attempts the forward habit caps at cross ~0.30–0.52 (15f legacy
++ w_rev 0.487, 16sr symmetric + w_rev 0.298, 18d doorway + w_rev 0.524) while
+reverse arms reach 0.86–0.89 with equal ease. The forward/reverse gap is a
+property of the policy class + sensing geometry (front-lidar arc prediction
+against a forward-moving body), not of gate parameterization. **Do not change
+the real `lidar_safety_monitor`.** If forward exploring is wanted, the lever
+is in the genome/observation (e.g. rear sensing or a memory of blocked
+directions), not the gate.
 
 Re-scoring existing champions under the doorway gate changed almost nothing
 (each is adapted to the gate it evolved under), so only evolution under it can
@@ -351,21 +375,17 @@ code at their defaults.
 
 ## Next actions, in priority order
 
-1. **Score run 18** (H18a/b) when `RUN-COMPLETE greenfield18d_s8` appears;
-   record in the skill.
-2. **Extend run 17** (trim-randomized, still climbing) — the best candidate for
+1. **Extend run 17** (trim-randomized, still climbing) — the best candidate for
    hardware because it is collision-robust across track asymmetries.
-3. **Combine** what works: trim randomization + (if run 18 passes) the doorway
-   gate + forward penalty, then a longer run and two seeds.
-4. If the doorway gate helps, decide **with the user** whether the real
-   `lidar_safety_monitor` should get the same parameters (a safety-system change).
-5. **Measure the real rover's track asymmetry** (drive a straight command on
+2. **Combine** what works: trim randomization + forward penalty (the doorway
+   gate is dead — run 18 FAIL), then a longer run and two seeds.
+3. **Measure the real rover's track asymmetry** (drive a straight command on
    the floor, compare the gyro to the sim's prediction) and narrow the trim
    randomization range around it.
-6. More live runs only with a trim-robust champion, longer and at full scale.
-7. Cross rate saturates near 0.9: prefer rooms-visited as the primary metric
+4. More live runs only with a trim-robust champion, longer and at full scale.
+5. Cross rate saturates near 0.9: prefer rooms-visited as the primary metric
    for future plateau tests.
-8. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
+6. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
    before any BC work.
 
 ## Operational gotchas
