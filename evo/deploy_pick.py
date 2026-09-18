@@ -41,6 +41,11 @@ def main():
     ap.add_argument("--w-coll", type=float, default=1.0)
     ap.add_argument("--w-cov", type=float, default=0.3)
     ap.add_argument("--coll-guard", type=float, default=20.0)
+    ap.add_argument("--reset-draws", type=int, default=3,
+                    help="independent initial-pose draws per trim; a "
+                    "single draw UNDERESTIMATES collision risk (run 19: "
+                    "idx109 passed at 11.8 on one draw, 62-95 colls on "
+                    "others) — guard and ranking take worst across draws")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -65,27 +70,38 @@ def main():
     per_trim = []
     for lt, rt in TRIMS:
         arena.set_trims([lt] * G, [rt] * G)
-        state = {"h": torch.zeros(P, G, hidden, device=args.device)}
+        draws = []
+        for k in range(args.reset_draws):
+            state = {"h": torch.zeros(P, G, hidden, device=args.device)}
 
-        def step(o, prev, _s=state):
-            a, _s["h"] = net.step(o.view(P, G, OBS_DIM), _s["h"])
-            return a.view(P * G, 2)
+            def step(o, prev, _s=state):
+                a, _s["h"] = net.step(o.view(P, G, OBS_DIM), _s["h"])
+                return a.view(P * G, 2)
 
-        torch.manual_seed(3)
-        m = arena.run_games(step, args.ticks)
-        fit = fitness(m, w_dist=args.w_dist, w_coll=args.w_coll,
-                      w_cov=args.w_cov).view(P, G).mean(1)
-        rooms = m["rooms"].view(P, G)
+            torch.manual_seed(3 + 1000 * k)
+            m = arena.run_games(step, args.ticks)
+            fit = fitness(m, w_dist=args.w_dist, w_coll=args.w_coll,
+                          w_cov=args.w_cov).view(P, G).mean(1)
+            rooms = m["rooms"].view(P, G)
+            draws.append({
+                "fit": fit.cpu().numpy(),
+                "cross": (rooms >= 2).float().mean(1).cpu().numpy(),
+                "rooms": rooms.mean(1).cpu().numpy(),
+                "coll": m["collisions"].view(P, G).mean(1).cpu().numpy(),
+                "rev": rev_frac(m).view(P, G).mean(1).cpu().numpy(),
+            })
         per_trim.append({
             "trim": [lt, rt],
-            "fit": fit.cpu().numpy(),
-            "cross": (rooms >= 2).float().mean(1).cpu().numpy(),
-            "rooms": rooms.mean(1).cpu().numpy(),
-            "coll": m["collisions"].view(P, G).mean(1).cpu().numpy(),
-            "rev": rev_frac(m).view(P, G).mean(1).cpu().numpy(),
+            # worst across reset draws (collision risk hides on single draws)
+            "coll": np.maximum.reduce([d["coll"] for d in draws]),
+            "fit": np.mean([d["fit"] for d in draws], axis=0),
+            "cross": np.mean([d["cross"] for d in draws], axis=0),
+            "rooms": np.mean([d["rooms"] for d in draws], axis=0),
+            "rev": np.mean([d["rev"] for d in draws], axis=0),
         })
         print(f"  trim {lt:.1f}/{rt:.1f}: mean cross "
-              f"{per_trim[-1]['cross'].mean():.3f}", flush=True)
+              f"{per_trim[-1]['cross'].mean():.3f}  worst-draw mean coll "
+              f"{per_trim[-1]['coll'].mean():.1f}", flush=True)
 
     cross = np.stack([t["cross"] for t in per_trim])      # [T, P]
     coll = np.stack([t["coll"] for t in per_trim])

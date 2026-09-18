@@ -28,6 +28,9 @@ def main():
     ap.add_argument("--ticks", type=int, default=5400)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--gate", choices=("legacy", "symmetric"), default="legacy")
+    ap.add_argument("--seed", type=int, default=3,
+                    help="reset-noise seed (initial poses): a single draw "
+                    "can hide or fake a collision-brute-forcing behaviour")
     args = ap.parse_args()
     d = np.load(args.genome)
     obs, action = read_meta(d)
@@ -49,7 +52,7 @@ def main():
         def step(o, prev):
             a, st["h"] = net.step(o.view(1, args.games, OBS_DIM), st["h"])
             return a.view(args.games, 2)
-        torch.manual_seed(3)
+        torch.manual_seed(args.seed)
         m = ar.run_games(step, args.ticks)
         rows.append((lt, rt, float(fitness(m).mean()), float(m["rooms"].mean()),
                      float((m["rooms"] >= 2).float().mean()),
