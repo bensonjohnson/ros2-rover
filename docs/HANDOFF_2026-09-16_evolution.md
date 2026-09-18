@@ -65,6 +65,35 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
 ## Live now (Spark only — V620 paused, too loud)
 
+**Run 20m — merged-pool experiment** (`evo/run20_merged.sh`,
+`greenfield20m_s10`, launched 09-18 16:57, ~2.2 h, watcher
+proc_2935455f75c8): ES warm-started from `evo_runs/merged19_pool.npz` =
+64 guard-passing genomes from 19e + 64 from 19t (`evo/merge_pools.py`).
+Tests whether strong crossing (19e) and collision honesty (19t) co-inherit.
+PRE-REGISTERED: M-PASS if deploy_pick at g119 finds worst-trim cross >=
+0.85 with coll <= 12 (beats both parents 0.823/11.9 and 0.667/5.7);
+M-PARTIAL = strict improvement on one axis, no regression on the other;
+M-FAIL = deploy the existing verified finalists (below) and stop extending.
+
+**Verified deploy finalists** (hardened multi-draw deploy_pick + trim_eval
+re-checked at independent pose seeds 1/3/777 + buildings deep-eval at 5400
+ticks; committed to `deploy/genomes/`):
+
+| genome | worst-trim cross | worst-trim coll | rooms@nominal | deep-eval (32 unseen L3) |
+|---|---|---|---|---|
+| `champ19e_idx95.npz` | 0.823 | 11.9 | 3.97 | fit 0.606, 2.53 rooms, cross 0.812, coll 0.7 |
+| `champ19t_idx16.npz` | 0.667 | 5.7 | 2.19 | fit 0.491, 1.97 rooms, cross 0.688, coll 0.9 |
+
+Both: legacy gate (the real monitor's params), obs v1/action lr = directly
+loadable by `evo/deploy/evo_runner.py`, reverse-driving ~0.98 (hardware-
+proven style from live run 2). **First live test = champ19e_idx95** (strong
+worst-case still well inside the collision envelope); fallback = idx16 if
+the field shows any collision-braving behavior. Note the fitness formula
+prices collisions at only coll/100 — champions can be crashers while the
+population still hides honest genomes; deploy_pick exists because of this.
+
+## Run 19 verdicts (see below) — kept for provenance
+
 **Deploy picks (hardened, live):** multi-draw `deploy_pick` (3 independent
 reset-pose draws per trim; guard = worst across draws) over both run-19
 populations -> `evo_runs/deploy_pick_19{e,t}.log`, marker `picks.done`.
