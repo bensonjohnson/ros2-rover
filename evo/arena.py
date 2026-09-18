@@ -388,7 +388,7 @@ class Arena:
                  every_cover: int = 24, fused: bool = False,
                  compile: bool = False, gate_obs: bool = False,
                  worlds: list | None = None, caps: tuple | None = None,
-                 gate_symmetric: bool = False,
+                 gate_symmetric: bool = False, trim_rand: bool = False,
                  extent: float = 16.0, every_door: int = 6):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
@@ -556,6 +556,14 @@ class Arena:
                                device=str(self.device))
         if gate_symmetric:
             self.gate.enable_symmetric()
+        if trim_rand:
+            # per-env effective track-speed factors (domain randomization);
+            # static buffers so set_trims() works between graph replays
+            rc = self.env.cfg
+            self.env._trim_l = torch.full((self.B,), float(rc.left_trim),
+                                          device=self.device)
+            self.env._trim_r = torch.full((self.B,), float(rc.right_trim),
+                                          device=self.device)
         self._preprocess = batched_preprocess
         self.gate_obs = bool(gate_obs)
         if compile:
@@ -669,6 +677,17 @@ class Arena:
             np.float32))
         self.env._worlds = [_PaddedWorld(houses[i], self.caps[0])
                             for i in idx]
+
+    def set_trims(self, left, right) -> None:
+        """Per-HOUSE-COLUMN track factors (len G*K each), tiled over
+        individuals so a generation stays a paired comparison. copy_ only:
+        legal between CUDA-graph replays. Needs Arena(trim_rand=True)."""
+        HG = self.G * self.G_sets
+        idx = np.arange(self.B) % HG
+        self.env._trim_l.copy_(torch.as_tensor(
+            np.asarray(left, np.float32)[idx], device=self.device))
+        self.env._trim_r.copy_(torch.as_tensor(
+            np.asarray(right, np.float32)[idx], device=self.device))
 
     def _room_code_rects(self) -> torch.Tensor:
         """Room index (-1 outside every rect) by elementwise containment

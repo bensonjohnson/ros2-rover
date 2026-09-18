@@ -339,7 +339,8 @@ def evolve(args):
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
                    gate_obs=args.obs == "v2",
-                   gate_symmetric=args.gate == "symmetric", **bkw)
+                   gate_symmetric=args.gate == "symmetric",
+                   trim_rand=args.trim_rand > 0, **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    gate_symmetric=args.gate == "symmetric",
                    fp16=args.fp16, door_w_range=holdout_door,
@@ -441,6 +442,14 @@ def evolve(args):
         if (args.world == "buildings" and gen > 0
                 and gen % args.resample_every == 0):
             train.load_worlds(sample_houses(level))   # same buffers: graph ok
+        if args.trim_rand > 0:
+            # fresh per-house-column track factors each gen: effective
+            # speed of each track ~ U(trim_rand, 1.0), independently —
+            # covers the sim's lopsided 0.8/1.0 and a balanced real rover
+            trim_rng = np.random.default_rng(args.seed * 7919 + gen)
+            HGc = G * args.train_rotations
+            train.set_trims(trim_rng.uniform(args.trim_rand, 1.0, HGc),
+                            trim_rng.uniform(args.trim_rand, 1.0, HGc))
         fit, metrics = score(True, thetas)
         fit_np = fit.cpu().numpy()
 
@@ -696,6 +705,12 @@ def main():
                     help="symmetric: mirror every forward safety-gate rule for "
                     "reverse (rear corridor + latch, rear-flank equalization); "
                     "legacy = the real rover's current front-heavy gate")
+    ap.add_argument("--trim-rand", type=float, default=0.0,
+                    help="> 0: per-gen, per-house effective track factors "
+                    "~ U(this, 1.0) for EACH track (train arena only; "
+                    "holdouts keep the nominal 0.8/1.0). Champions were "
+                    "extremely trim-sensitive; the real rover's 0.8 left "
+                    "trim is a driver-side CORRECTION, not a slow track")
     ap.add_argument("--w-rev", type=float, default=0.0,
                     help="penalty x fraction of distance driven in reverse "
                     "(run 15; 0 = runs 1-14 fitness)")

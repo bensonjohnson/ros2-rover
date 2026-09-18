@@ -148,10 +148,17 @@ class BatchedEnv:
         c = self.cfg
         cl = cmd[:, 0].clamp(-1.0, 1.0)
         cr = cmd[:, 1].clamp(-1.0, 1.0)
+        # Optional per-env track factors (evo --trim-rand domain
+        # randomization): tensors [B] replace the scalar trims. Unset ->
+        # the scalar path below, bit-identical to before.
+        lt = getattr(self, "_trim_l", None)
+        rt = getattr(self, "_trim_r", None)
         tl = torch.where(cl.abs() < c.deadband,
-                         torch.zeros_like(cl), cl * (c.v_max * c.left_trim))
+                         torch.zeros_like(cl),
+                         cl * (c.v_max * (c.left_trim if lt is None else lt)))
         tr = torch.where(cr.abs() < c.deadband,
-                         torch.zeros_like(cr), cr * (c.v_max * c.right_trim))
+                         torch.zeros_like(cr),
+                         cr * (c.v_max * (c.right_trim if rt is None else rt)))
 
         k = 1.0 - float(np.exp(-dt / c.motor_tau))
         self.v_left += (tl - self.v_left) * k
