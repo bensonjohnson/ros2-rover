@@ -54,7 +54,35 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
     cross rate 0.524 at gen 119 (H18a/b FAIL). Every forward arm (15f, 16sr,
     18d) plateaus 0.30–0.52 while reverse arms reach 0.86–0.89. The forward
     rules are not the doorway bottleneck; **do not change the real monitor**.
-    **Nothing is running now** — Spark idle since 11:32.
+11. **Deploy hunt (run 19 queue, live):** `evo/deploy_pick.py` re-ranks a
+    WHOLE final population across the trim envelope (5 trim settings × 32
+    unseen buildings, worst case wins). On run 17's population it found idx
+    56: worst-trim cross 0.688 / worst coll 9.7 vs the validation champion's
+    0.375 worst-trim cross — a 1.8× robustness gain from genomes that already
+    existed. Queue: 19e = extend run 17 (trim-rand, still climbing) +120
+    gens; 19t = fresh seed-9 twin; both end with deep-evals + trim_eval +
+    deploy_pick. Deploy candidate = best worst-trim genome from either.
+
+## Live now (Spark only — V620 paused, too loud)
+
+**Run 19 queue** (`evo/queue19.sh`, launched 2026-09-18 ~13:15, ~3 h total):
+
+1. `greenfield19e_s8` (`evo/run19_extend.sh`) — extend run 17 s8 by 120 gens
+   (warm `--seed-from` + `--keep-seed-sigma`, trim-rand 0.75, everything else
+   identical). Run 17 ended cross 0.703 still climbing, so this is the
+   strongest candidate lineage. Pre-registered: plateau test over local gens
+   45–59 vs 105–119 (PLATEAU < 0.02 → memory genome; CLIMBING ≥ 0.05 →
+   extend/accept); deploy guard trim_eval worst/nominal rooms ≥ 0.60 and
+   max coll ≤ 20; collision guards as runs 11–18.
+2. `greenfield19t_s9` (`evo/run19_twin.sh`) — fresh seed-9 trim-rand twin of
+   run 17. Pre-registered: hob_elite_cross(g119) within 0.15 of 0.703
+   (seed agreement); same deploy guard.
+
+Both chains end with legacy+buildings deep-evals, `trim_eval`, and
+`deploy_pick` (writes `deploy_candidates.json` + `deploy_genome.npz`,
+hardware-compatible npz for `evo/deploy/evo_runner.py`). Selection is
+worst-trim door-cross rate with a hard per-trim collision guard — the real
+rover's track factors are unknown, so worst case, not nominal, decides.
 
 ## Run 18 — doorway forward gate (complete 2026-09-18 11:32, VERDICT: FAIL)
 
