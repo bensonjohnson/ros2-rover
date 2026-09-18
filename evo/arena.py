@@ -438,6 +438,9 @@ class Arena:
         self._one64 = torch.ones((), dtype=torch.int64, device=self.device)
         self._zero64 = torch.zeros((), dtype=torch.int64, device=self.device)
         self._acc = None
+        # forward / reverse travel accumulators (static: graph-safe)
+        self._fwd_m = torch.zeros(self.B, device=self.device)
+        self._back_m = torch.zeros(self.B, device=self.device)
         if self.building_mode:
             self._init_building_buffers(houses)
         self._reset_hooks = []      # e.g. zero the policy's hidden state
@@ -658,6 +661,7 @@ class Arena:
         prev_act, seen, dist, coll, cells = acc
         prev_act.zero_()
         seen.zero_(); dist.zero_(); coll.zero_(); cells.zero_()
+        self._fwd_m.zero_(); self._back_m.zero_()
         if self.building_mode:
             self._dprev.zero_(); self._dused.zero_(); self._dcross.zero_()
         e = self.env
@@ -688,8 +692,14 @@ class Arena:
                 self._rec["cmd"].append(cmd.clone())
             gated = self.gate.gate(cmd)
             px, py = e.x.clone(), e.y.clone()
+            pth = e.theta.clone()
             e.step(gated, self.dt)
             dist += torch.hypot(e.x - px, e.y - py)
+            # signed body-frame travel (heading before the step): forward
+            # vs reverse distance for the w_rev fitness term
+            sd = (e.x - px) * torch.cos(pth) + (e.y - py) * torch.sin(pth)
+            self._fwd_m += sd.clamp(min=0.0)
+            self._back_m += (-sd).clamp(min=0.0)
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
                 if self.building_mode:
@@ -756,7 +766,8 @@ class Arena:
                "dist_m": dist.clone(), "collisions": coll.clone(),
                "cells": torch.minimum(cov, self.cells_total),
                "cells_total": self.cells_total.clone(),
-               "stops": self.gate.stops_dev.to(torch.float32).clone()}
+               "stops": self.gate.stops_dev.to(torch.float32).clone(),
+               "fwd_m": self._fwd_m.clone(), "back_m": self._back_m.clone()}
         if self.building_mode:
             out["door_crossings"] = self._dcross.clone()
             out["doors_used"] = self._dused.sum(dim=1).to(torch.float32)
@@ -808,8 +819,16 @@ class Arena:
         return g
 
 
+def rev_frac(metrics: dict) -> torch.Tensor:
+    """Fraction of travelled distance driven in reverse (0 if static)."""
+    tot = metrics["fwd_m"] + metrics["back_m"]
+    return torch.where(tot > 1e-3, metrics["back_m"] / tot.clamp(min=1e-3),
+                       torch.zeros_like(tot))
+
+
 def fitness(metrics: dict, w_dist: float = 0.03,
-            w_coll: float = 0.25, w_cov: float = 0.0) -> torch.Tensor:
+            w_coll: float = 0.25, w_cov: float = 0.0,
+            w_rev: float = 0.0) -> torch.Tensor:
     """Per-env scalar: fraction of reachable rooms visited (the honest
     target), distance as a small tiebreaker (stops are zero-effort rooms),
     collisions penalized (the gate is there; brute-forcing it shouldn't pay).
@@ -820,11 +839,19 @@ def fitness(metrics: dict, w_dist: float = 0.03,
     pays densely from tick one and saturates at the house ceiling (no
     novelty fountain). At w_cov ~0.3 coverage can buy one room crossing'
     worth of fitness — enough to pull a policy toward a door, not enough
-    to replace the rooms term."""
+    to replace the rooms term.
+
+    w_rev > 0 (run 15) subtracts w_rev x the fraction of distance driven in
+    reverse. The runs 11-14 champions explore mostly BACKWARDS (sim mean
+    command -0.72; real rover 75% reversing) because nothing priced
+    direction; the real rover's bumper geometry and camera face forward.
+    Scale-free, so a short reverse to escape a front block costs little."""
     frac = metrics["rooms"] / metrics["rooms_total"].clamp(min=1.0)
     out = (frac
            + w_dist * metrics["dist_m"] / 10.0
            - w_coll * metrics["collisions"] / 100.0)
     if w_cov:
         out = out + w_cov * metrics["cells"] / metrics["cells_total"].clamp(min=1.0)
+    if w_rev:
+        out = out - w_rev * rev_frac(metrics)
     return out

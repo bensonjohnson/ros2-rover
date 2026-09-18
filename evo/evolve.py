@@ -38,7 +38,7 @@ import time
 import numpy as np
 import torch
 
-from .arena import Arena, OBS_DIM, fitness
+from .arena import Arena, OBS_DIM, fitness, rev_frac
 from .policy import (PopulationNet, genome_meta, genome_size,
                      per_gene_scale, read_meta, sample_population)
 
@@ -46,7 +46,7 @@ from .policy import (PopulationNet, genome_meta, genome_size,
 def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              ticks: int, w_dist: float = 0.03,
              w_coll: float = 0.25,
-             w_cov: float = 0.0, obs: str = "v1",
+             w_cov: float = 0.0, obs: str = "v1", w_rev: float = 0.0,
              action: str = "lr") -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
@@ -63,7 +63,7 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
 
     metrics = arena.run_games(policy_step, ticks)
     fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll,
-                  w_cov=w_cov).view(P, G_eff).mean(dim=1)
+                  w_cov=w_cov, w_rev=w_rev).view(P, G_eff).mean(dim=1)
     return fit, metrics
 
 
@@ -103,12 +103,14 @@ class GraphRunner:
         return a.view(self.P * self.G_eff, 2)
 
     def run(self, thetas: torch.Tensor, ticks: int,
-            w_dist: float, w_coll: float, w_cov: float = 0.0):
+            w_dist: float, w_coll: float, w_cov: float = 0.0,
+            w_rev: float = 0.0):
         self.theta_buf.copy_(thetas)
         metrics = self.arena.run_games(self._step, ticks, graph=True)
         fit = fitness(metrics, w_dist=w_dist,
                       w_coll=w_coll,
-                      w_cov=w_cov).view(self.P, self.G_eff).mean(dim=1)
+                      w_cov=w_cov, w_rev=w_rev).view(self.P, self.G_eff) \
+            .mean(dim=1)
         return fit, metrics
 
 
@@ -359,7 +361,8 @@ def evolve(args):
                     hval if is_train == "val" else ho)
                 return evaluate(a, th, hidden, args.ticks,
                                 w_dist=args.w_dist, w_coll=args.w_coll,
-                                w_cov=args.w_cov, obs=args.obs,
+                                w_cov=args.w_cov, w_rev=args.w_rev,
+                                obs=args.obs,
                                 action=args.action)
             return tr, ho, score
 
@@ -368,12 +371,13 @@ def evolve(args):
         def score(is_train, th):
             if is_train is True:
                 return rn.run(th, args.ticks, args.w_dist, args.w_coll,
-                              args.w_cov)
+                              args.w_cov, args.w_rev)
             return evaluate(hob if is_train == "hob" else
                             hval if is_train == "val" else ho, th, hidden,
                             args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll,
-                            w_cov=args.w_cov, obs=args.obs,
+                            w_cov=args.w_cov, w_rev=args.w_rev,
+                            obs=args.obs,
                             action=args.action)
         return tr, ho, score
 
@@ -463,7 +467,8 @@ def evolve(args):
             return {"rooms": mean(m["rooms"]),
                     "cells": mean(m["cells"] / m["cells_total"]),
                     "dist": mean(m["dist_m"]),
-                    "coll": mean(m["collisions"])}
+                    "coll": mean(m["collisions"]),
+                    "rev": mean(rev_frac(m))}
         el = order[:n_elite]
         champ = int(order[0])
         tr = per_ind(metrics, G_eff)
@@ -476,6 +481,7 @@ def evolve(args):
                 "elite_dist": round(float(tr["dist"][el].mean()), 1),
                 "elite_coll": round(float(tr["coll"][el].mean()), 2),
                 "champ_cells": round(float(tr["cells"][champ]), 4),
+                "elite_rev_frac": round(float(tr["rev"][el].mean()), 3),
                 "sigma_med": round(float(sigma.median()), 4)}
         if oes is not None:
             trec["center_fit"] = round(float(fit_np[0]), 4)
@@ -499,7 +505,8 @@ def evolve(args):
             print(f"      L{level} elite cross_rate={cross_rate:.3f} "
                   f"rooms_frac={float(rf.mean()):.3f} "
                   f"door_x={float(dc.mean()):.2f} "
-                  f"doors_used={float(du.mean()):.3f}", flush=True)
+                  f"doors_used={float(du.mean()):.3f} "
+                  f"rev={trec['elite_rev_frac']:.2f}", flush=True)
             if args.curriculum and level < max(pools):
                 streak = streak + 1 if cross_rate >= args.advance_at else 0
                 if streak >= args.advance_patience:
@@ -597,7 +604,9 @@ def evolve(args):
                     "hob_elite_rooms": round(float(bi["rooms"][el].mean()), 3),
                     "hob_elite_cross_rate": round(float(brc[el].mean()), 3),
                     "hob_elite_door_crossings": round(float(bdx[el].mean()), 2),
-                    "hob_elite_coll": round(float(bi["coll"][el].mean()), 2)})
+                    "hob_elite_coll": round(float(bi["coll"][el].mean()), 2),
+                    "hob_champ_rev_frac": round(float(bi["rev"][champ]), 3),
+                    "hob_elite_rev_frac": round(float(bi["rev"][el].mean()), 3)})
                 print(f"      BUILDING HOLDOUT (L3 mix) champ fit="
                       f"{rec['hob_champ_fit']:.4f} rooms="
                       f"{rec['hob_champ_rooms']:.2f} cross="
@@ -678,6 +687,9 @@ def main():
                     help="distance term weight; LOWER (e.g. 0.005) if the "
                     "run plateaus as a fast wall-hugger — rooms dominates then")
     ap.add_argument("--w-coll", type=float, default=0.25)
+    ap.add_argument("--w-rev", type=float, default=0.0,
+                    help="penalty x fraction of distance driven in reverse "
+                    "(run 15; 0 = runs 1-14 fitness)")
     ap.add_argument("--w-cov", type=float, default=0.0,
                     help="cell-coverage novelty weight (run 5): pays for "
                     "distinct 0.8 m cells visited, saturating. 0 = off "

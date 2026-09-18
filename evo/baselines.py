@@ -68,8 +68,10 @@ BASELINES = {"random_walk": random_walk, "go_forward": go_forward,
 def _door_cols(m) -> dict:
     if "door_crossings" not in m:
         return {}
+    from .arena import rev_frac
     return {"cross_rate": float((m["rooms"] >= 2).float().mean()),
-            "door_x": float(m["door_crossings"].mean())}
+            "door_x": float(m["door_crossings"].mean()),
+            "rev": float(rev_frac(m).mean())}
 
 
 def run_named(fn, arena: Arena, ticks: int) -> dict:
@@ -169,13 +171,14 @@ def main():
 
     hdr = (f"{'controller':<28} {'fitness':>8} {'rooms':>6} {'/tot':>5} "
            f"{'dist_m':>7} {'coll':>6}"
-           + (f" {'cross':>6} {'door_x':>6}" if args.world == "buildings"
+           + (f" {'cross':>6} {'door_x':>6} {'rev':>5}"
+              if args.world == "buildings"
               else ""))
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
         extra = (f" {r['cross_rate']:>6.3f} {r['door_x']:>6.2f}"
-                 if "cross_rate" in r else "")
+                 f" {r['rev']:>5.2f}" if "cross_rate" in r else "")
         print(f"{r['name']:<28} {r['fitness']:>8.4f} {r['rooms']:>6.2f} "
               f"{r['rooms_total']:>5.1f} {r['dist_m']:>7.1f} "
               f"{r['collisions']:>6.1f}{extra}")
