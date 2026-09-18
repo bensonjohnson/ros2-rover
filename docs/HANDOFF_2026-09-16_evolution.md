@@ -65,6 +65,45 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
 ## Live now (Spark only — V620 paused, too loud)
 
+**Deploy picks (hardened, live):** multi-draw `deploy_pick` (3 independent
+reset-pose draws per trim; guard = worst across draws) over both run-19
+populations -> `evo_runs/deploy_pick_19{e,t}.log`, marker `picks.done`.
+Rationale: run 19's single-draw pick (19e idx109) passed at worst-coll 11.8
+but brute-forces 62-95 collisions on other pose draws — reset poses come
+from the global RNG and one draw underestimates collision risk.
+
+**Run 19 verdicts (both rc=0, done 09-18 14:00 / 16:25):**
+
+`greenfield19e_s8` (extend run 17 s8 +120 gens, trim-rand 0.75):
+- Plateau test B-A = +0.027 -> **AMBIGUOUS** (0.02-0.05 band; seed twin
+  below is the pre-registered tiebreak).
+- g119 hob elite cross **0.803**, val_best_fit 0.694, train rooms 3.2/game —
+  strongest population so far.
+- Deploy guard (val champion): worst/nominal rooms 0.66 PASS, max coll 11.4
+  PASS. **Collision guards FAIL**: hob champ coll 52.8 (> 20), train elite
+  coll 4.08 (> 3) — the champion is a brute-forcer; population mining is the
+  way (and the single-draw pick was fooled, see above).
+- trim_eval val champion: rooms 3.62-3.81 at 0.8-0.9 left trim (best
+  absolute numbers of any lineage); drops to 2.38 @ 1.0/0.8.
+
+`greenfield19t_s9` (fresh trim-rand twin):
+- Pre-registered seed agreement: g119 hob elite cross 0.679 vs run 17's
+  0.703 -> |diff| 0.024, **PASS**.
+- Its own plateau window B-A = +0.19 -> **CLIMBING** — trim-rand MLP not
+  converged; one more extension is justified.
+- Collision guards PASS (hob champ 1.8, train elite 2.49). But the VAL
+  champion brute-forces 105 coll at balanced 1.0/1.0 trim -> validation-set
+  picking still rewards crashers; worst-trim population mining mandatory.
+- Deploy pick (single-draw, pre-hardening): idx19 = worst cross 0.688,
+  worst coll 4.0, trim_eval worst/nominal rooms 0.97, max coll 5.5 —
+  **the most trim-honest genome measured so far**. Buildings deep-eval:
+  fit 0.497, 2.00/6 rooms, cross 0.688, coll 1.6, rev 0.98.
+
+Deploy status: 19t/deploy_genome.npz is already rover-grade by the numbers;
+final pick waits on the hardened multi-draw ranking of both populations.
+
+## Run 19 (superseded block — kept for provenance)
+
 **Run 19 queue** (`evo/queue19.sh`, launched 2026-09-18 ~13:15, ~3 h total):
 
 1. `greenfield19e_s8` (`evo/run19_extend.sh`) — extend run 17 s8 by 120 gens
