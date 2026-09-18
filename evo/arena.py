@@ -190,10 +190,136 @@ class NoSyncGate(BatchedGate):
         self._front_blocked_time = torch.where(
             block, now, self._front_blocked_time)
 
+    # ---------------------------------------------- symmetric gate (run 16)
+    # The stock gate is FRONT-heavy: forward motion gets a predicted-path
+    # corridor, a latched hold, and side equalization over the FRONT flanks
+    # (30-90 deg); reverse only gets a 150-180 deg rear cone at 0.30 m and
+    # no flank checks at all (90-150 deg is unwatched). Runs 11-15 evolved
+    # reverse explorers exploiting exactly that (mirror test: the reverse
+    # champion driven forward trips the front gate 67x and collides 862x).
+    # symmetric=True mirrors every forward rule for reverse: rear corridor
+    # (arc-shifted by the reverse command), same stop distance, hold and
+    # hysteresis latch, and rear-flank (90-150 deg) side equalization.
+    symmetric = False
+
+    def enable_symmetric(self):
+        z = dict(device=self.device)
+        md = self.cfg.max_eval_distance
+        self.symmetric = True
+        self._rpath = torch.full((self.B,), md, **z)
+        self._rstreak = torch.zeros(self.B, dtype=torch.long, **z)
+        self._rblocked = torch.zeros(self.B, dtype=torch.bool, **z)
+        self._rblocked_time = torch.full((self.B,), -1.0, **z)
+        self._rleft = torch.full((self.B,), md, **z)
+        self._rright = torch.full((self.B,), md, **z)
+        self.rstops_dev = torch.zeros(self.B, dtype=torch.int64, **z)
+
+    def _rear_geom(self, n, angle_min, angle_increment):
+        key = (n, float(angle_min), float(angle_increment))
+        g = getattr(self, "_rgeom", None)
+        if g is None or g[0] != key:
+            dev = self.device
+            a = torch.arange(n, device=dev, dtype=torch.float32) \
+                * angle_increment + angle_min
+            a = torch.remainder(a + np.pi, 2 * np.pi) - np.pi
+            g = (key, ((a > 1.57) & (a < 2.62),          # rear-left flank
+                       (a < -1.57) & (a > -2.62)))       # rear-right flank
+            self._rgeom = g
+        return g[1]
+
+    def process_scan(self, ranges, angle_min, angle_increment):
+        super().process_scan(ranges, angle_min, angle_increment)
+        if not self.symmetric:
+            return
+        c = self.cfg
+        n = ranges.shape[1]
+        cos_a, sin_a, _, _, _ = self._scan_geom(n, angle_min, angle_increment)
+        rl_m, rr_m = self._rear_geom(n, angle_min, angle_increment)
+        valid = (torch.isfinite(ranges) & (ranges > c.min_valid_range)
+                 & (ranges <= c.max_eval_distance))
+        r = torch.where(valid, ranges, torch.full_like(ranges, 1e6))
+        x, y = r * cos_a, r * sin_a
+        xb = -x - c.robot_front_offset              # distance behind bumper
+        arc = (self._cmd_lin < -0.02) & (self._cmd_ang.abs() > 0.1)
+        v = (-self._cmd_lin).clamp(min=0.05).unsqueeze(1)
+        xbf = xb.clamp(min=0.0)
+        # reverse arc: lateral offset of the path s behind = -w s^2 / (2|v|)
+        y_shift = (-self._cmd_ang.unsqueeze(1) * xbf * xbf
+                   / (2.0 * v)).clamp(-0.30, 0.30)
+        y_eff = torch.where(arc.unsqueeze(1), y - y_shift, y)
+        in_path = valid & (y_eff.abs() <= c.robot_half_width) & (xb > 0)
+        big = torch.full_like(xb, torch.inf)
+        rp = torch.where(in_path, xb, big).min(dim=1).values
+        self._rpath = torch.where(torch.isfinite(rp), rp.clamp(min=0.0),
+                                  torch.full_like(rp, c.max_eval_distance))
+        close = (in_path & (xb < c.stop_distance)).sum(dim=1)
+        self._rstreak = torch.where(close >= c.min_block_points,
+                                    self._rstreak + 1,
+                                    torch.zeros_like(self._rstreak))
+
+        def sector_min(mask):
+            rr = torch.where(valid & mask.unsqueeze(0), r,
+                             torch.full_like(r, torch.inf)).min(dim=1).values
+            return torch.where(torch.isfinite(rr), rr,
+                               torch.full_like(rr, c.max_eval_distance))
+        self._rleft = sector_min(rl_m)
+        self._rright = sector_min(rr_m)
+        # latch: mirror of _update_front_blocked
+        now = self._tick
+        resume = self._rpath > c.stop_distance + c.hysteresis
+        held = (self._rblocked_time < 0) \
+            | (now - self._rblocked_time >= c.min_block_duration)
+        release = self._rblocked & resume & held
+        self._rblocked = self._rblocked & ~release
+        self._rblocked_time = torch.where(release, self._neg1,
+                                          self._rblocked_time)
+        block = (~self._rblocked & (self._rpath < c.stop_distance)
+                 & (self._rstreak >= c.block_scans))
+        self.rstops_dev += block.to(torch.int64)
+        self._rblocked = self._rblocked | block
+        self._rblocked_time = torch.where(block, now, self._rblocked_time)
+
+    def gate(self, cmd):
+        if not self.symmetric:
+            return super().gate(cmd)
+        c = self.cfg
+        left = cmd[:, 0].clone()
+        right = cmd[:, 1].clone()
+        self._cmd_lin = (left + right) / 2.0 * 0.154
+        self._cmd_ang = (right - left) / c.track_width
+        fb = self.front_blocked
+        left = torch.where(fb, left.clamp(max=0.0), left)
+        right = torch.where(fb, right.clamp(max=0.0), right)
+        rb = self._rblocked
+        left = torch.where(rb, left.clamp(min=0.0), left)
+        right = torch.where(rb, right.clamp(min=0.0), right)
+        avg = (left + right) / 2.0
+        zero_turn = (avg.abs() < 0.05) & ((left - right).abs() > 0.1)
+        turn = right - left
+        fwd = ~zero_turn & (avg > 0.01)
+        eq_left = fwd & (turn > 0.1) & (self._left < c.stop_distance)
+        left = torch.where(eq_left, right, left)
+        eq_right = fwd & (turn < -0.1) & (self._right < c.stop_distance)
+        right = torch.where(eq_right, left, right)
+        # reverse + CCW turn swings the tail toward the RIGHT flank
+        bwd = ~zero_turn & (avg < -0.01)
+        turn = right - left
+        eq_rr = bwd & (turn > 0.1) & (self._rright < c.stop_distance)
+        right = torch.where(eq_rr, left, right)
+        eq_rl = bwd & (turn < -0.1) & (self._rleft < c.stop_distance)
+        left = torch.where(eq_rl, right, left)
+        return torch.stack([left, right], dim=1)
+
     def reset_state(self):
         """In-place state zero for arena re-runs / CUDA-graph replay
         (allocating a fresh gate per game would be illegal inside a graph
         capture)."""
+        if self.symmetric:
+            md = self.cfg.max_eval_distance
+            self._rpath.fill_(md); self._rstreak.zero_()
+            self._rblocked.zero_(); self._rblocked_time.fill_(-1.0)
+            self._rleft.fill_(md); self._rright.fill_(md)
+            self.rstops_dev.zero_()
         self.front_blocked.zero_()
         self._rear_blocked.zero_()
         self._front_blocked_time.fill_(-1.0)
@@ -262,6 +388,7 @@ class Arena:
                  every_cover: int = 24, fused: bool = False,
                  compile: bool = False, gate_obs: bool = False,
                  worlds: list | None = None, caps: tuple | None = None,
+                 gate_symmetric: bool = False,
                  extent: float = 16.0, every_door: int = 6):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
@@ -427,6 +554,8 @@ class Arena:
         self.gate = NoSyncGate(self._gate_cfg, self.B,
                                lambda: self._t * self.dt,
                                device=str(self.device))
+        if gate_symmetric:
+            self.gate.enable_symmetric()
         self._preprocess = batched_preprocess
         self.gate_obs = bool(gate_obs)
         if compile:

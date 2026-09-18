@@ -338,8 +338,10 @@ def evolve(args):
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
-                   gate_obs=args.obs == "v2", **bkw)
+                   gate_obs=args.obs == "v2",
+                   gate_symmetric=args.gate == "symmetric", **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
+                   gate_symmetric=args.gate == "symmetric",
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
@@ -349,11 +351,13 @@ def evolve(args):
             hob = Arena(P, G, seed=args.holdout_seed, device=dev,
                         fp16=args.fp16, cells=not args.no_cells,
                         every_cover=args.every_cover, fused=args.fused,
-                        gate_obs=args.obs == "v2", worlds=ho_worlds)
+                        gate_obs=args.obs == "v2", worlds=ho_worlds,
+                        gate_symmetric=args.gate == "symmetric")
             hval = Arena(P, G, seed=args.holdout_seed, device=dev,
                          fp16=args.fp16, cells=not args.no_cells,
                          every_cover=args.every_cover, fused=args.fused,
-                         gate_obs=args.obs == "v2", worlds=val_worlds)
+                         gate_obs=args.obs == "v2", worlds=val_worlds,
+                        gate_symmetric=args.gate == "symmetric")
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train is True else (
@@ -687,6 +691,11 @@ def main():
                     help="distance term weight; LOWER (e.g. 0.005) if the "
                     "run plateaus as a fast wall-hugger — rooms dominates then")
     ap.add_argument("--w-coll", type=float, default=0.25)
+    ap.add_argument("--gate", choices=("legacy", "symmetric"),
+                    default="legacy",
+                    help="symmetric: mirror every forward safety-gate rule for "
+                    "reverse (rear corridor + latch, rear-flank equalization); "
+                    "legacy = the real rover's current front-heavy gate")
     ap.add_argument("--w-rev", type=float, default=0.0,
                     help="penalty x fraction of distance driven in reverse "
                     "(run 15; 0 = runs 1-14 fitness)")
