@@ -372,9 +372,11 @@ class BatchedGate:
         zero_turn = (avg_fwd.abs() < 0.05) & ((left - right).abs() > 0.1)
         fwd = ~zero_turn & (avg_fwd > 0.01)
         turn = right - left
-        eq_left = fwd & (turn > 0.1) & (self._left < c.stop_distance)
+        side = (c.stop_distance if c.side_stop_distance is None
+                else c.side_stop_distance)
+        eq_left = fwd & (turn > 0.1) & (self._left < side)
         left = torch.where(eq_left, right, left)
-        eq_right = fwd & (turn < -0.1) & (self._right < c.stop_distance)
+        eq_right = fwd & (turn < -0.1) & (self._right < side)
         right = torch.where(eq_right, left, right)
 
         return torch.stack([left, right], dim=1)

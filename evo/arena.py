@@ -157,6 +157,23 @@ class Fp16Env(_DefaultRNGMixin, BatchedEnv):
         return self._dropout(r, c.lidar_dropout_p)
 
 
+# Sim-only forward-gate prototype for doorway passage (2026-09-18). The real
+# rover's lidar_safety_monitor = GateConfig() defaults. "doorway": corridor =
+# the true robot radius (0.14; the stock 0.12 is NARROWER than the robot),
+# stop 0.12 m from the bumper (0.18 m from centre, 4 cm over the 0.14 radius),
+# quicker release (hysteresis 0.05 m, hold 0.15 s), side equalisation only
+# inside 0.10 m (door jambs sit ~0.2 m off-axis in a 0.75 m door).
+GATE_PRESETS = {
+    "doorway": dict(stop_distance=0.12, robot_half_width=0.14,
+                    hysteresis=0.05, min_block_duration=0.15,
+                    side_stop_distance=0.10),
+}
+
+
+def gate_config(name: str = "legacy") -> "GateConfig":
+    return GateConfig(**GATE_PRESETS.get(name, {}))
+
+
 class NoSyncGate(BatchedGate):
     """BatchedGate minus its per-tick GPU->CPU sync: `stops +=
     int(block.sum())` forces a device-host round trip EVERY tick, draining
@@ -297,16 +314,18 @@ class NoSyncGate(BatchedGate):
         zero_turn = (avg.abs() < 0.05) & ((left - right).abs() > 0.1)
         turn = right - left
         fwd = ~zero_turn & (avg > 0.01)
-        eq_left = fwd & (turn > 0.1) & (self._left < c.stop_distance)
+        side = (c.stop_distance if c.side_stop_distance is None
+                else c.side_stop_distance)
+        eq_left = fwd & (turn > 0.1) & (self._left < side)
         left = torch.where(eq_left, right, left)
-        eq_right = fwd & (turn < -0.1) & (self._right < c.stop_distance)
+        eq_right = fwd & (turn < -0.1) & (self._right < side)
         right = torch.where(eq_right, left, right)
         # reverse + CCW turn swings the tail toward the RIGHT flank
         bwd = ~zero_turn & (avg < -0.01)
         turn = right - left
-        eq_rr = bwd & (turn > 0.1) & (self._rright < c.stop_distance)
+        eq_rr = bwd & (turn > 0.1) & (self._rright < side)
         right = torch.where(eq_rr, left, right)
-        eq_rl = bwd & (turn < -0.1) & (self._rleft < c.stop_distance)
+        eq_rl = bwd & (turn < -0.1) & (self._rleft < side)
         left = torch.where(eq_rl, right, left)
         return torch.stack([left, right], dim=1)
 

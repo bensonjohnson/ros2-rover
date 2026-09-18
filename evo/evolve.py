@@ -38,7 +38,7 @@ import time
 import numpy as np
 import torch
 
-from .arena import Arena, OBS_DIM, fitness, rev_frac
+from .arena import Arena, OBS_DIM, fitness, gate_config, rev_frac
 from .policy import (PopulationNet, genome_meta, genome_size,
                      per_gene_scale, read_meta, sample_population)
 
@@ -340,9 +340,11 @@ def evolve(args):
                    fused=args.fused, compile=args.compile,
                    gate_obs=args.obs == "v2",
                    gate_symmetric=args.gate == "symmetric",
+                   gate_cfg=gate_config(args.gate),
                    trim_rand=args.trim_rand > 0, **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    gate_symmetric=args.gate == "symmetric",
+                   gate_cfg=gate_config(args.gate),
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
@@ -353,12 +355,14 @@ def evolve(args):
                         fp16=args.fp16, cells=not args.no_cells,
                         every_cover=args.every_cover, fused=args.fused,
                         gate_obs=args.obs == "v2", worlds=ho_worlds,
-                        gate_symmetric=args.gate == "symmetric")
+                        gate_symmetric=args.gate == "symmetric",
+                        gate_cfg=gate_config(args.gate))
             hval = Arena(P, G, seed=args.holdout_seed, device=dev,
                          fp16=args.fp16, cells=not args.no_cells,
                          every_cover=args.every_cover, fused=args.fused,
                          gate_obs=args.obs == "v2", worlds=val_worlds,
-                        gate_symmetric=args.gate == "symmetric")
+                         gate_symmetric=args.gate == "symmetric",
+                         gate_cfg=gate_config(args.gate))
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train is True else (
@@ -700,11 +704,12 @@ def main():
                     help="distance term weight; LOWER (e.g. 0.005) if the "
                     "run plateaus as a fast wall-hugger — rooms dominates then")
     ap.add_argument("--w-coll", type=float, default=0.25)
-    ap.add_argument("--gate", choices=("legacy", "symmetric"),
+    ap.add_argument("--gate", choices=("legacy", "symmetric", "doorway"),
                     default="legacy",
                     help="symmetric: mirror every forward safety-gate rule for "
                     "reverse (rear corridor + latch, rear-flank equalization); "
-                    "legacy = the real rover's current front-heavy gate")
+                    "legacy = the real rover's current front-heavy gate; "
+                    "doorway = sim prototype (arena.GATE_PRESETS)")
     ap.add_argument("--trim-rand", type=float, default=0.0,
                     help="> 0: per-gen, per-house effective track factors "
                     "~ U(this, 1.0) for EACH track (train arena only; "

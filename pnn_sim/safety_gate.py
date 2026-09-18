@@ -37,6 +37,9 @@ class GateConfig:
     robot_half_width: float = 0.12
     min_block_duration: float = 0.3
     track_width: float = 0.154
+    # Side-equalisation distance; None = stop_distance (the real rover's
+    # monitor). Sim-only knob for the evo 'doorway' gate prototype.
+    side_stop_distance: float | None = None
 
 
 class SimSafetyGate:
