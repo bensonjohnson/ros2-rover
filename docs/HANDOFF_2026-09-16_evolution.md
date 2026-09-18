@@ -12,7 +12,7 @@ Sweep machine: DGX Spark `benson@172.0.0.201`, repo at `~/projects/ros2-rover`,
 is NOT a git clone — ship code with rsync, never `git pull` there.**
 Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
-## TL;DR (2026-09-18 01:30)
+## TL;DR (2026-09-18 10:15)
 
 1. **Runs 1–9 were void** — two bugs, both fixed and covered by tests:
    - *Reproduction:* children were built from the parent **index**, not the
@@ -42,24 +42,94 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
    buildings (plateau test split at 240 gens).
 7. **Real rover:** the champion runs on hardware through the real safety
    monitor (`evo/deploy/`); it explores mostly in **reverse**, as in the sim.
-8. **Now:** run 16 tests a symmetric safety gate in the sim; a reverse penalty
-   alone (run 15) failed.
+8. **Reverse habit:** a reverse penalty alone (run 15) and a symmetric safety
+   gate (run 16) both failed to produce a good forward explorer. The reverse
+   habit is present from gen 0 and is not caused by the gate asymmetry.
+9. **Sim-to-real hazard found:** the sim's 0.8 left trim is a physical
+   slowdown, but on the real rover it is a driver-side correction. The best
+   champion (run 14) takes 620 collisions with balanced tracks. Trim
+   randomization (run 17) makes champions collision-robust (≤ 10 at every
+   trim) at some cost in rooms.
+10. **Now:** run 18 evolves forward explorers under a sim-only "doorway" gate
+    prototype.
 
 ## Live now (Spark only — V620 paused, too loud)
 
-**Run 16** (`evo/queue16.sh`, launched 2026-09-18 ~01:20): a **symmetric safety
-gate in the sim** (`--gate symmetric`) — every forward gate rule mirrored for
-reverse: rear corridor with reverse-arc prediction, the same 0.15 m stop, hold +
-hysteresis latch, and equalization over the rear flanks (90–150°). The real
-rover's gate is unchanged. Two fresh seed-8 arms, 120 gens, 32 houses/genome:
-`greenfield16s_s8` (no penalty) then `greenfield16sr_s8` (`--w-rev 0.3`),
-~75 min each. Marker `QUEUE16-COMPLETE` in `evo_runs/queue16.log`.
+**Run 18** (`evo/run18_variant.sh`, `evo_runs/greenfield18d_s8`, launched
+2026-09-18 ~09:55, ~75 min): run 15f's config (fresh seed 8, `--w-rev 0.3`,
+legacy trims) with one change, **`--gate doorway`** — a sim-only forward-gate
+prototype (`arena.GATE_PRESETS`):
 
-**Pre-registered** (`evo/run16_variant.sh`): H16a reverse fraction < 0.50 at
-gen 119 without penalty; H16b building-holdout cross rate ≥ 0.770 (0.9× run 13
-s8); H16c with `--w-rev 0.3`: cross ≥ 0.770 **and** reverse ≤ 0.30 (run 15f:
-0.487). Early note: at gen 0–1 the best random genomes already reverse
-(0.57–0.71) with no penalty.
+| Rule | Real rover today | Doorway prototype |
+|---|---|---|
+| Corridor half-width | 0.12 m (narrower than the 0.14 m robot radius) | 0.14 m (= robot radius) |
+| Front stop | 0.15 m from bumper | 0.12 m (0.18 m from centre, 4 cm clear of the body) |
+| Release hysteresis | 0.10 m | 0.05 m |
+| Hold after a block | 0.3 s | 0.15 s |
+| Side-equalization | inside 0.15 m | inside 0.10 m |
+
+**Pre-registered** (in the script): H18a — forward exploring competitive:
+building-holdout elite cross rate ≥ 0.770 **and** reverse fraction ≤ 0.30 at
+gen 119; H18b — a clear improvement: cross ≥ 0.633 (1.3× run 15f's 0.487)
+with reverse ≤ 0.30. Collision guard as before. Deep-evals run on the **legacy**
+gate (the real rover's) and `evo.gate_rescore` compares both gates.
+
+Re-scoring existing champions under the doorway gate changed almost nothing
+(each is adapted to the gate it evolved under), so only evolution under it can
+answer whether the forward rules are the doorway bottleneck. The real rover's
+monitor is unchanged — any change there is the user's decision.
+
+## Runs 16–17 — verdicts (2026-09-18)
+
+**Run 16 — symmetric safety gate** (`--gate symmetric`, sim only: every forward
+rule mirrored for reverse — rear corridor with reverse-arc prediction, same
+0.15 m stop, hold/hysteresis latch, rear-flank 90–150° equalization). Fresh
+seed 8, 120 gens. **All three pre-registered checks FAIL:**
+
+| Arm | Reverse fraction (g119) | Holdout cross rate | Needed |
+|---|---|---|---|
+| 16s: symmetric, no penalty | 0.985 (H16a: < 0.50) | 0.488 (H16b: ≥ 0.770) | ✗ ✗ |
+| 16sr: symmetric + `--w-rev 0.3` | 0.001 ✓ | 0.298 (H16c: ≥ 0.770) | ✗ |
+| run 13 s8 (legacy gate, same start population) | reverse | 0.856 | reference |
+
+- The reverse habit is **not** caused by the gate asymmetry: it is present from
+  gen 0 (the best random genomes already reverse 57% of the time) and survives a
+  symmetric gate.
+- Mirroring the forward rules to the rear makes doorways hard in **both**
+  directions (0.49 vs 0.86). **Recommendation: do not put the symmetric rules on
+  the real monitor.**
+
+**Gate diagnostics** (`evo/mirror_test.py`, `evo/gate_ablate.py`,
+`evo/gate_rescore.py`): with the track trims swapped along with the frame, the
+run-14 reverse champion driven *forward* keeps 3.56 of its 4.31 rooms, so
+forward driving is not inherently hard. The first (uncorrected) mirror test's
+862 collisions came from the trim flip. Relaxing any single forward rule (hold,
+hysteresis, side-equalization) changes nothing for an evolved forward
+champion; removing the arc prediction hurts.
+
+**Run 17 — track-trim randomization** (`--trim-rand 0.75`: each generation,
+each house column draws independent effective track factors ~ U(0.75, 1.0);
+holdouts stay at the nominal 0.8/1.0). Legacy gate, fresh seed 8, 120 gens.
+
+| Tracks (L/R) | Run-14 champion (no randomization) | Run-17 champion |
+|---|---|---|
+| 0.8 / 1.0 (sim nominal) | 4.28 rooms, 4 collisions | 3.16 rooms, 9 collisions |
+| **1.0 / 1.0 (balanced)** | 1.78 rooms, **620 collisions** | 2.38 rooms, **9 collisions** |
+| 1.0 / 0.8 | 1.38 rooms, 275 collisions | 1.72 rooms, 1 collision |
+| worst / nominal rooms | 0.32 | 0.54 |
+
+- **H17a FAIL** on rooms (worst/nominal 0.54, needed ≥ 0.80) but the collision
+  part passes: no trim setting exceeds 10.4 collisions.
+- **H17b FAIL:** g119 holdout cross rate 0.703 (needed ≥ 0.770) — still
+  climbing (+0.12 over the last 20 gens), so it likely needs more generations.
+- Champion on 32 unseen buildings: 2.56 rooms, cross 0.75, 2.4 collisions,
+  reverse 0.97.
+- **Why it matters:** the sim applies the 0.8 left trim as a physical 20%
+  slowdown (a "straight" command curves 34° in 3 s), while the real rover's
+  0.8 is a motor-driver correction for a faster left track. In live run 2 the
+  rover curved the opposite way to the sim's prediction. **The run-14 champion
+  is not safe to trust on balanced tracks; prefer trim-randomized champions for
+  hardware.** `python3 -m evo.trim_eval --genome …` checks any genome.
 
 ## Runs 13–15 and the real rover (2026-09-17/18)
 
@@ -220,7 +290,16 @@ time again — not adopted yet.
 | `0f824b6` | readout fix (bmm); genome modes `--obs v2` (gate front/rear-blocked flags replace two pure-noise gyro channels; inputs centred), `--action vw`, `--compile`; npz carry `obs_mode`/`action_mode` |
 | `3589243` | `--algo oes` (OpenAI-ES: mirrored pairs, rank shaping, Adam); `evo/tick_rankcorr.py`; perf queue |
 | `d82b843` | **buildings** (below) |
-| later | run-11 family scripts, Spark-only queue, w_coll 1.0 |
+| `5014920` | validation-set champion (`val_best_genome.npz`, seed 779000) |
+| `6219f90` | `evo/deploy/`: numpy rover runner + hardware-only launch |
+| `a8c9941` | `--w-rev` reverse penalty; forward/reverse travel metrics (`rev` columns) |
+| `51229de` | `--gate symmetric`; `evo/mirror_test.py`, `evo/gate_ablate.py` |
+| `f3dfee3` | `--trim-rand` track-speed randomization (`BatchedEnv.step` optional per-env trims) |
+| `1d0af62` | `evo/trim_eval.py` trim-robustness check |
+| `a7ff369` | `--gate doorway` prototype (`GATE_PRESETS`, `GateConfig.side_stop_distance`), `evo/gate_rescore.py` |
+
+All sim options default off and were verified bit-identical to the previous
+code at their defaults.
 
 ### Buildings (`pnn_sim/buildings.py`, `evo/worlds.py`)
 
@@ -267,20 +346,26 @@ time again — not adopted yet.
   appearing on holdouts; always read the coll column.
 - Every run states its pass/fail criteria in the script header before launch;
   verdicts go in the skill.
+- **Before any hardware run:** `evo.trim_eval` on the genome (collisions at
+  balanced tracks) and `evo.gate_rescore` on the legacy gate (the real monitor).
 
 ## Next actions, in priority order
 
-1. **Score run 16** (H16a–c) when `QUEUE16-COMPLETE` appears; record in the skill.
-2. **Track-trim randomization** (per-game left/right trims) — champions are
-   extremely trim-sensitive; needed before trusting sim-to-real transfer.
-3. If the symmetric gate removes the reverse habit cheaply: decide with the
-   user whether the **real** `lidar_safety_monitor` gets the same symmetric
-   rules (a safety-system change — user's call).
-4. More live rover runs (longer, full scale) once a forward-driving,
-   trim-robust champion exists.
-5. Cross rate saturates near 0.9: use rooms-visited (or rooms fraction) as the
-   primary metric for future plateau tests.
-6. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
+1. **Score run 18** (H18a/b) when `RUN-COMPLETE greenfield18d_s8` appears;
+   record in the skill.
+2. **Extend run 17** (trim-randomized, still climbing) — the best candidate for
+   hardware because it is collision-robust across track asymmetries.
+3. **Combine** what works: trim randomization + (if run 18 passes) the doorway
+   gate + forward penalty, then a longer run and two seeds.
+4. If the doorway gate helps, decide **with the user** whether the real
+   `lidar_safety_monitor` should get the same parameters (a safety-system change).
+5. **Measure the real rover's track asymmetry** (drive a straight command on
+   the floor, compare the gyro to the sim's prediction) and narrow the trim
+   randomization range around it.
+6. More live runs only with a trim-robust champion, longer and at full scale.
+7. Cross rate saturates near 0.9: prefer rooms-visited as the primary metric
+   for future plateau tests.
+8. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
    before any BC work.
 
 ## Operational gotchas
@@ -313,7 +398,9 @@ time again — not adopted yet.
 `baselines.py` (deep-eval gate), `fused_scan.py` (Triton raycast),
 `prof_tick.py` (stage profiler), `tick_rankcorr.py` (short-game proxy check),
 tests: `test_reproduce.py`, `test_policy.py`, `test_buildings.py`,
-`test_cells.py`; run scripts: `run9b.sh`, `run11_variant.sh`, `queue11.sh`
+`test_cells.py`; diagnostics: `trim_eval.py`, `gate_rescore.py`,
+`mirror_test.py`, `gate_ablate.py`; deploy: `deploy/evo_runner.py`,
+`deploy/evo_hw.launch.py`; run scripts: `run9b.sh`, `run11_variant.sh`, `queue11.sh`
 (plus historical `run6a.sh`…`run10_620.sh`); `bc_seed.py`,
 `explore_probe.py` (pre-fix diagnostics). World generator:
 `pnn_sim/buildings.py`.
