@@ -12,7 +12,7 @@ Sweep machine: DGX Spark `benson@172.0.0.201`, repo at `~/projects/ros2-rover`,
 is NOT a git clone — ship code with rsync, never `git pull` there.**
 Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
-## TL;DR (2026-09-17 13:25)
+## TL;DR (2026-09-18 01:30)
 
 1. **Runs 1–9 were void** — two bugs, both fixed and covered by tests:
    - *Reproduction:* children were built from the parent **index**, not the
@@ -38,32 +38,58 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 5. **Run 12 verdict:** obs v2 / action vw / hidden 64 are all neutral — the
    base genome stands, and a validation-set champion (`val_best_genome.npz`)
    replaced the noisy train-argmax pick.
-6. **Now:** run 13 tests whether the base config plateaus (120 gens, 32 houses
-   per genome). At gen 64 it is still climbing — the old 40-gen horizon was
-   stopping runs early.
+6. **Runs 13–14:** longer training took the champion to ~4 of 6 rooms on unseen
+   buildings (plateau test split at 240 gens).
+7. **Real rover:** the champion runs on hardware through the real safety
+   monitor (`evo/deploy/`); it explores mostly in **reverse**, as in the sim.
+8. **Now:** run 16 tests a symmetric safety gate in the sim; a reverse penalty
+   alone (run 15) failed.
 
 ## Live now (Spark only — V620 paused, too loud)
 
-**Run 13** (`evo/queue13.sh`, launched 2026-09-17 12:42): the base genome on
-buildings, but longer and with less noise — **120 gens, 32 houses per genome**
-(B = 16384, ~1.6× the tick cost). Seeds 8 then 9, ~70 min each,
-`--fused --compile --graph`. Marker `QUEUE13-COMPLETE` in
-`evo_runs/queue13.log`.
+**Run 16** (`evo/queue16.sh`, launched 2026-09-18 ~01:20): a **symmetric safety
+gate in the sim** (`--gate symmetric`) — every forward gate rule mirrored for
+reverse: rear corridor with reverse-arc prediction, the same 0.15 m stop, hold +
+hysteresis latch, and equalization over the rear flanks (90–150°). The real
+rover's gate is unchanged. Two fresh seed-8 arms, 120 gens, 32 houses/genome:
+`greenfield16s_s8` (no penalty) then `greenfield16sr_s8` (`--w-rev 0.3`),
+~75 min each. Marker `QUEUE16-COMPLETE` in `evo_runs/queue16.log`.
 
-**Pre-registered plateau test** (`evo/run13_variant.sh`), on
-`hob_elite_cross_rate`: A = mean of gens 75–89, B = mean of gens 105–119.
-- **PLATEAU** if B − A < 0.02 → the base recurrent MLP has converged and the
-  memory-genome branch is finally justified by evidence.
-- **CLIMBING** if B − A ≥ 0.05 → extend the run instead of changing the genome.
-- **AMBIGUOUS** in between → add seeds before any structural decision.
-Both seeds must agree. Collision and transfer guards as run 11/12.
+**Pre-registered** (`evo/run16_variant.sh`): H16a reverse fraction < 0.50 at
+gen 119 without penalty; H16b building-holdout cross rate ≥ 0.770 (0.9× run 13
+s8); H16c with `--w-rev 0.3`: cross ≥ 0.770 **and** reverse ≤ 0.30 (run 15f:
+0.487). Early note: at gen 0–1 the best random genomes already reverse
+(0.57–0.71) with no penalty.
 
-**Progress (seed 8, gen 64 of 120):** building-holdout elite cross rate 0.100
-(g0) → 0.354 (g20) → 0.507 (g40) → 0.616 (g60); validation champion 0.355
-(g35) → 0.494 (g60); train elite cross rate 0.766. It flattened near 0.507 at
-gens 40–50 — exactly where run 12 ended — then climbed again, so **the 40-gen
-horizon was cutting runs off early**. Watch: train elite collisions 3.59 vs the
-≤ 3 guard (the holdout champion stays near 0); judged at gen 119.
+## Runs 13–15 and the real rover (2026-09-17/18)
+
+- **Run 13** (base genome, 120 gens, 32 houses/genome): **CLIMBING** on both seeds
+  (late-window gain +0.053 s8 / +0.221 s9); cross rate 0.10 → 0.86 / 0.81.
+- **Run 14** (+120 gens warm-start): plateau test **split** (s8 +0.0195 PLATEAU,
+  s9 +0.0234 AMBIGUOUS) — cross rate saturates near 0.88–0.89. **Best genome:
+  `greenfield14_s9/val_best_genome.npz`** — 32 unseen level-3 buildings: fitness
+  0.767, 3.81/6 rooms, cross 0.875, 2.8 collisions; legacy 0.604 (scripted
+  0.26 / ~1.1 rooms).
+- **Real rover** (`evo/deploy/`, `6219f90`): numpy runner (4e-7 parity with the
+  sim policy) + hardware-only launch (motor driver, STL-19P lidar, **BNO085** IMU —
+  the LSM9DS1 is not fitted — and `lidar_safety_monitor` with parameters
+  identical to the sim gate). Dry run by default; `--drive` only after the user
+  confirms, HARDSTOP (:8090) open. Lessons: `/emergency_stop` = front block only
+  (never zero on it — run 1 got stuck); the **right wheel encoder reads 0 while
+  moving** → wheel proprio from the sim motor model. **Live run 2** (scale 0.6,
+  20 s): ~1.5 m, 75% reversing / 23% pivots — the sim policy's style — no front
+  blocks, gate intervened on 17% of ticks.
+- **Run 15** (`--w-rev 0.3` reverse penalty): **both arms FAIL** — fresh drives
+  forward but reaches only cross 0.487 (1.6 rooms); warm-from-14 keeps reversing
+  (0.98) and pays the penalty.
+- **Gate diagnostics** (`evo/mirror_test.py`, `evo/gate_ablate.py`): with track
+  trims swapped correctly, the reverse champion driven **forward** keeps 3.56 of
+  4.31 rooms — the legacy gate's front-heavy asymmetry is worth only ~15–20% to
+  reversing. No single forward rule matters alone; arc prediction helps. The
+  first mirror test's 862 collisions were a trim artifact, which also shows the
+  champions are **extremely trim-sensitive** — a sim-to-real risk.
+- Real gate geometry: side sectors cover only the front flanks (30–90°); the rear
+  cone starts at 150° with a 0.30 m stop; the rear flanks (90–150°) are unwatched.
 
 ## Run 12 family — verdicts (7 runs, done 2026-09-17 11:36)
 
@@ -244,23 +270,17 @@ time again — not adopted yet.
 
 ## Next actions, in priority order
 
-1. **Score run 13** when `QUEUE13-COMPLETE` appears: apply the plateau test on
-   both seeds, plus the collision and transfer guards. Record in the skill.
-2. **If CLIMBING:** extend (240 gens, or warm-start via `--seed-from`) before
-   any genome change — the cheapest remaining lever.
-3. **If PLATEAU:** build the **memory genome** (memory vector + read/write
-   heads in `evo/policy.py`, ES recipe untouched). This is the first honest
-   case for it; the earlier one came from bugged runs.
-4. **Collisions:** if the train elite stays above the ≤ 3 guard while the
-   holdout champion is clean, prefer capping per-game collision credit over
-   raising `w_coll` again (a heavier penalty also suppresses doorway attempts).
-5. **Cheaper reports:** the three side evals now run 32-house arenas (~55 s per
-   report gen, ~22 min per run). Drop them to 16 houses or report every 10
-   gens if run time binds.
-6. **Half-length early generations** (2700 ticks; rank correlation 0.93) as a
-   speed option, chained via `--seed-from`.
-7. `bc_seed.py`'s scripted expert still has a noise-like pivot direction
-   (`sign(sin(37·front))`) and a one-sided "front" sector (bins 0–7); fix
+1. **Score run 16** (H16a–c) when `QUEUE16-COMPLETE` appears; record in the skill.
+2. **Track-trim randomization** (per-game left/right trims) — champions are
+   extremely trim-sensitive; needed before trusting sim-to-real transfer.
+3. If the symmetric gate removes the reverse habit cheaply: decide with the
+   user whether the **real** `lidar_safety_monitor` gets the same symmetric
+   rules (a safety-system change — user's call).
+4. More live rover runs (longer, full scale) once a forward-driving,
+   trim-robust champion exists.
+5. Cross rate saturates near 0.9: use rooms-visited (or rooms fraction) as the
+   primary metric for future plateau tests.
+6. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
    before any BC work.
 
 ## Operational gotchas
