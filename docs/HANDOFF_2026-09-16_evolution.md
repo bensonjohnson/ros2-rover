@@ -65,6 +65,20 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
 ## Live runs on the real rover
 
+**Live run 8 (09-19 ~17:12 rover-clock / ~11:12 MDT, 90 s, scale 0.8) —
+`champ21f_idx103`, the sim's cleanest forward genome.** 97% forward ticks,
+0% reverse, 100% dist-weighted forward, 92% moving ticks, mean cmd
+[-0.36,+0.99] — same sweeping left-arc family as idx87. Front clearance
+min 0.38 m / median 0.84 m: never once inside the 0.30 m stop distance,
+zero contact. 21 ESTOPs in 90 s though (~4x idx87's latch rate at the same
+scale): idx103 persistently commands at 0.3-0.4 m walls and the monitor
+keeps refusing — a more wall-hungry style that the sim's collision metric
+scored as "cleaner" but the hardware gate experiences as friction. Verdict:
+idx87 vs idx103 effectively TIED as field pilots (both drive forward with
+zero contact; idx87 has the smoother gate profile, idx103 never gets as
+close to walls). The tiebreak is the doorway-crossing test, still pending
+a good physical setup.
+
 **Live runs 5–7 (09-18 ~18:46-18:52 MDT — note the rover's clock runs
 several hours fast; times here are MDT, field session, 60 s each):**
 
