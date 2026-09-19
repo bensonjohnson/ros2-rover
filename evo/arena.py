@@ -597,6 +597,15 @@ class Arena:
         # forward / reverse travel accumulators (static: graph-safe)
         self._fwd_m = torch.zeros(self.B, device=self.device)
         self._back_m = torch.zeros(self.B, device=self.device)
+        # orbit guard (run 23): spin ticks + start pose, for net-displacement
+        # and spin-fraction metrics. dist_m counts ARC LENGTH, which an
+        # in-place orbit earns freely (live runs 5-8: arc 23 m, net 3 m,
+        # real rover zero-turn circling). These pay for straight-line travel
+        # and price opposite-wheel pivots.
+        self._spin_t = torch.zeros(self.B, device=self.device)
+        self._x0 = torch.zeros(self.B, device=self.device)
+        self._y0 = torch.zeros(self.B, device=self.device)
+        self._range = torch.zeros(self.B, device=self.device)
         if self.building_mode:
             self._init_building_buffers(houses)
         self._reset_hooks = []      # e.g. zero the policy's hidden state
@@ -759,6 +768,8 @@ class Arena:
         e = self.env
         e.x.copy_(self._pose[:, 0]); e.y.copy_(self._pose[:, 1])
         e.theta.copy_(self._pose[:, 2])
+        self._x0.copy_(self._pose[:, 0]); self._y0.copy_(self._pose[:, 1])
+        self._spin_t.zero_(); self._range.zero_()
         e.v_left.zero_(); e.v_right.zero_(); e._prev_v.zero_()
         e.collided.zero_()
         e.wheel_l.zero_(); e.wheel_r.zero_(); e.yaw_rate.zero_()
@@ -867,6 +878,19 @@ class Arena:
             sd = (e.x - px) * torch.cos(pth) + (e.y - py) * torch.sin(pth)
             self._fwd_m += sd.clamp(min=0.0)
             self._back_m += (-sd).clamp(min=0.0)
+            # spin tick: gate passed a genuine pivot (opposite-sign wheels
+            # with meaningful magnitude on both). These rotate in place in
+            # the sim; on the real skid-steer they are worse than that —
+            # the loaded track stalls and the rover orbits the dead wheel.
+            self._spin_t += ((gated[:, 0] * gated[:, 1] < -0.01)
+                             & (gated.abs().min(dim=1).values > 0.15)
+                             ).to(gated.dtype)
+            # furthest distance ever reached from the start pose (graph-safe
+            # in-place max): pays for genuine translation, which an in-place
+            # orbit never earns no matter how much arc it accumulates.
+            torch.maximum(self._range,
+                          torch.hypot(e.x - self._x0, e.y - self._y0),
+                          out=self._range)
             coll += e.collided.to(torch.float32)
             if t % every_room_sample == 0:
                 if self.building_mode:
@@ -934,7 +958,14 @@ class Arena:
                "cells": torch.minimum(cov, self.cells_total),
                "cells_total": self.cells_total.clone(),
                "stops": self.gate.stops_dev.to(torch.float32).clone(),
-               "fwd_m": self._fwd_m.clone(), "back_m": self._back_m.clone()}
+               "fwd_m": self._fwd_m.clone(), "back_m": self._back_m.clone(),
+               "net_m": torch.hypot(self.env.x - self._x0,
+                                    self.env.y - self._y0),
+               "range_m": self._range.clone(),
+               "spin_t": self._spin_t.clone(),
+               # device-side clock (graph-safe; _t is frozen at capture)
+               "spin_frac": self._spin_t * self.dt \
+                   / self.gate._tick.clamp(min=self.dt)}
         if self.building_mode:
             out["door_crossings"] = self._dcross.clone()
             out["doors_used"] = self._dused.sum(dim=1).to(torch.float32)
@@ -995,7 +1026,8 @@ def rev_frac(metrics: dict) -> torch.Tensor:
 
 def fitness(metrics: dict, w_dist: float = 0.03,
             w_coll: float = 0.25, w_cov: float = 0.0,
-            w_rev: float = 0.0) -> torch.Tensor:
+            w_rev: float = 0.0, w_net: float = 0.0,
+            w_spin: float = 0.0) -> torch.Tensor:
     """Per-env scalar: fraction of reachable rooms visited (the honest
     target), distance as a small tiebreaker (stops are zero-effort rooms),
     collisions penalized (the gate is there; brute-forcing it shouldn't pay).
@@ -1012,7 +1044,17 @@ def fitness(metrics: dict, w_dist: float = 0.03,
     reverse. The runs 11-14 champions explore mostly BACKWARDS (sim mean
     command -0.72; real rover 75% reversing) because nothing priced
     direction; the real rover's bumper geometry and camera face forward.
-    Scale-free, so a short reverse to escape a front block costs little."""
+    Scale-free, so a short reverse to escape a front block costs little.
+
+    w_net > 0 (run 23) pays for genuine translation: max straight-line
+    distance ever reached from the start pose, /10 m. dist_m above counts
+    ARC LENGTH, which an in-place orbit earns for free — live runs 5-8
+    proved the sim's arc-hungry champions (arc 23 m, net 3 m) are zero-turn
+    orbiters on the real skid-steer, where a pivot loads and stalls the
+    downhill track. w_spin > 0 subtracts w_spin x the fraction of ticks
+    spent pivoting (opposite-sign gated wheels): honest turning is arcs,
+    pirouettes are chassis abuse on this rover. Both are 0 by default —
+    every historical run keeps its exact scores."""
     frac = metrics["rooms"] / metrics["rooms_total"].clamp(min=1.0)
     out = (frac
            + w_dist * metrics["dist_m"] / 10.0
@@ -1021,4 +1063,8 @@ def fitness(metrics: dict, w_dist: float = 0.03,
         out = out + w_cov * metrics["cells"] / metrics["cells_total"].clamp(min=1.0)
     if w_rev:
         out = out - w_rev * rev_frac(metrics)
+    if w_net:
+        out = out + w_net * metrics["range_m"] / 10.0
+    if w_spin:
+        out = out - w_spin * metrics["spin_frac"]
     return out

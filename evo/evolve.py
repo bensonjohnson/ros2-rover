@@ -47,6 +47,7 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              ticks: int, w_dist: float = 0.03,
              w_coll: float = 0.25,
              w_cov: float = 0.0, obs: str = "v1", w_rev: float = 0.0,
+             w_net: float = 0.0, w_spin: float = 0.0,
              action: str = "lr") -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
@@ -63,7 +64,8 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
 
     metrics = arena.run_games(policy_step, ticks)
     fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll,
-                  w_cov=w_cov, w_rev=w_rev).view(P, G_eff).mean(dim=1)
+                  w_cov=w_cov, w_rev=w_rev, w_net=w_net,
+                  w_spin=w_spin).view(P, G_eff).mean(dim=1)
     return fit, metrics
 
 
@@ -104,12 +106,15 @@ class GraphRunner:
 
     def run(self, thetas: torch.Tensor, ticks: int,
             w_dist: float, w_coll: float, w_cov: float = 0.0,
-            w_rev: float = 0.0):
+            w_rev: float = 0.0, w_net: float = 0.0,
+            w_spin: float = 0.0):
         self.theta_buf.copy_(thetas)
         metrics = self.arena.run_games(self._step, ticks, graph=True)
         fit = fitness(metrics, w_dist=w_dist,
                       w_coll=w_coll,
-                      w_cov=w_cov, w_rev=w_rev).view(self.P, self.G_eff) \
+                      w_cov=w_cov, w_rev=w_rev,
+                      w_net=w_net, w_spin=w_spin
+                      ).view(self.P, self.G_eff) \
             .mean(dim=1)
         return fit, metrics
 
@@ -371,6 +376,7 @@ def evolve(args):
                 return evaluate(a, th, hidden, args.ticks,
                                 w_dist=args.w_dist, w_coll=args.w_coll,
                                 w_cov=args.w_cov, w_rev=args.w_rev,
+                                w_net=args.w_net, w_spin=args.w_spin,
                                 obs=args.obs,
                                 action=args.action)
             return tr, ho, score
@@ -380,12 +386,14 @@ def evolve(args):
         def score(is_train, th):
             if is_train is True:
                 return rn.run(th, args.ticks, args.w_dist, args.w_coll,
-                              args.w_cov, args.w_rev)
+                              args.w_cov, args.w_rev,
+                              args.w_net, args.w_spin)
             return evaluate(hob if is_train == "hob" else
                             hval if is_train == "val" else ho, th, hidden,
                             args.ticks,
                             w_dist=args.w_dist, w_coll=args.w_coll,
                             w_cov=args.w_cov, w_rev=args.w_rev,
+                            w_net=args.w_net, w_spin=args.w_spin,
                             obs=args.obs,
                             action=args.action)
         return tr, ho, score
@@ -719,6 +727,15 @@ def main():
     ap.add_argument("--w-rev", type=float, default=0.0,
                     help="penalty x fraction of distance driven in reverse "
                     "(run 15; 0 = runs 1-14 fitness)")
+    ap.add_argument("--w-net", type=float, default=0.0,
+                    help="reward x furthest straight-line distance ever "
+                    "reached from start / 10 m (run 23). dist_m pays ARC "
+                    "LENGTH which in-place orbits earn free; this pays "
+                    "genuine translation. 0 = historical fitness")
+    ap.add_argument("--w-spin", type=float, default=0.0,
+                    help="penalty x fraction of ticks pivoting (opposite-"
+                    "sign gated wheels; run 23). The real skid-steer stalls "
+                    "the loaded track on pivots and orbits it. 0 = off")
     ap.add_argument("--w-cov", type=float, default=0.0,
                     help="cell-coverage novelty weight (run 5): pays for "
                     "distinct 0.8 m cells visited, saturating. 0 = off "
