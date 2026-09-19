@@ -54,6 +54,8 @@ def main():
     obs, action = read_meta(d)
     hidden = int(d["hidden"])
     thetas = torch.as_tensor(d["thetas"], device=args.device)
+    if thetas.ndim == 1:                    # single-genome npz (audit mode)
+        thetas = thetas.unsqueeze(0)
     P = int(thetas.shape[0])
     G = args.games
     worlds = build_pool(3, G, HOLDOUT_SEED)

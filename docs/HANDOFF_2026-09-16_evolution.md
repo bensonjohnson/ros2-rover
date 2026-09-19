@@ -562,21 +562,37 @@ code at their defaults.
   verdicts go in the skill.
 - **Before any hardware run:** `evo.trim_eval` on the genome (collisions at
   balanced tracks) and `evo.gate_rescore` on the legacy gate (the real monitor).
+- **Metric flaws found by the orbit audit (09-19), both now priced in
+  fitness (w_net/w_spin) or in audit tooling:**
+  1. `dist_m` counts ARC LENGTH — in-place zero-turn orbits earn it freely
+     (champ arc 23 m / net 3.3 m; real rover pirouetted, live runs 5–8).
+     Companion metric: `range_m` (max straight-line from start); audit tool
+     `evo.orbit_audit`.
+  2. Raw `door_crossings` counts are earned by PING-PONGING one doorway
+     (audit's top crosser idx107: 7.75 crossings but only 1.6 unique rooms
+     of 6.1 — `deploy_pick`'s crossing-rate rank metric is inflated the same
+     way; its own `wRooms` column was the tell). deploy_pick follow-up:
+     rank by rooms-weighted score, not crossing rate. Honest exploration
+     across the whole 21f lineage is rooms/game ~1.6 of 6.1 — the rooms
+     term was always the honest one; everything auxiliary is gameable.
 
 ## Next actions, in priority order
 
-1. **Extend run 17** (trim-randomized, still climbing) — the best candidate for
-   hardware because it is collision-robust across track asymmetries.
-2. **Combine** what works: trim randomization + forward penalty (the doorway
-   gate is dead — run 18 FAIL), then a longer run and two seeds.
-3. **Measure the real rover's track asymmetry** (drive a straight command on
-   the floor, compare the gyro to the sim's prediction) and narrow the trim
-   randomization range around it.
-4. More live runs only with a trim-robust champion, longer and at full scale.
-5. Cross rate saturates near 0.9: prefer rooms-visited as the primary metric
-   for future plateau tests.
-6. `bc_seed.py`'s scripted expert still has a noise-like pivot direction; fix
-   before any BC work.
+1. **Score run 23** (translation fitness w_net 0.15 + w_spin 0.3, launched
+   09-19 11:40, watcher active) against its pre-registered bar: PASS =
+   worst-trim cross >= 0.60 AND range >= 2.5 m AND spin <= 30% -> field
+   verify. FAIL -> build the memory genome (CAMEMBE read/write heads):
+   the reward-shaping road is exhausted (runs 21+23 = two consecutive
+   structural FAIL classes).
+2. **Field-verify whichever genome passes run 23** (parity + trim_eval +
+   dry run + 60-90 s @ 0.8) — plus the still-un-run doorway test with
+   idx87 (rover 1.5 m facing an open doorway, count room-to-room
+   transitions over 90 s).
+3. **Rover chassis TODO (user side):** opposite-sign wheel commands stall
+   the loaded track (drive_diag pivL/pivR: gyro 0.00, one track dead).
+   Wheels-off-ground check of JGB3865 direction behavior; the driver
+   ships an `encoder_polarity` param for exactly this symptom.
+4. deploy_pick: rank by rooms-weighted score (metric flaw #2 above).
 
 ## Operational gotchas
 
