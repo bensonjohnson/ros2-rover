@@ -121,6 +121,22 @@ co-inheritance of *forward* exploring could not occur — forward quality
 only comes from the w_rev lineage (15f). idx115 supersedes idx95 as the
 best reverse deploy candidate; forward remains champ15f_idx87.
 
+**Run 21 VERDICT (done 09-18 20:08): FAIL.** Best forward genome (rev
+<= 0.15) reached only 0.510 worst-trim cross (idx103) — pre-registered
+PASS needed >= 0.60, even the FAIL-line 0.56 wasn't reached. The ~0.5
+forward ceiling is therefore STRUCTURAL for the reactive scan->wheels
+policy class (matches explore_probe's scripted finding: no reactive
+personality ever crossed a door reliably). Halving w_rev 0.3->0.15 did
+buy honesty: 120/128 genomes pass the collision guard, winner worst-trim
+coll 0.6 / 0.0-0.6 across every trim x pose draw, rev 0.02 — the cleanest
+forward genome built so far (`champ21f_idx103`, committed). Plateau B-A
++0.049 = climbing but capped. DECISION per pre-registration: no more
+reward knobs; forward-semantic improvement requires a structural change
+(rear sensing channel / memory genome / blocked-direction memory), and
+champ15f_idx87 @ scale 0.8 stays the forward pilot meanwhile. Field-test
+idx103 vs idx87 at next rover session (expect equal cross rate, fewer
+ESTOPs).
+
 **Run 21 (launching):** `evo/run21_forward.sh` — forward-quality attempt:
 15f recipe (w_rev) + trim-rand 0.75 + **halved penalty w_rev 0.15**, fresh
 seed 8, 120 gens. Pre-registered: PASS if deploy_pick finds a genome with
