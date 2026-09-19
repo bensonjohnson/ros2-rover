@@ -135,6 +135,23 @@ co-inheritance of *forward* exploring could not occur — forward quality
 only comes from the w_rev lineage (15f). idx115 supersedes idx95 as the
 best reverse deploy candidate; forward remains champ15f_idx87.
 
+**Run 23 VERDICT (done 09-19 13:57): FAIL, decisively — reward shaping is
+exhausted.** w_net 0.15 + w_spin 0.3 killed the exploit class (arc/net
+7.4->3.7 median, orbiters 48%->21%, spin-free genomes rev 0.00) but the
+honest signal is flat: best honest genome (deploy pick idx6) worst-trim
+cross 0.385 — below run 21's unshaped 0.510. The translation terms
+traded arc gaming for caution: population dist collapsed (23m->11m),
+cross-rate with it. Honest-explorer idx96 (net 2.79 m) and runner-up
+idx72 both FAIL the multi-draw collision guard (523 / 28.8 coll at
+1.0/0.8 trim — the trim sensitivity the 21f lineage always had is
+unmasked once caution is priced). Population rooms/game 1.27 of 6.1:
+no fitness knob on this reactive architecture explores buildings. Per
+pre-registration: the memory genome (CAMEMBE-style: explicit
+read/write over an internal state, trained end-to-end to remember
+which directions led to blocks) is the next build, not another run.
+Deploy bench unchanged: champ15f_idx87 @ 0.8 (honest ceiling ~0.5
+cross, arc-sweeper, field-proven).
+
 **Run 21 VERDICT (done 09-18 20:08): FAIL.** Best forward genome (rev
 <= 0.15) reached only 0.510 worst-trim cross (idx103) — pre-registered
 PASS needed >= 0.60, even the FAIL-line 0.56 wasn't reached. The ~0.5
