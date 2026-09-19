@@ -403,7 +403,7 @@ def evolve(args):
                             w_dist=args.w_dist, w_coll=args.w_coll,
                             w_cov=args.w_cov, w_rev=args.w_rev,
                             w_net=args.w_net, w_spin=args.w_spin,
-                            obs=args.obs,
+                            obs=args.obs, mem=mem,
                             action=args.action)
         return tr, ho, score
 
