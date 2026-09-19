@@ -63,7 +63,45 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
     gens; 19t = fresh seed-9 twin; both end with deep-evals + trim_eval +
     deploy_pick. Deploy candidate = best worst-trim genome from either.
 
-## Live now (Spark only — V620 paused, too loud)
+## Live runs on the real rover
+
+**Live run 4 (09-19 ~00:34) — `champ15f_idx87`, scale 0.6, 30 s — the
+forward run.** Telemetry: 98% of ticks forward-commanded, 100% of
+distance-weighted forward, 0% reverse (vs idx95's live run 3: 0% forward,
+100% reverse). Mean cmd [-0.36,+0.95] = forward with a strong left-arc bias
+(gyroscope yaw +1.0 to +1.3 rad/s — pirouetting forward). Lidar live, front
+reads 0.4-1.3 m, one ESTOP front-block at t=28 s (monitor clamped forward,
+exactly as designed), resumed next tick. Genome: mined from 15f population
+(deploy_pick multi-draw): worst-trim cross 0.510, 0-3 collisions at every
+trim x pose draw, rev 0.01, buildings deep-eval fit 0.402 rooms 1.62 coll
+0.0. **Field tradeoff to remember: forward explorer = ~0.50 cross vs the
+reverse explorer's 0.81.** No room-crossing observed in this short 30 s
+run; next field test should place a doorway in view and run longer.
+
+**Live run 3 (09-19 ~00:10) — `champ19e_idx95`:** behaved exactly as
+evolved: 91% reverse ticks, 44% pivots, gate held it safe (user: "spun and
+drove backwards"). Confirms sim->real behavior transfer; reverse is the
+fitness-selected gait (front-watched gate + legal-blind reverse), not a bug.
+
+## Live now: nothing (Spark idle since 09-18 18:33)
+
+**Run 20m VERDICT (done 09-18 18:32): M-PARTIAL.** Plateau test B-A =
+-0.034 (falling, warm pool already near basin top). Deploy pick (guard
+23/128): idx115 = worst-trim cross 0.833 / coll 11.5 — beats both parent
+picks (19e 0.823/11.9, 19t 0.667/5.7) on the cross axis with no collision
+regression => M-PARTIAL holds; best reverse genome to date. But the merged
+pool contained no forward genome (both parents were rev ~0.98 lineages), so
+co-inheritance of *forward* exploring could not occur — forward quality
+only comes from the w_rev lineage (15f). idx115 supersedes idx95 as the
+best reverse deploy candidate; forward remains champ15f_idx87.
+
+**Run 21 (launching):** `evo/run21_forward.sh` — forward-quality attempt:
+15f recipe (w_rev) + trim-rand 0.75 + **halved penalty w_rev 0.15**, fresh
+seed 8, 120 gens. Pre-registered: PASS if deploy_pick finds a genome with
+worst-trim cross >= 0.60 AND rev <= 0.15 AND worst coll <= 15 (current
+forward ceiling 0.510); FAIL if best forward genome stays < 0.56 cross
+=> forward ceiling ~0.5 is structural for this policy class, accept
+idx87 or reconsider rear sensing.
 
 **Run 20m — merged-pool experiment** (`evo/run20_merged.sh`,
 `greenfield20m_s10`, launched 09-18 16:57, ~2.2 h, watcher
