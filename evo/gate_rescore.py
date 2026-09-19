@@ -29,7 +29,7 @@ def main():
           f"{'coll':>6} {'rev':>4} {'fstops':>6}")
     for path in args.genomes:
         d = np.load(path)
-        obs, action = read_meta(d)
+        obs, action, mem = read_meta(d)
         H = int(d["hidden"])
         th = torch.as_tensor(d["thetas"], device=args.device).view(1, -1)
         for gname in args.gates.split(","):
@@ -37,8 +37,10 @@ def main():
                        fused=fused, worlds=worlds, gate_obs=obs == "v2",
                        gate_cfg=gate_config(gname),
                        gate_symmetric=gname == "symmetric")
-            net = PopulationNet(th, OBS_DIM, H, obs=obs, action=action)
+            net = PopulationNet(th, OBS_DIM, H, obs=obs, action=action,
+                                mem=mem)
             net.bind(1, args.games)
+            net.reset_memory()
             st = {"h": torch.zeros(1, args.games, H, device=args.device)}
 
             def step(o, prev):

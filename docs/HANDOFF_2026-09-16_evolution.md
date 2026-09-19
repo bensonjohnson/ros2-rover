@@ -135,6 +135,19 @@ co-inheritance of *forward* exploring could not occur — forward quality
 only comes from the w_rev lineage (15f). idx115 supersedes idx95 as the
 best reverse deploy candidate; forward remains champ15f_idx87.
 
+**Run 24 VERDICT (done 09-19 15:52): FAIL — reactive class CLOSED per
+pre-registration.** v2 blocked-flag inputs improved the right things
+(winner worst-coll 1.2 — cleanest deploy genome ever; plateau still
+climbing +0.058) but the cross ceiling did NOT move (0.458 vs 0.60 PASS
+bar, below 0.56 FAIL-line; rooms/game 1.53). Three consecutive
+structural FAILs — 21 (ceiling), 23 (shaping), 24 (inputs) — so the
+reactive scan->wheels class is done at rooms/game ~1.6. Note v2's
+collision benefit is real: keep obs v2 for the memory-genome runs.
+Winner idx14 arc/net 12.7 (no w_spin in this run — the orbit class
+returns whenever unpriced; hardware pivot-stall lesson makes w_spin
+mandatory going forward). NEXT (pre-registered): memory genome build,
+design doc docs/MEMORY_GENOME.md.
+
 **Run 23 VERDICT (done 09-19 13:57): FAIL, decisively — reward shaping is
 exhausted.** w_net 0.15 + w_spin 0.3 killed the exploit class (arc/net
 7.4->3.7 median, orbiters 48%->21%, spin-free genomes rev 0.00) but the

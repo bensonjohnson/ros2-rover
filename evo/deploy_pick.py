@@ -51,7 +51,7 @@ def main():
     args = ap.parse_args()
 
     d = np.load(args.population)
-    obs, action = read_meta(d)
+    obs, action, mem = read_meta(d)
     hidden = int(d["hidden"])
     thetas = torch.as_tensor(d["thetas"], device=args.device)
     if thetas.ndim == 1:                    # single-genome npz (audit mode)
@@ -66,8 +66,14 @@ def main():
     arena = Arena(P, G, seed=777_000, device=args.device, fp16=fused,
                   fused=fused, gate_obs=obs == "v2", worlds=worlds,
                   trim_rand=True)
-    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action,
+                        mem=mem)
     net.bind(P, G)
+    if mem:
+        # one net serves every trim/draw on this arena: memory is game
+        # state, zero it on every reset or draw k starts with draw k-1's
+        # (or trim k-1's) baggage
+        arena._reset_hooks.append(net.reset_memory)
 
     per_trim = []
     for lt, rt in TRIMS:

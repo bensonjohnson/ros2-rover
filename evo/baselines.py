@@ -89,7 +89,7 @@ def run_named(fn, arena: Arena, ticks: int) -> dict:
 
 def run_genome(path: str, arena: Arena, ticks: int) -> dict:
     d = np.load(path)
-    obs, action = read_meta(d)
+    obs, action, mem = read_meta(d)
     assert arena.gate_obs == (obs == "v2"), \
         f"{path}: obs {obs} needs Arena(gate_obs={obs == 'v2'})"
     thetas = torch.as_tensor(d["thetas"], device=arena.device)
@@ -99,8 +99,10 @@ def run_genome(path: str, arena: Arena, ticks: int) -> dict:
     P = thetas.shape[0]
     G = arena.B // P
     assert arena.B % P == 0
-    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action,
+                        mem=mem)
     net.bind(P, G)
+    net.reset_memory()
     state = {"h": torch.zeros(P, G, hidden, device=arena.device)}
 
     def step(obs, prev):

@@ -57,7 +57,8 @@ def main():
             if sigma is not None:
                 sigmas.append(sigma[j])
             origin.append(os.path.basename(os.path.dirname(pop_path)))
-        m = {k: str(d[k]) for k in ("hidden", "obs_mode", "action_mode")
+        m = {k: str(d[k]) for k in ("hidden", "obs_mode", "action_mode",
+                                    "mem_slots")
              if k in d.files}
         if meta is None:
             meta = m
@@ -70,6 +71,7 @@ def main():
     out = {"thetas": th, "hidden": int(meta["hidden"]),
            "obs_mode": meta.get("obs_mode", "v1"),
            "action_mode": meta.get("action_mode", "lr"),
+           "mem_slots": int(meta.get("mem_slots", 0)),
            "merged_from": "+".join(sorted(set(origin)))}
     if sigmas:
         out["sigma"] = np.asarray(sigmas, dtype=np.float32)

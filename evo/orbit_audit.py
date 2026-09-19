@@ -31,15 +31,17 @@ from .policy import PopulationNet, read_meta
 
 def _run(path: str, arena: Arena, ticks: int) -> dict:
     d = np.load(path)
-    obs, action = read_meta(d)
+    obs, action, mem = read_meta(d)
     thetas = torch.as_tensor(d["thetas"], device=arena.device)
     if thetas.ndim == 1:
         thetas = thetas.unsqueeze(0)
     hidden = int(d["hidden"])
     P = thetas.shape[0]
     G = arena.B // P
-    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action,
+                        mem=mem)
     net.bind(P, G)
+    net.reset_memory()
     state = {"h": torch.zeros(P, G, hidden, device=arena.device)}
 
     env = arena.env
@@ -95,7 +97,7 @@ def main():
     if not which:
         raise SystemExit("give --genome or --population")
     d = np.load(which)
-    obs, _ = read_meta(d)
+    obs, _, _ = read_meta(d)
     P = 1 if d["thetas"].ndim == 1 else d["thetas"].shape[0]
     arena = Arena(P, args.games, seed=args.holdout_seed, device=args.device,
                   fp16=args.fp16, gate_obs=(obs == "v2"), worlds=hw)

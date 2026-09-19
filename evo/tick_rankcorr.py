@@ -41,7 +41,7 @@ def main():
     ap.add_argument("--w-cov", type=float, default=0.3)
     args = ap.parse_args()
     d = np.load(args.population)
-    obs, action = read_meta(d)
+    obs, action, mem = read_meta(d)
     th = torch.as_tensor(d["thetas"], device=args.device)
     P, H = th.shape[0], int(d["hidden"])
     ar = Arena(P, args.games, seed=args.train_seed, device=args.device,

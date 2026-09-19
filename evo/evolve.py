@@ -48,12 +48,13 @@ def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
              w_coll: float = 0.25,
              w_cov: float = 0.0, obs: str = "v1", w_rev: float = 0.0,
              w_net: float = 0.0, w_spin: float = 0.0,
-             action: str = "lr") -> tuple[torch.Tensor, dict]:
+             action: str = "lr", mem: int = 0) -> tuple[torch.Tensor, dict]:
     """Run every individual in every house; returns per-individual fitness
     (mu) and the raw per-env metrics for the best individual."""
     P = arena.P
     G_eff = arena.G * arena.G_sets
-    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action)
+    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action,
+                        mem=mem)
     net.bind(P, G_eff)
     state = {"h": torch.zeros(P, G_eff, hidden, device=thetas.device)}
 
@@ -78,17 +79,22 @@ class GraphRunner:
     graph), which is the only way a parameter-changing graph is legal."""
 
     def __init__(self, arena: Arena, P: int, hidden: int, obs: str = "v1",
-                 action: str = "lr"):
+                 action: str = "lr", mem: int = 0):
         from .policy import genome_size
         self.arena, self.P, self.hidden = arena, P, hidden
         self.G_eff = arena.G * arena.G_sets      # envs per individual
-        N = genome_size(OBS_DIM, hidden)
+        N = genome_size(OBS_DIM, hidden, mem)
         self.theta_buf = torch.zeros(P, N, device=arena.device)
         self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden, obs=obs,
-                                 action=action)
+                                 action=action, mem=mem)
         self.net.bind(P, self.G_eff)
         self.h = torch.zeros(P, self.G_eff, hidden, device=arena.device)
         arena._reset_hooks.append(self.h.zero_)
+        if mem:
+            # memory is game state too: zero it on every reset or the
+            # next game starts with the last one's baggage (and the
+            # graph capture would bake that in).
+            arena._reset_hooks.append(self.net.reset_memory)
         # NOTE: env randomness goes through the DEFAULT CUDA generator
         # (see _DefaultRNGMixin) — natively graph-safe; on replay each game
         # sees the same captured noise stream, which is what we want
@@ -123,7 +129,7 @@ def reproduce(thetas: torch.Tensor, sigma: torch.Tensor, fit_np: np.ndarray,
               order: np.ndarray, scale: torch.Tensor,
               rng: np.random.Generator, *, n_elite: int, n_immigrant: int,
               tau: float, sigma_max: float, sigma0: float, hidden: int,
-              legacy: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+              legacy: bool = False, mem: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
     """Next population, laid out [survivors | children | immigrants].
 
     Survivors = top n_elite untouched. Each child copies ONE tournament
@@ -159,7 +165,8 @@ def reproduce(thetas: torch.Tensor, sigma: torch.Tensor, fit_np: np.ndarray,
         * torch.randn(n_child, N, device=dev)
 
     immigrants = torch.as_tensor(
-        sample_population(n_immigrant, OBS_DIM, hidden, rng), device=dev)
+        sample_population(n_immigrant, OBS_DIM, hidden, rng, mem=mem),
+        device=dev)
     sig_imm = torch.full((n_immigrant, 1), sigma0, device=dev)
     return (torch.cat([thetas[survivors], child, immigrants], dim=0),
             torch.cat([sigma[survivors], s_child, sig_imm], dim=0))
@@ -226,13 +233,14 @@ class OES:
 def evolve(args):
     dev = args.device
     hidden, P, G = args.hidden, args.pop, args.games
-    N = genome_size(OBS_DIM, hidden)
-    scale = torch.as_tensor(per_gene_scale(OBS_DIM, hidden), device=dev)
-    meta = genome_meta(args.obs, args.action)
+    mem = int(getattr(args, "mem", 0) or 0)
+    N = genome_size(OBS_DIM, hidden, mem)
+    scale = torch.as_tensor(per_gene_scale(OBS_DIM, hidden, mem), device=dev)
+    meta = genome_meta(args.obs, args.action, mem)
 
     rng = np.random.default_rng(args.seed)
     thetas = torch.as_tensor(
-        sample_population(P, OBS_DIM, hidden, rng), device=dev)
+        sample_population(P, OBS_DIM, hidden, rng, mem=mem), device=dev)
     sigma = torch.full((P, 1), args.sigma0, device=dev)
     if args.legacy_mutation:
         tau, sigma_max = 0.4, 1.0
@@ -249,8 +257,8 @@ def evolve(args):
         d = np.load(args.seed_from)
         assert int(d["hidden"]) == hidden, \
             f"--hidden {hidden} != file hidden {int(d['hidden'])}"
-        assert read_meta(d) == (args.obs, args.action), \
-            f"--seed-from genome modes {read_meta(d)} != run modes"
+        assert read_meta(d) == (args.obs, args.action, mem), \
+            f"--seed-from genome modes {read_meta(d)} != run modes {(args.obs, args.action, mem)}"
         seed_th = torch.as_tensor(d["thetas"], device=dev)
         if seed_th.ndim == 1:
             seed_th = seed_th.unsqueeze(0)
@@ -279,8 +287,8 @@ def evolve(args):
         d = np.load(args.bc_from)
         assert int(d["hidden"]) == hidden, \
             f"--hidden {hidden} != bc file hidden {int(d['hidden'])}"
-        assert read_meta(d) == (args.obs, args.action), \
-            f"--bc-from genome modes {read_meta(d)} != run modes"
+        assert read_meta(d) == (args.obs, args.action, mem), \
+            f"--bc-from genome modes {read_meta(d)} != run modes {(args.obs, args.action, mem)}"
         assert int(d.get("train_seed", args.train_seed)) == args.train_seed, \
             "bc file distilled on a different train seed — match --train-seed"
         bc = torch.as_tensor(d["thetas"], device=dev)
@@ -377,11 +385,12 @@ def evolve(args):
                                 w_dist=args.w_dist, w_coll=args.w_coll,
                                 w_cov=args.w_cov, w_rev=args.w_rev,
                                 w_net=args.w_net, w_spin=args.w_spin,
-                                obs=args.obs,
+                                obs=args.obs, mem=mem,
                                 action=args.action)
             return tr, ho, score
 
-        rn = GraphRunner(tr, P, hidden, obs=args.obs, action=args.action)
+        rn = GraphRunner(tr, P, hidden, obs=args.obs, action=args.action,
+                         mem=mem)
 
         def score(is_train, th):
             if is_train is True:
@@ -663,7 +672,7 @@ def evolve(args):
             thetas, sigma, fit_np, order, scale, rng,
             n_elite=n_elite, n_immigrant=n_immigrant, tau=tau,
             sigma_max=sigma_max, sigma0=args.sigma0, hidden=hidden,
-            legacy=args.legacy_mutation)
+            legacy=args.legacy_mutation, mem=mem)
 
     if oes is not None:
         np.savez(os.path.join(args.out_dir, "oes_center.npz"),
@@ -685,6 +694,12 @@ def main():
     ap.add_argument("--games", type=int, default=32,
                     help="houses per individual (paired across pop)")
     ap.add_argument("--hidden", type=int, default=64)
+    ap.add_argument("--mem", type=int, default=0,
+                    help="> 0: explicit memory slots per env (run 25): "
+                    "[Wg,bg,Wv,bv,Wm,Wom] appended to the flat genome, "
+                    "learned write gate init CLOSED (bg mean -3). Genomes "
+                    "without a mem_slots npz field are mem=0 (byte-identical "
+                    "legacy packing). See docs/MEMORY_GENOME.md")
     ap.add_argument("--ticks", type=int, default=3600,
                     help="sim ticks per game (3600 = 4 sim-min)")
     ap.add_argument("--gens", type=int, default=40)

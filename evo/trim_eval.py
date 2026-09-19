@@ -33,7 +33,7 @@ def main():
                     "can hide or fake a collision-brute-forcing behaviour")
     args = ap.parse_args()
     d = np.load(args.genome)
-    obs, action = read_meta(d)
+    obs, action, mem = read_meta(d)
     H = int(d["hidden"])
     th = torch.as_tensor(d["thetas"], device=args.device).view(1, -1)
     worlds = build_pool(3, args.games, HOLDOUT_SEED)
@@ -45,8 +45,9 @@ def main():
                    gate_obs=obs == "v2",
                    gate_symmetric=args.gate == "symmetric")
         ar.set_trims([lt] * args.games, [rt] * args.games)
-        net = PopulationNet(th, OBS_DIM, H, obs=obs, action=action)
+        net = PopulationNet(th, OBS_DIM, H, obs=obs, action=action, mem=mem)
         net.bind(1, args.games)
+        net.reset_memory()
         st = {"h": torch.zeros(1, args.games, H, device=args.device)}
 
         def step(o, prev):
