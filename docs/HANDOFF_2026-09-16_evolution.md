@@ -65,6 +65,32 @@ Companion skill with the running log of verdicts: `ros2-rover-revival`.
 
 ## Live runs on the real rover
 
+**Live runs 5–7 (09-18 ~18:46-18:52 MDT — note the rover's clock runs
+several hours fast; times here are MDT, field session, 60 s each):**
+
+| run | genome | scale | fwd/rev/pivot ticks | dist-wtd | still | ESTOPs | front min |
+|---|---|---|---|---|---|---|---|
+| 5 | champ15f_idx87 | 0.6 | 95 / 0 / 5 | 100% fwd | ~4% | 11 | 0.28 m |
+| 6 | champ20m_idx115 | 0.6 | 0 / 43 / 61 | 100% rev | **56%** | 8 | 0.08 m |
+| 7 | champ15f_idx87 | **0.8** | 90 / 0 / 10 | 100% fwd | **~4%** | **3** | 0.30 m |
+
+- **FINDING: pivot-heavy genomes degrade on real hardware.** idx115
+  (sim: best reverse, 0.833 cross) spent 56% of the 60 s physically still —
+  its in-place pivots barely rotate on the real skid-steer (weak torque /
+  friction vs the sim's instant yaw), and wall-facing pivots latch the
+  monitor. Its sim score does not transfer. Sweeping-arc genomes (idx87)
+  transfer cleanly.
+- **Action scale 0.8 > 0.6 for idx87:** decisive arcs escape cul-de-sacs;
+  fewer gate latches (3 vs 11) and more distance. Future forward runs at
+  0.8.
+- All three runs: zero observed contact, all ESTOPs self-recovered, safety
+  chain (monitor + driver clamp) behaved identically to the sim's gate
+  semantics.
+- Deploy state: **champ15f_idx87 @ scale 0.8 = current best forward pilot.**
+  idx115/idx95 (reverse, high-pivot) NOT field-recommended despite sim
+  scores. Next decisive test needs a physical setup: rover ~1.5 m facing a
+  doorway, 90 s run — count door crossings (rooms >= 2 events).
+
 **Live run 4 (09-19 ~00:34) — `champ15f_idx87`, scale 0.6, 30 s — the
 forward run.** Telemetry: 98% of ticks forward-commanded, 100% of
 distance-weighted forward, 0% reverse (vs idx95's live run 3: 0% forward,
