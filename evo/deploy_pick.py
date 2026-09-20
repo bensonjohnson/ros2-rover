@@ -152,7 +152,7 @@ def main():
         top = ranked[0]
         np.savez(os.path.join(out_dir, "deploy_genome.npz"),
                  thetas=thetas[top].cpu().numpy(), hidden=hidden,
-                 obs_mode=obs, action_mode=action,
+                 obs_mode=obs, action_mode=action, mem_slots=mem,
                  worst_cross=float(worst_cross[top]),
                  worst_coll=float(worst_coll[top]),
                  nominal_fit=float(fitn[top]),
