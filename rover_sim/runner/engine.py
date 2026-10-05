@@ -40,6 +40,7 @@ from rover_sim.core.gate import GateConfig
 from rover_sim.core.batched import batched_preprocess
 from rover_sim.core.fast import Fp32Env, Fp16Env, NoSyncGate
 from rover_sim.core.buildings import _PaddedWorld, world_caps, cell_ceiling
+from rover_sim.core.render import CameraConfig, CameraRenderer
 
 from .obs import (NUM_BINS, MAX_RANGE, _proprio,
                   DEFAULT_OBS_SPEC, ObsSpec, channel_views)
@@ -64,7 +65,8 @@ class RolloutEngine:
                  compile: bool = False, gate_obs: bool = False,
                  worlds: list | None = None, caps: tuple | None = None,
                  gate_symmetric: bool = False, trim_rand: bool = False,
-                 extent: float = 16.0, every_door: int = 6):
+                 extent: float = 16.0, every_door: int = 6,
+                 camera: CameraConfig | None = None):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -83,7 +85,12 @@ class RolloutEngine:
         houses by copy_ into fixed-capacity buffers (caps = (segments,
         rects, doors)) — legal between CUDA-graph replays, so the train
         set can be resampled every generation without recapture. Legacy
-        mode (worlds=None) is byte-for-byte the runs 1-9 arena."""
+        mode (worlds=None) is byte-for-byte the runs 1-9 arena.
+        camera=CameraConfig() opts into the stage-4b egocentric camera
+        channel: a static [B, H, W, C] uint8 buffer rendered every tick and
+        presented only to policies whose ObsSpec requests it. None (default)
+        leaves every legacy path — buffers, numerics, channel_views keys —
+        byte-identical."""
         self.cells_on = bool(cells)
         self.every_cover = int(every_cover)
         self.P, self.G = P, G
@@ -265,6 +272,18 @@ class RolloutEngine:
         self._range = torch.zeros(self.B, device=self.device)
         if self.building_mode:
             self._init_building_buffers(houses)
+        # Stage-4b opt-in camera channel: allocate the [B, H, W, C] uint8
+        # frame buffer and the graph-safe renderer HERE (bind/init time,
+        # never mid-tick). camera=None (default) keeps every legacy path
+        # byte-identical: no buffer, no render, no channel.
+        self.camera = camera
+        self._cam_renderer = None
+        self._camera_buf = None
+        if camera is not None:
+            self._camera_buf = torch.zeros(
+                self.B, camera.height, camera.width, camera.channels,
+                dtype=torch.uint8, device=self.device)
+            self._cam_renderer = CameraRenderer(camera, self.B, self.device)
         self._reset_hooks = []      # e.g. zero the policy's hidden state
         self._rec = None            # set to dict to record (obs, cmd) streams
 
@@ -518,6 +537,11 @@ class RolloutEngine:
                                   self.gate._rear_blocked[:, None].float(),
                                   prop[:, 4:]], dim=1)
             obs = torch.cat([scan72, prop, prev_act], dim=1)
+            if self._cam_renderer is not None:
+                # Stage-4b camera: pure tensor ops into the static uint8
+                # buffer (graph-legal); default-off branch, so legacy
+                # numerics never change.
+                self._cam_renderer.render(e, self._camera_buf)
 
             cmd = policy_step(obs, prev_act).clamp(-1.0, 1.0)
             if self._rec is not None:
@@ -691,13 +715,22 @@ class RolloutEngine:
         if isinstance(spec, ObsSpec) and spec.proprio_version == "v2" \
                 and not self.gate_obs:
             raise ValueError("policy obs spec v2 needs engine gate_obs=True")
+        if isinstance(spec, ObsSpec) and spec.camera \
+                and self._cam_renderer is None:
+            raise ValueError(
+                "policy obs spec requests the camera channel but this engine "
+                "has no camera: build it with RolloutEngine(..., "
+                "camera=CameraConfig())")
         if callable(getattr(policy, "bind", None)):
             policy.bind(self.P, self.G)
         if callable(getattr(policy, "reset", None)):
             self.add_reset_hook(policy.reset)
 
+        camera_buf = self._camera_buf       # None when camera disabled
+
         def policy_step(obs_flat, prev_act):
-            return policy.step(channel_views(obs_flat, spec), prev_act)
+            return policy.step(
+                channel_views(obs_flat, spec, camera=camera_buf), prev_act)
 
         return self.run_games(policy_step, ticks,
                               every_room_sample=every_room_sample, graph=graph,

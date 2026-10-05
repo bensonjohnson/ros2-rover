@@ -10,10 +10,12 @@ from .engine import Arena, CONTROL_HZ, RolloutEngine
 from .obs import (DEFAULT_OBS_SPEC, MAX_RANGE, N_LAST_ACT, N_PROPRIO,
                   NUM_BINS, OBS_DIM, ObsSpec, channel_views, flat)
 from .policy import FunctionPolicy, Policy, check_graph_safe
+from ..core.render import CameraConfig, CameraRenderer, render_np
 
 __all__ = [
     "RolloutEngine", "Arena", "ObsSpec", "DEFAULT_OBS_SPEC",
     "channel_views", "flat", "Policy", "FunctionPolicy",
     "check_graph_safe", "OBS_DIM", "NUM_BINS", "MAX_RANGE", "N_PROPRIO",
     "N_LAST_ACT", "CONTROL_HZ",
+    "CameraConfig", "CameraRenderer", "render_np",
 ]
