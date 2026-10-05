@@ -95,16 +95,20 @@ def _legacy_pick(thetas, worlds, games, ticks, reset_draws):
             "worst_rooms": worst_rooms, "nominal_fit": fitn, "ranked": ranked}
 
 
-def _legacy_envelope(thetas, worlds, games, ticks):
-    """Literal transcription of evo/trim_eval.main()'s computation."""
+def _legacy_envelope(thetas, worlds, games, ticks, mem=0):
+    """Literal transcription of evo/trim_eval.main()'s computation.
+
+    The script constructs a NEW net per trim and calls reset_memory() each
+    time; the transcription keeps one net but mirrors the per-trim reset.
+    """
     arena = LegacyArena(1, games, seed=1, device="cpu", fp16=False, fused=False,
                         worlds=worlds, trim_rand=True, gate_obs=False)
-    net = LegacyNet(thetas, OBS_DIM, H)
+    net = LegacyNet(thetas, OBS_DIM, H, mem=mem)
     net.bind(1, games)
-    net.reset_memory()
     rows = []
     for lt, rt in bench.TRIMS:
         arena.set_trims([lt] * games, [rt] * games)
+        net.reset_memory()
         state = {"h": torch.zeros(1, games, H)}
 
         def step(o, prev, _s=state):
@@ -172,8 +176,19 @@ def b2_trim_envelope():
     nom = ref[0][1]
     ratio = min(r[1] for r in ref) / max(nom, 1e-6)
     assert abs(got.ratio - ratio) < 1e-12, (got.ratio, ratio)
+    # mem>0: per-trim memory reset must match the script (fresh net per trim)
+    thm = torch.as_tensor(sample_population(
+        1, OBS_DIM, H, np.random.default_rng(SEED + 1), mem=4))
+    gotm = bench.trim_envelope(thm, hidden=H, suite="holdout", worlds=WORLDS,
+                               games=G, ticks=TICKS, mem=4, final=True)
+    refm = _legacy_envelope(thm, WORLDS, G, TICKS, mem=4)
+    for row, r in zip(gotm.rows, refm):
+        assert np.allclose([row["fit"], row["rooms"], row["cross"],
+                            row["coll"], row["rev"]], r, rtol=0, atol=0), \
+            (row, r)
     print(f"B2 ok: trim envelope == evo/trim_eval transcription "
-          f"(T={len(got.rows)} rows bit-equal; ratio={got.ratio:.4f})")
+          f"(T={len(got.rows)} rows bit-equal; ratio={got.ratio:.4f}; "
+          f"mem=4 per-trim-reset bit-equal)")
 
 
 # -------------------------------------------------------------------- B3

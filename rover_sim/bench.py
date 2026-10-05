@@ -475,10 +475,12 @@ def trim_envelope(genome, *, suite="holdout", hidden=None, obs="v1", action="lr"
     net = PopulationNet(sp.thetas.to(device), OBS_DIM, sp.hidden, obs=sp.obs,
                         action=sp.action, mem=sp.mem)
     net.bind(1, games)
-    net.reset_memory()
     rows = []
     for lt, rt in trims:
         arena.set_trims([lt] * games, [rt] * games)
+        # legacy tool builds a fresh net per trim (and zeroes memory): hidden
+        # clock / memory state must not leak across trims (mem>0 genomes)
+        net.reset_memory()
         state = {"h": torch.zeros(1, games, sp.hidden, device=device)}
 
         def step(o, prev, _s=state):
