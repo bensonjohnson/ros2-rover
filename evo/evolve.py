@@ -42,7 +42,9 @@ from .arena import Arena, OBS_DIM, fitness, gate_config, rev_frac
 from .policy import (PopulationNet, genome_meta, genome_size,
                      per_gene_scale, read_meta, sample_population)
 
-from rover_sim.adapters.es import ESGenomePolicy
+# GraphRunner is re-exported for legacy importers (evo.bisect5 imports it
+# from here); evolve itself uses ESGenomePolicy + tr.run(...).
+from rover_sim.adapters.es import ESGenomePolicy, GraphRunner  # noqa: F401
 from rover_sim.evaluate import evaluate
 from rover_sim.strategies import OES, reproduce
 

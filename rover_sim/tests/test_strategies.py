@@ -9,8 +9,10 @@ S2  registry: STRATEGIES['ga']['reproduce'] / ['oes']['class'] are wired to
     those same objects.
 S3  reproduce determinism smoke (CPU): two identically-seeded calls are
     bit-identical and preserve shapes; runs on cpu tensors.
-S4  OES smoke (CPU): constructs on cpu tensors, ask() is mirrored, tell()
-    moves the centre on a toy objective (no CUDA hardcoding).
+S4  OES smoke (CPU): constructs on cpu tensors, ask() is mirrored, tell() moves
+    the centre on a toy objective (no CUDA hardcoding).
+S5  legacy GraphRunner compat: evo.evolve re-exports the adapters-side
+    class (kept for evo.bisect5) and it constructs on cpu tensors.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from evo.evolve import OES as evo_OES
 from evo.evolve import reproduce as evo_reproduce
 from rover_sim.policies.es_genome import genome_size, per_gene_scale, \
     sample_population
+from rover_sim.runner import Arena
 from rover_sim.runner.obs import OBS_DIM
 from rover_sim.strategies import STRATEGIES
 from rover_sim.strategies.ga import reproduce
@@ -91,6 +94,18 @@ def main():
     assert d1 < d0, f"OES did not climb: {d0:.1f} -> {d1:.1f}"
     print(f"S4 ok: OES on cpu tensors, mirrored pairs, distance "
           f"{d0:.0f} -> {d1:.0f}")
+
+    # S5: legacy GraphRunner compat (stage 3b removed the class from
+    # evolve; evo.bisect5 imports it from there) --------------------------
+    import evo.evolve as _ev
+    from rover_sim.adapters.es import GraphRunner
+    assert _ev.GraphRunner is GraphRunner, \
+        "evo.evolve.GraphRunner not re-exported"
+    tr = Arena(2, 3, seed=777_000, merged_houses=2, device="cpu", fp16=False)
+    rn = GraphRunner(tr, 2, H)
+    assert rn.G_eff == 6 and rn.P == 2 and rn.hidden == H, (rn.G_eff, rn.P)
+    assert rn.policy.theta_buf.shape == (2, genome_size(OBS_DIM, H))
+    print("S5 ok: legacy GraphRunner re-exported + constructible (G_eff=6)")
 
     print("ALL STRATEGIES CHECKS PASSED")
 

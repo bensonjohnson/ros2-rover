@@ -24,6 +24,7 @@ import torch
 
 from rover_sim.policies.es_genome import PopulationNet, genome_size
 from rover_sim.runner.obs import OBS_DIM, ObsSpec, flat
+from rover_sim.scoring import fitness
 
 
 class ESGenomePolicy:
@@ -79,3 +80,33 @@ class ESGenomePolicy:
         a, h_new = self.net.step(o, self.h)
         self.h.copy_(h_new)
         return a.view(P * G_eff, 2)
+
+
+class GraphRunner:
+    """Legacy-compat graph evaluator — the pre-platform
+    `evo.evolve.GraphRunner` (removed from evolve.py in stage 3b).
+
+    Same constructor/run contract, so legacy importers (`from evo.evolve
+    import GraphRunner` — e.g. evo/bisect5.py) keep working. Internals are
+    the `ESGenomePolicy` adapter; NEW code should use the adapter +
+    `engine.run(..., graph=True)` directly.
+    """
+
+    def __init__(self, arena, P: int, hidden: int, obs: str = "v1",
+                 action: str = "lr", mem: int = 0):
+        self.arena, self.P, self.hidden = arena, P, hidden
+        self.G_eff = arena.G * arena.G_sets      # envs per individual
+        self.policy = ESGenomePolicy(P, hidden, obs=obs, action=action,
+                                     mem=mem, merged_houses=arena.G_sets,
+                                     device=arena.device)
+
+    def run(self, thetas: torch.Tensor, ticks: int,
+            w_dist: float, w_coll: float, w_cov: float = 0.0,
+            w_rev: float = 0.0, w_net: float = 0.0,
+            w_spin: float = 0.0):
+        self.policy.set_thetas(thetas)
+        metrics = self.arena.run(self.policy, ticks, graph=True)
+        fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll,
+                      w_cov=w_cov, w_rev=w_rev, w_net=w_net,
+                      w_spin=w_spin).view(self.P, self.G_eff).mean(dim=1)
+        return fit, metrics
