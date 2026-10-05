@@ -42,192 +42,9 @@ from .arena import Arena, OBS_DIM, fitness, gate_config, rev_frac
 from .policy import (PopulationNet, genome_meta, genome_size,
                      per_gene_scale, read_meta, sample_population)
 
-
-def evaluate(arena: Arena, thetas: torch.Tensor, hidden: int,
-             ticks: int, w_dist: float = 0.03,
-             w_coll: float = 0.25,
-             w_cov: float = 0.0, obs: str = "v1", w_rev: float = 0.0,
-             w_net: float = 0.0, w_spin: float = 0.0,
-             action: str = "lr", mem: int = 0) -> tuple[torch.Tensor, dict]:
-    """Run every individual in every house; returns per-individual fitness
-    (mu) and the raw per-env metrics for the best individual."""
-    P = arena.P
-    G_eff = arena.G * arena.G_sets
-    net = PopulationNet(thetas, OBS_DIM, hidden, obs=obs, action=action,
-                        mem=mem)
-    net.bind(P, G_eff)
-    state = {"h": torch.zeros(P, G_eff, hidden, device=thetas.device)}
-
-    def policy_step(obs, prev_act):
-        o = obs.view(P, G_eff, OBS_DIM)
-        a, state["h"] = net.step(o, state["h"])
-        return a.view(P * G_eff, 2)
-
-    metrics = arena.run_games(policy_step, ticks)
-    fit = fitness(metrics, w_dist=w_dist, w_coll=w_coll,
-                  w_cov=w_cov, w_rev=w_rev, w_net=w_net,
-                  w_spin=w_spin).view(P, G_eff).mean(dim=1)
-    return fit, metrics
-
-
-class GraphRunner:
-    """CUDA-graph evaluator for one arena: the whole rollout — physics,
-    gate, policy — is captured ONCE and replayed per generation. The
-    launch-bound regime on the GB10 is thousands of tiny kernels per game
-    (raycast is only ~30 segments wide); replay replaces them with one
-    graphLaunch. Weights flow through a STATIC buffer (copy_ outside the
-    graph), which is the only way a parameter-changing graph is legal."""
-
-    def __init__(self, arena: Arena, P: int, hidden: int, obs: str = "v1",
-                 action: str = "lr", mem: int = 0):
-        from .policy import genome_size
-        self.arena, self.P, self.hidden = arena, P, hidden
-        self.G_eff = arena.G * arena.G_sets      # envs per individual
-        N = genome_size(OBS_DIM, hidden, mem)
-        self.theta_buf = torch.zeros(P, N, device=arena.device)
-        self.net = PopulationNet(self.theta_buf, OBS_DIM, hidden, obs=obs,
-                                 action=action, mem=mem)
-        self.net.bind(P, self.G_eff)
-        self.h = torch.zeros(P, self.G_eff, hidden, device=arena.device)
-        arena._reset_hooks.append(self.h.zero_)
-        if mem:
-            # memory is game state too: zero it on every reset or the
-            # next game starts with the last one's baggage (and the
-            # graph capture would bake that in).
-            arena._reset_hooks.append(self.net.reset_memory)
-        # NOTE: env randomness goes through the DEFAULT CUDA generator
-        # (see _DefaultRNGMixin) — natively graph-safe; on replay each game
-        # sees the same captured noise stream, which is what we want
-        # (paired comparison across individuals).
-        self._built = False
-
-    def _step(self, obs, prev_act):
-        a, h_new = self.net.step(
-            obs.view(self.P, self.G_eff, OBS_DIM), self.h)
-        self.h.copy_(h_new)   # in-place: keeps the hidden-state address
-                              # stable across graph replays (a rebind would
-                              # leak state between games and orphan the
-                              # reset hook)
-        return a.view(self.P * self.G_eff, 2)
-
-    def run(self, thetas: torch.Tensor, ticks: int,
-            w_dist: float, w_coll: float, w_cov: float = 0.0,
-            w_rev: float = 0.0, w_net: float = 0.0,
-            w_spin: float = 0.0):
-        self.theta_buf.copy_(thetas)
-        metrics = self.arena.run_games(self._step, ticks, graph=True)
-        fit = fitness(metrics, w_dist=w_dist,
-                      w_coll=w_coll,
-                      w_cov=w_cov, w_rev=w_rev,
-                      w_net=w_net, w_spin=w_spin
-                      ).view(self.P, self.G_eff) \
-            .mean(dim=1)
-        return fit, metrics
-
-
-def reproduce(thetas: torch.Tensor, sigma: torch.Tensor, fit_np: np.ndarray,
-              order: np.ndarray, scale: torch.Tensor,
-              rng: np.random.Generator, *, n_elite: int, n_immigrant: int,
-              tau: float, sigma_max: float, sigma0: float, hidden: int,
-              legacy: bool = False, mem: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
-    """Next population, laid out [survivors | children | immigrants].
-
-    Survivors = top n_elite untouched. Each child copies ONE tournament
-    parent's genome and gets per-gene Gaussian mutation in init-scale
-    units with a log-normal self-adapted per-individual sigma.
-
-    Runs 1-8 built children as `p1.unsqueeze(1).expand(-1, N) * mix`, i.e.
-    the parent INDEX (0..P-1) broadcast as every gene: children were
-    constant vectors + noise, nothing was inherited, and the ES reduced to
-    elitism over gen-0 samples and random immigrants (evo.test_reproduce).
-    """
-    P, N = thetas.shape
-    dev = thetas.device
-    n_child = P - n_elite - n_immigrant
-    survivors = torch.as_tensor(order[:n_elite], device=dev)
-
-    def tournament(k=3):
-        cand = rng.integers(0, P, size=(n_child, k))
-        return cand[np.arange(n_child), fit_np[cand].argmax(axis=1)]
-
-    par = torch.as_tensor(tournament(), device=dev)
-    if legacy:
-        # runs 1-8 step-size rule (max of two parents, tau 0.4, <= 1.0)
-        par2 = torch.as_tensor(tournament(), device=dev)
-        s_child = sigma[par].maximum(sigma[par2]) * torch.exp(
-            tau * torch.randn(n_child, 1, device=dev)
-            + 0.1 * torch.randn(n_child, 1, device=dev))
-    else:
-        s_child = sigma[par] * torch.exp(
-            tau * torch.randn(n_child, 1, device=dev))
-    s_child = s_child.clamp(1e-4, sigma_max)
-    child = thetas[par] + s_child * scale.unsqueeze(0) \
-        * torch.randn(n_child, N, device=dev)
-
-    immigrants = torch.as_tensor(
-        sample_population(n_immigrant, OBS_DIM, hidden, rng, mem=mem),
-        device=dev)
-    sig_imm = torch.full((n_immigrant, 1), sigma0, device=dev)
-    return (torch.cat([thetas[survivors], child, immigrants], dim=0),
-            torch.cat([sigma[survivors], s_child, sig_imm], dim=0))
-
-
-class OES:
-    """OpenAI-ES (Salimans et al. 2017) over the flat genome, as an
-    alternative to the truncation GA (--algo oes).
-
-    Population slot 0 = the centre mu; slots 1..2n = mirrored pairs
-    mu +/- sigma*scale*eps (antithetic sampling cancels the fitness
-    baseline); a leftover odd slot re-scores the best genome seen. All 2n
-    perturbed scores become centred ranks in [-0.5, 0.5] (fitness shaping:
-    invariant to the w_cov/w_dist scale, robust to collision outliers), and
-    the search-gradient estimate g = sum_i (r+_i - r-_i) eps_i / (2 n sigma)
-    drives Adam on z = mu / scale (per-gene init-scale units, like the GA's
-    sigma) with L2 decay. Every one of the P rollouts feeds one gradient —
-    the GA keeps the top quarter and discards the rest."""
-
-    def __init__(self, mu: torch.Tensor, scale: torch.Tensor, P: int,
-                 sigma: float, lr: float, l2: float = 0.005):
-        self.z = (mu / scale).clone()
-        self.scale, self.P = scale, P
-        self.sigma, self.lr, self.l2 = sigma, lr, l2
-        self.n = (P - 1) // 2
-        self.m = torch.zeros_like(self.z)
-        self.v = torch.zeros_like(self.z)
-        self.t = 0
-        self.eps = None
-
-    @property
-    def mu(self) -> torch.Tensor:
-        return self.z * self.scale
-
-    def ask(self, best: torch.Tensor | None) -> torch.Tensor:
-        N = self.z.numel()
-        self.eps = torch.randn(self.n, N, device=self.z.device)
-        d = self.sigma * self.eps * self.scale
-        rows = [self.mu[None], self.mu + d, self.mu - d]
-        if self.P - 1 - 2 * self.n:
-            rows.append((best if best is not None else self.mu)[None])
-        return torch.cat(rows, dim=0)
-
-    def tell(self, fit_np: np.ndarray) -> float:
-        n = self.n
-        f = fit_np[1:1 + 2 * n]
-        ranks = np.empty(2 * n, dtype=np.float32)
-        ranks[np.argsort(f)] = np.arange(2 * n, dtype=np.float32)
-        ranks = ranks / (2 * n - 1) - 0.5
-        w = torch.as_tensor(ranks[:n] - ranks[n:], device=self.z.device)
-        g = (w[:, None] * self.eps).sum(0) / (2 * n * self.sigma)
-        g = g - self.l2 * self.z                 # ascent + decay
-        self.t += 1
-        b1, b2 = 0.9, 0.999
-        self.m.mul_(b1).add_(g, alpha=1 - b1)
-        self.v.mul_(b2).addcmul_(g, g, value=1 - b2)
-        mh = self.m / (1 - b1 ** self.t)
-        vh = self.v / (1 - b2 ** self.t)
-        step = self.lr * mh / (vh.sqrt() + 1e-8)
-        self.z.add_(step)
-        return float(step.norm() / (self.z.norm() + 1e-12))
+from rover_sim.adapters.es import ESGenomePolicy
+from rover_sim.evaluate import evaluate
+from rover_sim.strategies import OES, reproduce
 
 
 def evolve(args):
@@ -389,14 +206,18 @@ def evolve(args):
                                 action=args.action)
             return tr, ho, score
 
-        rn = GraphRunner(tr, P, hidden, obs=args.obs, action=args.action,
-                         mem=mem)
+        rn = ESGenomePolicy(P, hidden, obs=args.obs, action=args.action,
+                            mem=mem, merged_houses=args.train_rotations,
+                            device=dev)
 
         def score(is_train, th):
             if is_train is True:
-                return rn.run(th, args.ticks, args.w_dist, args.w_coll,
-                              args.w_cov, args.w_rev,
-                              args.w_net, args.w_spin)
+                rn.set_thetas(th)
+                m = tr.run(rn, args.ticks, graph=True)
+                return fitness(m, w_dist=args.w_dist, w_coll=args.w_coll,
+                               w_cov=args.w_cov, w_rev=args.w_rev,
+                               w_net=args.w_net, w_spin=args.w_spin
+                               ).view(P, G * args.train_rotations).mean(dim=1), m
             return evaluate(hob if is_train == "hob" else
                             hval if is_train == "val" else ho, th, hidden,
                             args.ticks,
