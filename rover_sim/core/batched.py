@@ -148,6 +148,22 @@ class BatchedEnv:
         d2 = ((p - closest) ** 2).sum(dim=2)                # [B, M]
         return d2.min(dim=1).values.sqrt()
 
+    def _clearance_grid(self, px: torch.Tensor,
+                        py: torch.Tensor) -> torch.Tensor:
+        """Rect-body twin of :meth:`_clearance` for [B, n] sample grids:
+        min distance from each of the n perimeter samples of each env to
+        THAT env's own walls -> [B, n]. Same math as :meth:`_clearance`,
+        one broadcast dimension deeper (stage 4a)."""
+        p = torch.stack([px, py], dim=2).unsqueeze(2)       # [B, n, 1, 2]
+        a = self._a.unsqueeze(1)                            # [B, 1, M, 2]
+        e = self._e.unsqueeze(1)                            # [B, 1, M, 2]
+        ap = p - a                                          # [B, n, M, 2]
+        tt = ((ap * e).sum(dim=3)
+              / self._ee.unsqueeze(1).clamp(min=1e-12)).clamp(0.0, 1.0)
+        closest = a + tt.unsqueeze(3) * e
+        d2 = ((p - closest) ** 2).sum(dim=3)                # [B, n, M]
+        return d2.min(dim=2).values.sqrt()                  # [B, n]
+
     @torch.no_grad()
     def step(self, cmd: torch.Tensor, dt: float):
         """cmd [B, 2] on device, in [-1, 1] — SimRover.step semantics."""
@@ -179,8 +195,8 @@ class BatchedEnv:
         ny = self.y + v * torch.sin(self.theta) * dt
         if self._rect is not None:
             # Rect footprint: conservative perimeter-sample contact.
-            self.collided = (self._rect.clearance(self._clearance, nx, ny,
-                                                  self.theta)
+            self.collided = (self._rect.clearance(self._clearance_grid, nx,
+                                                  ny, self.theta)
                              < self._rect.margin)
         else:
             self.collided = self._clearance(nx, ny) < c.robot_radius

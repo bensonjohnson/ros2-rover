@@ -172,10 +172,12 @@ class RectBody:
 
     def clearance(self, clearance_fn, px: torch.Tensor, py: torch.Tensor,
                   th: torch.Tensor) -> torch.Tensor:
-        """Min over perimeter samples of ``clearance_fn`` (a [P] -> [P]
-        point-clearance kernel). Returns [B]. Compare against
-        :attr:`margin` for the (conservative) contact verdict."""
+        """Min over perimeter samples of ``clearance_fn`` — a GRID
+        point-clearance kernel ``(px [B, n], py [B, n]) -> [B, n]`` that
+        keeps each env's n samples against ITS OWN walls (per-env
+        broadcast; do NOT flatten B and n together — the walls live in a
+        [B, M, 2] tensor). Returns [B]. Compare against :attr:`margin`
+        for the (conservative) contact verdict."""
         sx, sy = self.sample_points(px, py, th)
-        b = px.shape[0]
-        d = clearance_fn(sx.reshape(-1), sy.reshape(-1)).reshape(b, self.n)
+        d = clearance_fn(sx, sy)
         return d.min(dim=1).values

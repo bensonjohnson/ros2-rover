@@ -16,6 +16,9 @@ G4  (CUDA only) rect body + mount capture a CUDA graph in RolloutEngine and
     report finite metrics. Parent runs this on the Spark.
 G5  Legacy-default regression: RoverConfig() keeps the circle + center
     raycast, and a default scan equals the legacy expression (G2a).
+G6  Batched rect integration: verdicts through the real env.step path
+    (per-env wall broadcast; regression for the flattened-sample bug that
+    only showed at B > 1).
 
 E1-E2-class determinism is CPU-pinned; G4 owns the GPU. Scan paths covered
 for the mount shift: BatchedEnv.scan (Fp32 base), Fp32Env.scan, Fp16Env
@@ -193,9 +196,10 @@ def _torch_rect_min(world, n, cx, cy, th):
                       collision_samples=n)
     rb = RectBody(body, 1, "cpu")
 
-    def clearance_fn(px, py):
-        return torch.tensor([world.clearance(float(a), float(b))
-                             for a, b in zip(px.tolist(), py.tolist())])
+    def clearance_fn(px, py):        # grid contract: [B, n] -> [B, n]
+        return torch.tensor([[world.clearance(float(a), float(b))
+                              for a, b in zip(rx, ry)]
+                             for rx, ry in zip(px.tolist(), py.tolist())])
     px = torch.tensor([cx], dtype=torch.float32)
     py = torch.tensor([cy], dtype=torch.float32)
     tt = torch.tensor([th], dtype=torch.float32)
@@ -356,6 +360,61 @@ def g5_defaults():
           "default scan bit-identical)")
 
 
+# ---------------------------------------------------------------------- G6
+def g6_batched_rect():
+    """Rect collision through the real batched env (per-env wall broadcast).
+
+    Regression: the first implementation flattened [B, n] samples and would
+    crash for B > 1 against the [B, M, 2] wall tensor (caught in parent
+    audit; the CUDA gate had not run yet).
+    """
+    segs = np.array([[3.0, -8.0, 3.0, 8.0]], dtype=np.float64)
+    world = World(segs, (-2.0, -10.0, 12.0, 10.0), (0.0, 0.0, 0.0))
+    cfg = RoverConfig()
+    cfg.body = HW_BODY
+    cfg.lidar_mount_x = HW_LIDAR_MOUNT_X
+    cfg.lidar_dropout_p = 0.0
+
+    # (a) deterministic verdicts through env.step (B = 4).
+    B, xs = 4, [2.6, 2.8, 2.95, 3.2]
+    env = _mk_env(B, cfg, world)
+    env.x[:] = torch.tensor(xs, dtype=torch.float32)
+    env.y[:] = 0.0
+    env.theta[:] = 0.0
+    env.step(torch.tensor([[0.5, 0.5]] * B, dtype=torch.float32), dt=1e-4)
+    # rect spans x +- 0.13335; wall at 3.0: gaps 0.2666 / 0.0667 -> no
+    # contact; front edge across the wall -> contact; wall behind the rear
+    # edge (gap 0.0667) -> no contact.
+    exp = [False, False, True, False]
+    assert env.collided.tolist() == exp, env.collided.tolist()
+
+    # (b) random x sweep vs the independent exact distance: sampled min
+    # within the Lipschitz bound, no true contact missed.
+    rng = np.random.default_rng(7)
+    B2 = 64
+    xs2 = rng.uniform(2.0, 3.4, B2)
+    ex = np.array([exact_rect_distance(world, float(x), 0.0, 0.0, HW_L, HW_W)
+                   for x in xs2])
+    env2 = _mk_env(B2, cfg, world)
+    env2.x[:] = torch.tensor(xs2, dtype=torch.float32)
+    env2.y[:] = 0.0
+    env2.theta[:] = 0.0
+    margin = env2._rect.margin
+    rect2 = env2._rect
+    assert rect2 is not None
+    dd = rect2.clearance(env2._clearance_grid, env2.x, env2.y,
+                         env2.theta).numpy().astype(np.float64)
+    maxerr = float(np.abs(dd - ex).max())
+    assert maxerr <= margin + 1e-4, (maxerr, margin)
+    missed = int(((ex <= 0.0) & ~(dd < margin)).sum())
+    assert missed == 0, missed
+    r = env2.scan()
+    assert r.shape == (B2, cfg.n_beams) and torch.isfinite(r).all()
+    print(f"G6 ok: batched rect B={B} verdicts {exp}; random sweep B={B2} "
+          f"max|sampled-exact|={maxerr:.6f} <= margin {margin:.6f}, "
+          f"missed contacts={missed}; mount scan finite")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -367,6 +426,7 @@ def main():
     g2_mount()
     g3_presets()
     g5_defaults()
+    g6_batched_rect()
     g4_capture(args.device)
     print("ALL GEOM CHECKS PASSED")
 
