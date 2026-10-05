@@ -31,6 +31,27 @@ class _DefaultRNGMixin:
                            r.clamp(min=0.02))
 
 
+class _MountOrigin:
+    """Read-only env view with x/y replaced by mount-shifted origins.
+
+    The fused Triton scan reads the ray origin straight from ``env.x`` /
+    ``env.y``; this feeds it the true lidar mount WITHOUT touching the
+    kernel or the env's live state (rayscan stays origin-agnostic). Only
+    constructed when ``lidar_mount_x != 0.0``; the default path calls
+    ``fused_scan(env)`` directly, byte-identical.
+    """
+
+    __slots__ = ("_env", "x", "y")
+
+    def __init__(self, env, x: torch.Tensor, y: torch.Tensor):
+        self._env = env
+        self.x = x
+        self.y = y
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
 class Fp32Env(_DefaultRNGMixin, BatchedEnv):
     """BatchedEnv with generator-free scan (graph-capturable)."""
 
@@ -40,6 +61,9 @@ class Fp32Env(_DefaultRNGMixin, BatchedEnv):
         ang = self.theta.unsqueeze(1) + self._beam_offsets
         d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
         p = torch.stack([self.x, self.y], dim=1)
+        if c.lidar_mount_x != 0.0:
+            p = p + c.lidar_mount_x * torch.stack(
+                [torch.cos(self.theta), torch.sin(self.theta)], dim=1)
         q = self._a - p.unsqueeze(1)
         cross_eq = (self._e[:, :, 0] * q[:, :, 1]
                     - self._e[:, :, 1] * q[:, :, 0])
@@ -88,13 +112,25 @@ class Fp16Env(_DefaultRNGMixin, BatchedEnv):
         c = self.cfg
         if self.fused:
             from .rayscan import fused_scan
-            r = fused_scan(self, out=self._scan_buf)   # clean, static buf
+            if c.lidar_mount_x != 0.0:
+                sh = c.lidar_mount_x * torch.stack(
+                    [torch.cos(self.theta), torch.sin(self.theta)], dim=1)
+                r = fused_scan(_MountOrigin(self, self.x + sh[:, 0],
+                                            self.y + sh[:, 1]),
+                               out=self._scan_buf)
+            else:
+                r = fused_scan(self, out=self._scan_buf)   # clean, static buf
             r = r + self.noise(c.lidar_noise_std, self.B, c.n_beams)
             return self._dropout(r, c.lidar_dropout_p)
         ang = self.theta.unsqueeze(1) + self._beam_offsets   # [B, nb] fp32
         d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
         d_h = d.half()
-        p = torch.stack([self.x, self.y], dim=1).half()
+        if c.lidar_mount_x != 0.0:
+            sh = c.lidar_mount_x * torch.stack(
+                [torch.cos(self.theta), torch.sin(self.theta)], dim=1)
+            p = (torch.stack([self.x, self.y], dim=1) + sh).half()
+        else:
+            p = torch.stack([self.x, self.y], dim=1).half()
         q = self._a_h - p.unsqueeze(1)                     # [B, M, 2]
         e = self._e_h
 

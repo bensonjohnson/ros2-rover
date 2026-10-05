@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .world import World
+from .geom import BodyConfig, rect_perimeter_offsets, rect_max_sample_spacing
 
 
 @dataclass
@@ -28,7 +29,14 @@ class RoverConfig:
     right_trim: float = 1.0
     motor_tau: float = 0.15       # s, first-order lag toward commanded speed
     slip_std: float = 0.05        # multiplicative per-step track slip noise
-    robot_radius: float = 0.14    # collision circle
+    robot_radius: float = 0.14    # collision circle (legacy default)
+
+    # Hardware-true geometry (stage 4a) — ALL OPT-IN. body=None keeps the
+    # legacy circle; lidar_mount_x=0.0 keeps the raycast origin at the
+    # robot center (docs/SIM_PLATFORM.md §4). See rover_sim/core/geom.py.
+    body: "BodyConfig | None" = None       # rect footprint when set
+    lidar_mount_x: float = 0.0             # LD19 mount, fwd of center (0.07635)
+    camera_mount_x: float = 0.0            # D435i mount, fwd of center (0.12085)
 
     # Lidar — STL19P-ish: 360 beams, 10-12 Hz on the rover.
     n_beams: int = 360
@@ -49,6 +57,15 @@ class SimRover:
                  rng: np.random.Generator | None = None):
         self.cfg = cfg or RoverConfig()
         self.rng = rng or np.random.default_rng(self.cfg.seed)
+        # Stage 4a: opt-in rect footprint collision (None = legacy circle).
+        self._rect_off = None
+        self._rect_margin = 0.0
+        if self.cfg.body is not None and self.cfg.body.shape == "rect":
+            b = self.cfg.body
+            self._rect_off = rect_perimeter_offsets(b.length, b.width,
+                                                    b.collision_samples)
+            self._rect_margin = 0.5 * rect_max_sample_spacing(
+                b.length, b.width, b.collision_samples)
         self.set_world(world)
 
     def set_world(self, world: World):
@@ -96,7 +113,17 @@ class SimRover:
         # stops (tracks stall against the obstacle).
         nx = self.x + v * np.cos(self.theta) * dt
         ny = self.y + v * np.sin(self.theta) * dt
-        self.collided = self.world.clearance(nx, ny) < c.robot_radius
+        if self._rect_off is None:
+            self.collided = self.world.clearance(nx, ny) < c.robot_radius
+        else:
+            # Rect footprint: min over perimeter samples (rotated at the
+            # current heading) vs the conservative margin. See geom.py.
+            ct, st = np.cos(self.theta), np.sin(self.theta)
+            ox = nx + ct * self._rect_off[:, 0] - st * self._rect_off[:, 1]
+            oy = ny + st * self._rect_off[:, 0] + ct * self._rect_off[:, 1]
+            dmin = min(self.world.clearance(float(ax), float(ay))
+                       for ax, ay in zip(ox, oy))
+            self.collided = dmin < self._rect_margin
         if not self.collided:
             self.x, self.y = nx, ny
         else:
@@ -127,7 +154,13 @@ class SimRover:
         c = self.cfg
         inc = 2.0 * np.pi / c.n_beams
         beam_angles = self.theta + np.arange(c.n_beams) * inc
-        r = self.world.raycast(self.x, self.y, beam_angles, c.lidar_max_range)
+        if c.lidar_mount_x != 0.0:
+            # Origin at the true lidar mount; fan angles stay theta+beam.
+            ox = self.x + c.lidar_mount_x * np.cos(self.theta)
+            oy = self.y + c.lidar_mount_x * np.sin(self.theta)
+        else:
+            ox, oy = self.x, self.y
+        r = self.world.raycast(ox, oy, beam_angles, c.lidar_max_range)
         r = r + self.rng.normal(0.0, c.lidar_noise_std, size=r.shape)
         drop = self.rng.random(r.shape) < c.lidar_dropout_p
         r = np.where(drop, np.inf, np.maximum(r, 0.02))

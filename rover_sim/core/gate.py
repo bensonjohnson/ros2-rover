@@ -9,6 +9,23 @@ equalization. Defaults mirror pc_active_inference.launch.py.
 
 Sim time is injected (time_fn) so hold durations follow the accelerated
 clock, not wall time.
+
+Named presets (stage 4a) — GATE_PRESETS below pins the two configurations
+the platform must be able to name explicitly:
+
+  * ``sim_evo`` — what the sim + the ``evo_hw`` deploy launch use today
+    (stop 0.15 / rear 0.30 m; the rest are GateConfig defaults). It is
+    field-by-field equal to ``GateConfig()``.
+  * ``monitor_default`` — the ROS ``lidar_safety_monitor`` node's own
+    parameter defaults (stop 0.20 / rear 0.40 m, slow 0.40, hysteresis
+    0.05, max_eval 4.0). Same source as sim_evo, different threshold set.
+
+CONFLICT / discipline: sim-side and deploy-side gates must stay PAIRED —
+the brain learns avoidance against whatever gate it trains under, so
+switching the sim to ``monitor_default`` while the rover keeps the
+deploy ``sim_evo`` overrides (or vice versa) would train against a
+different safety envelope than the hardware enforces. Pick ONE preset and
+use it on both sides.
 """
 
 from __future__ import annotations
@@ -21,6 +38,37 @@ import numpy as np
 _SIDE_MIN = 0.52
 _SIDE_MAX = 1.57
 _REAR_MIN = 2.62
+
+
+# Named gate presets (additive; gate_config() in fast.py is unchanged).
+# Values read from the sources cited per entry; only non-default fields
+# are listed, so GateConfig(**preset) yields the full config.
+GATE_PRESETS = {
+    # evo/deploy/evo_hw.launch.py lidar_safety_monitor params (0.15/0.30,
+    # slow 0.15, hysteresis 0.10, max_eval 5.0, offset 0.06, half 0.12).
+    # Identical to GateConfig() defaults.
+    "sim_evo": dict(
+        stop_distance=0.15,
+        stop_distance_rear=0.30,
+        robot_front_offset=0.06,
+        robot_half_width=0.12,
+    ),
+    # src/tractor_bringup/tractor_bringup/lidar_safety_monitor.py
+    # declare_parameter defaults: stop 0.20 (L54), rear 0.40 (L55),
+    # slow 0.40 (L56), hysteresis 0.05 (L57), max_eval 4.0 (L58).
+    "monitor_default": dict(
+        stop_distance=0.20,
+        stop_distance_rear=0.40,
+        slow_distance=0.40,
+        hysteresis=0.05,
+        max_eval_distance=4.0,
+        # offset 0.06 (L70) and half_width 0.12 (L71) match GateConfig
+        # defaults; min_block_points/block_scans/min_valid_range/
+        # min_block_duration/track_width (0.154) also match. The monitor
+        # has no sim-side equivalent of side_stop_distance (it gates sides
+        # on stop_dist), so that field keeps the sim default (None).
+    ),
+}
 
 
 @dataclass

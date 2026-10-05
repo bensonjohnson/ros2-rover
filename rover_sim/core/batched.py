@@ -20,6 +20,7 @@ import torch
 from .world import make_house
 from .rover import RoverConfig
 from .gate import GateConfig, _SIDE_MIN, _SIDE_MAX, _REAR_MIN
+from .geom import RectBody
 
 _DUMMY_SEG = [1e6, 1e6, 1e6 + 0.1, 1e6]
 
@@ -80,6 +81,11 @@ class BatchedEnv:
 
         c = self.cfg
         dev = self.device
+        # Stage 4a opt-in rect footprint: perimeter-sample collision. None
+        # here keeps the exact legacy circle path in step().
+        self._rect = None
+        if getattr(c, "body", None) is not None and c.body.shape == "rect":
+            self._rect = RectBody(c.body, batch, dev)
         z = lambda: torch.zeros(batch, device=dev)
         self.x, self.y, self.theta = z(), z(), z()
         self.v_left, self.v_right, self._prev_v = z(), z(), z()
@@ -171,7 +177,13 @@ class BatchedEnv:
 
         nx = self.x + v * torch.cos(self.theta) * dt
         ny = self.y + v * torch.sin(self.theta) * dt
-        self.collided = self._clearance(nx, ny) < c.robot_radius
+        if self._rect is not None:
+            # Rect footprint: conservative perimeter-sample contact.
+            self.collided = (self._rect.clearance(self._clearance, nx, ny,
+                                                  self.theta)
+                             < self._rect.margin)
+        else:
+            self.collided = self._clearance(nx, ny) < c.robot_radius
         ok = ~self.collided
         self.x = torch.where(ok, nx, self.x)
         self.y = torch.where(ok, ny, self.y)
@@ -198,6 +210,10 @@ class BatchedEnv:
         ang = self.theta.unsqueeze(1) + self._beam_offsets   # [B, nb]
         d = torch.stack([torch.cos(ang), torch.sin(ang)], dim=2)
         p = torch.stack([self.x, self.y], dim=1)
+        if c.lidar_mount_x != 0.0:
+            # Origin at the true mount; fan angles stay theta + beam.
+            p = p + c.lidar_mount_x * torch.stack(
+                [torch.cos(self.theta), torch.sin(self.theta)], dim=1)
         q = self._a - p.unsqueeze(1)                         # [B, M, 2]
 
         cross_eq = (self._e[:, :, 0] * q[:, :, 1]
