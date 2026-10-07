@@ -69,6 +69,51 @@ def _a1_case(P, G, hidden, mem, merged, seed, noise_seed, rng_seed, ticks,
           f"{float(m_A['dist_m'].mean()):.4f})")
 
 
+# A6: every gene must be able to move -----------------------------------
+def a6_no_frozen_genes(dev):
+    """A gene whose init std is 0 has mutation size 0 and is frozen forever
+    (mutation size is measured in init standard deviations). bv — the memory
+    write-candidate bias — was exactly that, which is why run 25's memory
+    genome was "closed by construction" while its gate bias looked evolvable.
+    """
+    import numpy as np
+    from rover_sim.policies.es_genome import (_param_shapes, per_gene_scale,
+                                              sample_population)
+    from rover_sim.runner.obs import OBS_DIM
+
+    for mem in (0, 4, 8):
+        scale = per_gene_scale(OBS_DIM, 16, mem)
+        assert (scale > 0).all(), f"frozen gene at mem={mem}"
+        # the bv slice specifically, and that a fresh population VARIES in it
+        # (before the fix every individual had bv identically zero)
+        off = 0
+        for name, shape, std, mean in _param_shapes(OBS_DIM, 16, mem):
+            n = int(np.prod(shape))
+            if name == "bv":
+                assert (scale[off:off + n] > 0).all(), "bv has zero scale"
+                pop = sample_population(6, OBS_DIM, 16,
+                                        np.random.default_rng(0), mem=mem)
+                assert pop[:, off:off + n].std() > 0.0, "bv identical for all"
+                assert (pop[:, off:off + n] != 0.0).any(), "bv stuck at 0"
+            off += n
+
+    # the guard itself: a zero-std gene must raise, not freeze silently
+    import rover_sim.policies.es_genome as eg
+    keep = eg._param_shapes
+    try:
+        eg._param_shapes = lambda *a, **k: [("zz", (2,), 0.0, 0.0)]
+        try:
+            per_gene_scale(OBS_DIM, 16, 0)
+            raise AssertionError("a zero-std gene did not raise")
+        except ValueError as e:
+            assert "unmutatable" in str(e), e
+    finally:
+        eg._param_shapes = keep
+    print("A6 ok: no frozen genes at mem 0/4/8; bv is scalable, varies across a "
+          "fresh population, and a zero-std gene now raises instead of "
+          "freezing silently")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,

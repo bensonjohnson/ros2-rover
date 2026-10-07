@@ -70,7 +70,17 @@ def _param_shapes(n_in: int, hidden: int, mem: int = 0):
             ("Wg", (q, mem), 1.0 / np.sqrt(q), 0.0),
             ("bg", (mem,), 1.0, -3.0),
             ("Wv", (q, mem), 0.1 / np.sqrt(q), 0.0),
-            ("bv", (mem,), 0.0, 0.0),
+            # bv held an init std of 0.0 originally ("no bias on the write
+            # value"), which silently FROZE the gene: per_gene_scale reuses the
+            # init std as the mutation unit, so a zero std means a gene that
+            # mutation, immigrants and selection can never touch. That is why
+            # run 25's memory genome was "closed by construction" — the write
+            # path had a believable gate but a write value stuck at exactly 0,
+            # so no memory content could ever be stored. Give it a real std
+            # (the gate still starts closed via bg, which is the intended
+            # single switch), and per_gene_scale now refuses to build a frozen
+            # gene at all.
+            ("bv", (mem,), 0.1, 0.0),
             ("Wm", (mem, hidden), 1.0 / np.sqrt(mem), 0.0),
             ("Wom", (mem, 2), 1.0 / np.sqrt(mem), 0.0),
         ]
@@ -80,10 +90,27 @@ def _param_shapes(n_in: int, hidden: int, mem: int = 0):
 def per_gene_scale(n_in: int, hidden: int, mem: int = 0) -> np.ndarray:
     """Per-gene init std, reused as the mutation-size unit: a sigma of 1.0
     means one init-standard-deviation for that gene, so layers with tiny
-    weights (deep, wide fan-in) are not frozen out of the search."""
-    out = []
-    for _, shape, std, _mean in _param_shapes(n_in, hidden, mem):
-        out.append(np.full(int(np.prod(shape)), std, dtype=np.float32))
+    weights (deep, wide fan-in) are not frozen out of the search.
+
+    Because the mutation size IS the init std, a gene whose init std is 0 has a
+    mutation size of 0: mutation, immigrants (sample_population) and selection
+    can never move it, in any generation, for any individual. That is a silent
+    dead end in a search — bv (memory write-candidate bias) was exactly that
+    for all of run 25, which is why its memory was "closed by construction".
+    Refuse to build such a gene instead of freezing it quietly.
+    """
+    out, frozen = [], []
+    for name, shape, std, _mean in _param_shapes(n_in, hidden, mem):
+        n = int(np.prod(shape))
+        if not std > 0.0:
+            frozen.append(f"{name}[{n}]")
+        out.append(np.full(n, std, dtype=np.float32))
+    if frozen:
+        raise ValueError(
+            f"per_gene_scale: {', '.join(frozen)} have a zero init std, which "
+            "makes them permanently unmutatable (mutation size is measured in "
+            "init standard deviations). Give the gene a nonzero std in "
+            "_param_shapes, or take it out of the packing.")
     return np.concatenate(out)
 
 
