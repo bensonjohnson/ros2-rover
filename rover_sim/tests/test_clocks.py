@@ -176,7 +176,9 @@ def c3_rate_semantics(device):
     applied, due_ticks = [], []
     for i in range(30):
         mc.tick()
-        cmd = torch.full((1, 2), float(i + 1))
+        # device matters: MultiRateClock lives on --device, and a CPU command
+        # tensor against a CUDA clock is the bug this test caught on the Spark
+        cmd = torch.full((1, 2), float(i + 1), device=mc.device)
         a = float(mc.latch_cmd(cmd)[0, 0])
         if bool(mc.driver_due[0]):
             due_ticks.append(i)
@@ -261,7 +263,8 @@ def c6_capture(device):
     m2 = eng.run_games(_scan_reading_policy, 200, graph=True)
     assert torch.equal(m["rooms"], m2["rooms"]), "replay not repeatable"
     print(f"C6 ok: clocks engine captured + replayed a CUDA graph "
-          f"(dist {float(m['dist'].mean()):.3f} m)")
+          f"(dist {float(m['dist_m'].mean()):.3f} m, "
+          f"collisions {int(m['collisions'].sum())})")
 
 
 def main():
