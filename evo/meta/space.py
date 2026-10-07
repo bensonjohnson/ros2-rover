@@ -126,6 +126,29 @@ KNOBS = (
          default="legacy",
          help="symmetric was falsified in sim (run 16: the gate asymmetry does "
               "NOT cause the reverse habit) — kept only as a control"),
+    # --- hardware-truth physics (fidelity items 2-5): SETTINGS, not knobs ---
+    # Never sampled. A search that tunes "is the right encoder dead" or "how
+    # asymmetric is the machine" is tuning its own problem definition, and the
+    # answer is a measurement, not a hyperparameter. Defaults here are the
+    # HARDWARE-TRUE values, so anything the search trains is the rover rather
+    # than an idealization (a bare `python3 -m evo.evolve` stays legacy unless
+    # it asks — the CLI's own defaults are unchanged).
+    Knob("wheel_source", "--wheel-source", "choice", values=("model",),
+         default="model", tune=False,
+         help="'model' is what evo_runner feeds the policy at deploy time "
+              "(the rover's right encoder reads 0), so this closes the "
+              "train/deploy obs skew"),
+    Knob("track_stall", "--track-stall", "choice", values=(0.05,), default=0.05,
+         tune=False,
+         help="0.05 m/s break-away: pivot commands of +-0.15 are +-0.024 m/s of "
+              "track speed, i.e. below it — dead still, exactly as observed"),
+    Knob("track_bias", "--track-bias", "choice", values=("1.25,1.0",),
+         default="1.25,1.0", tune=False,
+         help="mechanical wheel->ground factors paired with the nominal "
+              "(0.8,1.0) trims"),
+    Knob("n_beams", "--n-beams", "choice", values=(482,), default=482,
+         tune=False,
+         help="the rover's real LD19 beam count"),
     # --- budget (tunable within a stage, but visible) ------------------
     Knob("pop", "--pop", "choice", values=(64, 128), default=128),
     Knob("games", "--games", "choice", values=(16, 32), default=16),

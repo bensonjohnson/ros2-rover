@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import time
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -45,6 +46,7 @@ from .policy import (PopulationNet, genome_meta, genome_size,
 # GraphRunner is re-exported for legacy importers (evo.bisect5 imports it
 # from here); evolve itself uses ESGenomePolicy + tr.run(...).
 from rover_sim.adapters.es import ESGenomePolicy, GraphRunner  # noqa: F401
+from rover_sim.core.rover import RoverConfig
 from rover_sim.evaluate import evaluate
 from rover_sim.runner.clocks import ClocksConfig
 from rover_sim.strategies import OES, reproduce
@@ -177,6 +179,29 @@ def evolve(args):
                                   driver_hz=args.driver_hz,
                                   phase_stagger=not args.no_phase_stagger)
             print(f"[clocks] {clocks.describe()}")
+        # Hardware-truth physics (fidelity items 2-5): ONE RoverConfig for the
+        # whole run, train and eval alike — a policy must never be selected
+        # under different machine physics than it was trained on. Defaults are
+        # legacy (a bare command line reproduces the old arena byte-for-byte);
+        # the meta search pins the hardware-true values in every sampled config.
+        rover_cfg = None
+        if (args.wheel_source != "true" or args.track_stall > 0.0
+                or args.track_bias or args.n_beams != 360):
+            kw = dict(wheel_source=args.wheel_source,
+                      track_stall_speed=args.track_stall,
+                      n_beams=args.n_beams)
+            if args.track_bias:
+                try:
+                    bl, br = (float(x) for x in
+                              str(args.track_bias).split(","))
+                except ValueError:
+                    raise SystemExit("--track-bias wants 'L,R' (e.g. 1.25,1.0)")
+                kw["track_bias"] = (bl, br)
+            rover_cfg = replace(RoverConfig(), **kw)
+            print(f"[physics] wheel_source={rover_cfg.wheel_source} "
+                  f"track_stall={rover_cfg.track_stall_speed} m/s "
+                  f"track_bias={rover_cfg.track_bias} "
+                  f"n_beams={rover_cfg.n_beams}", flush=True)
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
@@ -185,10 +210,12 @@ def evolve(args):
                    gate_obs=args.obs == "v2",
                    gate_symmetric=args.gate == "symmetric",
                    gate_cfg=gate_config(args.gate), clocks=clocks,
+                   rover_cfg=rover_cfg,
                    trim_rand=args.trim_rand > 0, **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    gate_symmetric=args.gate == "symmetric",
                    gate_cfg=gate_config(args.gate), clocks=clocks,
+                   rover_cfg=rover_cfg,
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
@@ -200,13 +227,15 @@ def evolve(args):
                         every_cover=args.every_cover, fused=args.fused,
                         gate_obs=args.obs == "v2", worlds=ho_worlds,
                         gate_symmetric=args.gate == "symmetric",
-                        gate_cfg=gate_config(args.gate), clocks=clocks)
+                        gate_cfg=gate_config(args.gate), clocks=clocks,
+                        rover_cfg=rover_cfg)
             hval = Arena(P, G, seed=args.holdout_seed, device=dev,
                          fp16=args.fp16, cells=not args.no_cells,
                          every_cover=args.every_cover, fused=args.fused,
                          gate_obs=args.obs == "v2", worlds=val_worlds,
                          gate_symmetric=args.gate == "symmetric",
-                         gate_cfg=gate_config(args.gate), clocks=clocks)
+                         gate_cfg=gate_config(args.gate), clocks=clocks,
+                         rover_cfg=rover_cfg)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train is True else (
@@ -612,6 +641,35 @@ def main():
                     help="give every env the SAME lidar/driver phase (default "
                     "is a deterministic golden-ratio spread, so no single "
                     "phase relationship can become the trained convention)")
+    # ---- hardware-truth physics (SIM_PLATFORM fidelity items 2-5) --------
+    # Defaults are LEGACY, so every pre-existing command line is unchanged.
+    # The meta search pins the hardware-true values in every sampled config;
+    # a policy selected under idealized physics and deployed on the rover is
+    # the failure these flags exist to prevent.
+    ap.add_argument("--wheel-source", choices=("true", "model", "dead_right"),
+                    default="true",
+                    help="what the wheel proprio channels contain: true = "
+                    "legacy noisy encoders; model = what evo_runner "
+                    "--wheel-source model feeds the policy (motor model, no "
+                    "encoder noise) — use this for deploy parity; dead_right = "
+                    "the rover's defect (right channel pinned to 0)")
+    ap.add_argument("--track-stall", type=float, default=0.0, metavar="MPS",
+                    help="static-friction break-away for a LOADED track, m/s. "
+                    "A commanded track speed below this cannot move the track: "
+                    "both stalled = dead still, one = an orbit about the "
+                    "stalled track at radius track_width/2. This is the live "
+                    "signature of champ20m_idx115 (56%% of ticks physically "
+                    "still). 0 = legacy free rotation")
+    ap.add_argument("--track-bias", default=None, metavar="L,R",
+                    help="mechanical wheel->ground speed factors, e.g. 1.25,1.0 "
+                    "paired with the driver's nominal (0.8,1.0) trims: the trim "
+                    "is a CORRECTION, so a straight command stays straight "
+                    "(legacy trim-only physics curves 1.023 rad in 8 s) while "
+                    "the encoder keeps reporting the trim ratio")
+    ap.add_argument("--n-beams", type=int, default=360,
+                    help="lidar beam count: 482 = the rover's LD19 (with "
+                    "--lidar-max-range 25 for the full sensor); default 360 "
+                    "keeps legacy byte-comparability")
     ap.add_argument("--no-cells", action="store_true",
                     help="do not even allocate/accumulate the coverage "
                     "buffer (fault bisect: byte-proven runs 1-4 kernels)")
