@@ -61,7 +61,7 @@ DRY_STAGES = (dict(name="dry", gens=2, ticks=100, seeds=(63000,), keep=1.0),)
 #: rather than after it has spent a 40-minute stage. The failure is rare and was
 #: not reproducible in isolation, which is exactly why it needs a filter rather
 #: than a fix someone remembers to make.
-PREFLIGHT = dict(pop=4, games=2, ticks=20, gens=1, no_cells=True,
+PREFLIGHT = dict(pop=4, games=2, ticks=20, gens=2, no_cells=True,
                  train_rotations=1)
 
 #: Dry mode pins the cheap end of every budget knob so the whole pipeline —
@@ -122,6 +122,27 @@ def run_trial(cfg: dict, seed: int, stage: dict, args) -> dict:
     return dict(base, **res)
 
 
+def probe_verdict(rows: list) -> tuple:
+    """Judge a pre-flight probe's gens.jsonl rows -> (ok, reason).
+
+    PURE on purpose, so it is unit-testable against the exact shape that caused
+    a live false rejection: an OES gen-0 row carries `oes_rel_step` and NO
+    fitness key at all, so a fitness-is-required rule rejects every OES
+    candidate — the first real search silently degenerated to GA-only that way.
+    """
+    if not rows:
+        return False, "preflight produced no gens.jsonl"
+    bad = [f"{k}={v}" for r in rows for k, v in r.items()
+           if isinstance(v, float) and not np.isfinite(v)]
+    if bad:
+        return False, f"preflight non-finite ({', '.join(bad[:3])})"
+    progress = [r[k] for r in rows for k in ("fit_best", "oes_rel_step")
+                if r.get(k) is not None]
+    if not progress:
+        return False, "preflight produced no fitness/step signal"
+    return True, ""
+
+
 def preflight(cfg: dict, args) -> tuple:
     """Cheap filter: can this configuration produce a finite rollout at all?
 
@@ -141,13 +162,7 @@ def preflight(cfg: dict, args) -> tuple:
         return False, "preflight timeout"
     if proc.returncode != 0:
         return False, f"preflight rc={proc.returncode}"
-    rows = objective.read_gens(out)
-    if not rows:
-        return False, "preflight produced no gens.jsonl"
-    fit = rows[-1].get("fit_best")
-    if fit is None or not np.isfinite(float(fit)):
-        return False, f"preflight non-finite fitness ({fit})"
-    return True, ""
+    return probe_verdict(objective.read_gens(out))
 
 
 def promote(records: list, keep: float) -> list:
