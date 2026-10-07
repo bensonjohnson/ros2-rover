@@ -89,6 +89,14 @@ along for free. `test_meta.py` M1 fails loudly if a knob's flag is not one that
 
 ## Known limits
 
+* **One observed, unreproducible NaN.** A sampled config (`obs v2`, `action vw`,
+  `mem 8`, `algo oes`, `hidden 128`, `sigma0 0.08`) produced an all-NaN rollout
+  twice early on; the same flags are finite in six later attempts, and each of
+  v2 / vw / sigma0 0.08 / ticks 40 is clean alone at mem 8 + oes. Root cause
+  unknown. Containment is automatic: the preflight probe rejects such a config
+  in ~6 s, and `objective.score_trial` marks any non-finite metric
+  `feasible=False, score=-inf`, so a NaN can never rank or be promoted. It is
+  deliberately NOT fenced out of the space — see the note in `space.py`.
 * The pivot/spin constraint is enforced through `w_spin` in training; the full
   `rover_sim.bench` gates (`worst_trim_multi_draw_pick`, `trim_envelope`,
   `pivot_cap`) are NOT yet part of automatic promotion — run them on the top

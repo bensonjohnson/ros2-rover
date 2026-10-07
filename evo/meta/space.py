@@ -186,6 +186,19 @@ def sample_configs(n: int, *, seed: int = 0,
         cfg["w_rev"] = float(cfg["w_rev"])
         cfg["w_spin"] = float(cfg["w_spin"])
         cfg.update(overrides)
+        # -----------------------------------------------------------
+        # KNOWN, CONTAINED FAILURE MODE (not a ban — see below): `algo=oes`
+        # with a memory genome (mem>0) produced a NaN search step and an
+        # all-NaN rollout twice — once in the meta manager, once in a 4-way
+        # parallel batch, both in the full sampled corner (obs v2 AND action vw
+        # AND mem 8 AND oes AND sigma0 0.08). It has NOT reproduced since: six
+        # consecutive attempts at that exact corner, plus one-factor-at-a-time
+        # tests (each of v2, vw, sigma0 0.08, ticks 40 clean at h128/mem8/oes),
+        # are all finite. Root cause unknown, so the search is NOT fenced off
+        # from oes+mem (that would ban an unexplored corner of the memory
+        # hypothesis) — it is protected instead by the 1-generation preflight
+        # probe and by objective.score_trial's non-finite guard, which catch a
+        # NaN for ~6 s or one stage and can never let it rank.
         out.append(cfg)
     return out
 
