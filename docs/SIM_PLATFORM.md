@@ -291,17 +291,61 @@ rollback trivial until stage 5).
 - Spark: `ssh benson@172.0.0.201`, `source /home/benson/venv/bin/activate`, rsync
   code (exclude build/install/log).
 
-## 8. Fidelity backlog (after structure; one change at a time, each validated)
+## 8. Fidelity backlog — STATUS (updated 2026-10-06)
 
-1. **Multi-rate clocks** (lidar 10 Hz / control 15–30 / motor throttle 10 Hz) — the
-   historical clock-mismatch failure; policy acts on stale obs in sim the same way
-   it would on hardware.
-2. **Skid-steer pivot model** (loaded track stalls; live-run lesson) — opt-in
-   dynamics mode.
-3. **Wheel proprio variants** (right-encoder-dead / model-based) for deploy parity.
-4. **Beam count 482 + raycast from lidar mount** (hardware-true sensing).
-5. **Trim semantics** (driver-side correction vs physical slowdown).
-6. **Renderer upgrades** (textures/depth realism) — only if vision models show promise.
+Every item is OPT-IN and off by default, so the legacy path stays bit-identical
+(verified by `evo.equivalence_probe` on a clean-HEAD worktree vs the working
+tree: identical fitness/dist/rooms for a fixed genome). Items 1–5 are DONE and
+tested; item 6 is deliberately deferred until vision models are on the table.
+
+1. **Multi-rate clocks — DONE** (`rover_sim/runner/clocks.py`,
+   `RolloutEngine(clocks=ClocksConfig(...))`, `--lidar-hz` / `--driver-hz` /
+   `--no-phase-stagger`). The measured truth: LD19 10.0 Hz vs a 15 Hz brain, so
+   **0.667 of ticks carry a new revolution** and **1 in 3 decisions acts on
+   content it already acted on** (test_clocks C2). The safety gate's streak
+   state machines now advance per REVOLUTION (its real /scan-callback timing),
+   and a driver rate limit latches the last accepted command
+   (`motor_command_rate_limit_secs`; 25 Hz today = a no-op at 15 Hz, 10 Hz =
+   the historical clock-mismatch failure). Registered rejection: a policy that
+   reads the scan diverges from the single-clock sim by 0.35 m mean / 0.75 m
+   max of travel per 600 ticks (C5) — the old sim was a different causal world,
+   not a close approximation.
+2. **Wheel proprio truth — DONE** (`RoverConfig.wheel_source`). `true` legacy
+   (noisy encoders both sides), `model` = what `evo_runner --wheel-source model`
+   actually feeds (motor model, no encoder noise — the rover's right encoder
+   reads 0), `dead_right` = the raw defect. The sim/deploy skew this closes is
+   REVIVAL_PLAN failure #4 ("silent train/inference skew").
+3. **Track stall — DONE** (`RoverConfig.track_stall_speed`, m/s). Static
+   friction break-away for a loaded track. Validated signature: with both tracks
+   under break-away the rover is **dead still** (0.000 m, 0 rad in 60 ticks at
+   ±0.15 command) and with one stalled it **orbits at radius 0.0770 m =
+   track_width/2 exactly** — the live-run behaviour that made sim-best
+   `champ20m_idx115` sit still 56% of its ticks. Batched == numpy to 6e-9.
+4. **LD19 482 beams / 25 m — VERIFIED GENERIC** (test_geom G7): scan (B, 482),
+   all beams resolve, and the 72-bin preprocess still covers every beam (6–7
+   per bin); the 360-beam path is unaffected in the same process. The default
+   stays 360 for byte-comparable legacy runs.
+5. **Trim vs mechanical bias — DONE** (`RoverConfig.track_bias`). The driver's
+   0.8 left trim is a CORRECTION for a mechanically ~1.25× faster left track,
+   not a slow track. Legacy folds the whole asymmetry into the trim, so a
+   straight command curves **1.023 rad in 8 s** — a false dynamic ES learns to
+   fight; with `track_bias=(1.25, 1.0)` the same command runs dead straight
+   while the encoder still reports the 0.8 ratio (encoder ≠ ground speed).
+   Consequence for search: trim randomization now models a MIS-TUNED trim
+   (~0.94–1.25 residual) instead of implying a 44%-asymmetric machine.
+6. **Renderer upgrades** (textures/depth realism) — deferred: only worth it if
+   vision models show promise, per the original plan.
+
+Residual differences left ON PURPOSE (quantified, not fixed):
+* The tick grid quantizes the sensor→brain delivery latency, so the modelled
+  mean content age (22 ms) is up to one control tick smaller than wall-clock
+  (~50 ms on hardware timing). The reuse PATTERN (0.667 fresh / 0.333 reused)
+  is exact, which is the part that changes what a policy must learn.
+* `dead_right` pins the right channel to 0 but does not reproduce the left
+  encoder's ±55 rad/s spikes — the deployable fact is that the channel carries
+  no information, and `--wheel-source model` is the runner's chosen remedy.
+* Gate state machines are masked by the revolution, but the clamp itself is
+  still evaluated every control tick (as it is on the rover, on /track_cmd).
 
 ## 9. Risks & open questions
 

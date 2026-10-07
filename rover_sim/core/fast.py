@@ -181,7 +181,7 @@ class NoSyncGate(BatchedGate):
         self._tick = torch.zeros((), device=self.device)
         self._neg1 = torch.full((), -1.0, device=self.device)
 
-    def _update_front_blocked(self):
+    def _update_front_blocked(self, due: torch.Tensor | None = None):
         c = self.cfg
         now = self._tick
         resume = self._front_path_dist > c.stop_distance + c.hysteresis
@@ -194,6 +194,10 @@ class NoSyncGate(BatchedGate):
         block = (~self.front_blocked
                  & (self._front_path_dist < c.stop_distance)
                  & (self._front_streak >= c.block_scans))
+        if due is not None:
+            # Multi-rate clocks: a block can only start on a revolution (see
+            # BatchedGate._update_front_blocked).
+            block = block & due
         self.stops_dev += block.to(torch.int64)
         self.front_blocked = self.front_blocked | block
         self._front_blocked_time = torch.where(
@@ -236,8 +240,9 @@ class NoSyncGate(BatchedGate):
             self._rgeom = g
         return g[1]
 
-    def process_scan(self, ranges, angle_min, angle_increment):
-        super().process_scan(ranges, angle_min, angle_increment)
+    def process_scan(self, ranges, angle_min, angle_increment,
+                     due: torch.Tensor | None = None):
+        super().process_scan(ranges, angle_min, angle_increment, due=due)
         if not self.symmetric:
             return
         c = self.cfg
@@ -262,17 +267,23 @@ class NoSyncGate(BatchedGate):
         self._rpath = torch.where(torch.isfinite(rp), rp.clamp(min=0.0),
                                   torch.full_like(rp, c.max_eval_distance))
         close = (in_path & (xb < c.stop_distance)).sum(dim=1)
-        self._rstreak = torch.where(close >= c.min_block_points,
-                                    self._rstreak + 1,
-                                    torch.zeros_like(self._rstreak))
+        rstreak = torch.where(close >= c.min_block_points,
+                              self._rstreak + 1,
+                              torch.zeros_like(self._rstreak))
+        if due is not None:
+            rstreak = torch.where(due, rstreak, self._rstreak)
+        self._rstreak = rstreak
 
         def sector_min(mask):
             rr = torch.where(valid & mask.unsqueeze(0), r,
                              torch.full_like(r, torch.inf)).min(dim=1).values
             return torch.where(torch.isfinite(rr), rr,
                                torch.full_like(rr, c.max_eval_distance))
-        self._rleft = sector_min(rl_m)
-        self._rright = sector_min(rr_m)
+        rleft, rright = sector_min(rl_m), sector_min(rr_m)
+        if due is not None:
+            rleft = torch.where(due, rleft, self._rleft)
+            rright = torch.where(due, rright, self._rright)
+        self._rleft, self._rright = rleft, rright
         # latch: mirror of _update_front_blocked
         now = self._tick
         resume = self._rpath > c.stop_distance + c.hysteresis
@@ -284,6 +295,8 @@ class NoSyncGate(BatchedGate):
                                           self._rblocked_time)
         block = (~self._rblocked & (self._rpath < c.stop_distance)
                  & (self._rstreak >= c.block_scans))
+        if due is not None:
+            block = block & due
         self.rstops_dev += block.to(torch.int64)
         self._rblocked = self._rblocked | block
         self._rblocked_time = torch.where(block, now, self._rblocked_time)

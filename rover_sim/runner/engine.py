@@ -44,6 +44,7 @@ from rover_sim.core.render import CameraConfig, CameraRenderer
 
 from .obs import (NUM_BINS, MAX_RANGE, _proprio,
                   DEFAULT_OBS_SPEC, ObsSpec, channel_views)
+from .clocks import ClocksConfig, MultiRateClock
 
 CONTROL_HZ = 15.0
 
@@ -66,7 +67,8 @@ class RolloutEngine:
                  worlds: list | None = None, caps: tuple | None = None,
                  gate_symmetric: bool = False, trim_rand: bool = False,
                  extent: float = 16.0, every_door: int = 6,
-                 camera: CameraConfig | None = None):
+                 camera: CameraConfig | None = None,
+                 clocks: ClocksConfig | None = None):
         """merged_houses=K: play each individual in K*G houses (one set per
         seed offset) inside ONE arena — lets the whole run need a single
         CUDA graph (separate live graphs fault on this stack; see
@@ -90,7 +92,13 @@ class RolloutEngine:
         channel: a static [B, H, W, C] uint8 buffer rendered every tick and
         presented only to policies whose ObsSpec requests it. None (default)
         leaves every legacy path — buffers, numerics, channel_views keys —
-        byte-identical."""
+        byte-identical.
+        clocks=ClocksConfig(lidar_hz=10.0) opts into the multi-rate sensor/
+        actuator schedule (fidelity item 1): the lidar delivers a revolution
+        at its own rate while the brain keeps ticking, the safety gate
+        advances its state machines per REVOLUTION, and a driver rate limit
+        latches the last accepted command. None (default) = one clock for
+        everything, byte-identical to the pre-clock arena."""
         self.cells_on = bool(cells)
         self.every_cover = int(every_cover)
         self.P, self.G = P, G
@@ -129,6 +137,14 @@ class RolloutEngine:
         self.env._worlds = [houses_env[b % (G * merged_houses)]
                             for b in range(self.B)]
         self.env._build_segments()
+
+        # Multi-rate clocks (fidelity item 1, docs/SIM_PLATFORM.md §8):
+        # opt-in, and completely inert when off — `clocks=None` (the default)
+        # leaves the single-clock path byte-identical.
+        self.clocks = clocks
+        self._mr = (MultiRateClock(clocks, self.dt, self.B,
+                                   self.env.cfg.n_beams, device=self.device)
+                    if clocks is not None and clocks.active else None)
 
         # Cache start poses + partition geometry as device tensors.
         pose = np.array([w.start_pose for w in self.env._worlds],
@@ -452,6 +468,13 @@ class RolloutEngine:
         e.accel.zero_()
         e.accel[:, 2] = e.cfg.gravity
         self.gate.reset_state()
+        if self._mr is not None:
+            # New game: rate clocks restart, and the held revolution is
+            # re-seeded from the reset pose — the rover always has SOMETHING
+            # on the wire, it is just up to one lidar period old.
+            self._mr.reset()
+            if self._mr.lidar_on:
+                self._mr.held_scan.copy_(e.scan())
         if (self._noise_seed is not None
                 and not torch.cuda.is_current_stream_capturing()):
             torch.manual_seed(self._noise_seed)
@@ -519,14 +542,27 @@ class RolloutEngine:
         if self.building_mode:
             self._dprev.zero_(); self._dused.zero_(); self._dcross.zero_()
         e = self.env
+        mr = self._mr
         for t in range(ticks):
             self.gate._tick.add_(self.dt)          # device-side clock
-            ranges = e.scan()
+            if mr is not None:
+                mr.tick()                          # rate clocks advance
+            ranges = e.scan()                      # the sensor keeps spinning
+            lidar_due = None
+            if mr is not None and mr.lidar_on:
+                # Multi-rate: only the envs whose lidar clock is due get the
+                # new revolution; everyone else acts on the held scan (mean
+                # age ~half a period: ~48 ms at 10 Hz against a 15 Hz brain).
+                ranges = mr.hold_scan(ranges)
+                lidar_due = mr.lidar_due
             scan72 = self._preprocess(ranges, e.angle_min,
                                         e.angle_increment,
                                         num_bins=NUM_BINS,
                                         max_range=MAX_RANGE)
-            self.gate.process_scan(ranges, e.angle_min, e.angle_increment)
+            self.gate.process_scan(ranges, e.angle_min, e.angle_increment,
+                                   due=lidar_due)
+            if mr is not None and mr.lidar_on:
+                mr.scan_taken()
             prop = _proprio(e)
             if self.gate_obs:
                 # obs v2: proprio channels 2/3 were pure gyro NOISE (no
@@ -550,9 +586,16 @@ class RolloutEngine:
                 self._rec["obs"].append(obs.clone())
                 self._rec["cmd"].append(cmd.clone())
             gated = self.gate.gate(cmd)
+            applied = gated
+            if mr is not None and mr.driver_on:
+                # The motor driver accepts a command only at its own rate
+                # (motor_command_rate_limit_secs); everything faster is
+                # dropped and the motors keep running the last accepted one.
+                applied = mr.latch_cmd(gated)
+                mr.cmd_taken()
             px, py = e.x.clone(), e.y.clone()
             pth = e.theta.clone()
-            e.step(gated, self.dt)
+            e.step(applied, self.dt)
             dist += torch.hypot(e.x - px, e.y - py)
             # signed body-frame travel (heading before the step): forward
             # vs reverse distance for the w_rev fitness term
@@ -563,9 +606,11 @@ class RolloutEngine:
             # with meaningful magnitude on both). These rotate in place in
             # the sim; on the real skid-steer they are worse than that —
             # the loaded track stalls and the rover orbits the dead wheel.
-            self._spin_t += ((gated[:, 0] * gated[:, 1] < -0.01)
-                             & (gated.abs().min(dim=1).values > 0.15)
-                             ).to(gated.dtype)
+            # Measured on APPLIED (post-driver) commands: with a driver rate
+            # limit a dropped pivot command never became motion.
+            self._spin_t += ((applied[:, 0] * applied[:, 1] < -0.01)
+                             & (applied.abs().min(dim=1).values > 0.15)
+                             ).to(applied.dtype)
             # furthest distance ever reached from the start pose (graph-safe
             # in-place max): pays for genuine translation, which an in-place
             # orbit never earns no matter how much arc it accumulates.

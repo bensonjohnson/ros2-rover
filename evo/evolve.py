@@ -46,6 +46,7 @@ from .policy import (PopulationNet, genome_meta, genome_size,
 # from here); evolve itself uses ESGenomePolicy + tr.run(...).
 from rover_sim.adapters.es import ESGenomePolicy, GraphRunner  # noqa: F401
 from rover_sim.evaluate import evaluate
+from rover_sim.runner.clocks import ClocksConfig
 from rover_sim.strategies import OES, reproduce
 
 
@@ -165,6 +166,17 @@ def evolve(args):
         bkw = {}
         if args.world == "buildings":
             bkw = dict(worlds=sample_houses(level), caps=caps)
+        # Multi-rate clocks (fidelity item 1): ONE config for every arena in
+        # the run. Train and holdout must share the actuation/sensing timing
+        # exactly as they share the gate preset, or the scores are not
+        # comparable — and a policy must never be evaluated under a different
+        # clock than the one it was selected in.
+        clocks = None
+        if args.lidar_hz or args.driver_hz:
+            clocks = ClocksConfig(lidar_hz=args.lidar_hz,
+                                  driver_hz=args.driver_hz,
+                                  phase_stagger=not args.no_phase_stagger)
+            print(f"[clocks] {clocks.describe()}")
         tr = Arena(P, G, seed=args.train_seed, device=dev, fp16=args.fp16,
                    merged_houses=args.train_rotations,
                    door_w_range=(door_w, door_w) if door_w else (0.7, 1.0),
@@ -172,11 +184,11 @@ def evolve(args):
                    fused=args.fused, compile=args.compile,
                    gate_obs=args.obs == "v2",
                    gate_symmetric=args.gate == "symmetric",
-                   gate_cfg=gate_config(args.gate),
+                   gate_cfg=gate_config(args.gate), clocks=clocks,
                    trim_rand=args.trim_rand > 0, **bkw)
         ho = Arena(P, G, seed=args.holdout_seed, device=dev,
                    gate_symmetric=args.gate == "symmetric",
-                   gate_cfg=gate_config(args.gate),
+                   gate_cfg=gate_config(args.gate), clocks=clocks,
                    fp16=args.fp16, door_w_range=holdout_door,
                    cells=not args.no_cells, every_cover=args.every_cover,
                    fused=args.fused, compile=args.compile,
@@ -188,13 +200,13 @@ def evolve(args):
                         every_cover=args.every_cover, fused=args.fused,
                         gate_obs=args.obs == "v2", worlds=ho_worlds,
                         gate_symmetric=args.gate == "symmetric",
-                        gate_cfg=gate_config(args.gate))
+                        gate_cfg=gate_config(args.gate), clocks=clocks)
             hval = Arena(P, G, seed=args.holdout_seed, device=dev,
                          fp16=args.fp16, cells=not args.no_cells,
                          every_cover=args.every_cover, fused=args.fused,
                          gate_obs=args.obs == "v2", worlds=val_worlds,
                          gate_symmetric=args.gate == "symmetric",
-                         gate_cfg=gate_config(args.gate))
+                         gate_cfg=gate_config(args.gate), clocks=clocks)
         if not args.graph:
             def score(is_train, th):
                 a = tr if is_train is True else (
@@ -579,6 +591,27 @@ def main():
                     "distinct 0.8 m cells visited, saturating. 0 = off "
                     "(identical to runs 1-4). ~0.3 = coverage buys one "
                     "room crossing")
+    # ---- multi-rate clocks (SIM_PLATFORM fidelity item 1) -----------------
+    # The real stack is NOT single-clock: the LD19 publishes ~10 Hz while the
+    # brain ticks at 15 Hz, the safety monitor runs inside the /scan callback,
+    # and the motor driver rate-limits commands. Training without that teaches
+    # a causally wrong obs->act map (always-fresh sensing, every action lands).
+    # Both default OFF, so every pre-clock command line is byte-for-byte the
+    # same. Use --lidar-hz 10 by default for anything meant to transfer.
+    ap.add_argument("--lidar-hz", type=float, default=None,
+                    help="lidar revolution rate (rover LD19 = 10.0); the brain "
+                    "then acts on a scan up to one period old. None = one "
+                    "revolution per control tick (legacy single-clock sim)")
+    ap.add_argument("--driver-hz", type=float, default=None,
+                    help="motor driver command acceptance rate "
+                    "(motor_command_rate_limit_secs: 25 Hz today, 10 Hz in "
+                    "the config behind the historical clock-mismatch failure). "
+                    "Faster commands are dropped; the motors keep the last "
+                    "accepted one. None = every command lands")
+    ap.add_argument("--no-phase-stagger", action="store_true",
+                    help="give every env the SAME lidar/driver phase (default "
+                    "is a deterministic golden-ratio spread, so no single "
+                    "phase relationship can become the trained convention)")
     ap.add_argument("--no-cells", action="store_true",
                     help="do not even allocate/accumulate the coverage "
                     "buffer (fault bisect: byte-proven runs 1-4 kernels)")

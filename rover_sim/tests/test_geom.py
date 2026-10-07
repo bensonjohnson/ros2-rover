@@ -415,6 +415,42 @@ def g6_batched_rect():
           f"missed contacts={missed}; mount scan finite")
 
 
+# ---------------------------------------------------------------------- G7
+def g7_ld19_beams(dev):
+    """The rover's lidar is 482 beams at 25 m, not the sim's 360/12 default.
+    Everything downstream is beam-count generic (numpy raycast, fp32, fp16,
+    the fused Triton grid via triton.cdiv, the safety gate's per-geometry
+    cache) — this pins it: the scan follows n_beams, every beam resolves, and
+    the 72-bin obs preprocess still covers every beam exactly once."""
+    from ..core.batched import batched_preprocess, _bin_index
+    cfg = RoverConfig()
+    cfg.n_beams = 482
+    cfg.lidar_max_range = 25.0
+    cfg.lidar_dropout_p = 0.0
+    env = _mk_env(3, cfg, _wall_world(3.0))
+    r = env.scan()
+    assert tuple(r.shape) == (3, 482), r.shape
+    assert torch.isfinite(r).all(), "non-finite range at 482 beams"
+    bins = _bin_index(482, env.angle_min, env.angle_increment, 72,
+                      torch.device("cpu"))
+    assert int(bins.min()) == 0 and int(bins.max()) == 71, (int(bins.min()),
+                                                            int(bins.max()))
+    counts = torch.bincount(bins, minlength=72)
+    assert int(counts.sum()) == 482, int(counts.sum())
+    assert int(counts.min()) >= 6, int(counts.min())
+    out = batched_preprocess(r, env.angle_min, env.angle_increment,
+                             num_bins=72, max_range=5.0)
+    assert tuple(out.shape) == (3, 72) and torch.isfinite(out).all()
+    # the gate caches its sector masks per scan geometry, so a second, different
+    # beam count in the same process must not inherit the first one's masks
+    tob = _mk_env(2, RoverConfig(), _wall_world(3.0))
+    assert tuple(tob.scan().shape) == (2, 360)
+    print(f"G7 ok: LD19 482 beams / 25 m — scan {tuple(r.shape)}, obs "
+          f"{tuple(out.shape)}, beams per bin {int(counts.min())}-"
+          f"{int(counts.max())} (all 482 covered); 360-beam path still "
+          f"{tuple(tob.scan().shape)}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -427,6 +463,7 @@ def main():
     g3_presets()
     g5_defaults()
     g6_batched_rect()
+    g7_ld19_beams(args.device)
     g4_capture(args.device)
     print("ALL GEOM CHECKS PASSED")
 

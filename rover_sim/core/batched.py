@@ -185,9 +185,19 @@ class BatchedEnv:
         k = 1.0 - float(np.exp(-dt / c.motor_tau))
         self.v_left += (tl - self.v_left) * k
         self.v_right += (tr - self.v_right) * k
+        if c.track_stall_speed > 0.0:
+            # Static friction (fidelity item 3): a loaded track whose commanded
+            # speed is below the break-away threshold does not move at all.
+            # Both loaded = dead still; one loaded = an orbit about that track.
+            sl = tl.abs() < c.track_stall_speed
+            sr = tr.abs() < c.track_stall_speed
+            self.v_left = torch.where(sl, torch.zeros_like(self.v_left),
+                                      self.v_left)
+            self.v_right = torch.where(sr, torch.zeros_like(self.v_right),
+                                       self.v_right)
 
-        vl = self.v_left * (1.0 + self.noise(c.slip_std))
-        vr = self.v_right * (1.0 + self.noise(c.slip_std))
+        vl = self.v_left * (1.0 + self.noise(c.slip_std)) * c.track_bias[0]
+        vr = self.v_right * (1.0 + self.noise(c.slip_std)) * c.track_bias[1]
         v = 0.5 * (vl + vr)
         w = (vr - vl) / c.track_width
 
@@ -207,8 +217,19 @@ class BatchedEnv:
         self.theta = torch.remainder(self.theta + w * dt + np.pi,
                                      2 * np.pi) - np.pi
 
-        self.wheel_l = self.v_left / c.wheel_radius + self.noise(0.05)
-        self.wheel_r = self.v_right / c.wheel_radius + self.noise(0.05)
+        ws = c.wheel_source
+        if ws == "model":
+            # the deploy runner's substitution (evo_runner --wheel-source
+            # model): the same motor model, no encoder noise
+            self.wheel_l = self.v_left / c.wheel_radius
+            self.wheel_r = self.v_right / c.wheel_radius
+        elif ws == "dead_right":
+            # the rover's actual defect: the right encoder reads 0
+            self.wheel_l = self.v_left / c.wheel_radius + self.noise(0.05)
+            self.wheel_r = torch.zeros_like(self.v_right)
+        else:
+            self.wheel_l = self.v_left / c.wheel_radius + self.noise(0.05)
+            self.wheel_r = self.v_right / c.wheel_radius + self.noise(0.05)
         self.yaw_rate = w + self.noise(c.gyro_noise_std)
         ax = (v - self._prev_v) / dt + self.noise(c.accel_noise_std)
         ay = v * w + self.noise(c.accel_noise_std)
@@ -297,7 +318,17 @@ class BatchedGate:
 
     @torch.no_grad()
     def process_scan(self, ranges: torch.Tensor, angle_min: float,
-                     angle_increment: float):
+                     angle_increment: float, due: torch.Tensor | None = None):
+        """One scan update.
+
+        `due` (optional [B] bool, multi-rate clocks) marks the envs for which
+        this is a NEW revolution: the real monitor runs inside the /scan
+        callback, so its streak counters and sector distances advance once
+        per revolution, not once per control tick. Envs with due=False keep
+        the verdicts of their last revolution (the scan in `ranges` is a held
+        buffer for them). None = the legacy single-clock behaviour, where
+        every call is a fresh scan.
+        """
         c = self.cfg
         B, n = ranges.shape
         cos_a, sin_a, left_m, right_m, rear_m = self._scan_geom(
@@ -324,15 +355,21 @@ class BatchedGate:
 
         big = torch.full_like(x_bumper, torch.inf)
         front = torch.where(in_path, x_bumper, big).min(dim=1).values
-        self._front_path_dist = torch.where(
+        front = torch.where(
             torch.isfinite(front), front.clamp(min=0.0),
             torch.full_like(front, c.max_eval_distance))
+        if due is not None:
+            front = torch.where(due, front, self._front_path_dist)
+        self._front_path_dist = front
 
         close_pts = (in_path & (x_bumper < c.stop_distance)).sum(dim=1)
         qual = close_pts >= c.min_block_points
-        self._front_streak = torch.where(qual, self._front_streak + 1,
-                                         torch.zeros_like(self._front_streak))
-        self._update_front_blocked()
+        front_streak = torch.where(qual, self._front_streak + 1,
+                                   torch.zeros_like(self._front_streak))
+        if due is not None:
+            front_streak = torch.where(due, front_streak, self._front_streak)
+        self._front_streak = front_streak
+        self._update_front_blocked(due)
 
         def sector_min(mask):
             rr = torch.where(valid & mask.unsqueeze(0), r,
@@ -340,17 +377,24 @@ class BatchedGate:
             return torch.where(torch.isfinite(rr), rr,
                                torch.full_like(rr, c.max_eval_distance))
 
-        self._left = sector_min(left_m)
-        self._right = sector_min(right_m)
-        self._rear = sector_min(rear_m)
+        left, right, rear = (sector_min(left_m), sector_min(right_m),
+                             sector_min(rear_m))
+        if due is not None:
+            left = torch.where(due, left, self._left)
+            right = torch.where(due, right, self._right)
+            rear = torch.where(due, rear, self._rear)
+        self._left, self._right, self._rear = left, right, rear
 
         rear_close = (valid & rear_m.unsqueeze(0)
                       & (r < c.stop_distance_rear)).sum(dim=1)
         rqual = rear_close >= c.min_block_points
-        self._rear_streak = torch.where(rqual, self._rear_streak + 1,
-                                        torch.zeros_like(self._rear_streak))
+        rear_streak = torch.where(rqual, self._rear_streak + 1,
+                                  torch.zeros_like(self._rear_streak))
+        if due is not None:
+            rear_streak = torch.where(due, rear_streak, self._rear_streak)
+        self._rear_streak = rear_streak
 
-    def _update_front_blocked(self):
+    def _update_front_blocked(self, due: torch.Tensor | None = None):
         c = self.cfg
         now = self._now()
         resume = self._front_path_dist > c.stop_distance + c.hysteresis
@@ -365,6 +409,10 @@ class BatchedGate:
         block = (~self.front_blocked
                  & (self._front_path_dist < c.stop_distance)
                  & (self._front_streak >= c.block_scans))
+        if due is not None:
+            # A block can only start ON a revolution (the monitor only sees
+            # new geometry then); releases are time-based and always apply.
+            block = block & due
         self.stops += int(block.sum())
         self.front_blocked = self.front_blocked | block
         self._front_blocked_time = torch.where(

@@ -38,7 +38,51 @@ class RoverConfig:
     lidar_mount_x: float = 0.0             # LD19 mount, fwd of center (0.07635)
     camera_mount_x: float = 0.0            # D435i mount, fwd of center (0.12085)
 
-    # Lidar — STL19P-ish: 360 beams, 10-12 Hz on the rover.
+    # ---- proprio truth (fidelity item 2) — OPT-IN ----------------------
+    # What the wheel channels of the observation actually contain. The legacy
+    # sim feeds the lagged track speeds plus encoder noise; the DEPLOY runner
+    # cannot (the rover's right encoder reads 0 while the track turns — live
+    # runs 5-8), so it substitutes the motor model. That is a silent
+    # train/deploy obs skew of exactly the class REVIVAL_PLAN lists as
+    # failure #4. Modes:
+    #   "true"       legacy: lagged track speed + N(0, 0.05) rad/s, both sides
+    #   "model"      what evo/deploy/evo_runner.py --wheel-source model feeds:
+    #                the same first-order motor model, NO encoder noise
+    #   "dead_right" the raw hardware signature: right channel pinned to 0,
+    #                left = lagged track speed + noise
+    wheel_source: str = "true"
+
+    # ---- track stall (fidelity item 3) — OPT-IN ------------------------
+    # m/s. Static friction break-away for a LOADED track: a commanded track
+    # speed below this value cannot move the track at all. This is the
+    # mechanism behind the worst sim->real failure in the whole lineage (live
+    # runs 5-7): champ20m_idx115 was sim-best (cross 0.833, 61% pivot ticks)
+    # and sat PHYSICALLY STILL 56% of its ticks, because pivot commands of
+    # +-0.15 -> +-0.024 m/s of track speed never broke static friction. The
+    # diff-drive kinematics then produce the observed behaviour for free: both
+    # tracks stalled = dead still, one stalled = an orbit about the stalled
+    # track (ICC at that track, radius = track_width). 0.0 = disabled.
+    track_stall_speed: float = 0.0
+
+    # ---- mechanical ground-speed bias (fidelity item 5) — OPT-IN --------
+    # Per-track factor from WHEEL surface speed to GROUND speed: the tracks do
+    # not convert equally. The driver's trim exists to CANCEL this: the rover's
+    # left_track_trim is 0.8 precisely because the left track is mechanically
+    # ~1.25x faster at equal wheel speed (tuned by driving full throttle until
+    # it ran straight). The legacy sim folds the WHOLE asymmetry into the trim,
+    # so a sim-trained policy learns that cmd (1, 1) curves left — a false
+    # dynamic that does not exist on a correctly-trimmed rover. Use
+    # track_bias=(1.25, 1.0) with the nominal (0.8, 1.0) trims for the
+    # hardware-true pair; then trim randomization models a MIS-TUNED trim
+    # (~0.94-1.25 residual) instead of implying a 44%-asymmetric machine.
+    # Wheel proprio is unaffected: an encoder measures wheel rotation, not
+    # ground speed (this is also why evo_runner's wheel model stays trimmed).
+    track_bias: tuple = (1.0, 1.0)
+
+    # Lidar — STL19P-ish: 360 beams, 10-12 Hz on the rover. The real LD19 is
+    # 482 beams / 25 m (measured on the rover); n_beams is a plain knob and
+    # every path (numpy, fp32, fp16, fused Triton grid) is beam-count generic,
+    # but the 360 default stays for byte-comparable legacy runs.
     n_beams: int = 360
     lidar_max_range: float = 12.0
     lidar_noise_std: float = 0.01
@@ -99,12 +143,20 @@ class SimRover:
         k = 1.0 - np.exp(-dt / c.motor_tau)
         self.v_left += (tl - self.v_left) * k
         self.v_right += (tr - self.v_right) * k
+        if c.track_stall_speed > 0.0:
+            # Static friction (fidelity item 3): a loaded track whose commanded
+            # speed is below the break-away threshold does not move at all.
+            if abs(tl) < c.track_stall_speed:
+                self.v_left = 0.0
+            if abs(tr) < c.track_stall_speed:
+                self.v_right = 0.0
 
         # Track slip: the ground sees a noisy fraction of the track speed.
+        # wheel->ground conversion also carries the mechanical bias (item 5).
         slip_l = 1.0 + self.rng.normal(0.0, c.slip_std)
         slip_r = 1.0 + self.rng.normal(0.0, c.slip_std)
-        vl = self.v_left * slip_l
-        vr = self.v_right * slip_r
+        vl = self.v_left * slip_l * c.track_bias[0]
+        vr = self.v_right * slip_r * c.track_bias[1]
 
         v = 0.5 * (vl + vr)
         w = (vr - vl) / c.track_width
@@ -132,10 +184,21 @@ class SimRover:
 
         # Proprio. Wheel rad/s reflect the TRACK speeds (encoders sit before
         # the slip, like on the rover), gyro/accel reflect the body motion.
-        self.wheel_l = self.v_left / c.wheel_radius \
-            + self.rng.normal(0.0, 0.05)
-        self.wheel_r = self.v_right / c.wheel_radius \
-            + self.rng.normal(0.0, 0.05)
+        # wheel_source selects WHICH encoder reality the policy sees (item 2).
+        if c.wheel_source == "model":
+            # the deploy runner's substitution (no encoder noise)
+            self.wheel_l = self.v_left / c.wheel_radius
+            self.wheel_r = self.v_right / c.wheel_radius
+        elif c.wheel_source == "dead_right":
+            # the rover's actual defect: the right encoder reads 0
+            self.wheel_l = self.v_left / c.wheel_radius \
+                + self.rng.normal(0.0, 0.05)
+            self.wheel_r = 0.0
+        else:
+            self.wheel_l = self.v_left / c.wheel_radius \
+                + self.rng.normal(0.0, 0.05)
+            self.wheel_r = self.v_right / c.wheel_radius \
+                + self.rng.normal(0.0, 0.05)
         self.yaw_rate = w + self.rng.normal(0.0, c.gyro_noise_std)
         ax = (v - self._prev_v) / dt + self.rng.normal(0.0, c.accel_noise_std)
         ay = v * w + self.rng.normal(0.0, c.accel_noise_std)
